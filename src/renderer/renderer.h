@@ -39,7 +39,9 @@
 #include "math/wpe_math.h"
 
 /** Maximum number of float varyings passed from vertex to fragment shader. */
-#define WPE_MAX_VARYINGS 16u
+#define WPE_MAX_VARYINGS 32u
+/** Maximum WPE_DrawDesc::subdivision_levels. */
+#define WPE_MAX_SUBDIVISION_LEVELS 4u
 /** Maximum framebuffer width or height. */
 #define WPE_RENDERER_MAX_DIMENSION 4096u
 /** Edge length of the square screen tiles that are rasterized in parallel. */
@@ -95,6 +97,12 @@ typedef struct WPE_RenderState {
     WPE_DepthFunc depth_func;
     bool depth_write;
     WPE_BlendMode blend;
+    /*
+     * Write depth only (e.g. shadow maps): color is never written and the fragment shader may be
+     * NULL, in which case every covered pixel passing the depth test writes depth. A non-NULL
+     * fragment shader still runs so it can discard (alpha-tested casters).
+     */
+    bool depth_only;
 } WPE_RenderState;
 
 /** @return Back-face culling, LESS depth test with writes, opaque blending. */
@@ -113,6 +121,14 @@ static inline WPE_RenderState wpe_render_state_default(void) {
  */
 typedef void (*WPE_VertexShaderFn)(const void* uniforms, const void* vertex, WPE_Vec4* out_position,
                                    float* out_varyings);
+
+/**
+ * Interpolates two input vertices (used by subdivision to create new vertices before shading).
+ *
+ * @param a, b Input vertices (vertex_stride bytes each). @param t Interpolation factor (0 = a).
+ * @param out Receives the interpolated vertex (vertex_stride bytes; never aliases a or b).
+ */
+typedef void (*WPE_VertexLerpFn)(const void* a, const void* b, float t, void* out);
 
 typedef struct WPE_FragmentInput {
     int32_t x;   /* Pixel column. */
@@ -143,6 +159,7 @@ typedef struct WPE_ShaderProgram {
     uint32_t varying_count; /* <= WPE_MAX_VARYINGS */
     bool uv_derivatives;    /* Compute WPE_FragmentInput::uv_dx/uv_dy (texture LOD selection). */
     uint32_t uv_varying;    /* First of the two varyings holding the UV; uv_varying + 1 < varying_count. */
+    WPE_VertexLerpFn vertex_lerp; /* Required for draws that request subdivision. */
 } WPE_ShaderProgram;
 
 /** One draw call: a triangle list, optionally indexed. */
@@ -157,6 +174,15 @@ typedef struct WPE_DrawDesc {
     uint32_t index_count;    /* Multiple of 3 when indices are given. */
     WPE_RenderState state;
     uint64_t sort_key; /* Draws execute in ascending key order; equal keys keep submission order. */
+    /*
+     * Adaptive subdivision (0 = off, up to WPE_MAX_SUBDIVISION_LEVELS): before rasterization, any
+     * triangle edge longer than subdivision_edge_pixels on screen (or crossing the camera plane) is
+     * split at its midpoint, recursively up to this many levels. New vertices are created with
+     * program->vertex_lerp and run through the vertex shader, so per-vertex effects (lighting) are
+     * evaluated densely near the camera. Splits depend only on each edge, so meshes stay crack-free.
+     */
+    uint32_t subdivision_levels;
+    float subdivision_edge_pixels;
 } WPE_DrawDesc;
 
 typedef struct WPE_ClearDesc {
@@ -178,6 +204,7 @@ typedef struct WPE_RenderStats {
     uint32_t triangles_culled;     /* Back/front-face or degenerate. */
     uint32_t triangles_clipped;    /* Needed clipping (including fully rejected ones). */
     uint32_t triangles_rasterized; /* Setup triangles that were binned. */
+    uint32_t triangles_subdivided; /* Submitted triangles that were split by adaptive subdivision. */
     uint64_t fragments_shaded;     /* Fragment shader invocations. */
 } WPE_RenderStats;
 
@@ -241,6 +268,15 @@ WPE_Result wpe_renderer_end_frame(WPE_Renderer* renderer);
 
 /** @return The framebuffer (borrowed; valid until resize or destroy). @thread_safety Owning thread */
 const WPE_Framebuffer* wpe_renderer_framebuffer(const WPE_Renderer* renderer);
+
+/**
+ * @return The framebuffer for direct modification between frames (post-processing), or NULL
+ *         while a frame is recording. @thread_safety Owning thread
+ */
+WPE_Framebuffer* wpe_renderer_framebuffer_for_write(WPE_Renderer* renderer);
+
+/** @return The job system given at creation (may be NULL). @thread_safety Owning thread */
+WPE_JobSystem* wpe_renderer_jobs(const WPE_Renderer* renderer);
 
 /** @return Statistics of the last completed frame. @thread_safety Owning thread */
 WPE_RenderStats wpe_renderer_stats(const WPE_Renderer* renderer);

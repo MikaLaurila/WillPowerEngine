@@ -9,6 +9,8 @@ agents can drive fully, and it exports standalone game executables.
 > - Core module, math, ECS and scene hierarchy
 > - Job system and multithreaded software rasterizer, with an SDL3 window
 > - glTF model loading, textured materials, skinned animation and bitmap-font text
+> - Hybrid vertex/pixel lighting (directional, point and spot lights), directional shadows, fog,
+>   adaptive subdivision and post-processing (SSAO, PS1 dither, chromatic aberration, ...)
 >
 > See [CHANGELOG.md](CHANGELOG.md) for progress.
 
@@ -17,6 +19,7 @@ Try the demos after building:
 ```bash
 ./build/samples/spinning_cubes                                   # --width 640 --height 480 --scale 2 --workers N
 ./build/samples/model_viewer assets/meshes/damaged_helmet.glb    # any .glb/.gltf; --dither, --max-texture N
+./build/samples/lighting_demo --ssao --fog                       # also --ps1 --chroma --vignette --dither --no-shadows
 ```
 
 ## Documents

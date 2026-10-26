@@ -45,10 +45,20 @@ static bool varying_color_fs(const void* uniforms, const WPE_FragmentInput* in, 
     return true;
 }
 
+static void clip_lerp(const void* a, const void* b, float t, void* out) {
+    const ClipVertex* va = a;
+    const ClipVertex* vb = b;
+    ClipVertex* o = out;
+    for (int i = 0; i < 4; ++i) {
+        o->position[i] = va->position[i] + (vb->position[i] - va->position[i]) * t;
+        o->attr[i] = va->attr[i] + (vb->attr[i] - va->attr[i]) * t;
+    }
+}
+
 static const WPE_ShaderProgram g_uniform_program = {
-    .vertex = clip_vs, .fragment = uniform_color_fs, .varying_count = 4};
+    .vertex = clip_vs, .fragment = uniform_color_fs, .varying_count = 4, .vertex_lerp = clip_lerp};
 static const WPE_ShaderProgram g_varying_program = {
-    .vertex = clip_vs, .fragment = varying_color_fs, .varying_count = 4};
+    .vertex = clip_vs, .fragment = varying_color_fs, .varying_count = 4, .vertex_lerp = clip_lerp};
 
 #define W 96
 #define H 64
@@ -223,7 +233,7 @@ static void test_renderer_fullscreen_quad_covers_each_pixel_once(void) {
     wpe_renderer_destroy(renderer);
 }
 
-static void test_renderer_jittered_mesh_is_watertight(void) {
+static void run_jittered_mesh_coverage(uint32_t subdivision_levels) {
     /* A grid of irregular triangles with shared edges and vertices must cover every pixel exactly once. */
     enum { CELLS_X = 13, CELLS_Y = 9 };
     static ClipVertex grid[(CELLS_X + 1) * (CELLS_Y + 1)];
@@ -263,6 +273,8 @@ static void test_renderer_jittered_mesh_is_watertight(void) {
     WPE_DrawDesc d = draw_of(grid, (CELLS_X + 1) * (CELLS_Y + 1), &u, state_no_cull());
     d.indices = indices;
     d.index_count = n;
+    d.subdivision_levels = subdivision_levels;
+    d.subdivision_edge_pixels = 3.0f;
     WPE_JobSystem* jobs = NULL;
     WPE_TEST_ASSERT_OK(wpe_jobs_create(3, &jobs));
     WPE_Renderer* renderer = make_renderer(W, H, jobs);
@@ -272,7 +284,7 @@ static void test_renderer_jittered_mesh_is_watertight(void) {
     wpe_jobs_destroy(jobs);
 }
 
-static void test_renderer_fill_rule_on_pixel_center_edges(void) {
+static void run_pixel_center_edge_coverage(uint32_t subdivision_levels) {
     /*
      * All vertices lie exactly on pixel centers, so horizontal, vertical and diagonal edges pass
      * through pixel centers and coverage depends entirely on the top-left fill rule: shared edges
@@ -308,8 +320,11 @@ static void test_renderer_fill_rule_on_pixel_center_edges(void) {
     WPE_DrawDesc d = draw_of(verts, N * N, &u, state_no_cull());
     d.indices = indices;
     d.index_count = n;
+    d.subdivision_levels = subdivision_levels;
+    d.subdivision_edge_pixels = 3.0f;
     WPE_Renderer* renderer = make_renderer(S, S, NULL);
     render(renderer, &d, 1);
+    if (subdivision_levels > 0) WPE_TEST_ASSERT(wpe_renderer_stats(renderer).triangles_subdivided > 0);
 
     const uint32_t last = FIRST + (N - 1) * STEP;
     for (uint32_t y = 0; y < S; ++y) {
@@ -319,6 +334,158 @@ static void test_renderer_fill_rule_on_pixel_center_edges(void) {
                                 x, y, counts[y * S + x], expected);
         }
     }
+    wpe_renderer_destroy(renderer);
+}
+
+static void test_renderer_jittered_mesh_is_watertight(void) {
+    run_jittered_mesh_coverage(0);
+}
+
+static void test_renderer_fill_rule_on_pixel_center_edges(void) {
+    run_pixel_center_edge_coverage(0);
+}
+
+/* Subdivision must stay crack-free: every shared edge is split identically from both sides. */
+static void test_renderer_subdivision_is_watertight(void) {
+    run_jittered_mesh_coverage(WPE_MAX_SUBDIVISION_LEVELS);
+    run_pixel_center_edge_coverage(WPE_MAX_SUBDIVISION_LEVELS);
+}
+
+/* Vertex shader computing a non-linear function of position, as per-vertex lighting does. */
+static void quadratic_vs(const void* uniforms, const void* vertex, WPE_Vec4* out_position,
+                         float* out_varyings) {
+    (void)uniforms;
+    const ClipVertex* v = vertex;
+    *out_position = wpe_vec4(v->position[0], v->position[1], v->position[2], v->position[3]);
+    out_varyings[0] = v->position[0] * v->position[0];
+    out_varyings[1] = out_varyings[2] = out_varyings[3] = 0.0f;
+}
+
+static bool capture_varying_fs(const void* uniforms, const WPE_FragmentInput* in, WPE_Vec4* out_color) {
+    const TestUniforms* u = uniforms;
+    u->captured[(size_t)in->y * u->width + (size_t)in->x] = in->varyings[0];
+    *out_color = wpe_vec4(1, 1, 1, 1);
+    return true;
+}
+
+static float quadratic_error(uint32_t levels, WPE_RenderStats* out_stats) {
+    enum { S = 64 };
+    static float captured[S * S];
+    const WPE_ShaderProgram program = {
+        .vertex = quadratic_vs, .fragment = capture_varying_fs, .varying_count = 4, .vertex_lerp = clip_lerp};
+    const TestUniforms u = {.captured = captured, .width = S};
+    const ClipVertex quad[6] = {cv(-1, -1, 0, 1), cv(1, -1, 0, 1), cv(1, 1, 0, 1),
+                                cv(-1, -1, 0, 1), cv(1, 1, 0, 1),  cv(-1, 1, 0, 1)};
+    WPE_DrawDesc d = draw_of(quad, 6, &u, state_no_cull());
+    d.program = &program;
+    d.subdivision_levels = levels;
+    d.subdivision_edge_pixels = 4.0f;
+    WPE_Renderer* renderer = make_renderer(S, S, NULL);
+    render(renderer, &d, 1);
+    *out_stats = wpe_renderer_stats(renderer);
+    wpe_renderer_destroy(renderer);
+
+    float worst = 0.0f;
+    for (uint32_t x = 0; x < S; ++x) {
+        const float ndc_x = ((float)x + 0.5f) / S * 2.0f - 1.0f;
+        const float error = fabsf(captured[(S / 2) * S + x] - ndc_x * ndc_x);
+        worst = error > worst ? error : worst;
+    }
+    return worst;
+}
+
+static void test_renderer_subdivision_densifies_per_vertex_evaluation(void) {
+    WPE_RenderStats plain, refined;
+    const float plain_error = quadratic_error(0, &plain);
+    const float refined_error = quadratic_error(WPE_MAX_SUBDIVISION_LEVELS, &refined);
+    /* Without subdivision x^2 is linearly interpolated between the corners (error up to 1). */
+    WPE_TEST_ASSERT(plain_error > 0.5f);
+    WPE_TEST_ASSERT_MSG(refined_error < 0.02f, "refined error %.4f", (double)refined_error);
+    WPE_TEST_ASSERT_EQ_UINT(0, plain.triangles_subdivided);
+    WPE_TEST_ASSERT_EQ_UINT(2, refined.triangles_subdivided);
+    WPE_TEST_ASSERT(refined.triangles_rasterized > 100);
+}
+
+static void test_renderer_subdivision_validation_and_determinism(void) {
+    WPE_Renderer* renderer = make_renderer(W, H, NULL);
+    const TestUniforms u = {0};
+    const ClipVertex tri[3] = {cv(-1, -1, 0, 1), cv(1, -1, 0, 1), cv(0, 1, 0, 1)};
+    const WPE_ShaderProgram no_lerp = {.vertex = clip_vs, .fragment = uniform_color_fs, .varying_count = 4};
+    WPE_TEST_ASSERT_OK(wpe_renderer_begin_frame(renderer, NULL));
+    wpe_log_set_stderr_enabled(false);
+    WPE_DrawDesc d = draw_of(tri, 3, &u, state_no_cull());
+    d.subdivision_levels = WPE_MAX_SUBDIVISION_LEVELS + 1;
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_renderer_submit(renderer, &d));
+    d.subdivision_levels = 1;
+    d.program = &no_lerp;
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_renderer_submit(renderer, &d));
+    wpe_log_set_stderr_enabled(true);
+    WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
+    wpe_renderer_destroy(renderer);
+
+    /* Subdivided output is identical for any thread count, including a perspective floor crossing the camera
+     * plane. */
+    const WPE_Mat4 proj = wpe_mat4_perspective(WPE_PI / 2, 1.0f, 0.1f, 100.0f);
+    const float corners[4][3] = {{-30, -1, 10}, {30, -1, 10}, {30, -1, -40}, {-30, -1, -40}};
+    ClipVertex floor_v[4];
+    for (int i = 0; i < 4; ++i) {
+        const WPE_Vec4 c = wpe_mat4_mul_vec4(&proj, wpe_vec4(corners[i][0], corners[i][1], corners[i][2], 1));
+        floor_v[i] = (ClipVertex){.position = {c.x, c.y, c.z, c.w},
+                                  .attr = {(float)i / 3, 1.0f - (float)i / 3, 0.5f, 1}};
+    }
+    const ClipVertex floor_quad[6] = {floor_v[0], floor_v[1], floor_v[2], floor_v[0], floor_v[2], floor_v[3]};
+    WPE_DrawDesc fd = {.program = &g_varying_program,
+                       .vertices = floor_quad,
+                       .vertex_stride = sizeof(ClipVertex),
+                       .vertex_count = 6,
+                       .state = wpe_render_state_default(),
+                       .subdivision_levels = 3,
+                       .subdivision_edge_pixels = 8.0f};
+    static WPE_Color reference[64 * 64];
+    const uint32_t workers[] = {0, 2, 5};
+    for (size_t w = 0; w < 3; ++w) {
+        WPE_JobSystem* jobs = NULL;
+        WPE_TEST_ASSERT_OK(wpe_jobs_create(workers[w], &jobs));
+        WPE_Renderer* r = make_renderer(64, 64, jobs);
+        const WPE_Framebuffer* fb = render(r, &fd, 1);
+        WPE_TEST_ASSERT(wpe_renderer_stats(r).triangles_subdivided == 2);
+        if (w == 0) {
+            memcpy(reference, fb->color, sizeof reference);
+        } else {
+            WPE_TEST_ASSERT(memcmp(reference, fb->color, sizeof reference) == 0);
+        }
+        wpe_renderer_destroy(r);
+        wpe_jobs_destroy(jobs);
+    }
+}
+
+static void test_renderer_depth_only_writes_depth_without_color(void) {
+    WPE_Renderer* renderer = make_renderer(W, H, NULL);
+    const ClipVertex quad[6] = {cv(-1, -1, -0.5f, 1), cv(1, -1, -0.5f, 1), cv(1, 1, -0.5f, 1),
+                                cv(-1, -1, -0.5f, 1), cv(1, 1, -0.5f, 1),  cv(-1, 1, -0.5f, 1)};
+    const WPE_ShaderProgram depth_program = {.vertex = clip_vs, .varying_count = 0};
+    WPE_RenderState state = wpe_render_state_default();
+    state.depth_only = true;
+    const WPE_DrawDesc d = {.program = &depth_program,
+                            .vertices = quad,
+                            .vertex_stride = sizeof(ClipVertex),
+                            .vertex_count = 6,
+                            .state = state};
+    const WPE_Framebuffer* fb = render(renderer, &d, 1);
+    for (uint32_t i = 0; i < W * H; ++i) {
+        WPE_TEST_ASSERT_EQ_UINT(0xFF000000u, fb->color[i]);
+        WPE_TEST_ASSERT_NEAR(0.25, fb->depth[i], 1e-6);
+    }
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_renderer_stats(renderer).fragments_shaded);
+
+    /* Without depth_only, a NULL fragment shader is rejected. */
+    WPE_DrawDesc bad = d;
+    bad.state.depth_only = false;
+    WPE_TEST_ASSERT_OK(wpe_renderer_begin_frame(renderer, NULL));
+    wpe_log_set_stderr_enabled(false);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_renderer_submit(renderer, &bad));
+    wpe_log_set_stderr_enabled(true);
+    WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
     wpe_renderer_destroy(renderer);
 }
 
@@ -705,6 +872,10 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_renderer_fullscreen_quad_covers_each_pixel_once),
     WPE_TEST_CASE(test_renderer_jittered_mesh_is_watertight),
     WPE_TEST_CASE(test_renderer_fill_rule_on_pixel_center_edges),
+    WPE_TEST_CASE(test_renderer_subdivision_is_watertight),
+    WPE_TEST_CASE(test_renderer_subdivision_densifies_per_vertex_evaluation),
+    WPE_TEST_CASE(test_renderer_subdivision_validation_and_determinism),
+    WPE_TEST_CASE(test_renderer_depth_only_writes_depth_without_color),
     WPE_TEST_CASE(test_renderer_guard_band_triangle_fills_screen),
     WPE_TEST_CASE(test_renderer_backface_culling),
     WPE_TEST_CASE(test_renderer_degenerate_and_nonfinite_triangles_are_dropped),

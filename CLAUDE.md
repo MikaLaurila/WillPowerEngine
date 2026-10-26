@@ -15,7 +15,7 @@ Development runs in milestones; the user reviews each one before the next starts
 2. ECS, plus math and the scene transform hierarchy (done)
 3. Rasterizer and window (SDL3) (done)
 4. glTF, materials, textures, fonts and skinned animation (done)
-5. Lighting, shadows and post-processing
+5. Lighting, shadows, fog, subdivision and post-processing (done)
 6. Luau scripting
 7. Box3D physics
 8. Audio and `.pak` archives
@@ -40,6 +40,7 @@ cmake --build build --target lint                       # clang-tidy over src/ (
 WPE_UPDATE_GOLDEN=1 ctest --test-dir build -R golden    # regenerate golden PNGs; open and review them before committing
 ./build/samples/spinning_cubes --frames 30 --screenshot out.png   # render headless-ish and inspect the PNG
 ./build/samples/model_viewer assets/meshes/RiggedFigure.glb --frames 2 --yaw 30 --time 0.6 --screenshot out.png
+./build/samples/lighting_demo --frames 2 --time 3 --screenshot out.png --shadow-map shadow.png   # + --ssao --fog --ps1 ...
 ```
 
 The test models live in `assets/meshes/`:
@@ -104,7 +105,15 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - `wpe_model_instantiate` builds the entity tree.
   - Frame order: `wpe_animation_update` → `wpe_scene_update_transforms` → `wpe_scene_render` (inside a renderer frame) → `wpe_draw2d_*`.
   - Skinning happens in the material vertex shader using a world-space joint palette. Skinned meshes skip the node transform and frustum culling.
-  - Lighting is a per-vertex placeholder (one directional light plus ambient, with ambient also reflected specularly) until Milestone 5. Normal maps are loaded but not used yet.
+  - Lighting is hybrid; see AGENTS.md §4.2.1.
+    - Lights are `WPE_Light` entities. The sun is the first directional light with `cast_shadows`, otherwise the first directional light. If the world has no lights at all, `settings.default_sun` is used.
+    - Material varyings are laid out at the top of `material_shader.c` (26 of 32 are used). Keep that layout and the `static_assert` next to it in sync.
+  - Post-processing: `wpe_postfx_apply(chain, renderer, effects, n, camera)` runs after `end_frame`. Draw HUD/2D in a second, non-clearing frame if it shouldn't be post-processed.
+  - Procedural models: `assets/procedural.h` provides a plane, a box and `wpe_model_create_mesh`.
+- **renderer extras:**
+  - `WPE_RenderState.depth_only` writes depth only; the fragment shader may be NULL in that mode. This is used for shadow passes.
+  - `WPE_DrawDesc.subdivision_levels/edge_pixels` require `program->vertex_lerp`.
+  - `wpe_renderer_framebuffer_for_write` returns NULL while a frame is recording.
 - **Tests:** `tests/framework/wpe_test.h` is a custom runner. Every case automatically fails if it changes the live `wpe_alloc` count (a leak) or triggers an engine `wpe_assert`; use `WPE_TEST_EXPECT_ASSERT` when an assert is expected. Register test executables with `wpe_add_test(...)` in `tests/<category>/CMakeLists.txt`. Categories are `unit/`, `stress/` (label `stress`) and `golden/` (reference PNGs in `tests/golden/references/`, compared with a small tolerance).
 - **Planned (see AGENTS.md §4–5 and §9):**
   - Fixed-timestep physics and Luau `on_fixed_update`.

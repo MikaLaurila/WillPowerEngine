@@ -243,8 +243,195 @@ static void wpe__clip_and_setup(WPE_Renderer* renderer, wpe__TriOutput* output, 
     }
 }
 
+static bool wpe__finite4(WPE_Vec4 p) {
+    return isfinite(p.x) && isfinite(p.y) && isfinite(p.z) && isfinite(p.w);
+}
+
+/* Rejects, clips or directly sets up one shaded triangle. */
+static void wpe__process_triangle(WPE_Renderer* renderer, wpe__TriOutput* output, uint32_t draw_index,
+                                  const WPE_DrawDesc* desc, const WPE_Vec4* positions[3],
+                                  const float* varyings[3]) {
+    uint32_t codes[3];
+    bool finite = true;
+    for (int i = 0; i < 3; ++i) {
+        finite = finite && wpe__finite4(*positions[i]);
+        codes[i] = wpe__outcode(*positions[i]);
+    }
+    /* Non-finite positions would poison clipping and fixed-point conversion; drop them. */
+    if (!finite || (codes[0] & codes[1] & codes[2])) {
+        ++output->clipped; /* Entirely outside one plane. */
+        return;
+    }
+    const uint32_t crossing = codes[0] | codes[1] | codes[2];
+    if (crossing == 0) {
+        wpe__setup_triangle(renderer, output, draw_index, desc, positions, varyings);
+    } else {
+        ++output->clipped;
+        wpe__clip_and_setup(renderer, output, draw_index, desc, positions, varyings, crossing);
+    }
+}
+
+/* ---- Adaptive subdivision ------------------------------------------------------------------------- */
+
+/*
+ * Whether an edge must be split. Depends only on the two endpoint positions (symmetric), so both
+ * triangles sharing an edge make the same decision and no T-junctions appear.
+ */
+static bool wpe__edge_needs_split(const WPE_Renderer* renderer, WPE_Vec4 a, WPE_Vec4 b, float threshold) {
+    const bool a_front = a.w > WPE__CLIP_W_EPSILON, b_front = b.w > WPE__CLIP_W_EPSILON;
+    if (!a_front && !b_front) return false; /* Entirely behind the camera: will be rejected. */
+    if (a_front != b_front) return true;    /* Crosses the camera plane: refine near the viewer. */
+    const float dx = (a.x / a.w - b.x / b.w) * 0.5f * (float)renderer->framebuffer.width;
+    const float dy = (a.y / a.w - b.y / b.w) * 0.5f * (float)renderer->framebuffer.height;
+    return dx * dx + dy * dy > threshold * threshold;
+}
+
+/* Total order on positions so an edge's midpoint is computed identically from either side. */
+static bool wpe__position_less(WPE_Vec4 a, WPE_Vec4 b) {
+    for (int i = 0; i < 4; ++i) {
+        if (a.v[i] != b.v[i]) return a.v[i] < b.v[i];
+    }
+    return false;
+}
+
+/* Returns the midpoint vertex of edge (i, j), creating and shading it on first use; UINT16_MAX when full. */
+static uint16_t wpe__subdiv_midpoint(wpe__ThreadScratch* s, const WPE_DrawDesc* desc, uint32_t stride,
+                                     uint16_t i, uint16_t j) {
+    if (wpe__position_less(s->vertices[j].position, s->vertices[i].position)) {
+        const uint16_t swap = i;
+        i = j;
+        j = swap;
+    }
+    for (uint32_t m = 0; m < s->midpoint_count; ++m) {
+        if (s->midpoint_keys[m][0] == i && s->midpoint_keys[m][1] == j) return s->midpoint_keys[m][2];
+    }
+    if (s->vertex_count >= WPE__SUBDIV_MAX_VERTICES) return UINT16_MAX;
+
+    const uint16_t index = (uint16_t)s->vertex_count++;
+    wpe__SubdivVertex* v = &s->vertices[index];
+    unsigned char* input = s->inputs + (size_t)index * stride;
+    desc->program->vertex_lerp(s->vertices[i].input, s->vertices[j].input, 0.5f, input);
+    v->input = input;
+    desc->program->vertex(desc->uniforms, input, &v->position, v->varyings);
+    s->midpoint_keys[s->midpoint_count][0] = i;
+    s->midpoint_keys[s->midpoint_count][1] = j;
+    s->midpoint_keys[s->midpoint_count][2] = index;
+    ++s->midpoint_count;
+    return index;
+}
+
+typedef struct wpe__SubdivTri {
+    uint16_t v[3];
+    uint8_t level;
+} wpe__SubdivTri;
+
+/*
+ * Refines one source triangle with edge-based (red-green) splitting: each long edge is halved and
+ * the triangle is re-triangulated according to how many of its edges were split (1, 2 or 3).
+ * Leaf triangles keep the source winding and go through the regular clip/setup path.
+ */
+static void wpe__subdivide_triangle(WPE_Renderer* renderer, wpe__TriOutput* output, wpe__ThreadScratch* s,
+                                    uint32_t draw_index, const WPE_DrawDesc* desc, const void* inputs[3],
+                                    const WPE_Vec4* positions[3], const float* varyings[3]) {
+    const uint32_t varying_count = desc->program->varying_count;
+    const uint32_t stride = desc->vertex_stride;
+    const float threshold = desc->subdivision_edge_pixels > 1.0f ? desc->subdivision_edge_pixels : 1.0f;
+    const uint8_t max_level =
+        (uint8_t)(desc->subdivision_levels < WPE_MAX_SUBDIVISION_LEVELS ? desc->subdivision_levels
+                                                                        : WPE_MAX_SUBDIVISION_LEVELS);
+    s->vertex_count = 3;
+    s->midpoint_count = 0;
+    for (int i = 0; i < 3; ++i) {
+        s->vertices[i].input = inputs[i];
+        s->vertices[i].position = *positions[i];
+        memcpy(s->vertices[i].varyings, varyings[i], varying_count * sizeof(float));
+    }
+
+    wpe__SubdivTri stack[WPE__SUBDIV_STACK];
+    uint32_t top = 0;
+    stack[top++] = (wpe__SubdivTri){.v = {0, 1, 2}, .level = 0};
+    bool split_any = false;
+
+    while (top > 0) {
+        const wpe__SubdivTri t = stack[--top];
+        bool split[3] = {false, false, false}; /* edge k runs from v[k] to v[(k + 1) % 3] */
+        int split_count = 0;
+        if (t.level < max_level) {
+            for (int k = 0; k < 3; ++k) {
+                split[k] = wpe__edge_needs_split(renderer, s->vertices[t.v[k]].position,
+                                                 s->vertices[t.v[(k + 1) % 3]].position, threshold);
+                split_count += split[k];
+            }
+        }
+
+        uint16_t mid[3] = {UINT16_MAX, UINT16_MAX, UINT16_MAX};
+        bool ok = split_count > 0 && top + 4 <= WPE__SUBDIV_STACK;
+        for (int k = 0; k < 3 && ok; ++k) {
+            if (!split[k]) continue;
+            mid[k] = wpe__subdiv_midpoint(s, desc, stride, t.v[k], t.v[(k + 1) % 3]);
+            ok = mid[k] != UINT16_MAX;
+        }
+        if (!ok) {
+            const WPE_Vec4* leaf_positions[3];
+            const float* leaf_varyings[3];
+            for (int i = 0; i < 3; ++i) {
+                leaf_positions[i] = &s->vertices[t.v[i]].position;
+                leaf_varyings[i] = s->vertices[t.v[i]].varyings;
+            }
+            wpe__process_triangle(renderer, output, draw_index, desc, leaf_positions, leaf_varyings);
+            continue;
+        }
+        split_any = true;
+
+        /* Rotate so the pattern is canonical: for one split it is edge 0, for two it is edges 0 and 1. */
+        int r = 0;
+        if (split_count == 1) r = split[0] ? 0 : (split[1] ? 1 : 2);
+        if (split_count == 2) r = !split[2] ? 0 : (!split[0] ? 1 : 2);
+        const uint16_t v0 = t.v[r], v1 = t.v[(r + 1) % 3], v2 = t.v[(r + 2) % 3];
+        const uint16_t m01 = mid[r], m12 = mid[(r + 1) % 3], m20 = mid[(r + 2) % 3];
+        const uint8_t level = (uint8_t)(t.level + 1);
+        if (split_count == 1) {
+            stack[top++] = (wpe__SubdivTri){.v = {v0, m01, v2}, .level = level};
+            stack[top++] = (wpe__SubdivTri){.v = {m01, v1, v2}, .level = level};
+        } else if (split_count == 2) {
+            stack[top++] = (wpe__SubdivTri){.v = {m01, v1, m12}, .level = level};
+            stack[top++] = (wpe__SubdivTri){.v = {v0, m01, m12}, .level = level};
+            stack[top++] = (wpe__SubdivTri){.v = {v0, m12, v2}, .level = level};
+        } else {
+            stack[top++] = (wpe__SubdivTri){.v = {v0, m01, m20}, .level = level};
+            stack[top++] = (wpe__SubdivTri){.v = {m01, v1, m12}, .level = level};
+            stack[top++] = (wpe__SubdivTri){.v = {m20, m12, v2}, .level = level};
+            stack[top++] = (wpe__SubdivTri){.v = {m01, m12, m20}, .level = level};
+        }
+    }
+    if (split_any) ++output->subdivided;
+}
+
+bool wpe__renderer_reserve_scratch(WPE_Renderer* renderer, uint32_t threads, uint32_t max_stride) {
+    if (threads > renderer->thread_scratch_count) {
+        wpe__ThreadScratch* scratch =
+            wpe_realloc(renderer->thread_scratch, (size_t)threads * sizeof *scratch);
+        if (!scratch) return false;
+        memset(scratch + renderer->thread_scratch_count, 0,
+               (size_t)(threads - renderer->thread_scratch_count) * sizeof *scratch);
+        renderer->thread_scratch = scratch;
+        renderer->thread_scratch_count = threads;
+    }
+    const size_t needed = (size_t)max_stride * WPE__SUBDIV_MAX_VERTICES;
+    for (uint32_t t = 0; t < threads; ++t) {
+        wpe__ThreadScratch* s = &renderer->thread_scratch[t];
+        if (s->inputs_capacity >= needed) continue;
+        unsigned char* inputs = wpe_realloc(s->inputs, needed);
+        if (!inputs) return false;
+        s->inputs = inputs;
+        s->inputs_capacity = needed;
+    }
+    return true;
+}
+
+/* ---- Triangle stage ------------------------------------------------------------------------------- */
+
 void wpe__renderer_setup_triangles(void* context, uint32_t begin, uint32_t end, uint32_t thread_index) {
-    (void)thread_index;
     WPE_Renderer* renderer = context;
     static const float no_varyings[WPE_MAX_VARYINGS];
 
@@ -253,16 +440,18 @@ void wpe__renderer_setup_triangles(void* context, uint32_t begin, uint32_t end, 
         const wpe__Draw* draw = renderer->sorted[job->draw];
         const WPE_DrawDesc* desc = &draw->desc;
         const uint32_t varying_count = desc->program->varying_count;
+        const unsigned char* vertex_bytes = desc->vertices;
+        const bool subdivide = desc->subdivision_levels > 0;
         wpe__TriOutput* output = &renderer->tri_outputs[j];
         output->count = 0;
         output->culled = 0;
         output->clipped = 0;
+        output->subdivided = 0;
 
         for (uint32_t t = job->begin; t < job->end; ++t) {
             const WPE_Vec4* positions[3];
             const float* varyings[3];
-            uint32_t codes[3];
-            bool finite = true;
+            const void* inputs[3];
             for (int i = 0; i < 3; ++i) {
                 const uint32_t vertex =
                     desc->indices ? desc->indices[t * 3 + (uint32_t)i] : t * 3 + (uint32_t)i;
@@ -270,22 +459,15 @@ void wpe__renderer_setup_triangles(void* context, uint32_t begin, uint32_t end, 
                 varyings[i] = varying_count
                                   ? renderer->varyings + draw->varying_base + (size_t)vertex * varying_count
                                   : no_varyings;
-                const WPE_Vec4 p = *positions[i];
-                finite = finite && isfinite(p.x) && isfinite(p.y) && isfinite(p.z) && isfinite(p.w);
-                codes[i] = wpe__outcode(p);
+                inputs[i] = vertex_bytes + (size_t)vertex * desc->vertex_stride;
             }
 
-            /* Non-finite positions would poison clipping and fixed-point conversion; drop them. */
-            if (!finite || (codes[0] & codes[1] & codes[2])) {
-                ++output->clipped; /* Entirely outside one plane. */
-                continue;
-            }
-            const uint32_t crossing = codes[0] | codes[1] | codes[2];
-            if (crossing == 0) {
-                wpe__setup_triangle(renderer, output, job->draw, desc, positions, varyings);
+            if (subdivide && wpe__finite4(*positions[0]) && wpe__finite4(*positions[1]) &&
+                wpe__finite4(*positions[2])) {
+                wpe__subdivide_triangle(renderer, output, &renderer->thread_scratch[thread_index], job->draw,
+                                        desc, inputs, positions, varyings);
             } else {
-                ++output->clipped;
-                wpe__clip_and_setup(renderer, output, job->draw, desc, positions, varyings, crossing);
+                wpe__process_triangle(renderer, output, job->draw, desc, positions, varyings);
             }
         }
     }

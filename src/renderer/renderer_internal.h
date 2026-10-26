@@ -66,7 +66,32 @@ typedef struct wpe__TriOutput {
     uint32_t capacity;
     uint32_t culled;
     uint32_t clipped;
+    uint32_t subdivided;
 } wpe__TriOutput;
+
+/*
+ * Adaptive subdivision bounds. A fully refined triangle at WPE_MAX_SUBDIVISION_LEVELS has
+ * (2^L + 1)(2^L + 2) / 2 = 153 vertices; the cap leaves headroom for the 3 originals.
+ */
+#define WPE__SUBDIV_MAX_VERTICES 160u
+#define WPE__SUBDIV_STACK 64u
+
+/* A vertex produced (or reused) during subdivision of one source triangle. */
+typedef struct wpe__SubdivVertex {
+    const void* input; /* Input vertex bytes (source buffer or the thread's scratch storage). */
+    WPE_Vec4 position;
+    float varyings[WPE_MAX_VARYINGS];
+} wpe__SubdivVertex;
+
+/* Per-thread scratch for subdivision; allocated during planning, never in parallel stages. */
+typedef struct wpe__ThreadScratch {
+    wpe__SubdivVertex vertices[WPE__SUBDIV_MAX_VERTICES];
+    uint16_t midpoint_keys[WPE__SUBDIV_MAX_VERTICES][3]; /* (endpoint a, endpoint b, midpoint) */
+    uint32_t midpoint_count;
+    uint32_t vertex_count;
+    unsigned char* inputs; /* WPE__SUBDIV_MAX_VERTICES * stride bytes of generated input vertices. */
+    size_t inputs_capacity;
+} wpe__ThreadScratch;
 
 struct WPE_Renderer {
     WPE_Framebuffer framebuffer;
@@ -84,6 +109,9 @@ struct WPE_Renderer {
 
     wpe__TriOutput* tri_outputs; /* One per triangle job; persists across frames. */
     uint32_t tri_output_capacity;
+
+    wpe__ThreadScratch* thread_scratch; /* Indexed by job thread index; persists across frames. */
+    uint32_t thread_scratch_count;
 
     /* Per-frame execution state (frame arena), valid during end_frame. */
     wpe__Draw** sorted; /* Draws in execution order (points into `draws`). */
@@ -105,6 +133,8 @@ struct WPE_Renderer {
 /* Parallel stage callbacks (context is the renderer). */
 void wpe__renderer_shade_vertices(void* context, uint32_t begin, uint32_t end, uint32_t thread_index);
 void wpe__renderer_setup_triangles(void* context, uint32_t begin, uint32_t end, uint32_t thread_index);
+/* Ensures per-thread subdivision scratch for `threads` threads and vertices of `max_stride` bytes. */
+bool wpe__renderer_reserve_scratch(WPE_Renderer* renderer, uint32_t threads, uint32_t max_stride);
 void wpe__renderer_raster_tiles(void* context, uint32_t begin, uint32_t end, uint32_t thread_index);
 
 #endif /* WPE_RENDERER_RENDERER_INTERNAL_H */

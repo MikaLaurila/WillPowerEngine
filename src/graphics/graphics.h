@@ -8,6 +8,7 @@
  *   meshes reference the joint entities that drive them.
  * - WPE_COMP_CAMERA (WPE_Camera): projection parameters; the entity's Transform places the camera
  *   (it looks down its local -Z axis with +Y up).
+ * - WPE_COMP_LIGHT (WPE_Light): directional, point or spot light placed by the entity's Transform.
  * - WPE_COMP_ANIMATOR (WPE_Animator): plays one of a model's animations on the entities created by
  *   wpe_model_instantiate().
  *
@@ -45,6 +46,22 @@ typedef struct WPE_Camera {
     float ortho_height; /* Visible world-space height for orthographic cameras. */
 } WPE_Camera;
 
+typedef enum WPE_LightType {
+    WPE_LIGHT_DIRECTIONAL = 0, /* Shines along the entity's local -Z axis; position ignored. */
+    WPE_LIGHT_POINT,           /* Omnidirectional from the entity's position. */
+    WPE_LIGHT_SPOT,            /* Cone along the entity's local -Z axis. */
+} WPE_LightType;
+
+typedef struct WPE_Light {
+    WPE_LightType type;
+    WPE_Vec3 color; /* Linear-ish RGB in [0, 1] (gamma space shading); multiplied by intensity. */
+    float intensity;
+    float range;       /* Point/spot: distance at which the light fades to zero (> 0). */
+    float inner_cone;  /* Spot: half-angle in radians of full intensity. */
+    float outer_cone;  /* Spot: half-angle in radians where intensity reaches zero (>= inner_cone). */
+    bool cast_shadows; /* Directional only (the main sun). */
+} WPE_Light;
+
 typedef struct WPE_Animator {
     const WPE_Model* model; /* Borrowed. */
     uint32_t animation;     /* Index into model->animations. */
@@ -60,9 +77,13 @@ typedef struct WPE_Animator {
  */
 WPE_Camera wpe_camera_default(void);
 
+/** @return A white light of the given type: intensity 1, range 10, cones 20/30 degrees. @thread_safety Any
+ * thread */
+WPE_Light wpe_light_default(WPE_LightType type);
+
 /**
- * Registers WPE_COMP_MESH, WPE_COMP_CAMERA and WPE_COMP_ANIMATOR. Scene components must be
- * registered too (wpe_scene_register_components()).
+ * Registers WPE_COMP_MESH, WPE_COMP_CAMERA, WPE_COMP_LIGHT and WPE_COMP_ANIMATOR. Scene components
+ * must be registered too (wpe_scene_register_components()).
  *
  * @thread_safety Thread owning the world
  */

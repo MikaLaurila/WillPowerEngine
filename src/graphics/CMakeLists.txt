@@ -3,6 +3,7 @@ add_library(wpe_graphics STATIC
     components.c
     draw2d.c
     material_shader.c
+    postfx.c
     scene_render.c)
 add_library(wpe::graphics ALIAS wpe_graphics)
 
@@ -11,5 +12,5 @@ wpe_configure_target(wpe_graphics)
 
 # Shaders run per vertex/pixel; keep them optimized in Debug builds as well.
 if(NOT MSVC)
-    set_source_files_properties(material_shader.c draw2d.c PROPERTIES COMPILE_OPTIONS "-O2")
+    set_source_files_properties(material_shader.c draw2d.c postfx.c PROPERTIES COMPILE_OPTIONS "-O2")
 endif()

@@ -183,10 +183,20 @@ static uint64_t wpe__raster_triangle(WPE_Renderer* renderer, const wpe__SetupTri
             input.x = x;
             input.y = y;
             input.depth = depth;
-            WPE_Vec4 color;
+            WPE_Vec4 color = {0};
+            if (state.depth_only) {
+                /* Depth-only: an optional fragment shader may discard; color is never written. */
+                if (fragment) {
+                    ++shaded;
+                    if (!fragment(desc->uniforms, &input, &color)) continue;
+                }
+                if (state.depth_write) fb->depth[index] = depth;
+                continue;
+            }
+
+            /* Submit validation guarantees a fragment shader for color-writing draws. */
             ++shaded;
             if (!fragment(desc->uniforms, &input, &color)) continue;
-
             if (state.blend == WPE_BLEND_ALPHA_DITHER) {
                 if (!wpe__dither_keeps(color.w, x, y)) continue;
                 color.w = 1.0f;

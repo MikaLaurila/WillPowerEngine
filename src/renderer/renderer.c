@@ -68,6 +68,9 @@ void wpe_renderer_destroy(WPE_Renderer* renderer) {
     for (uint32_t i = 0; i < renderer->tri_output_capacity; ++i)
         wpe_free(renderer->tri_outputs[i].tris);
     wpe_free(renderer->tri_outputs);
+    for (uint32_t i = 0; i < renderer->thread_scratch_count; ++i)
+        wpe_free(renderer->thread_scratch[i].inputs);
+    wpe_free(renderer->thread_scratch);
     wpe_free(renderer->draws);
     wpe_arena_release(&renderer->frame_arena);
     wpe_free(renderer->framebuffer.color);
@@ -88,6 +91,14 @@ WPE_Result wpe_renderer_resize(WPE_Renderer* renderer, uint32_t width, uint32_t 
 
 const WPE_Framebuffer* wpe_renderer_framebuffer(const WPE_Renderer* renderer) {
     return renderer ? &renderer->framebuffer : NULL;
+}
+
+WPE_Framebuffer* wpe_renderer_framebuffer_for_write(WPE_Renderer* renderer) {
+    return renderer && !renderer->recording ? &renderer->framebuffer : NULL;
+}
+
+WPE_JobSystem* wpe_renderer_jobs(const WPE_Renderer* renderer) {
+    return renderer ? renderer->jobs : NULL;
 }
 
 WPE_RenderStats wpe_renderer_stats(const WPE_Renderer* renderer) {
@@ -111,8 +122,17 @@ WPE_Result wpe_renderer_begin_frame(WPE_Renderer* renderer, const WPE_ClearDesc*
 
 static bool wpe__renderer_validate_draw(const WPE_DrawDesc* draw) {
     const WPE_ShaderProgram* program = draw->program;
-    if (!program || !program->vertex || !program->fragment) {
+    if (!program || !program->vertex || (!program->fragment && !draw->state.depth_only)) {
         wpe_log_error("draw has no complete shader program");
+        return false;
+    }
+    if (draw->subdivision_levels > WPE_MAX_SUBDIVISION_LEVELS) {
+        wpe_log_error("subdivision level %u exceeds the maximum of %u", draw->subdivision_levels,
+                      WPE_MAX_SUBDIVISION_LEVELS);
+        return false;
+    }
+    if (draw->subdivision_levels > 0 && !program->vertex_lerp) {
+        wpe_log_error("draw requests subdivision but the program has no vertex_lerp");
         return false;
     }
     if (program->varying_count > WPE_MAX_VARYINGS) {
@@ -218,10 +238,13 @@ static bool wpe__renderer_plan_jobs(WPE_Renderer* renderer) {
         qsort(renderer->sorted, draw_count, sizeof *renderer->sorted, wpe__renderer_compare_draws);
 
     uint32_t vertex_jobs = 0, tri_jobs = 0;
-    uint32_t vertex_total = 0;
+    uint32_t vertex_total = 0, max_subdiv_stride = 0;
     size_t varying_total = 0;
     for (uint32_t i = 0; i < draw_count; ++i) {
         wpe__Draw* draw = renderer->sorted[i];
+        if (draw->desc.subdivision_levels > 0 && draw->desc.vertex_stride > max_subdiv_stride) {
+            max_subdiv_stride = draw->desc.vertex_stride;
+        }
         draw->vertex_base = vertex_total;
         draw->varying_base = varying_total;
         vertex_total += draw->desc.vertex_count;
@@ -255,6 +278,12 @@ static bool wpe__renderer_plan_jobs(WPE_Renderer* renderer) {
                                      : draw->triangle_count;
             renderer->tri_jobs[renderer->tri_job_count++] = (wpe__Job){.draw = d, .begin = t, .end = end};
         }
+    }
+
+    /* Subdivision scratch is sized here so the parallel triangle stage never allocates it. */
+    if (max_subdiv_stride > 0 &&
+        !wpe__renderer_reserve_scratch(renderer, wpe_jobs_thread_count(renderer->jobs), max_subdiv_stride)) {
+        return false;
     }
 
     /* Triangle job outputs persist across frames; only the table of them grows here. */
@@ -352,6 +381,7 @@ WPE_Result wpe_renderer_end_frame(WPE_Renderer* renderer) {
     for (uint32_t j = 0; j < renderer->tri_job_count; ++j) {
         renderer->stats.triangles_culled += renderer->tri_outputs[j].culled;
         renderer->stats.triangles_clipped += renderer->tri_outputs[j].clipped;
+        renderer->stats.triangles_subdivided += renderer->tri_outputs[j].subdivided;
     }
 
     if (!wpe__renderer_bin_triangles(renderer)) goto out_of_memory;

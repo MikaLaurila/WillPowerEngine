@@ -32,6 +32,15 @@ WPE_Camera wpe_camera_default(void) {
     return (WPE_Camera){.fov_y = WPE_PI / 3.0f, .near_z = 0.1f, .far_z = 500.0f, .ortho_height = 10.0f};
 }
 
+WPE_Light wpe_light_default(WPE_LightType type) {
+    return (WPE_Light){.type = type,
+                       .color = wpe_vec3(1, 1, 1),
+                       .intensity = 1.0f,
+                       .range = 10.0f,
+                       .inner_cone = 20.0f * WPE_PI / 180.0f,
+                       .outer_cone = 30.0f * WPE_PI / 180.0f};
+}
+
 WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs) {
     if (!ecs) return WPE_RESULT_ERROR_NULL_ARG;
     const struct {
@@ -44,6 +53,7 @@ WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs) {
           .alignment = alignof(WPE_MeshRenderer),
           .on_remove = wpe__mesh_renderer_on_remove}},
         {WPE_COMP_CAMERA, {.name = "Camera", .size = sizeof(WPE_Camera), .alignment = alignof(WPE_Camera)}},
+        {WPE_COMP_LIGHT, {.name = "Light", .size = sizeof(WPE_Light), .alignment = alignof(WPE_Light)}},
         {WPE_COMP_ANIMATOR,
          {.name = "Animator",
           .size = sizeof(WPE_Animator),

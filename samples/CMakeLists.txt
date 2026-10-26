@@ -6,3 +6,8 @@ add_executable(model_viewer model_viewer/main.c)
 target_link_libraries(model_viewer PRIVATE wpe::graphics wpe::platform)
 target_compile_definitions(model_viewer PRIVATE WPE_SAMPLE_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
 wpe_configure_target(model_viewer)
+
+add_executable(lighting_demo lighting_demo/main.c)
+target_link_libraries(lighting_demo PRIVATE wpe::graphics wpe::platform)
+target_compile_definitions(lighting_demo PRIVATE WPE_SAMPLE_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
+wpe_configure_target(lighting_demo)

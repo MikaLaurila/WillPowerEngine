@@ -5,6 +5,19 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Lighting: `WPE_Light` component (directional/point/spot). Hybrid shading: per-vertex lighting
+  for ambient, up to 4 point/spot lights per object and the sun; per-pixel sun shadows and
+  normal-mapped sun lighting. Ambient is also reflected specularly.
+- Renderer: crack-free adaptive subdivision of near-camera triangles before vertex shading
+  (`subdivision_levels`, `vertex_lerp`), depth-only draws, 32 varyings, writable framebuffer
+  access between frames.
+- Shadows: texel-snapped orthographic shadow map for the main directional light with 3x3 PCF.
+- Fog (linear/exponential) in the material shader.
+- Post-processing chain (`graphics/postfx.h`): multi-pass, row-parallel effects with SSAO,
+  chromatic aberration, PS1-style dither/quantization, vignette and color adjustment.
+- Assets: tangent generation for normal-mapped meshes without tangents; procedural plane/box
+  models and `wpe_model_create_mesh`.
+- `samples/lighting_demo`; golden images for lights/shadows and post-processing.
 - Assets (`src/assets`): glTF 2.0 / GLB loader (meshes, materials, textures, nodes, skins,
   animations; strips/fans, flat normals, data URIs, KHR_texture_transform, emissive_strength,
   specular-glossiness, unlit, transmission approximation, mesh quantization; parallel texture
@@ -47,4 +60,7 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - GitHub Actions CI for Linux (GCC 14) and Windows (MSYS2 UCRT64 GCC).
 
 ### Changed
+- **BREAKING**: `WPE_SceneRenderSettings` replaced its single `light` with ambient, fog, shadow,
+  subdivision and default-sun settings; lights now come from `WPE_Light` entities.
+- **BREAKING**: `WPE_MAX_VARYINGS` raised to 32; `WPE_ShaderProgram` gained `vertex_lerp`.
 - **BREAKING**: `wpe_assert_fail` is now `[[noreturn]]`; an assert handler that returns aborts the process.

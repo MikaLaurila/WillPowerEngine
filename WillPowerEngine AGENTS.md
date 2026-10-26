@@ -239,7 +239,18 @@ Output (SDL texture)
 - Per-frame memory comes from a frame arena, and per-job buffers persist between frames, so steady-state frames make no heap allocations (also enforced by a test).
 - Shaders are plain C function pointers called concurrently. They must be free of side effects apart from writing their outputs.
 - Blend modes: opaque, alpha, additive, and `WPE_BLEND_ALPHA_DITHER` (4×4 Bayer screen-door transparency, order-independent).
-- Post-processing (Milestone 5) will run full-screen in parallel.
+- Adaptive subdivision runs inside the parallel triangle stage. It splits edges, not triangles: whether an edge is split depends only on its own two endpoints, and midpoints are computed in a canonical order, so meshes stay crack-free. New vertices come from the program's `vertex_lerp` and are run through the vertex shader. Per-thread scratch for this is allocated in the serial planning stage.
+- Post-processing (`graphics/postfx.h`) runs between frames. Effects are multi-pass, process rows in parallel, and swap between two color buffers.
+
+### 4.2.1 Lighting model (hybrid, decided in Milestone 5)
+
+- **Per vertex:** ambient, up to `WPE_MAX_OBJECT_LIGHTS` (4) point/spot lights per object (the most influential are chosen per object's bounding sphere), and the sun.
+- **Subdivision:** adaptive subdivision near the camera keeps vertex lighting smooth up close.
+- **Per pixel:** the sun's shadow (orthographic shadow map, texel-snapped, 3×3 PCF), plus normal-mapped sun lighting using tangent-space sun and half vectors.
+- **Materials:** traditional diffuse/specular/gloss. Metallic-roughness inputs are converted per pixel, and ambient is also reflected specularly as a uniform environment.
+- **Fog:** applied in the material shader.
+- **Light falloff:** windowed and inverse-square-like, `(1 - (d/r)^4)^2 / (1 + (4d/r)^2)`. It is exactly zero at the light's range.
+- **Shadow limits:** only the main directional light casts shadows. Point and spot lights don't (NOTE: limitation).
 
 ### 4.3 Scripting Integration
 

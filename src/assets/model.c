@@ -522,6 +522,59 @@ static bool wpe__unpack(const cgltf_accessor* accessor, float* out, size_t compo
     return cgltf_accessor_unpack_floats(accessor, out, components * count) == components * count;
 }
 
+/*
+ * Generates per-vertex tangents from UV gradients (Lengyel's method): per-triangle tangents and
+ * bitangents are accumulated, then Gram-Schmidt orthogonalized against the normal; w stores the
+ * bitangent handedness. Vertices without usable UV gradients get an arbitrary perpendicular.
+ */
+static void wpe__generate_tangents(WPE_MeshVertex* vertices, uint32_t vertex_count, const uint32_t* indices,
+                                   uint32_t index_count, uint32_t texcoord, float* scratch) {
+    float* tan = scratch;                            /* vertex_count * 3 */
+    float* bit = scratch + (size_t)vertex_count * 3; /* vertex_count * 3 */
+    memset(scratch, 0, (size_t)vertex_count * 6 * sizeof(float));
+
+    for (uint32_t t = 0; t + 2 < index_count; t += 3) {
+        const uint32_t i0 = indices[t], i1 = indices[t + 1], i2 = indices[t + 2];
+        const WPE_MeshVertex *a = &vertices[i0], *b = &vertices[i1], *c = &vertices[i2];
+        const WPE_Vec2 ua = texcoord ? a->uv1 : a->uv0, ub = texcoord ? b->uv1 : b->uv0,
+                       uc = texcoord ? c->uv1 : c->uv0;
+        const WPE_Vec3 e1 = wpe_vec3_sub(b->position, a->position),
+                       e2 = wpe_vec3_sub(c->position, a->position);
+        const float du1 = ub.x - ua.x, dv1 = ub.y - ua.y, du2 = uc.x - ua.x, dv2 = uc.y - ua.y;
+        const float det = du1 * dv2 - du2 * dv1;
+        if (!(fabsf(det) > 1e-12f)) continue;
+        const float r = 1.0f / det;
+        const WPE_Vec3 sdir =
+            wpe_vec3_scale(wpe_vec3_sub(wpe_vec3_scale(e1, dv2), wpe_vec3_scale(e2, dv1)), r);
+        const WPE_Vec3 tdir =
+            wpe_vec3_scale(wpe_vec3_sub(wpe_vec3_scale(e2, du1), wpe_vec3_scale(e1, du2)), r);
+        const uint32_t corners[3] = {i0, i1, i2};
+        for (int k = 0; k < 3; ++k) {
+            for (int axis = 0; axis < 3; ++axis) {
+                tan[(size_t)corners[k] * 3 + (size_t)axis] += sdir.v[axis];
+                bit[(size_t)corners[k] * 3 + (size_t)axis] += tdir.v[axis];
+            }
+        }
+    }
+
+    for (uint32_t v = 0; v < vertex_count; ++v) {
+        const WPE_Vec3 n = vertices[v].normal;
+        const WPE_Vec3 t = wpe_vec3(tan[(size_t)v * 3], tan[(size_t)v * 3 + 1], tan[(size_t)v * 3 + 2]);
+        WPE_Vec3 ortho = wpe_vec3_normalize(wpe_vec3_sub(t, wpe_vec3_scale(n, wpe_vec3_dot(n, t))));
+        if (wpe_vec3_length_sq(ortho) == 0.0f) {
+            /* No UV gradient: any vector perpendicular to the normal keeps shading well-defined. */
+            const WPE_Vec3 axis = fabsf(n.x) < 0.9f ? wpe_vec3(1, 0, 0) : wpe_vec3(0, 1, 0);
+            ortho = wpe_vec3_normalize(wpe_vec3_cross(axis, n));
+        }
+        const WPE_Vec3 b = wpe_vec3(bit[(size_t)v * 3], bit[(size_t)v * 3 + 1], bit[(size_t)v * 3 + 2]);
+        const float handedness = wpe_vec3_dot(wpe_vec3_cross(n, ortho), b) < 0.0f ? -1.0f : 1.0f;
+        vertices[v].tangent[0] = ortho.x;
+        vertices[v].tangent[1] = ortho.y;
+        vertices[v].tangent[2] = ortho.z;
+        vertices[v].tangent[3] = handedness;
+    }
+}
+
 /* Builds a primitive's vertices/indices into the model arrays. Returns WPE_RESULT_ERROR_PARSE on bad data. */
 static WPE_Result wpe__build_primitive(wpe__Loader* loader, const wpe__PrimitivePlan* plan,
                                        WPE_MeshPrimitive* out, uint32_t vertex_offset, uint32_t index_offset,
@@ -650,13 +703,23 @@ static WPE_Result wpe__build_primitive(wpe__Loader* loader, const wpe__Primitive
     if (plan->flat_normals) wpe_free(source_vertices);
     if (result != WPE_RESULT_OK) return result;
 
+    const uint32_t material =
+        p->material ? (uint32_t)cgltf_material_index(loader->gltf, p->material) : model->material_count - 1;
+    const WPE_TextureRef* normal_map = &model->materials[material].normal_texture;
+    if (!plan->attributes[WPE__ATTR_TANGENT] && normal_map->texture != WPE_MODEL_NONE) {
+        float* tangent_scratch = wpe_alloc((size_t)vertex_count * 6 * sizeof(float));
+        if (!tangent_scratch) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        wpe__generate_tangents(&model->vertices[vertex_offset], vertex_count, indices, tri_count * 3,
+                               normal_map->texcoord, tangent_scratch);
+        wpe_free(tangent_scratch);
+    }
+
     *out = (WPE_MeshPrimitive){
         .vertex_offset = vertex_offset,
         .vertex_count = vertex_count,
         .index_offset = index_offset,
         .index_count = tri_count * 3,
-        .material = p->material ? (uint32_t)cgltf_material_index(loader->gltf, p->material)
-                                : model->material_count - 1,
+        .material = material,
         .bounds = bounds,
     };
     return WPE_RESULT_OK;

@@ -9,7 +9,8 @@ target_link_libraries(wpe_assets_third_party
 add_library(wpe_assets STATIC
     font.c
     image.c
-    model.c)
+    model.c
+    procedural.c)
 add_library(wpe::assets ALIAS wpe_assets)
 
 target_link_libraries(wpe_assets
