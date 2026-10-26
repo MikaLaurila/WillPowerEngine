@@ -120,6 +120,13 @@ typedef struct WPE_FragmentInput {
     float depth; /* Window depth in [0, 1]. */
     bool front_facing;
     const float* varyings; /* Perspective-correct interpolated varyings. */
+    /*
+     * Screen-space derivatives of the varying pair selected by WPE_ShaderProgram::uv_varying, per
+     * pixel step right (uv_dx) and down (uv_dy). Exact for the perspective-correct interpolant.
+     * Zero unless the program sets uv_derivatives.
+     */
+    WPE_Vec2 uv_dx;
+    WPE_Vec2 uv_dy;
 } WPE_FragmentInput;
 
 /**
@@ -134,6 +141,8 @@ typedef struct WPE_ShaderProgram {
     WPE_VertexShaderFn vertex;
     WPE_FragmentShaderFn fragment;
     uint32_t varying_count; /* <= WPE_MAX_VARYINGS */
+    bool uv_derivatives;    /* Compute WPE_FragmentInput::uv_dx/uv_dy (texture LOD selection). */
+    uint32_t uv_varying;    /* First of the two varyings holding the UV; uv_varying + 1 < varying_count. */
 } WPE_ShaderProgram;
 
 /** One draw call: a triangle list, optionally indexed. */

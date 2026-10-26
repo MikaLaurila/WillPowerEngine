@@ -4,14 +4,19 @@ A multithreaded **software rasterizer** 3D game engine in C23 for Windows and Li
 retro resolutions (320×240 to 640×480, scalable to 1280×960). It comes with an editor that AI
 agents can drive fully, and it exports standalone game executables.
 
-> Status: early development. Done so far: the core module, math, the ECS, the scene hierarchy, the
-> job system, and the multithreaded software rasterizer, with an SDL3 window. See
-> [CHANGELOG.md](CHANGELOG.md) for progress.
+> Status: early development. Done so far:
+>
+> - Core module, math, ECS and scene hierarchy
+> - Job system and multithreaded software rasterizer, with an SDL3 window
+> - glTF model loading, textured materials, skinned animation and bitmap-font text
+>
+> See [CHANGELOG.md](CHANGELOG.md) for progress.
 
-Try the demo after building:
+Try the demos after building:
 
 ```bash
-./build/samples/spinning_cubes            # options: --width 640 --height 480 --scale 2 --workers N
+./build/samples/spinning_cubes                                   # --width 640 --height 480 --scale 2 --workers N
+./build/samples/model_viewer assets/meshes/damaged_helmet.glb    # any .glb/.gltf; --dither, --max-texture N
 ```
 
 ## Documents
@@ -33,7 +38,7 @@ cmake --build build --target test_all
 ## Dependencies
 
 Each dependency is added in the milestone that needs it. All are permissively licensed:
-SDL3, cglm, miniaudio, Luau, cimgui, Box3D, zstd.
+SDL3, cglm, cgltf, stb_image, miniaudio, Luau, cimgui, Box3D, zstd.
 
 ## License
 

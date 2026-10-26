@@ -128,6 +128,27 @@ static uint64_t wpe__raster_triangle(WPE_Renderer* renderer, const wpe__SetupTri
     WPE_FragmentInput input = {.front_facing = tri->front_facing, .varyings = varyings};
     uint64_t shaded = 0;
 
+    /*
+     * UV derivatives. With A = sum(l_i * uv_i / w_i) and B = sum(l_i / w_i), uv = A / B, so
+     * d(uv)/dx = (dA/dx - uv * dB/dx) / B. The barycentric weights are affine in screen space, so
+     * dA/dx and dB/dx are per-triangle constants computed here once.
+     */
+    const bool derivatives = desc->program->uv_derivatives;
+    const uint32_t uv_k = desc->program->uv_varying;
+    float dA_dx[2] = {0, 0}, dA_dy[2] = {0, 0}, dB_dx = 0.0f, dB_dy = 0.0f;
+    if (derivatives) {
+        for (int i = 0; i < 3; ++i) {
+            const float dl_dx = (float)row_edges[i].step_x * inv_area;
+            const float dl_dy = (float)row_edges[i].step_y * inv_area;
+            dB_dx += dl_dx * tri->inv_w[i];
+            dB_dy += dl_dy * tri->inv_w[i];
+            for (int c = 0; c < 2; ++c) {
+                dA_dx[c] += dl_dx * tri->varyings[i][uv_k + (uint32_t)c];
+                dA_dy[c] += dl_dy * tri->varyings[i][uv_k + (uint32_t)c];
+            }
+        }
+    }
+
     for (int32_t y = y0; y <= y1; ++y) {
         int64_t e0 = row_edges[0].value, e1 = row_edges[1].value, e2 = row_edges[2].value;
         const size_t row = (size_t)y * fb->width;
@@ -154,6 +175,11 @@ static uint64_t wpe__raster_triangle(WPE_Renderer* renderer, const wpe__SetupTri
                     (l0 * tri->varyings[0][k] + l1 * tri->varyings[1][k] + l2 * tri->varyings[2][k]) * w;
             }
 
+            if (derivatives) {
+                const float u = varyings[uv_k], v = varyings[uv_k + 1];
+                input.uv_dx = (WPE_Vec2){.x = (dA_dx[0] - u * dB_dx) * w, .y = (dA_dx[1] - v * dB_dx) * w};
+                input.uv_dy = (WPE_Vec2){.x = (dA_dy[0] - u * dB_dy) * w, .y = (dA_dy[1] - v * dB_dy) * w};
+            }
             input.x = x;
             input.y = y;
             input.depth = depth;

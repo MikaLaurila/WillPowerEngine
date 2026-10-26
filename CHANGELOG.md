@@ -5,6 +5,20 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Assets (`src/assets`): glTF 2.0 / GLB loader (meshes, materials, textures, nodes, skins,
+  animations; strips/fans, flat normals, data URIs, KHR_texture_transform, emissive_strength,
+  specular-glossiness, unlit, transmission approximation, mesh quantization; parallel texture
+  decoding with optional downscaling), JPEG/PNG decoding, bitmap font sheets.
+- Renderer: mipmapped textures (sRGB-correct mip generation, nearest/bilinear/trilinear, wrap
+  modes) and exact per-pixel UV derivatives from the rasterizer for LOD selection.
+- Graphics (`src/graphics`): MeshRenderer/Camera/Animator components, model instantiation into
+  entities, keyframe animation (linear/step/cubic spline), CPU skinning in the vertex shader,
+  material shader (diffuse/specular/gloss, per-pixel metallic-roughness conversion, alpha
+  mask/blend/dither, emissive, occlusion), scene rendering with frustum culling and depth sorting,
+  batched 2D drawing with pixel-exact bitmap text.
+- Platform: UTF-8 safe whole-file reading.
+- `samples/model_viewer`; golden images for a textured model with text and a skinned figure.
+- Dependencies: cgltf v1.15, stb_image (pinned commit), both approved.
 - Renderer (`src/renderer`): multithreaded tile-based software rasterizer with C vertex/fragment
   shaders, homogeneous clipping with guard band, top-left fill rule, perspective-correct varyings,
   depth test/write, culling, sort keys, opaque/alpha/additive/Bayer-dithered-alpha blending,

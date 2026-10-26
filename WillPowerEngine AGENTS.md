@@ -294,6 +294,13 @@ typedef struct {
 static wpe__AssetCache wpe__g_asset_cache;
 ```
 
+**Current state (glTF milestone):** `wpe_model_load()` turns a .gltf/.glb into an immutable `WPE_Model`. Material conversion:
+- glTF metallic-roughness inputs are kept and converted per pixel in the material shader to diffuse/specular/gloss.
+- Color factors are stored sRGB-encoded so they combine with sRGB texels in gamma-space shading.
+- Required extensions outside the supported list are rejected.
+
+ECS components currently hold borrowed `WPE_Model*` pointers. Handles and ref counting (below) replace them in the pak milestone.
+
 **Rules:**
 - Assets loaded from `.pak` archives (zstd/LZ4 compressed).
 - Reference counting for shared assets.
@@ -313,7 +320,9 @@ willpower_engine/
 │   ├── scene/          # Transform, hierarchy, name components and systems
 │   ├── jobs/           # Worker thread pool (parallel_for)
 │   ├── renderer/       # Software rasterizer (no SDL dependency)
-│   ├── platform/       # SDL3 wrapper: window, present, time, PNG I/O
+│   ├── platform/       # SDL3 wrapper: window, present, time, file and PNG I/O
+│   ├── assets/         # glTF models (cgltf), image decoding (stb_image), bitmap fonts
+│   ├── graphics/       # Mesh/camera/animator components, material shader, scene render, 2D
 │   ├── physics/        # Box3D wrapper
 │   ├── audio/          # miniaudio wrapper
 │   ├── script/         # Luau VM and bindings
@@ -343,6 +352,8 @@ willpower_engine/
   - `scene` depends on `core`, `math` and `ecs`.
   - `renderer` depends on `core`, `math` and `jobs`.
   - `platform` depends on `core` and `renderer`, and uses SDL3 privately.
+  - `assets` depends on `core`, `math`, `renderer`, `jobs` and `platform`, and uses cgltf and stb_image privately.
+  - `graphics` depends on `ecs`, `scene`, `renderer` and `assets`.
 - Only `jobs` and `platform` may include SDL headers; the renderer stays pure CPU so it can be tested headless.
 
 ---
@@ -392,6 +403,8 @@ For non-trivial changes:
 | Luau | Scripting | Latest stable |
 | cimgui | Editor UI | Matching ImGui version |
 | Box3D | Physics | Latest stable |
+| cgltf | glTF 2.0 / GLB parsing (approved for the glTF milestone) | Pinned release (v1.15) |
+| stb_image | JPEG/PNG decoding (approved for the glTF milestone) | Pinned commit |
 | zstd or LZ4 | Compression | Either, documented choice |
 
 ### 7.2 Adding New Dependencies

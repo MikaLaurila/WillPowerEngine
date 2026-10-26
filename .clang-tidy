@@ -4,6 +4,8 @@
 # - signed-bitwise: flags shifts by plain int literals (`x << 24`), which is idiomatic C.
 # - multi-level-implicit-pointer-conversion: flags the standard `T** p = alloc(...)` C idiom.
 # - insecureAPI.DeprecatedOrUnsafeBufferHandling: Annex K (memcpy_s etc.) is not portable.
+# - optin.performance.Padding: we keep related fields together (array next to its count) for
+#   readability; hot-path structs are laid out deliberately and reviewed by hand.
 Checks: >
   -*,
   bugprone-*,
@@ -13,6 +15,7 @@ Checks: >
   -bugprone-multi-level-implicit-pointer-conversion,
   clang-analyzer-*,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -clang-analyzer-optin.performance.Padding,
   performance-*,
   portability-*,
   -portability-avoid-pragma-once,

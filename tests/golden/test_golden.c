@@ -15,7 +15,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "assets/font.h"
 #include "cube_mesh.h"
+#include "graphics/animation.h"
+#include "graphics/draw2d.h"
+#include "graphics/graphics.h"
+#include "graphics/scene_render.h"
 #include "platform/platform.h"
 #include "renderer/renderer.h"
 #include "renderer/shaders.h"
@@ -172,4 +177,88 @@ static void test_golden_cubes_scene(void) {
     wpe_jobs_destroy(jobs);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_golden_cubes_scene))
+/* Renders an instantiated model from a fixed orbit position, optionally posed and with a text overlay. */
+static void render_model_golden(const char* name, const char* model_path, float yaw_deg, float pitch_deg,
+                                float distance, float target_y, float anim_time, const char* overlay) {
+    WPE_Model* model = NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_load(model_path, &(WPE_ModelLoadOptions){.max_texture_size = 128}, &model));
+    WPE_Ecs* ecs = NULL;
+    WPE_TEST_ASSERT_OK(wpe_ecs_create(&ecs));
+    WPE_TEST_ASSERT_OK(wpe_scene_register_components(ecs));
+    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(ecs));
+    WPE_Entity root;
+    const bool animated = model->animation_count > 0;
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(
+        ecs, model, &(WPE_InstantiateOptions){.animation = animated ? 0 : WPE_MODEL_NONE}, &root));
+    WPE_Animator* animator = wpe_ecs_get_component(ecs, root, WPE_COMP_ANIMATOR);
+    if (animator) {
+        animator->time = anim_time;
+        wpe_animation_apply(ecs, animator);
+    }
+
+    /* Orbit camera aimed at (0, target_y, 0). */
+    const float yaw = yaw_deg * WPE_PI / 180.0f, pitch = pitch_deg * WPE_PI / 180.0f;
+    const WPE_Vec3 target = wpe_vec3(0, target_y, 0);
+    const WPE_Vec3 eye =
+        wpe_vec3_add(target, wpe_vec3(sinf(yaw) * cosf(pitch) * distance, sinf(pitch) * distance,
+                                      cosf(yaw) * cosf(pitch) * distance));
+    const WPE_Mat4 view = wpe_mat4_look_at(eye, target, wpe_vec3(0, 1, 0));
+    WPE_Mat4 camera_world;
+    WPE_TEST_ASSERT(wpe_mat4_inverse(&view, &camera_world));
+    WPE_Transform camera_transform = wpe_transform_identity();
+    WPE_TEST_ASSERT(wpe_mat4_decompose(&camera_world, &camera_transform.position, &camera_transform.rotation,
+                                       &camera_transform.scale));
+    const WPE_Entity camera = wpe_ecs_spawn(ecs);
+    const WPE_Camera camera_params = wpe_camera_default();
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, camera, WPE_COMP_TRANSFORM, &camera_transform, NULL));
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, camera, WPE_COMP_CAMERA, &camera_params, NULL));
+    WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
+
+    WPE_JobSystem* jobs = NULL;
+    WPE_TEST_ASSERT_OK(wpe_jobs_create(3, &jobs));
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(
+        &(WPE_RendererDesc){.width = GOLDEN_W, .height = GOLDEN_H, .jobs = jobs}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_Draw2D* d2d = NULL;
+    WPE_TEST_ASSERT_OK(wpe_draw2d_create(&d2d));
+    WPE_BitmapFont* font = NULL;
+    WPE_TEST_ASSERT_OK(wpe_font_load(WPE_GOLDEN_ASSETS_DIR "/fonts/small.png", &font));
+
+    WPE_TEST_ASSERT_OK(
+        wpe_renderer_begin_frame(renderer, &(WPE_ClearDesc){.clear_color = true,
+                                                            .color = wpe_color_rgba8(36, 40, 54, 255),
+                                                            .clear_depth = true,
+                                                            .depth = 1}));
+    WPE_TEST_ASSERT_OK(wpe_scene_render(sr, renderer, ecs, camera, NULL, NULL));
+    if (overlay) {
+        wpe_draw2d_begin(d2d, GOLDEN_W, GOLDEN_H);
+        wpe_draw2d_rect(d2d, (WPE_Rect){0, 0, GOLDEN_W, 9}, wpe_color_rgba8(0, 0, 0, 140));
+        wpe_draw2d_text(d2d, font, 2, 2, overlay, 0xFFFFFFFFu, 1.0f);
+        WPE_TEST_ASSERT_OK(wpe_draw2d_submit(d2d, renderer));
+    }
+    WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
+    compare_with_reference(name, wpe_renderer_framebuffer(renderer));
+
+    wpe_font_destroy(font);
+    wpe_draw2d_destroy(d2d);
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_jobs_destroy(jobs);
+    wpe_ecs_destroy(ecs);
+    wpe_model_destroy(model);
+}
+
+static void test_golden_textured_helmet_with_text(void) {
+    render_model_golden("helmet", WPE_GOLDEN_ASSETS_DIR "/meshes/damaged_helmet.glb", 25.0f, 10.0f, 3.2f,
+                        0.0f, 0.0f, "Helmet 0123456789 !?#");
+}
+
+static void test_golden_skinned_figure_posed(void) {
+    render_model_golden("rigged_figure", WPE_GOLDEN_ASSETS_DIR "/meshes/RiggedFigure.glb", 30.0f, 5.0f, 1.6f,
+                        0.75f, 0.6f, NULL);
+}
+
+WPE_TEST_MAIN(WPE_TEST_CASE(test_golden_cubes_scene), WPE_TEST_CASE(test_golden_textured_helmet_with_text),
+              WPE_TEST_CASE(test_golden_skinned_figure_posed))

@@ -11,6 +11,7 @@
 #ifndef WPE_PLATFORM_PLATFORM_H
 #define WPE_PLATFORM_PLATFORM_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "core/result.h"
@@ -92,5 +93,20 @@ WPE_Result wpe_image_load_png(const char* path, WPE_Image* out_image);
 
 /** Releases an image's pixels and zeroes it; NULL is a no-op. @thread_safety Any thread */
 void wpe_image_free(WPE_Image* image);
+
+/**
+ * Reads a whole file into memory. Paths are UTF-8 on every platform.
+ *
+ * @param path File path; must not be NULL.
+ * @param out_data Receives a wpe_alloc() buffer owned by the caller (release with wpe_free()). A
+ *                 terminating NUL byte is appended (not counted in out_size) so text can be
+ *                 parsed in place.
+ * @param out_size Receives the file size in bytes.
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_IO (logged) or
+ *         WPE_RESULT_ERROR_OUT_OF_MEMORY.
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_file_read_all(const char* path, void** out_data, size_t* out_size);
 
 #endif /* WPE_PLATFORM_PLATFORM_H */

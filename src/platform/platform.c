@@ -169,6 +169,43 @@ WPE_Result wpe_image_load_png(const char* path, WPE_Image* out_image) {
     return WPE_RESULT_OK;
 }
 
+/* ---- Files ---------------------------------------------------------------------------------------- */
+
+WPE_Result wpe_file_read_all(const char* path, void** out_data, size_t* out_size) {
+    if (!path || !out_data || !out_size) return WPE_RESULT_ERROR_NULL_ARG;
+    *out_data = NULL;
+    *out_size = 0;
+
+    SDL_IOStream* stream = SDL_IOFromFile(path, "rb");
+    if (!stream) {
+        wpe_log_error("cannot open '%s': %s", path, SDL_GetError());
+        return WPE_RESULT_ERROR_IO;
+    }
+    const Sint64 size = SDL_GetIOSize(stream);
+    if (size < 0 || (uint64_t)size >= SIZE_MAX) {
+        wpe_log_error("cannot determine size of '%s': %s", path, SDL_GetError());
+        SDL_CloseIO(stream);
+        return WPE_RESULT_ERROR_IO;
+    }
+
+    unsigned char* data = wpe_alloc((size_t)size + 1);
+    if (!data) {
+        SDL_CloseIO(stream);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    const size_t read = size > 0 ? SDL_ReadIO(stream, data, (size_t)size) : 0;
+    const bool closed = SDL_CloseIO(stream);
+    if (read != (size_t)size || !closed) {
+        wpe_log_error("failed to read '%s': %s", path, SDL_GetError());
+        wpe_free(data);
+        return WPE_RESULT_ERROR_IO;
+    }
+    data[size] = '\0';
+    *out_data = data;
+    *out_size = (size_t)size;
+    return WPE_RESULT_OK;
+}
+
 void wpe_image_free(WPE_Image* image) {
     if (!image) return;
     wpe_free(image->pixels);

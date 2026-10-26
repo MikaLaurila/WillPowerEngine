@@ -14,7 +14,7 @@ Development runs in milestones; the user reviews each one before the next starts
 1. Build system, core and tests (done)
 2. ECS, plus math and the scene transform hierarchy (done)
 3. Rasterizer and window (SDL3) (done)
-4. glTF and materials
+4. glTF, materials, textures, fonts and skinned animation (done)
 5. Lighting, shadows and post-processing
 6. Luau scripting
 7. Box3D physics
@@ -22,7 +22,7 @@ Development runs in milestones; the user reviews each one before the next starts
 9. Runtime/export
 10. Editor
 
-Do not look outside the working directory. Third-party libraries come in through CMake FetchContent, pinned to release tags or commits. Only use the approved list in AGENTS.md §7 (SDL3, cglm, miniaudio, Luau, cimgui, Box3D, zstd). Add each one in the milestone that needs it, wrapped so its API is not exposed in public headers, and compiled *without* `wpe_configure_target` so its warnings don't break the build.
+Do not look outside the working directory. Third-party libraries come in through CMake FetchContent, pinned to release tags or commits. Only use the approved list in AGENTS.md §7 (SDL3, cglm, cgltf, stb_image, miniaudio, Luau, cimgui, Box3D, zstd); anything else needs the user's approval. Add each one in the milestone that needs it, wrapped so its API is not exposed in public headers, and compiled *without* `wpe_configure_target` so its warnings don't break the build.
 
 ## Commands
 
@@ -39,7 +39,16 @@ cmake --build build --target format                     # clang-format; run befo
 cmake --build build --target lint                       # clang-tidy over src/ (warnings are errors)
 WPE_UPDATE_GOLDEN=1 ctest --test-dir build -R golden    # regenerate golden PNGs; open and review them before committing
 ./build/samples/spinning_cubes --frames 30 --screenshot out.png   # render headless-ish and inspect the PNG
+./build/samples/model_viewer assets/meshes/RiggedFigure.glb --frames 2 --yaw 30 --time 0.6 --screenshot out.png
 ```
+
+The test models live in `assets/meshes/`:
+- `damaged_helmet.glb`: JPEG textures
+- `car_concept.glb`: 213k triangles, many material extensions
+- `commercial_refrigerator.glb`: requires `KHR_materials_transmission`
+- `RiggedFigure.glb`: skinned and animated
+
+The font is `assets/fonts/small.png`.
 
 The first configure downloads and builds SDL3 (about 70 s). To check rendering output yourself, use `--screenshot` or golden test images and open the PNG; when a golden test fails, its output is saved as `build/tests/golden/<name>_actual.png`.
 
@@ -77,7 +86,25 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - Shaders are C functions called concurrently from worker threads; varyings are capped at 16.
   - Output is deterministic across thread counts, and steady-state frames don't allocate; tests enforce both.
   - The rasterizer files are always compiled with `-O2`, even in Debug.
-- **platform** (`platform/platform.h`): the SDL3 window, presenting (nearest-neighbour, letterboxed), time, and PNG load/save. Only `jobs` and `platform` may include SDL.
+- **platform** (`platform/platform.h`): the SDL3 window, presenting (nearest-neighbour, letterboxed), time, PNG load/save, and UTF-8-safe `wpe_file_read_all`. Only `jobs` and `platform` may include SDL.
+- **renderer textures** (`renderer/texture.h`):
+  - Textures are mipmapped, with sRGB-correct mip generation, and have an optional `max_dimension` downscale.
+  - For LOD selection, a program sets `uv_derivatives`/`uv_varying`, and the rasterizer then provides exact per-pixel `uv_dx`/`uv_dy`.
+  - Shading happens in gamma (sRGB) space.
+- **assets** (`assets/`): `wpe_model_load` (cgltf) produces an immutable `WPE_Model` whose arrays live in an internal arena.
+  - Color factors are stored sRGB-encoded.
+  - Metallic-roughness inputs are kept and converted per pixel.
+  - A texture slot can be NULL if decoding failed; treat it as absent.
+  - Unsupported *required* glTF extensions are rejected.
+  - `wpe_image_decode` uses stb_image for JPEG and PNG.
+  - Fonts: `wpe_font_load` reads magenta-separated glyph sheets and checks for exactly 95 glyphs.
+  - cgltf and stb are compiled in `src/assets/third_party/` without engine warnings and allocate through `wpe_alloc`.
+- **graphics** (`graphics/`):
+  - Components: `WPE_MeshRenderer`, `WPE_Camera` (looks down local −Z) and `WPE_Animator`. Their remove hooks free the joint and node arrays, and they hold borrowed `WPE_Model*` pointers, so the model must outlive its entities.
+  - `wpe_model_instantiate` builds the entity tree.
+  - Frame order: `wpe_animation_update` → `wpe_scene_update_transforms` → `wpe_scene_render` (inside a renderer frame) → `wpe_draw2d_*`.
+  - Skinning happens in the material vertex shader using a world-space joint palette. Skinned meshes skip the node transform and frustum culling.
+  - Lighting is a per-vertex placeholder (one directional light plus ambient, with ambient also reflected specularly) until Milestone 5. Normal maps are loaded but not used yet.
 - **Tests:** `tests/framework/wpe_test.h` is a custom runner. Every case automatically fails if it changes the live `wpe_alloc` count (a leak) or triggers an engine `wpe_assert`; use `WPE_TEST_EXPECT_ASSERT` when an assert is expected. Register test executables with `wpe_add_test(...)` in `tests/<category>/CMakeLists.txt`. Categories are `unit/`, `stress/` (label `stress`) and `golden/` (reference PNGs in `tests/golden/references/`, compared with a small tolerance).
 - **Planned (see AGENTS.md §4–5 and §9):**
   - Fixed-timestep physics and Luau `on_fixed_update`.

@@ -1,0 +1,15 @@
+add_library(wpe_graphics STATIC
+    animation.c
+    components.c
+    draw2d.c
+    material_shader.c
+    scene_render.c)
+add_library(wpe::graphics ALIAS wpe_graphics)
+
+target_link_libraries(wpe_graphics PUBLIC wpe::core wpe::math wpe::ecs wpe::scene wpe::renderer wpe::assets)
+wpe_configure_target(wpe_graphics)
+
+# Shaders run per vertex/pixel; keep them optimized in Debug builds as well.
+if(NOT MSVC)
+    set_source_files_properties(material_shader.c draw2d.c PROPERTIES COMPILE_OPTIONS "-O2")
+endif()

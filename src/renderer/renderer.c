@@ -119,6 +119,12 @@ static bool wpe__renderer_validate_draw(const WPE_DrawDesc* draw) {
         wpe_log_error("shader program uses %u varyings (max %u)", program->varying_count, WPE_MAX_VARYINGS);
         return false;
     }
+    if (program->uv_derivatives && (program->uv_varying >= program->varying_count ||
+                                    program->uv_varying + 1 >= program->varying_count)) {
+        wpe_log_error("shader program requests UV derivatives of varyings %u..%u but has only %u varyings",
+                      program->uv_varying, program->uv_varying + 1, program->varying_count);
+        return false;
+    }
     if (draw->uniforms_size > 0 && !draw->uniforms) {
         wpe_log_error("draw declares %u uniform bytes but no uniform data", draw->uniforms_size);
         return false;

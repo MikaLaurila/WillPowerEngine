@@ -34,3 +34,24 @@ FetchContent_MakeAvailable(SDL3)
 
 add_library(wpe_dep_sdl3 INTERFACE)
 target_link_libraries(wpe_dep_sdl3 INTERFACE SDL3::SDL3-static)
+
+# cgltf v1.15 (MIT) — glTF 2.0 / GLB parser. Header-only; the implementation is compiled once in
+# src/assets/third_party/ with engine allocator hooks.
+FetchContent_Declare(cgltf
+    URL https://github.com/jkuhlmann/cgltf/archive/refs/tags/v1.15.tar.gz
+    URL_HASH SHA256=84e352092e5cd6aab7f66de62ddb66beb5e6f18d412ca9d12950d7a55bfef25a
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    SOURCE_SUBDIR wpe_header_only)
+FetchContent_MakeAvailable(cgltf)
+add_library(wpe_dep_cgltf INTERFACE)
+target_include_directories(wpe_dep_cgltf SYSTEM INTERFACE "${cgltf_SOURCE_DIR}")
+
+# stb_image (public domain / MIT) at commit 013ac3b (2024-05-31) — JPEG and PNG decoding.
+FetchContent_Declare(stb
+    URL https://github.com/nothings/stb/archive/013ac3beddff3dbffafd5177e7972067cd2b5083.tar.gz
+    URL_HASH SHA256=b01aa93e1a968aed55f43e072c98ee401d2f20e897aabdb1a166c7166886ed11
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    SOURCE_SUBDIR wpe_header_only)
+FetchContent_MakeAvailable(stb)
+add_library(wpe_dep_stb INTERFACE)
+target_include_directories(wpe_dep_stb SYSTEM INTERFACE "${stb_SOURCE_DIR}")
