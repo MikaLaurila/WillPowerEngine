@@ -55,10 +55,10 @@ typedef enum WPE_LogLevel {
 /** A single formatted log record. All pointers are only valid during the sink callback. */
 typedef struct WPE_LogMessage {
     WPE_LogLevel level;
-    const char* module;  /* Never NULL. */
-    const char* file;    /* Never NULL. */
+    const char* module; /* Never NULL. */
+    const char* file;   /* Never NULL. */
     int line;
-    const char* text;    /* Formatted message, NUL-terminated, without trailing newline. */
+    const char* text; /* Formatted message, NUL-terminated, without trailing newline. */
 } WPE_LogMessage;
 
 /**
@@ -84,13 +84,12 @@ typedef uint32_t WPE_LogSinkId;
  * @thread_safety Any thread
  */
 WPE_PRINTF_LIKE(5, 6)
-void wpe_log_write(WPE_LogLevel level, const char* module, const char* file, int line,
-                   const char* fmt, ...);
+void wpe_log_write(WPE_LogLevel level, const char* module, const char* file, int line, const char* fmt, ...);
 
 /** va_list variant of wpe_log_write(). @thread_safety Any thread */
 WPE_PRINTF_LIKE(5, 0)
-void wpe_log_write_v(WPE_LogLevel level, const char* module, const char* file, int line,
-                     const char* fmt, va_list args);
+void wpe_log_write_v(WPE_LogLevel level, const char* module, const char* file, int line, const char* fmt,
+                     va_list args);
 
 /**
  * Sets the minimum level that is dispatched. Defaults to DEBUG in debug builds, INFO otherwise.
@@ -140,6 +139,7 @@ const char* wpe_log_level_name(WPE_LogLevel level);
 #define wpe_log_info(...) wpe_log_write(WPE_LOG_LEVEL_INFO, WPE_LOG_MODULE, __FILE__, __LINE__, __VA_ARGS__)
 #define wpe_log_warn(...) wpe_log_write(WPE_LOG_LEVEL_WARN, WPE_LOG_MODULE, __FILE__, __LINE__, __VA_ARGS__)
 #define wpe_log_error(...) wpe_log_write(WPE_LOG_LEVEL_ERROR, WPE_LOG_MODULE, __FILE__, __LINE__, __VA_ARGS__)
-#define wpe_log_critical(...) wpe_log_write(WPE_LOG_LEVEL_CRITICAL, WPE_LOG_MODULE, __FILE__, __LINE__, __VA_ARGS__)
+#define wpe_log_critical(...)                                                                                \
+    wpe_log_write(WPE_LOG_LEVEL_CRITICAL, WPE_LOG_MODULE, __FILE__, __LINE__, __VA_ARGS__)
 
 #endif /* WPE_CORE_LOG_H */

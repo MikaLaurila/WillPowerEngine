@@ -42,9 +42,9 @@ static void wpe__alloc_track_add(size_t size) {
         atomic_fetch_add_explicit(&wpe__g_alloc_stats.live_bytes, size, memory_order_relaxed) + size;
 
     uint64_t peak = atomic_load_explicit(&wpe__g_alloc_stats.peak_live_bytes, memory_order_relaxed);
-    while (live > peak && !atomic_compare_exchange_weak_explicit(&wpe__g_alloc_stats.peak_live_bytes,
-                                                                 &peak, live, memory_order_relaxed,
-                                                                 memory_order_relaxed)) {
+    while (live > peak &&
+           !atomic_compare_exchange_weak_explicit(&wpe__g_alloc_stats.peak_live_bytes, &peak, live,
+                                                  memory_order_relaxed, memory_order_relaxed)) {
     }
 }
 
@@ -128,6 +128,7 @@ void wpe_alloc_get_stats(WPE_AllocStats* out_stats) {
         .live_allocations = atomic_load_explicit(&wpe__g_alloc_stats.live_allocations, memory_order_relaxed),
         .live_bytes = atomic_load_explicit(&wpe__g_alloc_stats.live_bytes, memory_order_relaxed),
         .peak_live_bytes = atomic_load_explicit(&wpe__g_alloc_stats.peak_live_bytes, memory_order_relaxed),
-        .total_allocations = atomic_load_explicit(&wpe__g_alloc_stats.total_allocations, memory_order_relaxed),
+        .total_allocations =
+            atomic_load_explicit(&wpe__g_alloc_stats.total_allocations, memory_order_relaxed),
     };
 }

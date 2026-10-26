@@ -13,8 +13,7 @@ WPE_AssertHandlerFn wpe_set_assert_handler(WPE_AssertHandlerFn handler) {
 }
 
 void wpe_assert_fail(const char* expression, const char* file, int line) {
-    wpe_log_write(WPE_LOG_LEVEL_CRITICAL, WPE_LOG_MODULE, file, line, "assertion failed: %s",
-                  expression);
+    wpe_log_write(WPE_LOG_LEVEL_CRITICAL, WPE_LOG_MODULE, file, line, "assertion failed: %s", expression);
 
     WPE_AssertHandlerFn handler = atomic_load(&wpe__g_assert_handler);
     if (handler) {

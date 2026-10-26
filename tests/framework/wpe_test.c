@@ -8,7 +8,7 @@
 #define WPE__TEST_MAX_EXPECT_DEPTH 4
 
 typedef enum wpe__TestOutcome {
-    WPE__TEST_OUTCOME_RUNNING = 0,  /* setjmp return value for the initial call. */
+    WPE__TEST_OUTCOME_RUNNING = 0, /* setjmp return value for the initial call. */
     WPE__TEST_OUTCOME_FAILED,
     WPE__TEST_OUTCOME_SKIPPED,
 } wpe__TestOutcome;

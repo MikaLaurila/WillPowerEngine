@@ -18,7 +18,5 @@ static void test_result_to_string_rejects_out_of_range(void) {
     WPE_TEST_ASSERT_EQ_STR("WPE_RESULT_<invalid>", wpe_result_to_string((WPE_Result)-1));
 }
 
-WPE_TEST_MAIN(
-    WPE_TEST_CASE(test_result_ok_is_zero),
-    WPE_TEST_CASE(test_result_to_string_names_every_code),
-    WPE_TEST_CASE(test_result_to_string_rejects_out_of_range))
+WPE_TEST_MAIN(WPE_TEST_CASE(test_result_ok_is_zero), WPE_TEST_CASE(test_result_to_string_names_every_code),
+              WPE_TEST_CASE(test_result_to_string_rejects_out_of_range))

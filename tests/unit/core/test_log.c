@@ -144,13 +144,10 @@ static void test_log_min_level_ignores_invalid_values(void) {
     WPE_TEST_ASSERT_EQ_INT(before, wpe_log_get_min_level());
 }
 
-WPE_TEST_MAIN(
-    WPE_TEST_CASE(test_log_dispatches_formatted_message_with_module),
-    WPE_TEST_CASE(test_log_filters_below_min_level),
-    WPE_TEST_CASE(test_log_truncates_long_messages),
-    WPE_TEST_CASE(test_log_removed_sink_receives_nothing),
-    WPE_TEST_CASE(test_log_add_sink_validates_arguments),
-    WPE_TEST_CASE(test_log_sink_capacity_is_enforced),
-    WPE_TEST_CASE(test_log_ids_are_unique),
-    WPE_TEST_CASE(test_log_level_names),
-    WPE_TEST_CASE(test_log_min_level_ignores_invalid_values))
+WPE_TEST_MAIN(WPE_TEST_CASE(test_log_dispatches_formatted_message_with_module),
+              WPE_TEST_CASE(test_log_filters_below_min_level),
+              WPE_TEST_CASE(test_log_truncates_long_messages),
+              WPE_TEST_CASE(test_log_removed_sink_receives_nothing),
+              WPE_TEST_CASE(test_log_add_sink_validates_arguments),
+              WPE_TEST_CASE(test_log_sink_capacity_is_enforced), WPE_TEST_CASE(test_log_ids_are_unique),
+              WPE_TEST_CASE(test_log_level_names), WPE_TEST_CASE(test_log_min_level_ignores_invalid_values))

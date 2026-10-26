@@ -22,10 +22,10 @@
 
 /** Snapshot of global allocation counters. */
 typedef struct WPE_AllocStats {
-    uint64_t live_allocations;   /* Allocations not yet freed. */
-    uint64_t live_bytes;         /* User-requested bytes not yet freed (headers excluded). */
-    uint64_t peak_live_bytes;    /* Highest live_bytes observed since process start. */
-    uint64_t total_allocations;  /* Allocations ever made, including reallocs that moved. */
+    uint64_t live_allocations;  /* Allocations not yet freed. */
+    uint64_t live_bytes;        /* User-requested bytes not yet freed (headers excluded). */
+    uint64_t peak_live_bytes;   /* Highest live_bytes observed since process start. */
+    uint64_t total_allocations; /* Allocations ever made, including reallocs that moved. */
 } WPE_AllocStats;
 
 /**

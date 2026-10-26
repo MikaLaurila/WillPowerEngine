@@ -49,9 +49,8 @@ static void test_debug_set_assert_handler_returns_previous(void) {
     WPE_TEST_ASSERT(mine == custom_handler);
 }
 
-WPE_TEST_MAIN(
-    WPE_TEST_CASE(test_debug_assert_passes_on_true),
-    WPE_TEST_CASE(test_debug_assert_fires_on_false),
-    WPE_TEST_CASE(test_debug_unreachable_always_fires),
-    WPE_TEST_CASE(test_debug_check_returns_condition_and_always_evaluates),
-    WPE_TEST_CASE(test_debug_set_assert_handler_returns_previous))
+WPE_TEST_MAIN(WPE_TEST_CASE(test_debug_assert_passes_on_true),
+              WPE_TEST_CASE(test_debug_assert_fires_on_false),
+              WPE_TEST_CASE(test_debug_unreachable_always_fires),
+              WPE_TEST_CASE(test_debug_check_returns_condition_and_always_evaluates),
+              WPE_TEST_CASE(test_debug_set_assert_handler_returns_previous))

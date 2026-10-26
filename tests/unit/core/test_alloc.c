@@ -34,7 +34,8 @@ static void test_alloc_returns_max_aligned_memory(void) {
         WPE_TEST_ASSERT(ptrs[i] != NULL);
         WPE_TEST_ASSERT_EQ_UINT(0, (uintptr_t)ptrs[i] % alignof(max_align_t));
     }
-    for (size_t i = 0; i < 16; ++i) wpe_free(ptrs[i]);
+    for (size_t i = 0; i < 16; ++i)
+        wpe_free(ptrs[i]);
 }
 
 static void test_alloc_zero_size_returns_null(void) {
@@ -48,7 +49,8 @@ static void test_alloc_zero_size_returns_null(void) {
 static void test_alloc_zeroed_clears_memory(void) {
     unsigned char* bytes = wpe_alloc_zeroed(64, 4);
     WPE_TEST_ASSERT(bytes != NULL);
-    for (size_t i = 0; i < 256; ++i) WPE_TEST_ASSERT_EQ_UINT(0, bytes[i]);
+    for (size_t i = 0; i < 256; ++i)
+        WPE_TEST_ASSERT_EQ_UINT(0, bytes[i]);
     wpe_free(bytes);
 }
 
@@ -64,17 +66,20 @@ static void test_alloc_rejects_overflowing_sizes(void) {
 static void test_alloc_realloc_preserves_contents(void) {
     unsigned char* bytes = wpe_alloc(16);
     WPE_TEST_ASSERT(bytes != NULL);
-    for (unsigned char i = 0; i < 16; ++i) bytes[i] = i;
+    for (unsigned char i = 0; i < 16; ++i)
+        bytes[i] = i;
 
     const uint64_t live_bytes_before = stats_now().live_bytes;
     unsigned char* grown = wpe_realloc(bytes, 4096);
     WPE_TEST_ASSERT(grown != NULL);
-    for (unsigned char i = 0; i < 16; ++i) WPE_TEST_ASSERT_EQ_UINT(i, grown[i]);
+    for (unsigned char i = 0; i < 16; ++i)
+        WPE_TEST_ASSERT_EQ_UINT(i, grown[i]);
     WPE_TEST_ASSERT_EQ_UINT(live_bytes_before - 16 + 4096, stats_now().live_bytes);
 
     unsigned char* shrunk = wpe_realloc(grown, 8);
     WPE_TEST_ASSERT(shrunk != NULL);
-    for (unsigned char i = 0; i < 8; ++i) WPE_TEST_ASSERT_EQ_UINT(i, shrunk[i]);
+    for (unsigned char i = 0; i < 8; ++i)
+        WPE_TEST_ASSERT_EQ_UINT(i, shrunk[i]);
     wpe_free(shrunk);
 }
 
@@ -94,7 +99,7 @@ static void test_alloc_realloc_overflow_keeps_original(void) {
     void* failed = wpe_realloc(ptr, SIZE_MAX);
     wpe_log_set_stderr_enabled(true);
     WPE_TEST_ASSERT(failed == NULL);
-    wpe_free(ptr);  /* Still owned after a failed realloc. */
+    wpe_free(ptr); /* Still owned after a failed realloc. */
 }
 
 static void test_alloc_free_null_is_noop(void) {
@@ -105,11 +110,7 @@ static void test_alloc_free_null_is_noop(void) {
 
 WPE_TEST_MAIN(
     WPE_TEST_CASE(test_alloc_tracks_live_allocations_and_bytes),
-    WPE_TEST_CASE(test_alloc_returns_max_aligned_memory),
-    WPE_TEST_CASE(test_alloc_zero_size_returns_null),
-    WPE_TEST_CASE(test_alloc_zeroed_clears_memory),
-    WPE_TEST_CASE(test_alloc_rejects_overflowing_sizes),
-    WPE_TEST_CASE(test_alloc_realloc_preserves_contents),
-    WPE_TEST_CASE(test_alloc_realloc_null_and_zero),
-    WPE_TEST_CASE(test_alloc_realloc_overflow_keeps_original),
-    WPE_TEST_CASE(test_alloc_free_null_is_noop))
+    WPE_TEST_CASE(test_alloc_returns_max_aligned_memory), WPE_TEST_CASE(test_alloc_zero_size_returns_null),
+    WPE_TEST_CASE(test_alloc_zeroed_clears_memory), WPE_TEST_CASE(test_alloc_rejects_overflowing_sizes),
+    WPE_TEST_CASE(test_alloc_realloc_preserves_contents), WPE_TEST_CASE(test_alloc_realloc_null_and_zero),
+    WPE_TEST_CASE(test_alloc_realloc_overflow_keeps_original), WPE_TEST_CASE(test_alloc_free_null_is_noop))

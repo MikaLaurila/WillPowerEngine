@@ -15,17 +15,17 @@
 
 typedef enum WPE_Result {
     WPE_RESULT_OK = 0,
-    WPE_RESULT_ERROR,                 /* Unspecified failure; prefer a specific code. */
-    WPE_RESULT_ERROR_NULL_ARG,        /* A required pointer argument was NULL. */
-    WPE_RESULT_ERROR_INVALID_ARG,     /* An argument was outside its valid range. */
-    WPE_RESULT_ERROR_OUT_OF_MEMORY,   /* An allocation failed. */
-    WPE_RESULT_ERROR_INVALID_STATE,   /* The call is not valid in the object's current state. */
-    WPE_RESULT_ERROR_NOT_FOUND,       /* A requested item does not exist. */
-    WPE_RESULT_ERROR_ALREADY_EXISTS,  /* An item with the same identity already exists. */
-    WPE_RESULT_ERROR_CAPACITY,        /* A fixed capacity limit was reached. */
-    WPE_RESULT_ERROR_IO,              /* A file or stream operation failed. */
-    WPE_RESULT_ERROR_PARSE,           /* Input data was malformed. */
-    WPE_RESULT_ERROR_UNSUPPORTED,     /* The feature or format is not supported. */
+    WPE_RESULT_ERROR,                /* Unspecified failure; prefer a specific code. */
+    WPE_RESULT_ERROR_NULL_ARG,       /* A required pointer argument was NULL. */
+    WPE_RESULT_ERROR_INVALID_ARG,    /* An argument was outside its valid range. */
+    WPE_RESULT_ERROR_OUT_OF_MEMORY,  /* An allocation failed. */
+    WPE_RESULT_ERROR_INVALID_STATE,  /* The call is not valid in the object's current state. */
+    WPE_RESULT_ERROR_NOT_FOUND,      /* A requested item does not exist. */
+    WPE_RESULT_ERROR_ALREADY_EXISTS, /* An item with the same identity already exists. */
+    WPE_RESULT_ERROR_CAPACITY,       /* A fixed capacity limit was reached. */
+    WPE_RESULT_ERROR_IO,             /* A file or stream operation failed. */
+    WPE_RESULT_ERROR_PARSE,          /* Input data was malformed. */
+    WPE_RESULT_ERROR_UNSUPPORTED,    /* The feature or format is not supported. */
     WPE_RESULT_COUNT
 } WPE_Result;
 

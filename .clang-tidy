@@ -1,0 +1,17 @@
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-assignment-in-if-condition,
+  clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  performance-*,
+  portability-*,
+  -portability-avoid-pragma-once,
+  misc-redundant-expression,
+  misc-misleading-identifier,
+  misc-definitions-in-headers,
+  readability-misleading-indentation,
+  readability-duplicate-include
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/(src|tests)/.*'

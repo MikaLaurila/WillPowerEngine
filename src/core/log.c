@@ -10,7 +10,7 @@
 #endif
 
 typedef struct wpe__LogSink {
-    WPE_LogSinkFn fn;  /* NULL marks a free slot. */
+    WPE_LogSinkFn fn; /* NULL marks a free slot. */
     void* user_data;
     WPE_LogSinkId id;
 } wpe__LogSink;
@@ -37,12 +37,8 @@ static struct {
 };
 
 static const char* const wpe__log_level_names[] = {
-    [WPE_LOG_LEVEL_TRACE] = "TRACE",
-    [WPE_LOG_LEVEL_DEBUG] = "DEBUG",
-    [WPE_LOG_LEVEL_INFO] = "INFO",
-    [WPE_LOG_LEVEL_WARN] = "WARN",
-    [WPE_LOG_LEVEL_ERROR] = "ERROR",
-    [WPE_LOG_LEVEL_CRITICAL] = "CRITICAL",
+    [WPE_LOG_LEVEL_TRACE] = "TRACE", [WPE_LOG_LEVEL_DEBUG] = "DEBUG", [WPE_LOG_LEVEL_INFO] = "INFO",
+    [WPE_LOG_LEVEL_WARN] = "WARN",   [WPE_LOG_LEVEL_ERROR] = "ERROR", [WPE_LOG_LEVEL_CRITICAL] = "CRITICAL",
 };
 
 static_assert(sizeof(wpe__log_level_names) / sizeof(wpe__log_level_names[0]) == WPE_LOG_LEVEL_COUNT,
@@ -62,8 +58,7 @@ static void wpe__log_write_stderr(const WPE_LogMessage* message) {
         fprintf(stderr, "[%s][%s] %s (%s:%d)\n", wpe_log_level_name(message->level), message->module,
                 message->text, message->file, message->line);
     } else {
-        fprintf(stderr, "[%s][%s] %s\n", wpe_log_level_name(message->level), message->module,
-                message->text);
+        fprintf(stderr, "[%s][%s] %s\n", wpe_log_level_name(message->level), message->module, message->text);
     }
 }
 
@@ -72,16 +67,15 @@ const char* wpe_log_level_name(WPE_LogLevel level) {
     return wpe__log_level_names[level];
 }
 
-void wpe_log_write(WPE_LogLevel level, const char* module, const char* file, int line,
-                   const char* fmt, ...) {
+void wpe_log_write(WPE_LogLevel level, const char* module, const char* file, int line, const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
     wpe_log_write_v(level, module, file, line, fmt, args);
     va_end(args);
 }
 
-void wpe_log_write_v(WPE_LogLevel level, const char* module, const char* file, int line,
-                     const char* fmt, va_list args) {
+void wpe_log_write_v(WPE_LogLevel level, const char* module, const char* file, int line, const char* fmt,
+                     va_list args) {
     if ((unsigned)level >= WPE_LOG_LEVEL_COUNT) return;
     if ((int)level < atomic_load_explicit(&wpe__g_log.min_level, memory_order_relaxed)) return;
 
@@ -135,7 +129,7 @@ WPE_Result wpe_log_add_sink(WPE_LogSinkFn fn, void* user_data, WPE_LogSinkId* ou
         sink->fn = fn;
         sink->user_data = user_data;
         sink->id = wpe__g_log.next_id++;
-        if (wpe__g_log.next_id == 0) wpe__g_log.next_id = 1;  /* Zero is reserved as invalid. */
+        if (wpe__g_log.next_id == 0) wpe__g_log.next_id = 1; /* Zero is reserved as invalid. */
         *out_id = sink->id;
         result = WPE_RESULT_OK;
         break;
