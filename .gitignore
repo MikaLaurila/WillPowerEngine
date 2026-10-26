@@ -1,0 +1,13 @@
+# Build trees
+/build*/
+/out/
+
+# IDE / editor state
+.vs/
+.vscode/
+.idea/
+*.user
+compile_commands.json
+
+# Claude Code local settings
+.claude/settings.local.json
