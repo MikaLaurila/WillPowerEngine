@@ -1,0 +1,698 @@
+#define WPE_LOG_MODULE "script"
+#include <luacode.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "core/alloc.h"
+#include "core/debug.h"
+#include "core/log.h"
+#include "graphics/graphics.h"
+#include "platform/platform.h"
+#include "scene/scene.h"
+#include "script/script_internal.h"
+
+#define WPE__DEFAULT_MEMORY_LIMIT ((size_t)64 * 1024 * 1024)
+#define WPE__DEFAULT_TIME_LIMIT_MS 250.0
+#define WPE__ERROR_MESSAGE_MAX 2048u
+
+/* Globals removed before sandboxing: dynamic code loading and environment manipulation. */
+static const char* const wpe__unsafe_globals[] = {"loadstring", "load",    "dofile",
+                                                  "loadfile",   "getfenv", "setfenv"};
+
+/* ---- VM plumbing ---------------------------------------------------------------------------------- */
+
+WPE_ScriptHost* wpe__script_host_from(lua_State* L) {
+    return lua_callbacks(L)->userdata;
+}
+
+/* Allocator enforcing the VM memory limit; all VM memory goes through the tracked allocator. */
+static void* wpe__lua_alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
+    WPE_ScriptHost* host = ud;
+    if (!ptr) osize = 0;
+    if (nsize == 0) {
+        if (ptr) {
+            wpe_free(ptr);
+            host->memory_used -= osize;
+        }
+        return NULL;
+    }
+    if (nsize > osize && host->memory_used - osize + nsize > host->memory_limit) return NULL;
+    void* block = wpe_realloc(ptr, nsize);
+    if (!block) return NULL;
+    host->memory_used = host->memory_used - osize + nsize;
+    return block;
+}
+
+/* Interrupts scripts that exceed their time budget (infinite loops, runaway recursion). */
+static void wpe__interrupt(lua_State* L, int gc) {
+    if (gc >= 0) return; /* GC safepoints are not script progress. */
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    if (host->deadline > 0.0 && lua_clock() > host->deadline) {
+        host->deadline = 0.0; /* Allow the error to unwind without re-triggering. */
+        luaL_errorL(L, "script exceeded its time budget of %.0f ms", host->time_limit_seconds * 1000.0);
+    }
+}
+
+static int wpe__traceback(lua_State* L) {
+    const char* message = lua_tostring(L, 1);
+    luaL_traceback(L, L, message ? message : "(error object is not a string)", 1);
+    return 1;
+}
+
+/* Starts a callback's time budget, returning the previous deadline (nested invocations). */
+static double wpe__begin_budget(WPE_ScriptHost* host) {
+    const double previous = host->deadline;
+    host->deadline = lua_clock() + host->time_limit_seconds;
+    return previous;
+}
+
+/* ---- Paths ---------------------------------------------------------------------------------------- */
+
+bool wpe__script_path_is_safe(const char* path) {
+    if (!path || !path[0] || strlen(path) >= WPE__SCRIPT_PATH_MAX) return false;
+    if (path[0] == '/' || strchr(path, '\\') || strchr(path, ':')) return false;
+    /* Reject empty, "." and ".." segments. */
+    const char* segment = path;
+    for (const char* p = path;; ++p) {
+        if (*p == '/' || *p == '\0') {
+            const size_t length = (size_t)(p - segment);
+            if (length == 0 || (length == 1 && segment[0] == '.') ||
+                (length == 2 && segment[0] == '.' && segment[1] == '.')) {
+                return false;
+            }
+            if (*p == '\0') break;
+            segment = p + 1;
+        }
+    }
+    return true;
+}
+
+bool wpe__script_full_path(const WPE_ScriptHost* host, const char* path, char* out, size_t capacity) {
+    const int written = snprintf(out, capacity, "%s/%s", host->asset_root, path);
+    return written > 0 && (size_t)written < capacity;
+}
+
+/* ---- Script files --------------------------------------------------------------------------------- */
+
+typedef struct wpe__LoadOp {
+    WPE_ScriptHost* host;
+    const char* chunk_name;
+    const char* bytecode;
+    size_t bytecode_size;
+    int existing_meta_ref; /* LUA_NOREF for a new file; otherwise the meta table to retarget. */
+    bool require_table;    /* Script files must return their class table; ad-hoc chunks need not. */
+    int class_ref;         /* out */
+    int meta_ref;          /* out */
+    int thread_ref;        /* out */
+} wpe__LoadOp;
+
+/* Protected: loads bytecode into a fresh sandbox thread, runs it and captures the class table. */
+static int wpe__op_load(lua_State* L) {
+    wpe__LoadOp* op = lua_touserdata(L, 1);
+    lua_State* T = lua_newthread(L); /* Kept on L's stack (alive) until referenced below. */
+    luaL_sandboxthread(T);
+
+    if (luau_load(T, op->chunk_name, op->bytecode, op->bytecode_size, 0) != 0) {
+        luaL_errorL(L, "%s", lua_tostring(T, -1) ? lua_tostring(T, -1) : "invalid bytecode");
+    }
+    lua_pushcfunction(T, wpe__traceback, "traceback");
+    lua_insert(T, -2);
+    const double previous = wpe__begin_budget(op->host);
+    const int status = lua_pcall(T, 0, 1, -2);
+    op->host->deadline = previous;
+    if (status != 0) luaL_errorL(L, "%s", lua_tostring(T, -1) ? lua_tostring(T, -1) : "error while loading");
+    if (!op->require_table) {
+        op->class_ref = op->meta_ref = op->thread_ref = LUA_NOREF;
+        return 0;
+    }
+    if (!lua_istable(T, -1))
+        luaL_errorL(L, "script must return a table of callbacks (got %s)", luaL_typename(T, -1));
+
+    lua_xmove(T, L, 1); /* L: [op, T, class] */
+    if (op->existing_meta_ref == LUA_NOREF) {
+        lua_createtable(L, 0, 1);
+        lua_pushvalue(L, -2);
+        lua_setfield(L, -2, "__index");
+        op->meta_ref = lua_ref(L, -1);
+        lua_pop(L, 1);
+    } else {
+        /* Hot reload: every instance shares this metatable, so retargeting __index swaps code for all. */
+        lua_getref(L, op->existing_meta_ref);
+        lua_pushvalue(L, -2);
+        lua_setfield(L, -2, "__index");
+        lua_pop(L, 1);
+        op->meta_ref = op->existing_meta_ref;
+    }
+    op->class_ref = lua_ref(L, -1);
+    op->thread_ref = lua_ref(L, -2);
+    return 0;
+}
+
+/* Reads and compiles a script; on success returns owned bytecode (free with free()). */
+static WPE_Result wpe__compile_file(WPE_ScriptHost* host, const char* path, char** out_bytecode,
+                                    size_t* out_size, int64_t* out_time) {
+    char full[1024];
+    if (!wpe__script_full_path(host, path, full, sizeof full)) return WPE_RESULT_ERROR_INVALID_ARG;
+    void* source = NULL;
+    size_t source_size = 0;
+    WPE_Result result = wpe_file_read_all(full, &source, &source_size);
+    if (result != WPE_RESULT_OK) return result;
+    if (out_time && wpe_file_modified_time(full, out_time) != WPE_RESULT_OK) *out_time = 0;
+
+    lua_CompileOptions options = {.optimizationLevel = 1, .debugLevel = 1};
+    size_t bytecode_size = 0;
+    char* bytecode = luau_compile(source, source_size, &options, &bytecode_size);
+    wpe_free(source);
+    if (!bytecode) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    if (bytecode_size == 0 || bytecode[0] == 0) {
+        /* Luau encodes compile errors as a zero version byte followed by the message. */
+        wpe_log_error("compile error in '%s': %.*s", path, (int)(bytecode_size > 1 ? bytecode_size - 1 : 0),
+                      bytecode + 1);
+        free(bytecode); /* luau_compile allocates with malloc. */
+        ++host->errors;
+        return WPE_RESULT_ERROR_PARSE;
+    }
+    *out_bytecode = bytecode;
+    *out_size = bytecode_size;
+    return WPE_RESULT_OK;
+}
+
+static WPE_Result wpe__load_bytecode(WPE_ScriptHost* host, const char* path, const char* bytecode,
+                                     size_t size, int existing_meta_ref, wpe__LoadOp* out_op) {
+    char chunk_name[WPE__SCRIPT_PATH_MAX + 1];
+    snprintf(chunk_name, sizeof chunk_name, "@%s", path);
+    *out_op = (wpe__LoadOp){.host = host,
+                            .chunk_name = chunk_name,
+                            .bytecode = bytecode,
+                            .bytecode_size = size,
+                            .existing_meta_ref = existing_meta_ref,
+                            .require_table = true};
+    if (lua_cpcall(host->L, wpe__op_load, out_op) != 0) {
+        wpe_log_error("failed to load '%s': %s", path,
+                      lua_tostring(host->L, -1) ? lua_tostring(host->L, -1) : "unknown error");
+        lua_pop(host->L, 1);
+        ++host->errors;
+        return WPE_RESULT_ERROR_PARSE;
+    }
+    return WPE_RESULT_OK;
+}
+
+/* Returns the index of a loaded script file, loading it on first use. */
+static WPE_Result wpe__script_file(WPE_ScriptHost* host, const char* path, uint32_t* out_index) {
+    for (uint32_t i = 0; i < host->file_count; ++i) {
+        if (strcmp(host->files[i].path, path) == 0) {
+            *out_index = i;
+            return WPE_RESULT_OK;
+        }
+    }
+    if (host->file_count == host->file_capacity) {
+        const uint32_t capacity = host->file_capacity ? host->file_capacity * 2 : 16;
+        wpe__ScriptFile* files = wpe_realloc(host->files, (size_t)capacity * sizeof *files);
+        if (!files) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        host->files = files;
+        host->file_capacity = capacity;
+    }
+
+    char* bytecode = NULL;
+    size_t size = 0;
+    int64_t modified = 0;
+    WPE_Result result = wpe__compile_file(host, path, &bytecode, &size, &modified);
+    if (result != WPE_RESULT_OK) return result;
+    wpe__LoadOp op;
+    result = wpe__load_bytecode(host, path, bytecode, size, LUA_NOREF, &op);
+    free(bytecode);
+    if (result != WPE_RESULT_OK) return result;
+
+    wpe__ScriptFile* file = &host->files[host->file_count];
+    *file = (wpe__ScriptFile){.modified_time = modified,
+                              .class_ref = op.class_ref,
+                              .meta_ref = op.meta_ref,
+                              .thread_ref = op.thread_ref};
+    snprintf(file->path, sizeof file->path, "%s", path);
+    *out_index = host->file_count++;
+    return WPE_RESULT_OK;
+}
+
+/* ---- Instances and callbacks ---------------------------------------------------------------------- */
+
+typedef struct wpe__InstanceOp {
+    int meta_ref;
+    WPE_Entity entity;
+    int instance_ref; /* out */
+} wpe__InstanceOp;
+
+static int wpe__op_create_instance(lua_State* L) {
+    wpe__InstanceOp* op = lua_touserdata(L, 1);
+    lua_createtable(L, 0, 4);
+    lua_pushnumber(L, (double)op->entity);
+    lua_setfield(L, -2, "entity");
+    lua_getref(L, op->meta_ref);
+    lua_setmetatable(L, -2);
+    op->instance_ref = lua_ref(L, -1);
+    lua_pop(L, 1);
+    return 0;
+}
+
+typedef struct wpe__CallOp {
+    WPE_ScriptHost* host;
+    int instance_ref;
+    const char* method;
+    bool has_arg;
+    double arg;
+    bool failed;                          /* out */
+    char message[WPE__ERROR_MESSAGE_MAX]; /* out */
+} wpe__CallOp;
+
+/* Protected: calls instance:method(arg) if the method exists. Script errors are captured in op. */
+static int wpe__op_call(lua_State* L) {
+    wpe__CallOp* op = lua_touserdata(L, 1);
+    lua_pushcfunction(L, wpe__traceback, "traceback");
+    const int handler = lua_gettop(L);
+    lua_getref(L, op->instance_ref);
+    if (!lua_istable(L, -1)) return 0;
+    lua_getfield(L, -1, op->method);
+    if (!lua_isfunction(L, -1)) return 0;
+    lua_insert(L, -2); /* [handler, fn, instance] */
+    int args = 1;
+    if (op->has_arg) {
+        lua_pushnumber(L, op->arg);
+        ++args;
+    }
+    const double previous = wpe__begin_budget(op->host);
+    const int status = lua_pcall(L, args, 0, handler);
+    op->host->deadline = previous;
+    if (status != 0) {
+        op->failed = true;
+        snprintf(op->message, sizeof op->message, "%s",
+                 lua_tostring(L, -1) ? lua_tostring(L, -1) : "unknown error");
+    }
+    return 0;
+}
+
+/* Calls a lifecycle method; on error logs, counts and marks the instance failed. Returns false on error. */
+static bool wpe__call_method(WPE_ScriptHost* host, WPE_Entity entity, int instance_ref, uint32_t script,
+                             const char* method, bool has_arg, double arg) {
+    wpe__CallOp op = {
+        .host = host, .instance_ref = instance_ref, .method = method, .has_arg = has_arg, .arg = arg};
+    if (lua_cpcall(host->L, wpe__op_call, &op) != 0) {
+        op.failed = true;
+        snprintf(op.message, sizeof op.message, "%s",
+                 lua_tostring(host->L, -1) ? lua_tostring(host->L, -1) : "VM error");
+        lua_pop(host->L, 1);
+    }
+    /* No lua_settop here: this may run nested inside a binding whose stack frame must survive. */
+    if (!op.failed) return true;
+
+    ++host->errors;
+    /*
+     * Luau does not collect garbage when an allocation fails, so a memory error leaves the failed
+     * script's garbage in place; collect now so other scripts are not starved by it.
+     */
+    lua_gc(host->L, LUA_GCCOLLECT, 0);
+    wpe_log_error("%s failed in '%s' (entity 0x%08x); instance disabled until reload:\n%s", method,
+                  script < host->file_count ? host->files[script].path : "?", entity, op.message);
+    /* The component may have moved or been replaced during the call; only flag the same instance. */
+    WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
+    if (s && s->instance_ref == instance_ref) s->state |= WPE__SCRIPT_FAILED;
+    return false;
+}
+
+/* ECS remove hook: runs on_destroy in restricted mode and releases the instance. */
+static void wpe__script_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
+    (void)ecs;
+    WPE_ScriptHost* host = user_data;
+    const WPE_Script s =
+        *(const WPE_Script*)component; /* Copy: the call may not touch this slot, but be safe. */
+    if ((s.state & WPE__SCRIPT_STARTED) && !(s.state & WPE__SCRIPT_FAILED)) {
+        ++host->restricted_depth;
+        wpe__call_method(host, entity, s.instance_ref, s.script, "on_destroy", false, 0.0);
+        --host->restricted_depth;
+    }
+    lua_unref(host->L, s.instance_ref);
+    if (s.script < host->file_count && host->files[s.script].instances > 0) --host->files[s.script].instances;
+}
+
+/* Copies the current script entities so callbacks may change the world freely. */
+static uint32_t wpe__snapshot(WPE_ScriptHost* host) {
+    WPE_EcsPoolView view;
+    if (wpe_ecs_pool_view(host->ecs, WPE_COMP_SCRIPT, &view) != WPE_RESULT_OK || view.count == 0) return 0;
+    if (view.count > host->snapshot_capacity) {
+        WPE_Entity* snapshot = wpe_realloc(host->snapshot, (size_t)view.count * sizeof *snapshot);
+        if (!snapshot) return 0;
+        host->snapshot = snapshot;
+        host->snapshot_capacity = view.count;
+    }
+    memcpy(host->snapshot, view.entities, (size_t)view.count * sizeof *host->snapshot);
+    return view.count;
+}
+
+WPE_Result wpe__script_queue_destroy(WPE_ScriptHost* host, WPE_Entity entity) {
+    if (host->pending_count == host->pending_capacity) {
+        const uint32_t capacity = host->pending_capacity ? host->pending_capacity * 2 : 32;
+        WPE_Entity* pending = wpe_realloc(host->pending_destroy, (size_t)capacity * sizeof *pending);
+        if (!pending) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        host->pending_destroy = pending;
+        host->pending_capacity = capacity;
+    }
+    host->pending_destroy[host->pending_count++] = entity;
+    return WPE_RESULT_OK;
+}
+
+static void wpe__flush_destroys(WPE_ScriptHost* host) {
+    /* on_destroy handlers may queue more; the count is re-read every iteration. */
+    for (uint32_t i = 0; i < host->pending_count; ++i) {
+        const WPE_Entity entity = host->pending_destroy[i];
+        if (wpe_ecs_is_alive(host->ecs, entity)) wpe_scene_destroy_recursive(host->ecs, entity);
+    }
+    host->pending_count = 0;
+}
+
+/* ---- Public API ----------------------------------------------------------------------------------- */
+
+static int wpe__op_init(lua_State* L) {
+    luaL_openlibs(L);
+    for (size_t i = 0; i < sizeof wpe__unsafe_globals / sizeof wpe__unsafe_globals[0]; ++i) {
+        lua_pushnil(L);
+        lua_setglobal(L, wpe__unsafe_globals[i]);
+    }
+    wpe__script_api_register(L);
+    luaL_sandbox(L); /* Libraries and globals become read-only. */
+    return 0;
+}
+
+WPE_Result wpe_script_host_create(const WPE_ScriptHostDesc* desc, WPE_ScriptHost** out_host) {
+    if (!desc || !desc->ecs || !desc->asset_root || !out_host) return WPE_RESULT_ERROR_NULL_ARG;
+    *out_host = NULL;
+    if (wpe_ecs_is_registered(desc->ecs, WPE_COMP_SCRIPT)) {
+        wpe_log_error("the world already has a script host");
+        return WPE_RESULT_ERROR_ALREADY_EXISTS;
+    }
+
+    WPE_ScriptHost* host = wpe_alloc_zeroed(1, sizeof *host);
+    const size_t root_length = strlen(desc->asset_root);
+    char* root = wpe_alloc(root_length + 1);
+    if (!host || !root) {
+        wpe_free(host);
+        wpe_free(root);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    memcpy(root, desc->asset_root, root_length + 1);
+    while (root_length > 1 && (root[strlen(root) - 1] == '/' || root[strlen(root) - 1] == '\\'))
+        root[strlen(root) - 1] = '\0';
+    host->asset_root = root;
+    host->ecs = desc->ecs;
+    host->jobs = desc->jobs;
+    host->max_texture_size = desc->max_texture_size ? desc->max_texture_size : 512;
+    host->memory_limit = desc->memory_limit ? desc->memory_limit : WPE__DEFAULT_MEMORY_LIMIT;
+    host->time_limit_seconds =
+        (desc->time_limit_ms > 0.0 ? desc->time_limit_ms : WPE__DEFAULT_TIME_LIMIT_MS) / 1000.0;
+
+    host->L = lua_newstate(wpe__lua_alloc, host);
+    if (!host->L) {
+        wpe_free(root);
+        wpe_free(host);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    lua_callbacks(host->L)->userdata = host;
+    lua_callbacks(host->L)->interrupt = wpe__interrupt;
+    if (lua_cpcall(host->L, wpe__op_init, NULL) != 0) {
+        wpe_log_error("failed to initialize the Luau VM: %s", lua_tostring(host->L, -1));
+        wpe_script_host_destroy(host);
+        return WPE_RESULT_ERROR;
+    }
+
+    const WPE_Result result =
+        wpe_ecs_register_component(host->ecs, WPE_COMP_SCRIPT,
+                                   &(WPE_ComponentDesc){.name = "Script",
+                                                        .size = sizeof(WPE_Script),
+                                                        .alignment = alignof(WPE_Script),
+                                                        .on_remove = wpe__script_on_remove,
+                                                        .hook_user_data = host});
+    if (result != WPE_RESULT_OK) {
+        lua_close(host->L);
+        host->L = NULL;
+        wpe_script_host_destroy(host);
+        return result;
+    }
+    *out_host = host;
+    return WPE_RESULT_OK;
+}
+
+void wpe_script_host_destroy(WPE_ScriptHost* host) {
+    if (!host) return;
+    host->shutting_down = true;
+    if (host->L && wpe_ecs_is_registered(host->ecs, WPE_COMP_SCRIPT)) {
+        const uint32_t count = wpe__snapshot(host);
+        for (uint32_t i = 0; i < count; ++i)
+            wpe_ecs_remove_component(host->ecs, host->snapshot[i], WPE_COMP_SCRIPT);
+        wpe__flush_destroys(host);
+        /* Destroys may have removed further scripts; anything left is removed without callbacks' world
+         * access. */
+        const uint32_t remaining = wpe__snapshot(host);
+        for (uint32_t i = 0; i < remaining; ++i)
+            wpe_ecs_remove_component(host->ecs, host->snapshot[i], WPE_COMP_SCRIPT);
+        wpe_ecs_unregister_component(host->ecs, WPE_COMP_SCRIPT);
+    }
+    if (host->L) lua_close(host->L);
+    wpe_assert(host->memory_used == 0);
+    for (uint32_t i = 0; i < host->prefab_count; ++i)
+        wpe_model_destroy(host->prefabs[i].owned);
+    wpe_free(host->prefabs);
+    wpe_free(host->files);
+    wpe_free(host->pending_destroy);
+    wpe_free(host->snapshot);
+    wpe_free(host->asset_root);
+    wpe_free(host);
+}
+
+WPE_Result wpe_script_attach(WPE_ScriptHost* host, WPE_Entity entity, const char* path) {
+    if (!host || !path) return WPE_RESULT_ERROR_NULL_ARG;
+    if (host->restricted_depth > 0 || host->shutting_down) {
+        wpe_log_error("scripts cannot be attached from on_destroy");
+        return WPE_RESULT_ERROR_INVALID_STATE;
+    }
+    if (!wpe_ecs_is_alive(host->ecs, entity)) return WPE_RESULT_ERROR_NOT_FOUND;
+    if (!wpe__script_path_is_safe(path)) {
+        wpe_log_error("script path '%s' is not a safe asset-relative path", path);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+
+    uint32_t index = 0;
+    WPE_Result result = wpe__script_file(host, path, &index);
+    if (result != WPE_RESULT_OK) return result;
+    if (wpe_ecs_has_component(host->ecs, entity, WPE_COMP_SCRIPT)) {
+        result = wpe_ecs_remove_component(host->ecs, entity, WPE_COMP_SCRIPT);
+        if (result != WPE_RESULT_OK) return result;
+        if (!wpe_ecs_is_alive(host->ecs, entity)) return WPE_RESULT_ERROR_NOT_FOUND;
+    }
+
+    wpe__InstanceOp op = {.meta_ref = host->files[index].meta_ref, .entity = entity};
+    if (lua_cpcall(host->L, wpe__op_create_instance, &op) != 0) {
+        wpe_log_error("failed to create script instance: %s", lua_tostring(host->L, -1));
+        lua_pop(host->L, 1);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    const WPE_Script component = {.script = index, .instance_ref = op.instance_ref};
+    result = wpe_ecs_add_component(host->ecs, entity, WPE_COMP_SCRIPT, &component, NULL);
+    if (result != WPE_RESULT_OK) {
+        lua_unref(host->L, op.instance_ref);
+        return result;
+    }
+    ++host->files[index].instances;
+    return WPE_RESULT_OK;
+}
+
+static WPE_Result wpe__run_callbacks(WPE_ScriptHost* host, float dt, bool fixed) {
+    const uint32_t count = wpe__snapshot(host);
+    for (uint32_t i = 0; i < count; ++i) {
+        const WPE_Entity entity = host->snapshot[i];
+        WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
+        if (!s || (s->state & WPE__SCRIPT_FAILED)) continue;
+        if (!(s->state & WPE__SCRIPT_STARTED)) {
+            if (fixed) continue; /* Fixed updates begin after on_start has run in a regular update. */
+            s->state |= WPE__SCRIPT_STARTED;
+            const int ref = s->instance_ref;
+            const uint32_t script = s->script;
+            if (!wpe__call_method(host, entity, ref, script, "on_start", false, 0.0)) continue;
+            s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
+            if (!s || s->instance_ref != ref || (s->state & WPE__SCRIPT_FAILED)) continue;
+        }
+        wpe__call_method(host, entity, s->instance_ref, s->script, fixed ? "on_fixed_update" : "on_update",
+                         true, dt);
+    }
+    wpe__flush_destroys(host);
+    return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_script_host_update(WPE_ScriptHost* host, float dt) {
+    if (!host) return WPE_RESULT_ERROR_NULL_ARG;
+    const WPE_Result result = wpe__run_callbacks(host, dt, false);
+    host->time += dt;
+    ++host->frame;
+    return result;
+}
+
+WPE_Result wpe_script_host_fixed_update(WPE_ScriptHost* host, float dt) {
+    if (!host) return WPE_RESULT_ERROR_NULL_ARG;
+    return wpe__run_callbacks(host, dt, true);
+}
+
+static WPE_Result wpe__reload_file(WPE_ScriptHost* host, uint32_t index) {
+    wpe__ScriptFile* file = &host->files[index];
+    char* bytecode = NULL;
+    size_t size = 0;
+    int64_t modified = 0;
+    WPE_Result result = wpe__compile_file(host, file->path, &bytecode, &size, &modified);
+    if (result == WPE_RESULT_OK) {
+        wpe__LoadOp op;
+        result = wpe__load_bytecode(host, file->path, bytecode, size, file->meta_ref, &op);
+        free(bytecode);
+        if (result == WPE_RESULT_OK) {
+            lua_unref(host->L, file->class_ref);
+            lua_unref(host->L, file->thread_ref);
+            file->class_ref = op.class_ref;
+            file->thread_ref = op.thread_ref;
+        }
+    }
+    /* Record the timestamp even on failure so a broken file is not recompiled every poll. */
+    if (modified != 0) file->modified_time = modified;
+    if (result != WPE_RESULT_OK) {
+        wpe_log_warn("reload of '%s' failed; the previous version keeps running", file->path);
+        return result;
+    }
+
+    wpe_log_info("reloaded '%s'", file->path);
+    const uint32_t count = wpe__snapshot(host);
+    for (uint32_t i = 0; i < count; ++i) {
+        WPE_Script* s = wpe_ecs_get_component(host->ecs, host->snapshot[i], WPE_COMP_SCRIPT);
+        if (!s || s->script != index) continue;
+        s->state &= (uint8_t)~WPE__SCRIPT_FAILED; /* New code gets a fresh chance. */
+        if (s->state & WPE__SCRIPT_STARTED) {
+            wpe__call_method(host, host->snapshot[i], s->instance_ref, index, "on_reload", false, 0.0);
+        }
+    }
+    wpe__flush_destroys(host);
+    return WPE_RESULT_OK;
+}
+
+uint32_t wpe_script_host_reload_changed(WPE_ScriptHost* host) {
+    if (!host) return 0;
+    uint32_t reloaded = 0;
+    for (uint32_t i = 0; i < host->file_count; ++i) {
+        char full[1024];
+        int64_t modified = 0;
+        if (!wpe__script_full_path(host, host->files[i].path, full, sizeof full) ||
+            wpe_file_modified_time(full, &modified) != WPE_RESULT_OK ||
+            modified == host->files[i].modified_time) {
+            continue;
+        }
+        if (wpe__reload_file(host, i) == WPE_RESULT_OK) ++reloaded;
+    }
+    return reloaded;
+}
+
+WPE_Result wpe_script_host_reload(WPE_ScriptHost* host, const char* path) {
+    if (!host || !path) return WPE_RESULT_ERROR_NULL_ARG;
+    for (uint32_t i = 0; i < host->file_count; ++i) {
+        if (strcmp(host->files[i].path, path) == 0) return wpe__reload_file(host, i);
+    }
+    return WPE_RESULT_ERROR_NOT_FOUND;
+}
+
+WPE_Result wpe_script_host_register_prefab(WPE_ScriptHost* host, const char* name, const WPE_Model* model) {
+    if (!host || !name || !model) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!name[0] || strlen(name) >= WPE__SCRIPT_PREFAB_NAME_MAX) return WPE_RESULT_ERROR_INVALID_ARG;
+    for (uint32_t i = 0; i < host->prefab_count; ++i) {
+        if (strcmp(host->prefabs[i].name, name) == 0) {
+            wpe_model_destroy(host->prefabs[i].owned);
+            host->prefabs[i].owned = NULL;
+            host->prefabs[i].model = model;
+            return WPE_RESULT_OK;
+        }
+    }
+    if (host->prefab_count == host->prefab_capacity) {
+        const uint32_t capacity = host->prefab_capacity ? host->prefab_capacity * 2 : 16;
+        wpe__Prefab* prefabs = wpe_realloc(host->prefabs, (size_t)capacity * sizeof *prefabs);
+        if (!prefabs) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        host->prefabs = prefabs;
+        host->prefab_capacity = capacity;
+    }
+    wpe__Prefab* prefab = &host->prefabs[host->prefab_count++];
+    *prefab = (wpe__Prefab){.model = model};
+    snprintf(prefab->name, sizeof prefab->name, "%s", name);
+    return WPE_RESULT_OK;
+}
+
+const WPE_Model* wpe__script_find_prefab(WPE_ScriptHost* host, const char* name_or_path) {
+    for (uint32_t i = 0; i < host->prefab_count; ++i) {
+        if (strcmp(host->prefabs[i].name, name_or_path) == 0) return host->prefabs[i].model;
+    }
+    if (!wpe__script_path_is_safe(name_or_path) || strlen(name_or_path) >= WPE__SCRIPT_PREFAB_NAME_MAX) {
+        wpe_log_error("prefab '%s' is not registered and is not a safe asset path", name_or_path);
+        return NULL;
+    }
+    char full[1024];
+    if (!wpe__script_full_path(host, name_or_path, full, sizeof full)) return NULL;
+    WPE_Model* model = NULL;
+    const WPE_ModelLoadOptions options = {.jobs = host->jobs, .max_texture_size = host->max_texture_size};
+    if (wpe_model_load(full, &options, &model) != WPE_RESULT_OK) return NULL;
+    if (wpe_script_host_register_prefab(host, name_or_path, model) != WPE_RESULT_OK) {
+        wpe_model_destroy(model);
+        return NULL;
+    }
+    host->prefabs[host->prefab_count - 1].owned = model;
+    return model;
+}
+
+WPE_ScriptStats wpe_script_host_stats(const WPE_ScriptHost* host) {
+    WPE_ScriptStats stats = {0};
+    if (!host) return stats;
+    stats.scripts = host->file_count;
+    stats.errors = host->errors;
+    stats.memory = host->memory_used;
+    WPE_EcsPoolView view;
+    if (wpe_ecs_pool_view(host->ecs, WPE_COMP_SCRIPT, &view) == WPE_RESULT_OK) {
+        stats.instances = view.count;
+        for (uint32_t i = 0; i < view.count; ++i) {
+            const WPE_Script* s =
+                (const WPE_Script*)((const unsigned char*)view.data + (size_t)i * view.stride);
+            stats.failed += (s->state & WPE__SCRIPT_FAILED) != 0;
+        }
+    }
+    return stats;
+}
+
+WPE_Result wpe_script_host_run(WPE_ScriptHost* host, const char* chunk_name, const char* source) {
+    if (!host || !chunk_name || !source) return WPE_RESULT_ERROR_NULL_ARG;
+    lua_CompileOptions options = {.optimizationLevel = 1, .debugLevel = 1};
+    size_t size = 0;
+    char* bytecode = luau_compile(source, strlen(source), &options, &size);
+    if (!bytecode) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    if (size == 0 || bytecode[0] == 0) {
+        wpe_log_error("compile error in '%s': %.*s", chunk_name, (int)(size > 1 ? size - 1 : 0),
+                      bytecode + 1);
+        free(bytecode);
+        ++host->errors;
+        return WPE_RESULT_ERROR_PARSE;
+    }
+    /* Ad-hoc chunks run in their own sandbox thread like script files but may return anything. */
+    char chunk[WPE__SCRIPT_PATH_MAX + 1];
+    snprintf(chunk, sizeof chunk, "=%s", chunk_name);
+    wpe__LoadOp op = {.host = host,
+                      .chunk_name = chunk,
+                      .bytecode = bytecode,
+                      .bytecode_size = size,
+                      .existing_meta_ref = LUA_NOREF,
+                      .require_table = false};
+    const int status = lua_cpcall(host->L, wpe__op_load, &op);
+    free(bytecode);
+    if (status != 0) {
+        wpe_log_error("error in '%s': %s", chunk_name,
+                      lua_tostring(host->L, -1) ? lua_tostring(host->L, -1) : "unknown error");
+        lua_pop(host->L, 1);
+        ++host->errors;
+        return WPE_RESULT_ERROR;
+    }
+    return WPE_RESULT_OK;
+}

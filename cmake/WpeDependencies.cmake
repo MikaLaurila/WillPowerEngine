@@ -55,3 +55,35 @@ FetchContent_Declare(stb
 FetchContent_MakeAvailable(stb)
 add_library(wpe_dep_stb INTERFACE)
 target_include_directories(wpe_dep_stb SYSTEM INTERFACE "${stb_SOURCE_DIR}")
+
+# Luau 0.742 (MIT) — scripting VM and compiler (C++17). Only Luau.VM and Luau.Compiler are built
+# (EXCLUDE_FROM_ALL keeps analysis/CLI targets out of the build).
+set(LUAU_BUILD_CLI OFF CACHE BOOL "" FORCE)
+set(LUAU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LUAU_BUILD_WEB OFF CACHE BOOL "" FORCE)
+set(LUAU_EXTERN_C OFF CACHE BOOL "" FORCE) # Its public definitions are C++-only; see below.
+FetchContent_Declare(luau
+    URL https://github.com/luau-lang/luau/archive/refs/tags/0.742.tar.gz
+    URL_HASH SHA256=c065ac4e0a7f147a5db0429163d8d4d61cd18281a83195185823d9810f0e8284
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    EXCLUDE_FROM_ALL
+    SYSTEM)
+FetchContent_MakeAvailable(luau)
+# Errors must unwind with longjmp, not C++ exceptions: engine API functions called from scripts
+# are C code, and exceptions cannot safely propagate through C frames.
+target_compile_definitions(Luau.VM PUBLIC LUA_USE_LONGJMP=1)
+# Give the API C linkage when compiling Luau itself only. C consumers see the default `extern`
+# declarations from luaconf.h/luacode.h, which match these C-linkage definitions.
+target_compile_definitions(Luau.VM PRIVATE "LUA_API=extern \"C\"") # LUALIB_API derives from LUA_API
+target_compile_definitions(Luau.Compiler PRIVATE "LUACODE_API=extern \"C\"")
+if(MINGW)
+    # Luau marks internals with ELF symbol visibility, which PE/COFF targets ignore; silence the noise.
+    foreach(luau_target Luau.VM Luau.Compiler Luau.Ast Luau.Common)
+        if(TARGET ${luau_target})
+            target_compile_options(${luau_target} PRIVATE -Wno-attributes)
+        endif()
+    endforeach()
+endif()
+
+add_library(wpe_dep_luau INTERFACE)
+target_link_libraries(wpe_dep_luau INTERFACE Luau.VM Luau.Compiler)

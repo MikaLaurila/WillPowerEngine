@@ -30,6 +30,19 @@ WPE_Quat wpe_quat_from_euler_xyz(WPE_Vec3 radians) {
     return wpe_quat_mul(qz, wpe_quat_mul(qy, qx));
 }
 
+WPE_Vec3 wpe_quat_to_euler_xyz(WPE_Quat q) {
+    /* R = Rz * Ry * Rx; read the needed elements of R (row r, column c) = m[c][r]. */
+    const WPE_Mat4 m = wpe_mat4_from_trs(wpe_vec3(0, 0, 0), q, wpe_vec3(1, 1, 1));
+    const float r20 = m.m[0][2];
+    const float sin_y = r20 < -1.0f ? 1.0f : (r20 > 1.0f ? -1.0f : -r20);
+    const float y = asinf(sin_y);
+    if (fabsf(sin_y) > 0.99999f) {
+        /* Gimbal lock: x and z rotate about the same axis; fold everything into z. */
+        return wpe_vec3(0.0f, y, atan2f(-m.m[1][0], m.m[1][1]));
+    }
+    return wpe_vec3(atan2f(m.m[1][2], m.m[2][2]), y, atan2f(m.m[0][1], m.m[0][0]));
+}
+
 WPE_Quat wpe_quat_mul(WPE_Quat a, WPE_Quat b) {
     WPE_Quat q;
     glm_quat_mul(a.v, b.v, q.v);

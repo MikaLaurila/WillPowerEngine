@@ -4,6 +4,7 @@ add_library(wpe_core STATIC
     alloc.c
     arena.c
     debug.c
+    fixed_step.c
     log.c
     result.c)
 add_library(wpe::core ALIAS wpe_core)
@@ -14,3 +15,6 @@ target_include_directories(wpe_core PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 wpe_configure_target(wpe_core)
+if(UNIX)
+    target_link_libraries(wpe_core PUBLIC m)
+endif()

@@ -197,7 +197,8 @@ WPE_Result wpe_ecs_create(WPE_Ecs** out_ecs) {
 void wpe_ecs_destroy(WPE_Ecs* ecs) {
     if (!ecs) return;
 
-    for (uint32_t type = 1; type < WPE_ECS_MAX_COMPONENT_TYPES; ++type) {
+    /* Same descending order as despawn so higher-level hooks see lower-level components intact. */
+    for (uint32_t type = WPE_ECS_MAX_COMPONENT_TYPES - 1; type >= 1; --type) {
         const wpe__EcsPool* pool = &ecs->pools[type];
         if (!pool->registered || !pool->on_remove) continue;
         for (uint32_t i = 0; i < pool->count; ++i) {
@@ -252,6 +253,23 @@ WPE_Result wpe_ecs_register_component(WPE_Ecs* ecs, WPE_ComponentType type, cons
     return WPE_RESULT_OK;
 }
 
+WPE_Result wpe_ecs_unregister_component(WPE_Ecs* ecs, WPE_ComponentType type) {
+    if (!ecs) return WPE_RESULT_ERROR_NULL_ARG;
+    if (wpe__ecs_reject_in_hook(ecs, "wpe_ecs_unregister_component")) return WPE_RESULT_ERROR_INVALID_STATE;
+    if (!wpe__ecs_registered_pool(ecs, type)) return WPE_RESULT_ERROR_NOT_FOUND;
+    wpe__EcsPool* pool = &ecs->pools[type];
+    if (pool->count != 0) {
+        wpe_log_error("cannot unregister component '%s': %u instance(s) still exist", pool->name,
+                      pool->count);
+        return WPE_RESULT_ERROR_INVALID_STATE;
+    }
+    wpe_free(pool->sparse);
+    wpe_free(pool->dense_entities);
+    wpe_free(pool->data);
+    *pool = (wpe__EcsPool){0};
+    return WPE_RESULT_OK;
+}
+
 bool wpe_ecs_is_registered(const WPE_Ecs* ecs, WPE_ComponentType type) {
     return ecs && wpe__ecs_registered_pool(ecs, type) != NULL;
 }
@@ -299,8 +317,12 @@ WPE_Result wpe_ecs_despawn(WPE_Ecs* ecs, WPE_Entity entity) {
     if (!slot) return WPE_RESULT_ERROR_NOT_FOUND;
     const uint32_t index = wpe__ecs_index(entity);
 
-    /* All on_remove hooks run while the entity is still intact, so hooks may read sibling components. */
-    for (uint32_t type = 1; type < WPE_ECS_MAX_COMPONENT_TYPES; ++type) {
+    /*
+     * All on_remove hooks run before any storage is released, in descending type id order:
+     * higher-level components (scripts, game components) are torn down while lower-level ones
+     * (transform, hierarchy) are still fully intact, since those hooks may edit shared state.
+     */
+    for (uint32_t type = WPE_ECS_MAX_COMPONENT_TYPES - 1; type >= 1; --type) {
         if (!(slot->mask & WPE_ECS_MASK(type))) continue;
         const wpe__EcsPool* pool = &ecs->pools[type];
         wpe__ecs_run_hook(ecs, pool, pool->on_remove, entity, pool->sparse[index]);

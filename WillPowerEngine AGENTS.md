@@ -277,6 +277,11 @@ end
 return MyEntity
 ```
 
+**Implementation:** `src/script/` (public API in `script/script.h`; Luau API reference in `docs/scripting.md`).
+- The module is a C host around the Luau VM. Luau is built with `LUA_USE_LONGJMP=1` so its errors can unwind through C bindings.
+- The `on_reload(self)` callback runs after a hot reload.
+- On a despawn, the script's `on_destroy` runs before hierarchy and transform teardown, because ECS remove hooks run in descending component id order.
+
 **Script host responsibilities:**
 - Expose ECS API to Luau (entity manipulation, component access).
 - Hot reload: detect script changes, restart scripts preserving state.
@@ -365,6 +370,7 @@ willpower_engine/
   - `platform` depends on `core` and `renderer`, and uses SDL3 privately.
   - `assets` depends on `core`, `math`, `renderer`, `jobs` and `platform`, and uses cgltf and stb_image privately.
   - `graphics` depends on `ecs`, `scene`, `renderer` and `assets`.
+  - `script` depends on `graphics`, `assets` and `platform`, and uses Luau privately.
 - Only `jobs` and `platform` may include SDL headers; the renderer stays pure CPU so it can be tested headless.
 
 ---

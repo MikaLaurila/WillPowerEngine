@@ -109,4 +109,15 @@ void wpe_image_free(WPE_Image* image);
  */
 WPE_Result wpe_file_read_all(const char* path, void** out_data, size_t* out_size);
 
+/**
+ * Reads a file's last modification time (for change detection such as hot reload).
+ *
+ * @param out_time Receives an opaque, monotonically comparable timestamp (nanoseconds).
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_NOT_FOUND (no such file;
+ *         not logged, since polling for missing files is normal).
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_file_modified_time(const char* path, int64_t* out_time);
+
 #endif /* WPE_PLATFORM_PLATFORM_H */

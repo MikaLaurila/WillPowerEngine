@@ -9,14 +9,14 @@ WillPowerEngine is a C23 multithreaded software-rasterizer 3D game engine (Windo
 - `WillPowerEngine Spec (Refined).md`: the product spec, which is the source of truth for *what* to build.
 - `WillPowerEngine AGENTS.md`: the authoritative coding standards, testing rules, architecture and planned layout. Update it when an architectural decision changes.
 
-Development runs in milestones; the user reviews each one before the next starts. Commit and push to `origin main` (github.com/MikaLaurila/WillPowerEngine) at each working milestone, and record notable changes in `CHANGELOG.md`.
+Development runs in milestones; the user reviews each one before the next starts. Commit and push to `origin main` (github.com/MikaLaurila/WillPowerEngine) at each working milestone, and record notable changes in `CHANGELOG.md`. End every commit message with the trailer `Co-Authored-By: Claude <noreply@anthropic.com>` (the user asked for it starting with Milestone 6).
 
 1. Build system, core and tests (done)
 2. ECS, plus math and the scene transform hierarchy (done)
 3. Rasterizer and window (SDL3) (done)
 4. glTF, materials, textures, fonts and skinned animation (done)
 5. Lighting, shadows, fog, subdivision and post-processing (done)
-6. Luau scripting
+6. Luau scripting (done)
 7. Box3D physics
 8. Audio and `.pak` archives
 9. Runtime/export
@@ -41,7 +41,11 @@ WPE_UPDATE_GOLDEN=1 ctest --test-dir build -R golden    # regenerate golden PNGs
 ./build/samples/spinning_cubes --frames 30 --screenshot out.png   # render headless-ish and inspect the PNG
 ./build/samples/model_viewer assets/meshes/RiggedFigure.glb --frames 2 --yaw 30 --time 0.6 --screenshot out.png
 ./build/samples/lighting_demo --frames 2 --time 3 --screenshot out.png --shadow-map shadow.png   # + --ssao --fog --ps1 ...
+./build/samples/script_demo --watch                               # edit assets/scripts/*.luau while it runs
+ctest --test-dir build -L integration                             # 60 s simulated run of every scripting API
 ```
+
+Luau is the only C++ dependency. It's compiled without the engine's warning flags (with `-Wno-attributes` on MinGW), and its API gets C linkage through *private* compile definitions on `Luau.VM` and `Luau.Compiler`.
 
 The test models live in `assets/meshes/`:
 - `damaged_helmet.glb`: JPEG textures
@@ -110,6 +114,14 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
     - Material varyings are laid out at the top of `material_shader.c` (26 of 32 are used). Keep that layout and the `static_assert` next to it in sync.
   - Post-processing: `wpe_postfx_apply(chain, renderer, effects, n, camera)` runs after `end_frame`. Draw HUD/2D in a second, non-clearing frame if it shouldn't be post-processed.
   - Procedural models: `assets/procedural.h` provides a plane, a box and `wpe_model_create_mesh`.
+- **script** (`script/script.h`, Luau; API reference in `docs/scripting.md`):
+  - There is one `WPE_ScriptHost` per world. It registers `WPE_COMP_SCRIPT` and must be destroyed *before* the world.
+  - The game loop is `wpe_fixed_step_advance` → `wpe_script_host_fixed_update` for each step → `wpe_script_host_update` → animation → transforms → render.
+  - Luau is built with `LUA_USE_LONGJMP=1`, so script errors unwind with `longjmp` rather than C++ exceptions. API bindings in `script_api.c` must therefore validate all arguments (which may raise) *before* touching engine state, and must never hold engine allocations across calls that can raise.
+  - Host-side Luau operations run inside `lua_cpcall`.
+  - Never call `lua_settop` in host code that may run nested inside a binding.
+  - The `wpe` table is read-only once sandboxed. To add an API function, add it to `wpe__api[]`, `docs/scripting.md` and `assets/scripts/api_tour.luau`, which the 60-second integration test runs.
+- **ECS hook order:** on despawn, `on_remove` hooks run in descending type-id order, so the Script hook (8) runs before the Hierarchy hook (2).
 - **renderer extras:**
   - `WPE_RenderState.depth_only` writes depth only; the fragment shader may be NULL in that mode. This is used for shadow passes.
   - `WPE_DrawDesc.subdivision_levels/edge_pixels` require `program->vertex_lerp`.

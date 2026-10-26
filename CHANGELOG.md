@@ -5,6 +5,17 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Scripting (`src/script`): Luau 0.742 VM host with per-entity scripts (`on_start`,
+  `on_update`, `on_fixed_update`, `on_destroy`, `on_reload`), sandbox (safe libraries only,
+  read-only globals, per-file environments, asset-root path checks), per-callback time budget,
+  VM memory limit, error isolation with tracebacks, hot reload preserving instance state, named
+  and path-based prefabs, and the `wpe` API (entities, hierarchy, transforms, lights,
+  visibility, animation, time). API reference in `docs/scripting.md`.
+- Core: fixed-timestep clock (`core/fixed_step.h`) with spiral-of-death protection.
+- ECS: `wpe_ecs_unregister_component`.
+- Math: `wpe_quat_to_euler_xyz`. Platform: `wpe_file_modified_time`.
+- Example scripts (`assets/scripts`), `samples/script_demo` (fixed-step game loop, `--watch`
+  hot reload), and an integration test running the full scripting API for 60 simulated seconds.
 - Lighting: `WPE_Light` component (directional/point/spot). Hybrid shading: per-vertex lighting
   for ambient, up to 4 point/spot lights per object and the sun; per-pixel sun shadows and
   normal-mapped sun lighting. Ambient is also reflected specularly.
@@ -60,6 +71,8 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - GitHub Actions CI for Linux (GCC 14) and Windows (MSYS2 UCRT64 GCC).
 
 ### Changed
+- ECS `on_remove` hooks now run in descending component type id order (higher-level components
+  such as scripts see transform/hierarchy intact during teardown).
 - **BREAKING**: `WPE_SceneRenderSettings` replaced its single `light` with ambient, fog, shadow,
   subdivision and default-sun settings; lights now come from `WPE_Light` entities.
 - **BREAKING**: `WPE_MAX_VARYINGS` raised to 32; `WPE_ShaderProgram` gained `vertex_lerp`.

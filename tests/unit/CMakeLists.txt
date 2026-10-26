@@ -15,5 +15,8 @@ wpe_add_test(graphics_graphics SOURCES graphics/test_graphics.c LIBS wpe::graphi
 target_compile_definitions(test_graphics_graphics PRIVATE WPE_TEST_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
 wpe_add_test(graphics_lighting SOURCES graphics/test_lighting.c LIBS wpe::graphics LABELS unit graphics)
 target_compile_definitions(test_graphics_lighting PRIVATE WPE_TEST_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
+wpe_add_test(script_script SOURCES script/test_script.c LIBS wpe::script LABELS unit script)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/script_assets")
+set_tests_properties(script_script PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 # Tests write scratch files into their working directory.
 set_tests_properties(assets_assets PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

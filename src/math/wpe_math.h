@@ -131,6 +131,12 @@ WPE_Quat wpe_quat_from_axis_angle(WPE_Vec3 axis, float radians);
 /** Rotation from Euler angles applied X first, then Y, then Z: q = qz * qy * qx. */
 WPE_Quat wpe_quat_from_euler_xyz(WPE_Vec3 radians);
 
+/**
+ * Inverse of wpe_quat_from_euler_xyz(): angles (x, y, z) such that q = qz * qy * qx, with
+ * y in [-pi/2, pi/2]. At gimbal lock (|y| = pi/2) x is reported as 0.
+ */
+WPE_Vec3 wpe_quat_to_euler_xyz(WPE_Quat q);
+
 /** Hamilton product: the result applies b first, then a. */
 WPE_Quat wpe_quat_mul(WPE_Quat a, WPE_Quat b);
 

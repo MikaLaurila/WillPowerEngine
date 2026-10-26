@@ -20,6 +20,9 @@
  *   wpe_ecs_despawn_deferred() and wpe_ecs_flush_deferred(). Debug builds assert on violations and
  *   the iteration stops early in all builds.
  * - Component hooks may read and write component data but must not make structural changes.
+ *   When an entity is despawned (or the world destroyed), on_remove hooks run in descending
+ *   component type id order before any storage is released, so hooks of higher ids (e.g. scripts)
+ *   still see lower-id components (transform, hierarchy) unmodified.
  *
  * - Dependencies: core
  * - Thread affinity: a world is not internally synchronized. Concurrent read-only access (get,
@@ -165,6 +168,17 @@ void wpe_ecs_destroy(WPE_Ecs* ecs);
  */
 [[nodiscard]] WPE_Result wpe_ecs_register_component(WPE_Ecs* ecs, WPE_ComponentType type,
                                                     const WPE_ComponentDesc* desc);
+
+/**
+ * Unregisters a component type so its id can be registered again (e.g. when a subsystem that
+ * owns the type's hooks shuts down). Only allowed when no entity has the component.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_NOT_FOUND (not registered) or
+ *         WPE_RESULT_ERROR_INVALID_STATE (components of this type still exist, or called from a hook).
+ *
+ * @thread_safety Thread owning the world
+ */
+WPE_Result wpe_ecs_unregister_component(WPE_Ecs* ecs, WPE_ComponentType type);
 
 /** @return Whether `type` is registered in `ecs`. @thread_safety Thread owning the world */
 bool wpe_ecs_is_registered(const WPE_Ecs* ecs, WPE_ComponentType type);

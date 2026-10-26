@@ -206,6 +206,14 @@ WPE_Result wpe_file_read_all(const char* path, void** out_data, size_t* out_size
     return WPE_RESULT_OK;
 }
 
+WPE_Result wpe_file_modified_time(const char* path, int64_t* out_time) {
+    if (!path || !out_time) return WPE_RESULT_ERROR_NULL_ARG;
+    SDL_PathInfo info;
+    if (!SDL_GetPathInfo(path, &info) || info.type != SDL_PATHTYPE_FILE) return WPE_RESULT_ERROR_NOT_FOUND;
+    *out_time = (int64_t)info.modify_time;
+    return WPE_RESULT_OK;
+}
+
 void wpe_image_free(WPE_Image* image) {
     if (!image) return;
     wpe_free(image->pixels);
