@@ -402,6 +402,7 @@ WPE_Result wpe_script_host_create(const WPE_ScriptHostDesc* desc, WPE_ScriptHost
         root[strlen(root) - 1] = '\0';
     host->asset_root = root;
     host->ecs = desc->ecs;
+    host->physics = desc->physics;
     host->jobs = desc->jobs;
     host->max_texture_size = desc->max_texture_size ? desc->max_texture_size : 512;
     host->memory_limit = desc->memory_limit ? desc->memory_limit : WPE__DEFAULT_MEMORY_LIMIT;
@@ -536,6 +537,34 @@ WPE_Result wpe_script_host_update(WPE_ScriptHost* host, float dt) {
 WPE_Result wpe_script_host_fixed_update(WPE_ScriptHost* host, float dt) {
     if (!host) return WPE_RESULT_ERROR_NULL_ARG;
     return wpe__run_callbacks(host, dt, true);
+}
+
+/* Calls instance:method(other) on a started, healthy script of `entity`, if any. */
+static void wpe__notify(WPE_ScriptHost* host, WPE_Entity entity, const char* method, WPE_Entity other) {
+    const WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
+    if (!s || !(s->state & WPE__SCRIPT_STARTED) || (s->state & WPE__SCRIPT_FAILED)) return;
+    wpe__call_method(host, entity, s->instance_ref, s->script, method, true, (double)other);
+}
+
+WPE_Result wpe_script_host_dispatch_physics(WPE_ScriptHost* host) {
+    if (!host) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!host->physics) return WPE_RESULT_OK;
+    static const char* const methods[] = {
+        [WPE_PHYSICS_CONTACT_BEGIN] = "on_collision_enter",
+        [WPE_PHYSICS_CONTACT_END] = "on_collision_exit",
+        [WPE_PHYSICS_TRIGGER_ENTER] = "on_trigger_enter",
+        [WPE_PHYSICS_TRIGGER_EXIT] = "on_trigger_exit",
+    };
+    /* Callbacks cannot step physics, so the event array stays valid throughout. */
+    uint32_t count = 0;
+    const WPE_PhysicsEvent* events = wpe_physics_events(host->physics, &count);
+    for (uint32_t i = 0; i < count; ++i) {
+        const WPE_PhysicsEvent event = events[i];
+        wpe__notify(host, event.entity_a, methods[event.type], event.entity_b);
+        wpe__notify(host, event.entity_b, methods[event.type], event.entity_a);
+    }
+    wpe__flush_destroys(host);
+    return WPE_RESULT_OK;
 }
 
 static WPE_Result wpe__reload_file(WPE_ScriptHost* host, uint32_t index) {

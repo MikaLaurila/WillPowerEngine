@@ -64,6 +64,39 @@ function Tour:on_start()
 	assert(wpe.attach_script(self.temp, "scripts/spinner.luau"))
 	assert(not pcall(wpe.get_position, 4294967295)) -- invalid handles raise errors
 
+	-- Physics (the host provides a ground collider with its top at y = 0).
+	self.ball = wpe.spawn("tour_ball")
+	wpe.set_position(self.ball, vector.create(8, 3, 8))
+	wpe.add_rigidbody(self.ball, {
+		type = wpe.BODY_DYNAMIC,
+		linear_damping = 0.1,
+		angular_damping = 0.1,
+		gravity_scale = 1,
+		lock_rotation = false,
+		continuous = true,
+	})
+	wpe.add_collider(self.ball, { shape = wpe.COLLIDER_SPHERE, radius = 0.5, density = 2, friction = 0.5, restitution = 0.1 })
+	wpe.set_velocity(self.ball, vector.create(0, 1, 0))
+	assert(vnear(wpe.get_velocity(self.ball), vector.create(0, 1, 0)))
+	wpe.apply_impulse(self.ball, vector.create(0.1, 0, 0))
+	wpe.apply_force(self.ball, vector.create(0, 0, 1))
+
+	self.pillar = wpe.spawn("tour_pillar")
+	wpe.set_position(self.pillar, vector.create(-8, 1, -8))
+	wpe.add_rigidbody(self.pillar, { type = wpe.BODY_KINEMATIC })
+	wpe.add_collider(self.pillar, { shape = wpe.COLLIDER_CAPSULE, radius = 0.3, height = 2, offset = vector.create(0, 0, 0) })
+	wpe.remove_collider(self.pillar)
+	wpe.remove_rigidbody(self.pillar)
+	-- Without a rigid body a collider is static level geometry; this one is a trigger hull from a prefab.
+	wpe.add_collider(self.pillar, { shape = wpe.COLLIDER_CONVEX, model = "box", mesh = 1, trigger = true })
+
+	local gravity = wpe.get_gravity()
+	assert(gravity.y < 0)
+	wpe.set_gravity(gravity)
+	local hit = wpe.raycast(vector.create(20, 5, 20), vector.create(0, -1, 0), 10)
+	assert(hit and near(hit.distance, 5, 1e-3) and hit.normal.y > 0.99 and wpe.get_name(hit.entity) == "ground")
+	assert(wpe.raycast(vector.create(20, 5, 20), vector.create(0, 1, 0)) == nil)
+
 	self.updates = 0
 	self.fixed = 0
 end
@@ -75,6 +108,8 @@ function Tour:on_update(dt)
 		wpe.stop_animation(self.figure)
 	elseif self.updates == 11 then
 		assert(not wpe.is_alive(self.temp), "destroy should have completed at the end of the previous update")
+	elseif self.updates == 120 then
+		assert(wpe.get_position(self.ball).y < 0.55, "the ball should rest on the ground")
 	end
 	assert(wpe.time() >= 0 and wpe.frame() >= 0)
 end
@@ -90,6 +125,8 @@ function Tour:on_destroy()
 	wpe.destroy(self.pointer)
 	wpe.destroy(self.child)
 	wpe.destroy(self.figure)
+	wpe.destroy(self.ball)
+	wpe.destroy(self.pillar)
 end
 
 return Tour

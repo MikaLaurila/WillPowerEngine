@@ -444,6 +444,201 @@ static int wpe__api_animation_time(lua_State* L) {
     return 1;
 }
 
+/* ---- Physics --------------------------------------------------------------------------------------- */
+
+static WPE_Physics* wpe__physics(lua_State* L) {
+    WPE_Physics* physics = wpe__script_host_from(L)->physics;
+    if (!physics) luaL_errorL(L, "physics is not enabled for this world");
+    return physics;
+}
+
+static bool wpe__field_bool(lua_State* L, int table, const char* key, bool fallback) {
+    lua_getfield(L, table, key);
+    const bool value = lua_isnil(L, -1) ? fallback : luaL_checkboolean(L, -1);
+    lua_pop(L, 1);
+    return value;
+}
+
+/* Raises with a readable message for the body-control error codes. */
+static void wpe__raise_body_result(lua_State* L, const char* function, WPE_Entity entity, WPE_Result result) {
+    if (result == WPE_RESULT_ERROR_NOT_FOUND)
+        luaL_errorL(L, "wpe.%s: entity 0x%08x has no rigid body", function, entity);
+    if (result == WPE_RESULT_ERROR_INVALID_STATE) {
+        luaL_errorL(L, "wpe.%s: not supported by the body type of entity 0x%08x", function, entity);
+    }
+    wpe__raise_result(L, function, result);
+}
+
+static int wpe__api_add_rigidbody(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "add_rigidbody");
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_RigidBody* existing = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_PHYSICS_RIGIDBODY);
+    WPE_RigidBody body = existing ? *existing : wpe_rigidbody_default(WPE_BODY_DYNAMIC);
+    if (!lua_isnoneornil(L, 2)) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        const float type = wpe__field_number(L, 2, "type", (float)body.type);
+        if (!(type == WPE_BODY_STATIC || type == WPE_BODY_KINEMATIC || type == WPE_BODY_DYNAMIC)) {
+            luaL_errorL(L, "rigid body type must be wpe.BODY_STATIC, wpe.BODY_KINEMATIC or wpe.BODY_DYNAMIC");
+        }
+        body.type = (WPE_BodyType)type;
+        body.linear_damping = wpe__field_number(L, 2, "linear_damping", body.linear_damping);
+        body.angular_damping = wpe__field_number(L, 2, "angular_damping", body.angular_damping);
+        body.gravity_scale = wpe__field_number(L, 2, "gravity_scale", body.gravity_scale);
+        body.lock_rotation = wpe__field_bool(L, 2, "lock_rotation", body.lock_rotation);
+        body.continuous = wpe__field_bool(L, 2, "continuous", body.continuous);
+    }
+    /* Re-fetch after raising calls; private fields of an existing body are carried over unchanged. */
+    WPE_RigidBody* stored = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_PHYSICS_RIGIDBODY);
+    if (stored) {
+        *stored = body;
+    } else {
+        wpe__raise_result(L, "add_rigidbody",
+                          wpe_ecs_add_component(host->ecs, entity, WPE_COMP_PHYSICS_RIGIDBODY, &body, NULL));
+    }
+    /* Create the body now so velocities and forces work immediately. */
+    wpe__raise_result(L, "add_rigidbody", wpe_physics_refresh(physics, entity));
+    return 0;
+}
+
+static int wpe__api_add_collider(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "add_collider");
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_Collider* existing = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_PHYSICS_COLLIDER);
+    WPE_Collider collider = existing ? *existing : wpe_collider_default(WPE_COLLIDER_BOX);
+    char model_name[WPE__SCRIPT_PATH_MAX] = "";
+    if (!lua_isnoneornil(L, 2)) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        const float shape = wpe__field_number(L, 2, "shape", (float)collider.shape);
+        if (!(shape >= WPE_COLLIDER_BOX && shape <= WPE_COLLIDER_MESH && shape == floorf(shape))) {
+            luaL_errorL(L, "collider shape must be one of the wpe.COLLIDER_* constants");
+        }
+        collider.shape = (WPE_ColliderShape)shape;
+        lua_getfield(L, 2, "size");
+        if (!lua_isnil(L, -1)) collider.size = wpe__check_vec3(L, -1);
+        lua_pop(L, 1);
+        collider.size.x = wpe__field_number(L, 2, "radius", collider.size.x);
+        collider.size.y = wpe__field_number(L, 2, "height", collider.size.y);
+        lua_getfield(L, 2, "offset");
+        if (!lua_isnil(L, -1)) collider.offset = wpe__check_vec3(L, -1);
+        lua_pop(L, 1);
+        collider.density = wpe__field_number(L, 2, "density", collider.density);
+        collider.friction = wpe__field_number(L, 2, "friction", collider.friction);
+        collider.restitution = wpe__field_number(L, 2, "restitution", collider.restitution);
+        collider.is_trigger = wpe__field_bool(L, 2, "trigger", collider.is_trigger);
+        const float mesh = wpe__field_number(L, 2, "mesh", (float)collider.mesh + 1.0f); /* 1-based */
+        if (!(mesh >= 1.0f && mesh == floorf(mesh))) luaL_errorL(L, "collider mesh index must be >= 1");
+        collider.mesh = (uint32_t)mesh - 1;
+        lua_getfield(L, 2, "model");
+        if (!lua_isnil(L, -1)) snprintf(model_name, sizeof model_name, "%s", luaL_checkstring(L, -1));
+        lua_pop(L, 1);
+    }
+    if (model_name[0] != '\0') {
+        collider.model = wpe__script_find_prefab(host, model_name);
+        if (!collider.model) luaL_errorL(L, "wpe.add_collider: unknown model '%s'", model_name);
+    }
+    if ((collider.shape == WPE_COLLIDER_CONVEX || collider.shape == WPE_COLLIDER_MESH) && !collider.model) {
+        luaL_errorL(L, "wpe.add_collider: convex and mesh colliders need a model");
+    }
+    WPE_Collider* stored = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_PHYSICS_COLLIDER);
+    if (stored) {
+        *stored = collider;
+    } else {
+        wpe__raise_result(
+            L, "add_collider",
+            wpe_ecs_add_component(host->ecs, entity, WPE_COMP_PHYSICS_COLLIDER, &collider, NULL));
+    }
+    wpe__raise_result(L, "add_collider", wpe_physics_refresh(physics, entity));
+    return 0;
+}
+
+static int wpe__api_remove_physics(lua_State* L, const char* function, WPE_ComponentType type) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, function);
+    wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    if (wpe_ecs_has_component(host->ecs, entity, type))
+        wpe__raise_result(L, function, wpe_ecs_remove_component(host->ecs, entity, type));
+    return 0;
+}
+
+static int wpe__api_remove_rigidbody(lua_State* L) {
+    return wpe__api_remove_physics(L, "remove_rigidbody", WPE_COMP_PHYSICS_RIGIDBODY);
+}
+
+static int wpe__api_remove_collider(lua_State* L) {
+    return wpe__api_remove_physics(L, "remove_collider", WPE_COMP_PHYSICS_COLLIDER);
+}
+
+static int wpe__api_apply_force(lua_State* L) {
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    wpe__raise_body_result(L, "apply_force", entity,
+                           wpe_physics_apply_force(physics, entity, wpe__check_vec3(L, 2)));
+    return 0;
+}
+
+static int wpe__api_apply_impulse(lua_State* L) {
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    wpe__raise_body_result(L, "apply_impulse", entity,
+                           wpe_physics_apply_impulse(physics, entity, wpe__check_vec3(L, 2)));
+    return 0;
+}
+
+static int wpe__api_set_velocity(lua_State* L) {
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    wpe__raise_body_result(L, "set_velocity", entity,
+                           wpe_physics_set_velocity(physics, entity, wpe__check_vec3(L, 2)));
+    return 0;
+}
+
+static int wpe__api_get_velocity(lua_State* L) {
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    WPE_Vec3 velocity;
+    wpe__raise_body_result(L, "get_velocity", entity, wpe_physics_get_velocity(physics, entity, &velocity));
+    wpe__push_vec3(L, velocity);
+    return 1;
+}
+
+static int wpe__api_raycast(lua_State* L) {
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Vec3 origin = wpe__check_vec3(L, 1);
+    const WPE_Vec3 direction = wpe__check_vec3(L, 2);
+    const float max_distance = (float)luaL_optnumber(L, 3, 1000.0);
+    WPE_RaycastHit hit;
+    if (!wpe_physics_raycast(physics, origin, direction, max_distance, &hit)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_createtable(L, 0, 4);
+    lua_pushnumber(L, (double)hit.entity);
+    lua_setfield(L, -2, "entity");
+    wpe__push_vec3(L, hit.point);
+    lua_setfield(L, -2, "point");
+    wpe__push_vec3(L, hit.normal);
+    lua_setfield(L, -2, "normal");
+    lua_pushnumber(L, hit.distance);
+    lua_setfield(L, -2, "distance");
+    return 1;
+}
+
+static int wpe__api_set_gravity(lua_State* L) {
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Vec3 gravity = wpe__check_vec3(L, 1);
+    if (!(isfinite(gravity.x) && isfinite(gravity.y) && isfinite(gravity.z)))
+        luaL_errorL(L, "gravity must be finite");
+    wpe_physics_set_gravity(physics, gravity);
+    return 0;
+}
+
+static int wpe__api_get_gravity(lua_State* L) {
+    wpe__push_vec3(L, wpe_physics_gravity(wpe__physics(L)));
+    return 1;
+}
+
 /* ---- Time ------------------------------------------------------------------------------------------ */
 
 static int wpe__api_time(lua_State* L) {
@@ -487,6 +682,17 @@ static const luaL_Reg wpe__api[] = {
     {"play_animation", wpe__api_play_animation},
     {"stop_animation", wpe__api_stop_animation},
     {"animation_time", wpe__api_animation_time},
+    {"add_rigidbody", wpe__api_add_rigidbody},
+    {"add_collider", wpe__api_add_collider},
+    {"remove_rigidbody", wpe__api_remove_rigidbody},
+    {"remove_collider", wpe__api_remove_collider},
+    {"apply_force", wpe__api_apply_force},
+    {"apply_impulse", wpe__api_apply_impulse},
+    {"set_velocity", wpe__api_set_velocity},
+    {"get_velocity", wpe__api_get_velocity},
+    {"raycast", wpe__api_raycast},
+    {"set_gravity", wpe__api_set_gravity},
+    {"get_gravity", wpe__api_get_gravity},
     {"time", wpe__api_time},
     {"frame", wpe__api_frame},
     {NULL, NULL},
@@ -501,6 +707,19 @@ void wpe__script_api_register(lua_State* L) {
     lua_setfield(L, -2, "LIGHT_POINT");
     lua_pushnumber(L, WPE_LIGHT_SPOT);
     lua_setfield(L, -2, "LIGHT_SPOT");
+    static const struct {
+        const char* name;
+        int value;
+    } constants[] = {
+        {"BODY_STATIC", WPE_BODY_STATIC},         {"BODY_KINEMATIC", WPE_BODY_KINEMATIC},
+        {"BODY_DYNAMIC", WPE_BODY_DYNAMIC},       {"COLLIDER_BOX", WPE_COLLIDER_BOX},
+        {"COLLIDER_SPHERE", WPE_COLLIDER_SPHERE}, {"COLLIDER_CAPSULE", WPE_COLLIDER_CAPSULE},
+        {"COLLIDER_CONVEX", WPE_COLLIDER_CONVEX}, {"COLLIDER_MESH", WPE_COLLIDER_MESH},
+    };
+    for (size_t i = 0; i < sizeof constants / sizeof constants[0]; ++i) {
+        lua_pushnumber(L, constants[i].value);
+        lua_setfield(L, -2, constants[i].name);
+    }
     lua_setglobal(L, "wpe");
 
     lua_pushcfunction(L, wpe__api_log, "print");

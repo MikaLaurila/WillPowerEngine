@@ -1,6 +1,7 @@
 add_library(wpe_graphics STATIC
     animation.c
     components.c
+    debug_lines.c
     draw2d.c
     material_shader.c
     postfx.c

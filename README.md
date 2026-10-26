@@ -12,6 +12,7 @@ agents can drive fully, and it exports standalone game executables.
 > - Hybrid vertex/pixel lighting (directional, point and spot lights), directional shadows, fog,
 >   adaptive subdivision and post-processing (SSAO, PS1 dither, chromatic aberration, ...)
 > - Sandboxed Luau scripting with hot reload (see [docs/scripting.md](docs/scripting.md))
+> - Box3D rigid body physics with colliders, triggers, raycasts and script collision callbacks
 >
 > See [CHANGELOG.md](CHANGELOG.md) for progress.
 
@@ -21,7 +22,7 @@ Try the demos after building:
 ./build/samples/spinning_cubes                                   # --width 640 --height 480 --scale 2 --workers N
 ./build/samples/model_viewer assets/meshes/damaged_helmet.glb    # any .glb/.gltf; --dither, --max-texture N
 ./build/samples/lighting_demo --ssao --fog                       # also --ps1 --chroma --vignette --dither --no-shadows
-./build/samples/script_demo --watch                              # edit assets/scripts/*.luau while it runs
+./build/samples/script_demo --watch                              # edit assets/scripts/*.luau while it runs; --debug-physics
 ```
 
 ## Documents

@@ -17,7 +17,7 @@ Development runs in milestones; the user reviews each one before the next starts
 4. glTF, materials, textures, fonts and skinned animation (done)
 5. Lighting, shadows, fog, subdivision and post-processing (done)
 6. Luau scripting (done)
-7. Box3D physics
+7. Box3D physics (done)
 8. Audio and `.pak` archives
 9. Runtime/export
 10. Editor
@@ -42,6 +42,7 @@ WPE_UPDATE_GOLDEN=1 ctest --test-dir build -R golden    # regenerate golden PNGs
 ./build/samples/model_viewer assets/meshes/RiggedFigure.glb --frames 2 --yaw 30 --time 0.6 --screenshot out.png
 ./build/samples/lighting_demo --frames 2 --time 3 --screenshot out.png --shadow-map shadow.png   # + --ssao --fog --ps1 ...
 ./build/samples/script_demo --watch                               # edit assets/scripts/*.luau while it runs
+./build/samples/script_demo --frames 150 --debug-physics --screenshot out.png   # collider wireframes
 ctest --test-dir build -L integration                             # 60 s simulated run of every scripting API
 ```
 
@@ -88,7 +89,7 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - A frame is `begin_frame(clear)` → `submit(draw)…` → `end_frame()`.
   - Uniforms are copied at submit; vertex/index buffers and the program are borrowed until `end_frame`.
   - Clip space follows the OpenGL convention (z in [−w, w]); front faces are counter-clockwise; the framebuffer origin is top-left; colors are `0xAARRGGBB`.
-  - Shaders are C functions called concurrently from worker threads; varyings are capped at 16.
+  - Shaders are C functions called concurrently from worker threads; varyings are capped at 32 (`WPE_MAX_VARYINGS`).
   - Output is deterministic across thread counts, and steady-state frames don't allocate; tests enforce both.
   - The rasterizer files are always compiled with `-O2`, even in Debug.
 - **platform** (`platform/platform.h`): the SDL3 window, presenting (nearest-neighbour, letterboxed), time, PNG load/save, and UTF-8-safe `wpe_file_read_all`. Only `jobs` and `platform` may include SDL.
@@ -116,19 +117,25 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - Procedural models: `assets/procedural.h` provides a plane, a box and `wpe_model_create_mesh`.
 - **script** (`script/script.h`, Luau; API reference in `docs/scripting.md`):
   - There is one `WPE_ScriptHost` per world. It registers `WPE_COMP_SCRIPT` and must be destroyed *before* the world.
-  - The game loop is `wpe_fixed_step_advance` → `wpe_script_host_fixed_update` for each step → `wpe_script_host_update` → animation → transforms → render.
+  - The game loop is `wpe_fixed_step_advance` → for each step: `wpe_script_host_fixed_update` → `wpe_physics_step` → `wpe_script_host_dispatch_physics` → then `wpe_script_host_update` → animation → transforms → render. Destroy order: script host, physics, world.
   - Luau is built with `LUA_USE_LONGJMP=1`, so script errors unwind with `longjmp` rather than C++ exceptions. API bindings in `script_api.c` must therefore validate all arguments (which may raise) *before* touching engine state, and must never hold engine allocations across calls that can raise.
   - Host-side Luau operations run inside `lua_cpcall`.
   - Never call `lua_settop` in host code that may run nested inside a binding.
   - The `wpe` table is read-only once sandboxed. To add an API function, add it to `wpe__api[]`, `docs/scripting.md` and `assets/scripts/api_tour.luau`, which the 60-second integration test runs.
-- **ECS hook order:** on despawn, `on_remove` hooks run in descending type-id order, so the Script hook (8) runs before the Hierarchy hook (2).
+- **physics** (`physics/physics.h`, Box3D private): one `WPE_Physics` per world registers `WPE_COMP_PHYSICS_RIGIDBODY`/`COLLIDER`; destroy it before the world.
+  - Bodies and shapes are created lazily in `wpe_physics_step` (or immediately by `wpe_physics_refresh`). Component settings and world scale are read only at creation, so call refresh after changing them.
+  - A body is matched to its entity through `body_entities[b3BodyId.index1]`, not Box3D `userData` (clang-tidy rejects integer-to-pointer casts, and the codebase uses no NOLINT).
+  - Teleport detection compares the entity's world pose with the body using a distance-scaled tolerance, so the float error of the parent-relative write-back never registers as a move.
+  - Box3D's allocator and assert hooks are process-global and are installed once. Its triangle meshes are referenced, not copied, so each mesh collider owns its `b3MeshData` (hulls are copied by Box3D).
+  - The solver is single-threaded (Box3D's task callbacks need asynchronous tasks, which `wpe_jobs` lacks).
+- **ECS hook order:** on despawn, `on_remove` hooks run in descending type-id order: Collider (10) and RigidBody (9) before Script (8), which runs before Hierarchy (2). So the physics body is already gone when `on_destroy` runs.
 - **renderer extras:**
   - `WPE_RenderState.depth_only` writes depth only; the fragment shader may be NULL in that mode. This is used for shadow passes.
   - `WPE_DrawDesc.subdivision_levels/edge_pixels` require `program->vertex_lerp`.
   - `wpe_renderer_framebuffer_for_write` returns NULL while a frame is recording.
 - **Tests:** `tests/framework/wpe_test.h` is a custom runner. Every case automatically fails if it changes the live `wpe_alloc` count (a leak) or triggers an engine `wpe_assert`; use `WPE_TEST_EXPECT_ASSERT` when an assert is expected. Register test executables with `wpe_add_test(...)` in `tests/<category>/CMakeLists.txt`. Categories are `unit/`, `stress/` (label `stress`) and `golden/` (reference PNGs in `tests/golden/references/`, compared with a small tolerance).
+- **graphics debug lines** (`graphics/debug_lines.h`): world-space segments become screen-width quads, depth-tested with a small bias, drawn with sort key `UINT64_MAX - 1` (after the scene, before draw2d). Feed it from `wpe_physics_debug_draw`.
 - **Planned (see AGENTS.md §4–5 and §9):**
-  - Fixed-timestep physics and Luau `on_fixed_update`.
   - Separate `editor/` and `runtime/` executables. The editor must be fully drivable by AI agents.
 
 ## Conventions that are easy to get wrong

@@ -397,6 +397,154 @@ static void test_script_quat_euler_roundtrip(void) {
         1.0, fabsf(locked.x * back.x + locked.y * back.y + locked.z * back.z + locked.w * back.w), 1e-3);
 }
 
+/* ---- Physics --------------------------------------------------------------------------------------- */
+
+typedef struct PhysicsFixture {
+    WPE_Ecs* ecs;
+    WPE_Physics* physics;
+    WPE_ScriptHost* host;
+} PhysicsFixture;
+
+static PhysicsFixture make_physics_fixture(void) {
+    PhysicsFixture f = {0};
+    WPE_TEST_ASSERT_OK(wpe_ecs_create(&f.ecs));
+    WPE_TEST_ASSERT_OK(wpe_scene_register_components(f.ecs));
+    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(f.ecs));
+    WPE_TEST_ASSERT_OK(wpe_physics_create(
+        &(WPE_PhysicsDesc){.ecs = f.ecs, .gravity = wpe_vec3(0.0f, -9.81f, 0.0f)}, &f.physics));
+    WPE_TEST_ASSERT_OK(wpe_script_host_create(
+        &(WPE_ScriptHostDesc){.ecs = f.ecs, .physics = f.physics, .asset_root = ROOT}, &f.host));
+    return f;
+}
+
+static void free_physics_fixture(PhysicsFixture* f) {
+    wpe_script_host_destroy(f->host);
+    wpe_physics_destroy(f->physics);
+    wpe_ecs_destroy(f->ecs);
+}
+
+/* One frame in the documented order: update, fixed update, physics step, collision callbacks. */
+static void physics_frame(PhysicsFixture* f) {
+    const float dt = 1.0f / 60.0f;
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f->host, dt));
+    WPE_TEST_ASSERT_OK(wpe_script_host_fixed_update(f->host, dt));
+    WPE_TEST_ASSERT_OK(wpe_physics_step(f->physics, dt));
+    WPE_TEST_ASSERT_OK(wpe_script_host_dispatch_physics(f->host));
+}
+
+static void test_script_physics_api_and_callbacks(void) {
+    write_script("ball.luau",
+                 "local B = {}\n"
+                 "function B:on_start()\n"
+                 "  wpe.add_rigidbody(self.entity, {type = wpe.BODY_DYNAMIC, linear_damping = 0})\n"
+                 "  wpe.add_collider(self.entity, {shape = wpe.COLLIDER_SPHERE, radius = 0.5})\n"
+                 "  wpe.apply_impulse(self.entity, vector.create(0, 2, 0))\n"
+                 "  local v = wpe.get_velocity(self.entity)\n"
+                 "  assert(math.abs(v.y - 2 / (4 / 3 * math.pi * 0.125)) < 1e-3)\n"
+                 "  self.hits = 0\n"
+                 "end\n"
+                 "function B:on_collision_enter(other)\n"
+                 "  self.hits += 1\n"
+                 "  wpe.set_name(self.entity, 'hit ' .. wpe.get_name(other) .. ' ' .. self.hits)\n"
+                 "end\n"
+                 "function B:on_trigger_enter(other) wpe.set_scale(self.entity, vector.create(2, 2, 2)) end\n"
+                 "return B\n");
+    write_script("zone.luau",
+                 "local Z = {}\n"
+                 "function Z:on_start() wpe.add_collider(self.entity, {shape = wpe.COLLIDER_BOX, size = "
+                 "vector.create(4, 1, 4), trigger = true}) end\n"
+                 "function Z:on_trigger_enter(other) wpe.set_name(self.entity, 'entered') end\n"
+                 "function Z:on_trigger_exit(other) wpe.set_name(self.entity, 'exited') end\n"
+                 "return Z\n");
+    write_script("probe.luau",
+                 "local P = {}\n"
+                 "function P:on_update(dt)\n"
+                 "  if wpe.frame() == 0 then return end -- the ground is created by the first step\n"
+                 "  local hit = wpe.raycast(vector.create(5, 10, 0), vector.create(0, -1, 0))\n"
+                 "  assert(hit and math.abs(hit.distance - 10) < 1e-3 and hit.normal.y > 0.99)\n"
+                 "  wpe.set_name(self.entity, 'saw ' .. wpe.get_name(hit.entity))\n"
+                 "  assert(wpe.raycast(vector.create(5, 10, 0), vector.create(0, 1, 0)) == nil)\n"
+                 "  wpe.set_gravity(wpe.get_gravity())\n"
+                 "end\n"
+                 "return P\n");
+    PhysicsFixture f = make_physics_fixture();
+    /* Ground set up from C, named for the scripts. */
+    const WPE_Entity ground = wpe_ecs_spawn(f.ecs);
+    WPE_Transform t = wpe_transform_identity();
+    t.position.y = -0.5f;
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, ground, WPE_COMP_TRANSFORM, &t, NULL));
+    WPE_TEST_ASSERT_OK(wpe_scene_set_name(f.ecs, ground, "ground"));
+    WPE_Collider floor = wpe_collider_default(WPE_COLLIDER_BOX);
+    floor.size = wpe_vec3(40.0f, 1.0f, 40.0f);
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, ground, WPE_COMP_PHYSICS_COLLIDER, &floor, NULL));
+
+    const WPE_Entity ball = wpe_ecs_spawn(f.ecs);
+    t = wpe_transform_identity();
+    t.position.y = 4.0f;
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, ball, WPE_COMP_TRANSFORM, &t, NULL));
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, ball, "ball.luau"));
+    const WPE_Entity zone = wpe_ecs_spawn(f.ecs);
+    t = wpe_transform_identity();
+    t.position.y = 2.0f;
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, zone, WPE_COMP_TRANSFORM, &t, NULL));
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, zone, "zone.luau"));
+    const WPE_Entity probe = wpe_ecs_spawn(f.ecs);
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, probe, "probe.luau"));
+
+    for (int i = 0; i < 180; ++i)
+        physics_frame(&f);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(f.host).errors);
+    WPE_TEST_ASSERT_EQ_STR("hit ground 1", wpe_scene_get_name(f.ecs, ball));
+    WPE_TEST_ASSERT_EQ_STR("exited", wpe_scene_get_name(f.ecs, zone));
+    WPE_TEST_ASSERT_EQ_STR("saw ground", wpe_scene_get_name(f.ecs, probe));
+    const WPE_Transform* ball_t = wpe_ecs_get_component(f.ecs, ball, WPE_COMP_TRANSFORM);
+    WPE_TEST_ASSERT_NEAR(2.0, ball_t->scale.x, 0);       /* The visitor got on_trigger_enter too. */
+    WPE_TEST_ASSERT_NEAR(0.5, ball_t->position.y, 0.02); /* Collider built before the scale change. */
+    free_physics_fixture(&f);
+}
+
+static void test_script_physics_errors(void) {
+    write_script("no_physics.luau", "local S = {}\n"
+                                    "function S:on_start() wpe.add_rigidbody(self.entity) end\n"
+                                    "return S\n");
+    write_script("bad_collider.luau", "local S = {}\n"
+                                      "function S:on_start() wpe.add_collider(self.entity, {shape = "
+                                      "wpe.COLLIDER_MESH}) end\n"
+                                      "return S\n");
+    write_script("bad_force.luau",
+                 "local S = {}\n"
+                 "function S:on_start() wpe.apply_force(self.entity, vector.create(1, 0, 0)) end\n"
+                 "return S\n");
+    write_script("destroy_physics.luau", "local S = {}\n"
+                                         "function S:on_destroy() wpe.add_collider(self.entity) end\n"
+                                         "return S\n");
+    quiet(true);
+    Fixture plain = make_fixture(0, 0);
+    WPE_TEST_ASSERT_OK(wpe_script_attach(plain.host, spawn(&plain, NULL), "no_physics.luau"));
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(plain.host, 0.016f));
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_script_host_stats(plain.host).errors);
+    WPE_TEST_ASSERT_OK(wpe_script_host_dispatch_physics(plain.host)); /* No-op without physics. */
+    free_fixture(&plain);
+
+    PhysicsFixture f = make_physics_fixture();
+    const char* scripts[] = {"bad_collider.luau", "bad_force.luau", "destroy_physics.luau"};
+    WPE_Entity entities[3];
+    for (int i = 0; i < 3; ++i) {
+        entities[i] = wpe_ecs_spawn(f.ecs);
+        const WPE_Transform t = wpe_transform_identity();
+        WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, entities[i], WPE_COMP_TRANSFORM, &t, NULL));
+        WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, entities[i], scripts[i]));
+    }
+    physics_frame(&f);
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_script_host_stats(f.host).errors);
+    WPE_TEST_ASSERT(!wpe_ecs_has_component(f.ecs, entities[0], WPE_COMP_PHYSICS_COLLIDER));
+    WPE_TEST_ASSERT_OK(wpe_ecs_despawn(f.ecs, entities[2])); /* on_destroy may not add physics. */
+    WPE_TEST_ASSERT_EQ_UINT(3, wpe_script_host_stats(f.host).errors);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_physics_stats(f.physics).bodies);
+    quiet(false);
+    free_physics_fixture(&f);
+}
+
 static void test_script_ecs_unregister_component(void) {
     WPE_Ecs* ecs = NULL;
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&ecs));
@@ -425,4 +573,5 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_script_lifecycle_order), WPE_TEST_CASE(test_scr
               WPE_TEST_CASE(test_script_api_transforms_lights_prefabs),
               WPE_TEST_CASE(test_script_host_destroy_and_recreate),
               WPE_TEST_CASE(test_script_fixed_step_clock), WPE_TEST_CASE(test_script_quat_euler_roundtrip),
+              WPE_TEST_CASE(test_script_physics_api_and_callbacks), WPE_TEST_CASE(test_script_physics_errors),
               WPE_TEST_CASE(test_script_ecs_unregister_component))

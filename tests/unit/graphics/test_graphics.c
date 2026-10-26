@@ -2,6 +2,7 @@
 
 #include "assets/font.h"
 #include "graphics/animation.h"
+#include "graphics/debug_lines.h"
 #include "graphics/draw2d.h"
 #include "graphics/graphics.h"
 #include "graphics/material_shader.h"
@@ -364,6 +365,61 @@ static void test_graphics_draw2d_text_is_pixel_exact(void) {
     wpe_font_destroy(font);
 }
 
+/* ---- Debug lines ------------------------------------------------------------------------------------ */
+
+static uint32_t count_color(const WPE_Framebuffer* fb, WPE_Color color) {
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < fb->width * fb->height; ++i)
+        count += fb->color[i] == color;
+    return count;
+}
+
+static void test_graphics_debug_lines(void) {
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));
+    WPE_DebugLines* lines = NULL;
+    WPE_TEST_ASSERT_OK(wpe_debug_lines_create(&lines));
+    const WPE_Mat4 identity = wpe_mat4_identity(); /* World coordinates are clip coordinates. */
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(renderer);
+    const WPE_ClearDesc clear = {
+        .clear_color = true, .color = 0xFF000000u, .clear_depth = true, .depth = 1.0f};
+
+    /* A horizontal line across half the screen covers one pixel row of 32 pixels. */
+    WPE_TEST_ASSERT_OK(wpe_renderer_begin_frame(renderer, &clear));
+    wpe_debug_lines_begin(lines, &identity, 64, 48, 1.0f);
+    wpe_debug_lines_add(lines, wpe_vec3(-0.5f, 0.01f, 0.0f), wpe_vec3(0.5f, 0.01f, 0.0f), 0xFFFF0000u);
+    /* Entirely behind the near plane: rejected. */
+    wpe_debug_lines_add(lines, wpe_vec3(0.0f, 0.0f, -2.0f), wpe_vec3(0.5f, 0.5f, -3.0f), 0xFF00FF00u);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_debug_lines_count(lines));
+    WPE_TEST_ASSERT_OK(wpe_debug_lines_submit(lines, renderer, true));
+    WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
+    WPE_TEST_ASSERT_EQ_UINT(32, count_color(fb, 0xFFFF0000u));
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFF0000u, fb->color[23 * 64 + 32]);
+    WPE_TEST_ASSERT_NEAR(1.0, fb->depth[23 * 64 + 32], 0); /* No depth writes. */
+
+    /* A wider vertical line: 3 pixel columns over half the height. */
+    WPE_TEST_ASSERT_OK(wpe_renderer_begin_frame(renderer, &clear));
+    wpe_debug_lines_begin(lines, &identity, 64, 48, 3.0f);
+    wpe_debug_lines_add(lines, wpe_vec3(0.01f, -0.5f, 0.0f), wpe_vec3(0.01f, 0.5f, 0.0f), 0xFF00FF00u);
+    WPE_TEST_ASSERT_OK(wpe_debug_lines_submit(lines, renderer, true));
+    WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
+    WPE_TEST_ASSERT_EQ_UINT(3 * 24, count_color(fb, 0xFF00FF00u));
+
+    /* Depth testing hides lines behind the stored depth unless disabled. */
+    const WPE_ClearDesc near_depth = {
+        .clear_color = true, .color = 0xFF000000u, .clear_depth = true, .depth = 0.25f};
+    for (int test = 0; test < 2; ++test) {
+        WPE_TEST_ASSERT_OK(wpe_renderer_begin_frame(renderer, &near_depth));
+        wpe_debug_lines_begin(lines, &identity, 64, 48, 1.0f);
+        wpe_debug_lines_add(lines, wpe_vec3(-0.5f, 0.01f, 0.0f), wpe_vec3(0.5f, 0.01f, 0.0f), 0xFFFF0000u);
+        WPE_TEST_ASSERT_OK(wpe_debug_lines_submit(lines, renderer, test == 0));
+        WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
+        WPE_TEST_ASSERT_EQ_UINT(test == 0 ? 0u : 32u, count_color(fb, 0xFFFF0000u));
+    }
+    wpe_debug_lines_destroy(lines);
+    wpe_renderer_destroy(renderer);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_graphics_sample_linear_step_and_clamp),
               WPE_TEST_CASE(test_graphics_sample_rotation_slerps_shortest_path),
               WPE_TEST_CASE(test_graphics_sample_cubic_spline),
@@ -373,4 +429,5 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_graphics_sample_linear_step_and_clamp),
               WPE_TEST_CASE(test_graphics_shininess_range),
               WPE_TEST_CASE(test_graphics_scene_render_frustum_culling),
               WPE_TEST_CASE(test_graphics_camera_matrices_validation),
-              WPE_TEST_CASE(test_graphics_draw2d_text_is_pixel_exact))
+              WPE_TEST_CASE(test_graphics_draw2d_text_is_pixel_exact),
+              WPE_TEST_CASE(test_graphics_debug_lines))

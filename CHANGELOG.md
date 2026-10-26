@@ -5,6 +5,30 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Physics (`src/physics`): Box3D v0.1.0 rigid bodies driven by the `WPE_RigidBody` (static,
+  kinematic, dynamic; damping, gravity scale, rotation lock, continuous collision) and
+  `WPE_Collider` (box, sphere, capsule, convex hull and triangle mesh from model meshes; offset,
+  density, friction, restitution, triggers) components. World scale is baked into shapes; a
+  collider without a rigid body becomes static level geometry. Each fixed step creates missing
+  bodies, follows game-code moves (kinematic bodies move with velocity so they push; others
+  teleport), simulates, writes poses back into local transforms (parent-relative) and reports
+  contact/trigger begin/end events. Raycasts, forces, impulses, velocities, gravity, refresh after
+  settings changes, statistics and wireframe debug drawing. Box3D allocates through `wpe_alloc`
+  and reports assertions through the engine.
+- Scripting: `wpe.add_rigidbody`, `wpe.add_collider`, `wpe.remove_rigidbody`,
+  `wpe.remove_collider`, `wpe.apply_force`, `wpe.apply_impulse`, `wpe.get/set_velocity`,
+  `wpe.raycast`, `wpe.get/set_gravity`, body/collider constants, and the callbacks
+  `on_collision_enter/exit(other)` and `on_trigger_enter/exit(other)` dispatched by
+  `wpe_script_host_dispatch_physics()`. `WPE_ScriptHostDesc.physics` enables them.
+- Graphics: `graphics/debug_lines.h`, depth-tested screen-space-width 3D lines drawn after the
+  scene and before 2D.
+- `script_demo` uses physics: boxes fall, tumble and get batted away by the spinning (kinematic)
+  helmets, then remove themselves after landing; `--debug-physics` draws collider wireframes.
+- Tests: physics unit tests (resting, restitution, contacts, triggers, raycasts, teleports,
+  component removal, determinism, rotation lock, parenting, scaling, capsules, mesh/convex
+  colliders, kinematic carrying, forces, refresh, debug drawing), script physics tests, a
+  physics stress test, and physics in the 60-second scripting integration test.
+- Dependency: Box3D v0.1.0 (MIT).
 - Scripting (`src/script`): Luau 0.742 VM host with per-entity scripts (`on_start`,
   `on_update`, `on_fixed_update`, `on_destroy`, `on_reload`), sandbox (safe libraries only,
   read-only globals, per-file environments, asset-root path checks), per-callback time budget,

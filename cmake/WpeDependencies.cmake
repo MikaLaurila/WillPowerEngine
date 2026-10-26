@@ -87,3 +87,22 @@ endif()
 
 add_library(wpe_dep_luau INTERFACE)
 target_link_libraries(wpe_dep_luau INTERFACE Luau.VM Luau.Compiler)
+
+# Box3D v0.1.0 (MIT) — rigid body physics (C17). Samples/tests/benchmarks are disabled.
+set(BOX3D_SAMPLES OFF CACHE BOOL "" FORCE)
+set(BOX3D_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(BOX3D_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(BOX3D_DOCS OFF CACHE BOOL "" FORCE)
+set(BOX3D_VALIDATE OFF CACHE BOOL "" FORCE)
+set(BOX3D_PROFILE OFF CACHE BOOL "" FORCE)
+set(BOX3D_COMPILE_WARNING_AS_ERROR OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(box3d
+    URL https://github.com/erincatto/box3d/archive/refs/tags/v0.1.0.tar.gz
+    URL_HASH SHA256=df232c7618c0d0d3927b798044559ee56eabadeb9d8ff9dc526d4b384d7b415d
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    EXCLUDE_FROM_ALL
+    SYSTEM)
+FetchContent_MakeAvailable(box3d)
+
+add_library(wpe_dep_box3d INTERFACE)
+target_link_libraries(wpe_dep_box3d INTERFACE box3d::box3d)

@@ -1,10 +1,11 @@
 /*
  * Script demo: scene behavior written in Luau (the .luau files in assets/scripts) driven by a fixed-timestep
- * game loop. Edit the scripts while it runs with --watch to see hot reload.
+ * game loop with rigid body physics. Edit the scripts while it runs with --watch to see hot reload.
  *
  * Usage: script_demo [--width N] [--height N] [--scale N] [--frames N] [--screenshot file.png]
- *                    [--watch] [--no-vsync]
- *   --watch    poll script files twice a second and hot-reload changes (state is preserved)
+ *                    [--watch] [--debug-physics] [--no-vsync]
+ *   --watch          poll script files twice a second and hot-reload changes (state is preserved)
+ *   --debug-physics  draw collider wireframes
  */
 #define WPE_LOG_MODULE "scriptdemo"
 #include <stdio.h>
@@ -15,16 +16,18 @@
 #include "assets/procedural.h"
 #include "core/core.h"
 #include "graphics/animation.h"
+#include "graphics/debug_lines.h"
 #include "graphics/draw2d.h"
 #include "graphics/graphics.h"
 #include "graphics/scene_render.h"
+#include "physics/physics.h"
 #include "platform/platform.h"
 #include "script/script.h"
 
 typedef struct Options {
     uint32_t width, height, scale, frames;
     const char* screenshot;
-    bool watch, vsync;
+    bool watch, debug_physics, vsync;
 } Options;
 
 static bool parse_options(int argc, char** argv, Options* o) {
@@ -32,6 +35,8 @@ static bool parse_options(int argc, char** argv, Options* o) {
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--watch") == 0) {
             o->watch = true;
+        } else if (strcmp(argv[i], "--debug-physics") == 0) {
+            o->debug_physics = true;
         } else if (strcmp(argv[i], "--no-vsync") == 0) {
             o->vsync = false;
         } else if (i + 1 < argc && strcmp(argv[i], "--screenshot") == 0) {
@@ -64,6 +69,10 @@ static WPE_Entity spawn_at(WPE_Ecs* ecs, WPE_Vec3 position, WPE_Result* result) 
     return e;
 }
 
+static void add_debug_line(WPE_Vec3 a, WPE_Vec3 b, uint32_t color, void* user_data) {
+    wpe_debug_lines_add(user_data, a, b, 0xFF000000u | color);
+}
+
 int main(int argc, char** argv) {
     Options o;
     if (!parse_options(argc, argv, &o)) return EXIT_FAILURE;
@@ -72,9 +81,11 @@ int main(int argc, char** argv) {
     WPE_Renderer* renderer = NULL;
     WPE_Window* window = NULL;
     WPE_Ecs* ecs = NULL;
+    WPE_Physics* physics = NULL;
     WPE_ScriptHost* host = NULL;
     WPE_SceneRenderer* scene_renderer = NULL;
     WPE_Draw2D* draw2d = NULL;
+    WPE_DebugLines* debug_lines = NULL;
     WPE_BitmapFont* font = NULL;
     WPE_Model *ground = NULL, *box = NULL, *helmet = NULL, *figure = NULL;
     int exit_code = EXIT_FAILURE;
@@ -88,13 +99,15 @@ int main(int argc, char** argv) {
     }
     if (r == WPE_RESULT_OK) r = wpe_scene_renderer_create(&scene_renderer);
     if (r == WPE_RESULT_OK) r = wpe_draw2d_create(&draw2d);
+    if (r == WPE_RESULT_OK) r = wpe_debug_lines_create(&debug_lines);
     if (r == WPE_RESULT_OK) r = wpe_font_load(WPE_SAMPLE_ASSETS_DIR "/fonts/small.png", &font);
     if (r == WPE_RESULT_OK) r = wpe_ecs_create(&ecs);
     if (r == WPE_RESULT_OK) r = wpe_scene_register_components(ecs);
     if (r == WPE_RESULT_OK) r = wpe_graphics_register_components(ecs);
+    if (r == WPE_RESULT_OK) r = wpe_physics_create(&(WPE_PhysicsDesc){.ecs = ecs, .gravity = wpe_vec3(0, -9.81f, 0)}, &physics);
     if (r == WPE_RESULT_OK) {
-        r = wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .asset_root = WPE_SAMPLE_ASSETS_DIR, .jobs = jobs,
-                                                         .max_texture_size = 256},
+        r = wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .physics = physics, .asset_root = WPE_SAMPLE_ASSETS_DIR,
+                                                         .jobs = jobs, .max_texture_size = 256},
                                    &host);
     }
 
@@ -109,15 +122,27 @@ int main(int argc, char** argv) {
     if (r == WPE_RESULT_OK) r = wpe_script_host_register_prefab(host, "box", box);
     if (r == WPE_RESULT_OK) r = wpe_script_host_register_prefab(host, "figure", figure);
 
-    /* Scene: everything that moves is driven by scripts. */
+    /* Scene: everything that moves is driven by scripts and physics. */
     WPE_Entity e = WPE_ENTITY_NULL;
     if (r == WPE_RESULT_OK) r = wpe_model_instantiate(ecs, ground, NULL, &e);
+    if (r == WPE_RESULT_OK) {
+        WPE_Collider floor = wpe_collider_default(WPE_COLLIDER_BOX); /* Static: no rigid body. */
+        floor.size = wpe_vec3(30, 1, 30);
+        floor.offset = wpe_vec3(0, -0.5f, 0);
+        r = wpe_ecs_add_component(ecs, e, WPE_COMP_PHYSICS_COLLIDER, &floor, NULL);
+    }
     for (int i = 0; i < 2 && r == WPE_RESULT_OK; ++i) {
         r = wpe_model_instantiate(ecs, helmet, NULL, &e);
         if (r == WPE_RESULT_OK) {
             ((WPE_Transform*)wpe_ecs_get_component(ecs, e, WPE_COMP_TRANSFORM))->position = wpe_vec3(i ? 1.4f : -1.4f, 1.2f, 0);
             r = wpe_script_attach(host, e, "scripts/spinner.luau");
         }
+        /* Kinematic: the spinner script turns the helmets and they bat falling boxes away. */
+        const WPE_RigidBody body = wpe_rigidbody_default(WPE_BODY_KINEMATIC);
+        WPE_Collider sphere = wpe_collider_default(WPE_COLLIDER_SPHERE);
+        sphere.size.x = 0.85f;
+        if (r == WPE_RESULT_OK) r = wpe_ecs_add_component(ecs, e, WPE_COMP_PHYSICS_RIGIDBODY, &body, NULL);
+        if (r == WPE_RESULT_OK) r = wpe_ecs_add_component(ecs, e, WPE_COMP_PHYSICS_COLLIDER, &sphere, NULL);
     }
     for (int i = 0; i < 3 && r == WPE_RESULT_OK; ++i) {
         const WPE_Entity light = spawn_at(ecs, wpe_vec3(0, 1, 0), &r);
@@ -170,17 +195,30 @@ int main(int argc, char** argv) {
             last_watch = now;
         }
 
-        /* Game loop: fixed-step simulation, then per-frame updates, then rendering. */
+        /* Game loop: fixed-step simulation (scripts, physics, collision callbacks), then per-frame
+         * updates, then rendering. */
         const uint32_t steps = wpe_fixed_step_advance(&clock, dt);
-        for (uint32_t s = 0; s < steps; ++s) wpe_script_host_fixed_update(host, (float)clock.step);
+        for (uint32_t s = 0; s < steps && r == WPE_RESULT_OK; ++s) {
+            wpe_script_host_fixed_update(host, (float)clock.step);
+            r = wpe_physics_step(physics, (float)clock.step);
+            wpe_script_host_dispatch_physics(host);
+        }
         wpe_script_host_update(host, (float)dt);
-        r = wpe_animation_update(ecs, (float)dt);
+        if (r == WPE_RESULT_OK) r = wpe_animation_update(ecs, (float)dt);
         if (r == WPE_RESULT_OK) r = wpe_scene_update_transforms(ecs);
         if (r == WPE_RESULT_OK) {
             r = wpe_renderer_begin_frame(renderer, &(WPE_ClearDesc){.clear_color = true, .color = wpe_color_rgba8(28, 32, 44, 255),
                                                                     .clear_depth = true, .depth = 1.0f});
         }
         if (r == WPE_RESULT_OK) r = wpe_scene_render(scene_renderer, renderer, ecs, camera, &settings, NULL);
+        WPE_Mat4 view, projection;
+        if (r == WPE_RESULT_OK && o.debug_physics &&
+            wpe_scene_camera_matrices(ecs, camera, (float)o.width / (float)o.height, &view, &projection)) {
+            const WPE_Mat4 view_projection = wpe_mat4_mul(&projection, &view);
+            wpe_debug_lines_begin(debug_lines, &view_projection, o.width, o.height, 1.0f);
+            wpe_physics_debug_draw(physics, add_debug_line, debug_lines);
+            r = wpe_debug_lines_submit(debug_lines, renderer, true);
+        }
         if (r == WPE_RESULT_OK) {
             wpe_draw2d_begin(draw2d, o.width, o.height);
             wpe_draw2d_rect(draw2d, (WPE_Rect){0, 0, (float)o.width, 9}, wpe_color_rgba8(0, 0, 0, 140));
@@ -198,9 +236,11 @@ int main(int argc, char** argv) {
         ++stats_frames;
         if (now - stats_start >= 0.5) { /* Full windows only: the first frame includes startup stalls. */
             const WPE_ScriptStats stats = wpe_script_host_stats(host);
-            snprintf(hud, sizeof hud, "%.0f fps  %u scripts  %u instances  %llu errors  %u entities%s",
+            const WPE_PhysicsStats physics_stats = wpe_physics_stats(physics);
+            snprintf(hud, sizeof hud, "%.0f fps  %u scripts  %u instances  %llu errors  %u bodies (%u awake)%s",
                      stats_frames / fmax(now - stats_start, 1e-6), stats.scripts, stats.instances,
-                     (unsigned long long)stats.errors, wpe_ecs_entity_count(ecs), o.watch ? "  [watching]" : "");
+                     (unsigned long long)stats.errors, physics_stats.bodies, physics_stats.awake_bodies,
+                     o.watch ? "  [watching]" : "");
             stats_start = now;
             stats_frames = 0;
         }
@@ -214,7 +254,8 @@ int main(int argc, char** argv) {
     exit_code = EXIT_SUCCESS;
 
 cleanup:
-    wpe_script_host_destroy(host); /* Before the world: runs on_destroy for every script. */
+    wpe_script_host_destroy(host); /* Before physics and the world: runs on_destroy for every script. */
+    wpe_physics_destroy(physics);
     wpe_ecs_destroy(ecs);
     wpe_model_destroy(figure);
     wpe_model_destroy(helmet);
@@ -222,6 +263,7 @@ cleanup:
     wpe_model_destroy(ground);
     wpe_font_destroy(font);
     wpe_draw2d_destroy(draw2d);
+    wpe_debug_lines_destroy(debug_lines);
     wpe_scene_renderer_destroy(scene_renderer);
     wpe_window_destroy(window);
     wpe_renderer_destroy(renderer);

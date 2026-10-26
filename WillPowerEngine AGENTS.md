@@ -280,7 +280,17 @@ return MyEntity
 **Implementation:** `src/script/` (public API in `script/script.h`; Luau API reference in `docs/scripting.md`).
 - The module is a C host around the Luau VM. Luau is built with `LUA_USE_LONGJMP=1` so its errors can unwind through C bindings.
 - The `on_reload(self)` callback runs after a hot reload.
-- On a despawn, the script's `on_destroy` runs before hierarchy and transform teardown, because ECS remove hooks run in descending component id order.
+- On a despawn, the script's `on_destroy` runs before hierarchy and transform teardown, because ECS remove hooks run in descending component id order. Physics components (ids 9 and 10) are torn down before it.
+- Physics callbacks `on_collision_enter/exit(other)` and `on_trigger_enter/exit(other)` are dispatched by `wpe_script_host_dispatch_physics()` after each `wpe_physics_step()`, to both entities of every event.
+
+### 4.3.1 Physics Integration
+
+**Implementation:** `src/physics/` (public API in `physics/physics.h`), wrapping Box3D privately.
+- `WPE_RigidBody` and `WPE_Collider` are ECS components (one collider per entity). A collider without a rigid body is static level geometry.
+- Physics steps at the fixed rate. Each step creates missing bodies, follows game-code moves of entities, simulates, writes dynamic and kinematic poses back into the parent-relative Transform, and collects contact and trigger events.
+- Settings and world scale are read when a body or shape is created; `wpe_physics_refresh()` rebuilds them.
+- Box3D allocates through `wpe_alloc`, and its assertions go through the engine's assert handler.
+- NOTE: limitation. The solver is single-threaded, because Box3D's task API needs asynchronous tasks that the job system doesn't provide yet. Colliders don't combine across the hierarchy into compound bodies.
 
 **Script host responsibilities:**
 - Expose ECS API to Luau (entity manipulation, component access).

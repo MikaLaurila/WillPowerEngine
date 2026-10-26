@@ -42,6 +42,7 @@ typedef struct wpe__Prefab {
 
 struct WPE_ScriptHost {
     WPE_Ecs* ecs;
+    WPE_Physics* physics; /* Optional. */
     lua_State* L;
     char* asset_root;
     WPE_JobSystem* jobs;

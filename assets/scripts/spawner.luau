@@ -1,4 +1,4 @@
--- Drops a box prefab from the sky every `interval` seconds; each box runs falling.luau.
+-- Drops a box prefab from the sky every `interval` seconds; each box runs falling.luau (physics).
 local Spawner = {}
 
 function Spawner:on_start()
@@ -18,6 +18,8 @@ function Spawner:on_fixed_update(dt)
 	local z = math.cos(self.count * 2.3) * 3
 	local box = wpe.instantiate("box", vector.create(x, 6, z))
 	wpe.set_scale(box, 0.35)
+	-- Tilted so boxes land on edges and corners instead of flat.
+	wpe.set_rotation(box, vector.create(self.count * 0.9, self.count * 0.4, self.count * 1.3))
 	wpe.attach_script(box, "scripts/falling.luau")
 end
 

@@ -12,6 +12,8 @@
  * function Spinner:on_fixed_update(dt) end
  * function Spinner:on_destroy() end
  * function Spinner:on_reload() end -- optional: called after hot reload, state is preserved
+ * function Spinner:on_collision_enter(other) end -- with physics (see below); also
+ * function Spinner:on_collision_exit(other) end  -- on_trigger_enter(other) / on_trigger_exit(other)
  * return Spinner
  * @endcode
  *
@@ -22,7 +24,13 @@
  * - on_update(dt): every wpe_script_host_update(). on_fixed_update(dt): every fixed step.
  * - on_destroy: when the component is removed, its entity despawned, or the host destroyed.
  *   Inside on_destroy, scripts may read/modify component data and call wpe.destroy() (always
- *   deferred) but may not add/remove components or spawn entities.
+ *   deferred) but may not add/remove components or spawn entities. The entity's physics body is
+ *   already gone when on_destroy runs on despawn.
+ * - on_collision_enter/exit(other), on_trigger_enter/exit(other): from
+ *   wpe_script_host_dispatch_physics(), for both entities of each event of the last physics step.
+ *
+ * Fixed-step order per step: wpe_script_host_fixed_update(), wpe_physics_step(),
+ * wpe_script_host_dispatch_physics(). Destroy order: script host, physics, ECS world.
  *
  * Isolation:
  * - Sandbox: only safe standard libraries (no io, no loadstring, no getfenv/setfenv; os has
@@ -39,7 +47,7 @@
  *
  * The Luau-side API (the read-only global `wpe`) is documented in docs/scripting.md.
  *
- * - Dependencies: core, math, ecs, scene, graphics, assets, platform, Luau (private)
+ * - Dependencies: core, math, ecs, scene, graphics, assets, platform, physics, Luau (private)
  * - Thread affinity: main thread only (one VM per host)
  *
  * @author WillPowerEngine Team
@@ -54,6 +62,7 @@
 #include "core/result.h"
 #include "ecs/ecs.h"
 #include "jobs/jobs.h"
+#include "physics/physics.h"
 
 /** Script component data. Managed by the host; do not modify. */
 typedef struct WPE_Script {
@@ -66,6 +75,7 @@ typedef struct WPE_ScriptHost WPE_ScriptHost;
 
 typedef struct WPE_ScriptHostDesc {
     WPE_Ecs* ecs;              /* Borrowed. Scene and graphics components must be registered. */
+    WPE_Physics* physics;      /* Optional, borrowed: enables the physics API and collision callbacks. */
     const char* asset_root;    /* Directory that script and prefab paths are relative to (copied). */
     size_t memory_limit;       /* VM heap limit in bytes (0 = 64 MiB). */
     double time_limit_ms;      /* Budget per callback invocation (0 = 250 ms). */
@@ -124,6 +134,17 @@ WPE_Result wpe_script_host_update(WPE_ScriptHost* host, float dt);
 /** Runs on_fixed_update(dt) for started instances, then applies deferred destroys. @thread_safety Main thread
  */
 WPE_Result wpe_script_host_fixed_update(WPE_ScriptHost* host, float dt);
+
+/**
+ * Calls the collision and trigger callbacks for the events of the most recent wpe_physics_step()
+ * (on started instances only), then applies deferred destroys. Each event notifies both entities;
+ * `other` is the entity on the opposite side. A no-op without physics.
+ *
+ * @return WPE_RESULT_OK or WPE_RESULT_ERROR_NULL_ARG.
+ *
+ * @thread_safety Main thread
+ */
+WPE_Result wpe_script_host_dispatch_physics(WPE_ScriptHost* host);
 
 /**
  * Recompiles every script file whose modification time changed since it was loaded.
