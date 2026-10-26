@@ -163,7 +163,32 @@ static void test_math_extreme_values_stay_finite(void) {
     }
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_math_vec3_basic_ops), WPE_TEST_CASE(test_math_vec3_normalize_handles_zero),
+static void test_math_perspective_maps_near_far_to_clip_range(void) {
+    const WPE_Mat4 p = wpe_mat4_perspective(WPE_PI / 2, 1.0f, 0.5f, 50.0f);
+    const WPE_Vec4 near_pt = wpe_mat4_mul_vec4(&p, wpe_vec4(0, 0, -0.5f, 1));
+    const WPE_Vec4 far_pt = wpe_mat4_mul_vec4(&p, wpe_vec4(0, 0, -50.0f, 1));
+    WPE_TEST_ASSERT_NEAR(-1.0, near_pt.z / near_pt.w, 1e-5);
+    WPE_TEST_ASSERT_NEAR(1.0, far_pt.z / far_pt.w, 1e-4);
+    /* 90 degree FOV: a point at 45 degrees up lands on the top edge. */
+    const WPE_Vec4 edge = wpe_mat4_mul_vec4(&p, wpe_vec4(0, 2, -2, 1));
+    WPE_TEST_ASSERT_NEAR(1.0, edge.y / edge.w, 1e-5);
+}
+
+static void test_math_orthographic_and_look_at(void) {
+    const WPE_Mat4 o = wpe_mat4_orthographic(0, 320, 0, 240, -1, 1);
+    const WPE_Vec4 corner = wpe_mat4_mul_vec4(&o, wpe_vec4(320, 240, 0, 1));
+    WPE_TEST_ASSERT_NEAR(1.0, corner.x, EPS);
+    WPE_TEST_ASSERT_NEAR(1.0, corner.y, EPS);
+
+    const WPE_Mat4 view = wpe_mat4_look_at(wpe_vec3(0, 0, 5), wpe_vec3(0, 0, 0), wpe_vec3(0, 1, 0));
+    assert_vec3_near(wpe_vec3(0, 0, -5), wpe_mat4_transform_point(&view, wpe_vec3(0, 0, 0)), EPS);
+    const WPE_Mat4 side = wpe_mat4_look_at(wpe_vec3(5, 0, 0), wpe_vec3(0, 0, 0), wpe_vec3(0, 1, 0));
+    assert_vec3_near(wpe_vec3(0, 0, -5), wpe_mat4_transform_point(&side, wpe_vec3(0, 0, 0)), EPS);
+}
+
+WPE_TEST_MAIN(WPE_TEST_CASE(test_math_perspective_maps_near_far_to_clip_range),
+              WPE_TEST_CASE(test_math_orthographic_and_look_at), WPE_TEST_CASE(test_math_vec3_basic_ops),
+              WPE_TEST_CASE(test_math_vec3_normalize_handles_zero),
               WPE_TEST_CASE(test_math_quat_axis_angle_rotates_vector),
               WPE_TEST_CASE(test_math_quat_mul_applies_right_operand_first),
               WPE_TEST_CASE(test_math_quat_from_euler_matches_zyx_product),

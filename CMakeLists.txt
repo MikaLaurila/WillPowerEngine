@@ -28,6 +28,11 @@ include(WpeDependencies)
 
 add_subdirectory(src)
 
+option(WPE_BUILD_SAMPLES "Build the sample applications" ON)
+if(WPE_BUILD_SAMPLES)
+    add_subdirectory(samples)
+endif()
+
 if(WPE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

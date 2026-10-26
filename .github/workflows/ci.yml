@@ -16,7 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y ninja-build gcc-14 g++-14
+        run: >
+          sudo apt-get update && sudo apt-get install -y ninja-build gcc-14 g++-14
+          libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev
+          libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libgbm-dev
+          libdecor-0-dev libudev-dev libdbus-1-dev libpulse-dev libasound2-dev
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja

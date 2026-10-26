@@ -20,6 +20,7 @@ endfunction()
 
 add_subdirectory(unit)
 add_subdirectory(stress)
+add_subdirectory(golden)
 
 # Builds every test executable, then runs the whole suite.
 add_custom_target(test_all

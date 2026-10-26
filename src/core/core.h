@@ -14,6 +14,7 @@
 #define WPE_CORE_CORE_H
 
 #include "core/alloc.h"
+#include "core/arena.h"
 #include "core/debug.h"
 #include "core/log.h"
 #include "core/result.h"

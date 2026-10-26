@@ -224,11 +224,22 @@ Composite (post-processing chain)
 Output (SDL texture)
 ```
 
-**Parallelism strategy:**
-- Culling: per-entity parallel
-- Sorting: single-threaded (fast enough for target resolutions)
-- Rasterization: tile-based parallel (4×4 screen tiles)
-- Post-processing: full-screen parallel
+**Implementation (`src/renderer/`):** the stages run inside `wpe_renderer_end_frame()`, in this order:
+
+1. Stable sort of draws by `sort_key`.
+2. Vertex shading, in parallel chunks of 1024 vertices.
+3. Clipping, culling and triangle setup, in parallel chunks of 512 triangles. Clipping is homogeneous against the near and far planes and a 4× guard band. Setup snaps vertices to 28.4 fixed point.
+4. Serial binning into 32×32-pixel tiles, keeping draw order.
+5. Per-tile rasterization in parallel: int64 edge functions with the top-left fill rule, depth test, perspective-correct varyings, fragment shader, then blend.
+
+**Parallelism strategy and rules:**
+- Chunk boundaries are fixed and never depend on the thread count, so output is bit-identical for any number of workers; a test enforces this. Never make results depend on which thread runs a chunk.
+- Sorting and binning are single-threaded (fast enough for the target resolutions).
+- Each tile is owned by exactly one thread, so tiles need no locking.
+- Per-frame memory comes from a frame arena, and per-job buffers persist between frames, so steady-state frames make no heap allocations (also enforced by a test).
+- Shaders are plain C function pointers called concurrently. They must be free of side effects apart from writing their outputs.
+- Blend modes: opaque, alpha, additive, and `WPE_BLEND_ALPHA_DITHER` (4×4 Bayer screen-door transparency, order-independent).
+- Post-processing (Milestone 5) will run full-screen in parallel.
 
 ### 4.3 Scripting Integration
 
@@ -300,7 +311,9 @@ willpower_engine/
 │   ├── math/           # Vectors/quaternions/matrices (cglm wrapper)
 │   ├── ecs/            # Entity Component System
 │   ├── scene/          # Transform, hierarchy, name components and systems
-│   ├── renderer/       # Software rasterizer
+│   ├── jobs/           # Worker thread pool (parallel_for)
+│   ├── renderer/       # Software rasterizer (no SDL dependency)
+│   ├── platform/       # SDL3 wrapper: window, present, time, PNG I/O
 │   ├── physics/        # Box3D wrapper
 │   ├── audio/          # miniaudio wrapper
 │   ├── script/         # Luau VM and bindings
@@ -312,6 +325,7 @@ willpower_engine/
 │   └── main.c
 ├── runtime/            # Standalone game runtime
 │   └── main.c
+├── samples/            # Small demo programs (e.g. spinning_cubes) with --frames/--screenshot for automated checks
 ├── tests/              # Test suites
 ├── scenes/             # Test and demo scenes
 ├── assets/             # Test assets (glTF, fonts, etc.)
@@ -324,7 +338,12 @@ willpower_engine/
 - Each `src/*` module is a static library dependency.
 - No circular dependencies allowed.
 - Module interfaces declared in `<module>/<module>.h` files. Exception: `math/wpe_math.h`, named so it can't be confused with `<math.h>`.
-- Current dependencies: `math` and `ecs` each depend only on `core`; `scene` depends on `core`, `math` and `ecs`.
+- Current dependencies:
+  - `math`, `jobs` and `ecs` each depend only on `core`; `jobs` also uses SDL3 privately.
+  - `scene` depends on `core`, `math` and `ecs`.
+  - `renderer` depends on `core`, `math` and `jobs`.
+  - `platform` depends on `core` and `renderer`, and uses SDL3 privately.
+- Only `jobs` and `platform` may include SDL headers; the renderer stays pure CPU so it can be tested headless.
 
 ---
 

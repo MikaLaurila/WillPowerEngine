@@ -1,4 +1,7 @@
 add_subdirectory(core)
 add_subdirectory(math)
+add_subdirectory(jobs)
 add_subdirectory(ecs)
 add_subdirectory(scene)
+add_subdirectory(renderer)
+add_subdirectory(platform)

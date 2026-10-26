@@ -4,8 +4,15 @@ A multithreaded **software rasterizer** 3D game engine in C23 for Windows and Li
 retro resolutions (320×240 to 640×480, scalable to 1280×960). It comes with an editor that AI
 agents can drive fully, and it exports standalone game executables.
 
-> Status: early development. Done so far: the core module, math, the ECS, and the scene
-> transform hierarchy, along with the test infrastructure. See [CHANGELOG.md](CHANGELOG.md) for progress.
+> Status: early development. Done so far: the core module, math, the ECS, the scene hierarchy, the
+> job system, and the multithreaded software rasterizer, with an SDL3 window. See
+> [CHANGELOG.md](CHANGELOG.md) for progress.
+
+Try the demo after building:
+
+```bash
+./build/samples/spinning_cubes            # options: --width 640 --height 480 --scale 2 --workers N
+```
 
 ## Documents
 

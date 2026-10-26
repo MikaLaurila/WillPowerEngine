@@ -1,0 +1,175 @@
+/*
+ * Golden image tests: render fixed scenes and compare them with reviewed reference PNGs in
+ * tests/golden/references/.
+ *
+ * Small differences are tolerated because transcendental functions (sinf/cosf) differ by an ulp
+ * between C libraries, which can move a few edge pixels. On mismatch the actual image is written
+ * next to the test binary as <name>_actual.png for inspection.
+ *
+ * To (re)generate references after a reviewed, intentional change:
+ *   WPE_UPDATE_GOLDEN=1 ctest --test-dir build -R golden
+ * then inspect the new PNGs before committing them.
+ */
+#include "wpe_test.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+
+#include "cube_mesh.h"
+#include "platform/platform.h"
+#include "renderer/renderer.h"
+#include "renderer/shaders.h"
+
+enum { GOLDEN_W = 160, GOLDEN_H = 120 };
+
+/* Pixels whose channels all differ by at most this much count as equal. */
+#define GOLDEN_CHANNEL_TOLERANCE 3
+/* Fraction of pixels allowed to exceed the channel tolerance. */
+#define GOLDEN_MAX_BAD_FRACTION 0.004
+
+static uint32_t channel_diff(WPE_Color a, WPE_Color b, int shift) {
+    const int ca = (int)((a >> shift) & 0xFF), cb = (int)((b >> shift) & 0xFF);
+    return (uint32_t)(ca > cb ? ca - cb : cb - ca);
+}
+
+static void compare_with_reference(const char* name, const WPE_Framebuffer* fb) {
+    char reference_path[512], actual_path[512];
+    snprintf(reference_path, sizeof reference_path, "%s/%s.png", WPE_GOLDEN_REFERENCE_DIR, name);
+    snprintf(actual_path, sizeof actual_path, "%s_actual.png", name);
+
+    const char* update = getenv("WPE_UPDATE_GOLDEN");
+    if (update && update[0] == '1') {
+        WPE_TEST_ASSERT_OK(wpe_image_save_png(reference_path, fb->width, fb->height, fb->color));
+        fprintf(stderr, "    updated reference %s\n", reference_path);
+        return;
+    }
+
+    WPE_Image reference;
+    const WPE_Result loaded = wpe_image_load_png(reference_path, &reference);
+    if (loaded != WPE_RESULT_OK) {
+        WPE_TEST_ASSERT_OK(wpe_image_save_png(actual_path, fb->width, fb->height, fb->color));
+        WPE_TEST_ASSERT_MSG(false, "missing reference %s (actual output written to %s)", reference_path,
+                            actual_path);
+    }
+    const bool same_size = reference.width == fb->width && reference.height == fb->height;
+
+    uint32_t bad = 0;
+    uint32_t worst = 0;
+    if (same_size) {
+        for (uint32_t i = 0; i < fb->width * fb->height; ++i) {
+            uint32_t diff = 0;
+            for (int shift = 0; shift <= 16; shift += 8) {
+                const uint32_t d = channel_diff(reference.pixels[i], fb->color[i], shift);
+                diff = d > diff ? d : diff;
+            }
+            worst = diff > worst ? diff : worst;
+            if (diff > GOLDEN_CHANNEL_TOLERANCE) ++bad;
+        }
+    }
+    wpe_image_free(&reference);
+
+    const uint32_t allowed = (uint32_t)(GOLDEN_MAX_BAD_FRACTION * fb->width * fb->height);
+    if (!same_size || bad > allowed) {
+        WPE_TEST_ASSERT_OK(wpe_image_save_png(actual_path, fb->width, fb->height, fb->color));
+        WPE_TEST_ASSERT_MSG(
+            false, "%s: %u pixels differ (allowed %u, worst channel diff %u%s); actual written to %s", name,
+            bad, allowed, worst, same_size ? "" : ", size mismatch", actual_path);
+    }
+    fprintf(stderr, "    %s: %u differing pixels (allowed %u), worst channel diff %u\n", name, bad, allowed,
+            worst);
+}
+
+static WPE_DrawDesc cube_draw(const WPE_VertexColored* vertices, const uint32_t* indices,
+                              const WPE_VertexColorUniforms* uniforms, WPE_RenderState state) {
+    return (WPE_DrawDesc){
+        .program = wpe_shader_vertex_color(),
+        .uniforms = uniforms,
+        .uniforms_size = sizeof *uniforms,
+        .vertices = vertices,
+        .vertex_stride = sizeof(WPE_VertexColored),
+        .vertex_count = WPE_CUBE_VERTEX_COUNT,
+        .indices = indices,
+        .index_count = WPE_CUBE_INDEX_COUNT,
+        .state = state,
+    };
+}
+
+static void test_golden_cubes_scene(void) {
+    WPE_VertexColored cube_vertices[WPE_CUBE_VERTEX_COUNT];
+    uint32_t cube_indices[WPE_CUBE_INDEX_COUNT];
+    wpe_cube_mesh_build(cube_vertices, cube_indices);
+
+    /* Ground quad with a color gradient, extending behind the camera to exercise near clipping. */
+    const WPE_VertexColored ground[4] = {
+        {.position = {{-20, 0, 6}}, .color = {0.20f, 0.22f, 0.30f, 1}},
+        {.position = {{20, 0, 6}}, .color = {0.20f, 0.30f, 0.22f, 1}},
+        {.position = {{20, 0, -30}}, .color = {0.05f, 0.05f, 0.08f, 1}},
+        {.position = {{-20, 0, -30}}, .color = {0.05f, 0.05f, 0.08f, 1}},
+    };
+    const uint32_t ground_indices[6] = {0, 1, 2, 0, 2, 3};
+
+    const WPE_Mat4 projection = wpe_mat4_perspective(WPE_PI / 3.0f, (float)GOLDEN_W / GOLDEN_H, 0.1f, 50.0f);
+    const WPE_Mat4 view = wpe_mat4_look_at(wpe_vec3(0, 2.2f, 4.5f), wpe_vec3(0, 0.6f, 0), wpe_vec3(0, 1, 0));
+    const WPE_Mat4 view_projection = wpe_mat4_mul(&projection, &view);
+
+    typedef struct {
+        WPE_Vec3 position;
+        WPE_Vec3 euler;
+        float scale;
+        WPE_Vec4 tint;
+        WPE_BlendMode blend;
+    } Placement;
+    const Placement placements[] = {
+        {{{-1.6f, 0.6f, -0.5f}}, {{0.3f, 0.8f, 0.0f}}, 1.1f, {{1, 1, 1, 1}}, WPE_BLEND_OPAQUE},
+        {{{0.2f, 0.7f, -1.8f}}, {{0.9f, -0.4f, 0.5f}}, 1.3f, {{1, 1, 1, 1}}, WPE_BLEND_OPAQUE},
+        {{{1.7f, 0.5f, 0.2f}}, {{-0.2f, 2.3f, 0.7f}}, 0.9f, {{1, 1, 1, 1}}, WPE_BLEND_OPAQUE},
+        {{{0.0f, 0.9f, 0.9f}}, {{0.6f, 0.6f, 0.0f}}, 0.8f, {{1, 1, 1, 0.5f}}, WPE_BLEND_ALPHA_DITHER},
+        {{{1.0f, 1.6f, -0.4f}}, {{0.0f, 0.4f, 0.9f}}, 0.6f, {{1, 1, 1, 0.45f}}, WPE_BLEND_ALPHA},
+    };
+    enum { PLACEMENTS = sizeof placements / sizeof placements[0] };
+
+    WPE_JobSystem* jobs = NULL;
+    WPE_TEST_ASSERT_OK(wpe_jobs_create(3, &jobs));
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(
+        &(WPE_RendererDesc){.width = GOLDEN_W, .height = GOLDEN_H, .jobs = jobs}, &renderer));
+    WPE_TEST_ASSERT_OK(
+        wpe_renderer_begin_frame(renderer, &(WPE_ClearDesc){.clear_color = true,
+                                                            .color = wpe_color_rgba8(40, 44, 60, 255),
+                                                            .clear_depth = true,
+                                                            .depth = 1}));
+
+    const WPE_VertexColorUniforms ground_uniforms = {.mvp = view_projection, .tint = wpe_vec4(1, 1, 1, 1)};
+    WPE_RenderState ground_state = wpe_render_state_default();
+    WPE_TEST_ASSERT_OK(wpe_renderer_submit(renderer, &(WPE_DrawDesc){.program = wpe_shader_vertex_color(),
+                                                                     .uniforms = &ground_uniforms,
+                                                                     .uniforms_size = sizeof ground_uniforms,
+                                                                     .vertices = ground,
+                                                                     .vertex_stride = sizeof ground[0],
+                                                                     .vertex_count = 4,
+                                                                     .indices = ground_indices,
+                                                                     .index_count = 6,
+                                                                     .state = ground_state}));
+
+    WPE_VertexColorUniforms uniforms[PLACEMENTS];
+    for (int i = 0; i < PLACEMENTS; ++i) {
+        const Placement* p = &placements[i];
+        const WPE_Mat4 model = wpe_mat4_from_trs(p->position, wpe_quat_from_euler_xyz(p->euler),
+                                                 wpe_vec3(p->scale, p->scale, p->scale));
+        uniforms[i] =
+            (WPE_VertexColorUniforms){.mvp = wpe_mat4_mul(&view_projection, &model), .tint = p->tint};
+        WPE_RenderState state = wpe_render_state_default();
+        state.blend = p->blend;
+        if (p->blend == WPE_BLEND_ALPHA) state.depth_write = false;
+        WPE_DrawDesc draw = cube_draw(cube_vertices, cube_indices, &uniforms[i], state);
+        draw.sort_key = p->blend == WPE_BLEND_ALPHA ? 1 : 0; /* Blended geometry after opaque. */
+        WPE_TEST_ASSERT_OK(wpe_renderer_submit(renderer, &draw));
+    }
+    WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
+
+    compare_with_reference("cubes", wpe_renderer_framebuffer(renderer));
+    wpe_renderer_destroy(renderer);
+    wpe_jobs_destroy(jobs);
+}
+
+WPE_TEST_MAIN(WPE_TEST_CASE(test_golden_cubes_scene))

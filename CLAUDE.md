@@ -13,7 +13,7 @@ Development runs in milestones; the user reviews each one before the next starts
 
 1. Build system, core and tests (done)
 2. ECS, plus math and the scene transform hierarchy (done)
-3. Rasterizer and window (SDL3)
+3. Rasterizer and window (SDL3) (done)
 4. glTF and materials
 5. Lighting, shadows and post-processing
 6. Luau scripting
@@ -37,7 +37,13 @@ ctest --test-dir build -R "^core_" --output-on-failure  # one module (tests are 
 ctest --test-dir build -L stress                        # stress suite (randomized model check, 10k perf budget)
 cmake --build build --target format                     # clang-format; run before committing
 cmake --build build --target lint                       # clang-tidy over src/ (warnings are errors)
+WPE_UPDATE_GOLDEN=1 ctest --test-dir build -R golden    # regenerate golden PNGs; open and review them before committing
+./build/samples/spinning_cubes --frames 30 --screenshot out.png   # render headless-ish and inspect the PNG
 ```
+
+The first configure downloads and builds SDL3 (about 70 s). To check rendering output yourself, use `--screenshot` or golden test images and open the PNG; when a golden test fails, its output is saved as `build/tests/golden/<name>_actual.png`.
+
+When mutation-testing (deliberately breaking code to prove a test catches it), make sure the mutated code still compiles: with `-Werror`, a failed build silently leaves the old test binary in place.
 
 Run the Release build in a separate tree (`build-release/`). Some checks only happen there; for example, the 10k-transform perf budget is asserted only when `WPE_DEBUG` is off.
 
@@ -63,9 +69,17 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - Only change parenting through `wpe_scene_set_parent`.
   - `wpe_scene_update_transforms` recomputes all world matrices; it uses an explicit stack, not recursion.
   - Despawning a parent turns its children into roots (a hook does this); `wpe_scene_destroy_recursive` deletes a whole subtree.
-- **Tests:** `tests/framework/wpe_test.h` is a custom runner. Every case automatically fails if it changes the live `wpe_alloc` count (a leak) or triggers an engine `wpe_assert`; use `WPE_TEST_EXPECT_ASSERT` when an assert is expected. Register test executables with `wpe_add_test(...)` in `tests/<category>/CMakeLists.txt`.
+- **jobs** (`jobs/jobs.h`): `wpe_jobs_parallel_for(jobs, count, grain, fn, ctx)` blocks until done, and the calling thread takes part as thread index 0. `jobs == NULL` runs inline. Keep outputs per-chunk (fixed `grain`) so results don't depend on the thread count. Don't call it from inside a callback.
+- **renderer** (`renderer/renderer.h`): pure CPU with no SDL; see AGENTS.md §4.2 for the pipeline.
+  - A frame is `begin_frame(clear)` → `submit(draw)…` → `end_frame()`.
+  - Uniforms are copied at submit; vertex/index buffers and the program are borrowed until `end_frame`.
+  - Clip space follows the OpenGL convention (z in [−w, w]); front faces are counter-clockwise; the framebuffer origin is top-left; colors are `0xAARRGGBB`.
+  - Shaders are C functions called concurrently from worker threads; varyings are capped at 16.
+  - Output is deterministic across thread counts, and steady-state frames don't allocate; tests enforce both.
+  - The rasterizer files are always compiled with `-O2`, even in Debug.
+- **platform** (`platform/platform.h`): the SDL3 window, presenting (nearest-neighbour, letterboxed), time, and PNG load/save. Only `jobs` and `platform` may include SDL.
+- **Tests:** `tests/framework/wpe_test.h` is a custom runner. Every case automatically fails if it changes the live `wpe_alloc` count (a leak) or triggers an engine `wpe_assert`; use `WPE_TEST_EXPECT_ASSERT` when an assert is expected. Register test executables with `wpe_add_test(...)` in `tests/<category>/CMakeLists.txt`. Categories are `unit/`, `stress/` (label `stress`) and `golden/` (reference PNGs in `tests/golden/references/`, compared with a small tolerance).
 - **Planned (see AGENTS.md §4–5 and §9):**
-  - Renderer pipeline: cull → sort → tile-parallel raster → post-process → SDL texture. The main thread owns window, input and scene; worker threads render.
   - Fixed-timestep physics and Luau `on_fixed_update`.
   - Separate `editor/` and `runtime/` executables. The editor must be fully drivable by AI agents.
 

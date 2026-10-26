@@ -107,6 +107,33 @@ WPE_Vec3 wpe_mat4_transform_dir(const WPE_Mat4* m, WPE_Vec3 d) {
     return out;
 }
 
+WPE_Mat4 wpe_mat4_perspective(float fov_y_radians, float aspect, float near_z, float far_z) {
+    wpe_assert(fov_y_radians > 0.0f && aspect > 0.0f && near_z > 0.0f && far_z > near_z);
+    WPE_Mat4 out;
+    glm_perspective_rh_no(fov_y_radians, aspect, near_z, far_z, out.m);
+    return out;
+}
+
+WPE_Mat4 wpe_mat4_orthographic(float left, float right, float bottom, float top, float near_z, float far_z) {
+    wpe_assert(right != left && top != bottom && far_z != near_z);
+    WPE_Mat4 out;
+    glm_ortho_rh_no(left, right, bottom, top, near_z, far_z, out.m);
+    return out;
+}
+
+WPE_Mat4 wpe_mat4_look_at(WPE_Vec3 eye, WPE_Vec3 target, WPE_Vec3 up) {
+    WPE_Mat4 out;
+    glm_lookat_rh(eye.v, target.v, up.v, out.m);
+    return out;
+}
+
+WPE_Vec4 wpe_mat4_mul_vec4(const WPE_Mat4* m, WPE_Vec4 v) {
+    wpe_assert(m);
+    WPE_Vec4 out;
+    glm_mat4_mulv(WPE__CGLM_MAT4(m), v.v, out.v);
+    return out;
+}
+
 bool wpe_mat4_decompose(const WPE_Mat4* m, WPE_Vec3* out_translation, WPE_Quat* out_rotation,
                         WPE_Vec3* out_scale) {
     wpe_assert(m && out_translation && out_rotation && out_scale);

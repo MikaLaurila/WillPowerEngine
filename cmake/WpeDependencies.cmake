@@ -17,3 +17,20 @@ FetchContent_MakeAvailable(cglm)
 
 add_library(wpe_dep_cglm INTERFACE)
 target_include_directories(wpe_dep_cglm SYSTEM INTERFACE "${cglm_SOURCE_DIR}/include")
+
+# SDL3 3.4.8 (zlib) — built as a static library. Used for windowing, input, threads and PNG I/O.
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(SDL3
+    URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.8/SDL3-3.4.8.tar.gz
+    URL_HASH SHA256=e9fff7467fb60f037e6708da18b25560649e4c63edc2a69bb871b960d9cbfbba
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    SYSTEM)
+FetchContent_MakeAvailable(SDL3)
+
+add_library(wpe_dep_sdl3 INTERFACE)
+target_link_libraries(wpe_dep_sdl3 INTERFACE SDL3::SDL3-static)

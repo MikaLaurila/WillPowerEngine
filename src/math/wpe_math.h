@@ -170,6 +170,28 @@ WPE_Vec3 wpe_mat4_transform_point(const WPE_Mat4* m, WPE_Vec3 p);
 WPE_Vec3 wpe_mat4_transform_dir(const WPE_Mat4* m, WPE_Vec3 d);
 
 /**
+ * Right-handed perspective projection mapping view-space depth [-near, -far] to clip z in [-w, w]
+ * (OpenGL convention, which the rasterizer expects).
+ *
+ * @param fov_y_radians Vertical field of view, in (0, pi).
+ * @param aspect Width / height, > 0.
+ * @param near_z, far_z Distances to the clip planes, 0 < near_z < far_z.
+ */
+WPE_Mat4 wpe_mat4_perspective(float fov_y_radians, float aspect, float near_z, float far_z);
+
+/** Right-handed orthographic projection to clip z in [-1, 1] (view looks down -Z). */
+WPE_Mat4 wpe_mat4_orthographic(float left, float right, float bottom, float top, float near_z, float far_z);
+
+/**
+ * Right-handed view matrix looking from `eye` toward `target`. `up` must not be parallel to the
+ * view direction (the result is then undefined but finite-checked by callers).
+ */
+WPE_Mat4 wpe_mat4_look_at(WPE_Vec3 eye, WPE_Vec3 target, WPE_Vec3 up);
+
+/** Transforms a homogeneous vector. */
+WPE_Vec4 wpe_mat4_mul_vec4(const WPE_Mat4* m, WPE_Vec4 v);
+
+/**
  * Splits an affine matrix into translation, rotation and (positive) scale.
  *
  * NOTE(limitation): matrices containing shear or a negative determinant (mirroring) cannot be

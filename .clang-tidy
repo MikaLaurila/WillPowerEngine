@@ -1,8 +1,16 @@
+# Disabled checks and why:
+# - easily-swappable-parameters: flags most math/graphics signatures (x, y, w, h).
+# - assignment-in-if-condition: not used as a pattern here; GCC -Wall already covers accidents.
+# - signed-bitwise: flags shifts by plain int literals (`x << 24`), which is idiomatic C.
+# - multi-level-implicit-pointer-conversion: flags the standard `T** p = alloc(...)` C idiom.
+# - insecureAPI.DeprecatedOrUnsafeBufferHandling: Annex K (memcpy_s etc.) is not portable.
 Checks: >
   -*,
   bugprone-*,
   -bugprone-easily-swappable-parameters,
   -bugprone-assignment-in-if-condition,
+  -bugprone-signed-bitwise,
+  -bugprone-multi-level-implicit-pointer-conversion,
   clang-analyzer-*,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
   performance-*,
