@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+# Build and test output is also captured to files; on failure the first error lines are re-emitted
+# as workflow annotations, which are readable through the public checks API without signing in.
+
 jobs:
   linux:
     name: Linux GCC (${{ matrix.build_type }})
@@ -13,6 +16,9 @@ jobs:
       fail-fast: false
       matrix:
         build_type: [Debug, Release]
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
@@ -28,9 +34,15 @@ jobs:
           -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14
           -DSANITIZERS=${{ matrix.build_type == 'Debug' && 'ON' || 'OFF' }}
       - name: Build
-        run: cmake --build build
+        run: set -o pipefail; cmake --build build 2>&1 | tee build.log
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: set -o pipefail; ctest --test-dir build --output-on-failure 2>&1 | tee test.log
+      - name: Report errors
+        if: failure()
+        run: |
+          touch build.log test.log
+          grep -hE "error:|undefined reference|FAILED:|\[ FAIL \]|    FAIL |runtime error|ERROR: AddressSanitizer|ERROR: LeakSanitizer" build.log test.log \
+            | head -n 25 | sed -e 's/%/%25/g' -e 's/^/::error::/' || true
 
   windows:
     name: Windows MSYS2 UCRT64 (${{ matrix.build_type }})
@@ -55,6 +67,12 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
       - name: Build
-        run: cmake --build build
+        run: set -o pipefail; cmake --build build 2>&1 | tee build.log
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: set -o pipefail; ctest --test-dir build --output-on-failure 2>&1 | tee test.log
+      - name: Report errors
+        if: failure()
+        run: |
+          touch build.log test.log
+          grep -hE "error:|undefined reference|FAILED:|\[ FAIL \]|    FAIL " build.log test.log \
+            | head -n 25 | sed -e 's/%/%25/g' -e 's/^/::error::/' || true
