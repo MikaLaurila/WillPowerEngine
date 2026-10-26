@@ -18,7 +18,8 @@ void wpe_assert_fail(const char* expression, const char* file, int line) {
     WPE_AssertHandlerFn handler = atomic_load(&wpe__g_assert_handler);
     if (handler) {
         handler(expression, file, line);
-        wpe_log_write(WPE_LOG_LEVEL_CRITICAL, WPE_LOG_MODULE, file, line, "assert handler returned; aborting");
+        wpe_log_write(WPE_LOG_LEVEL_CRITICAL, WPE_LOG_MODULE, file, line,
+                      "assert handler returned; aborting");
     }
     abort();
 }
