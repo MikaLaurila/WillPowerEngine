@@ -12,7 +12,7 @@ WillPowerEngine is a C23 multithreaded software-rasterizer 3D game engine (Windo
 Development runs in milestones; the user reviews each one before the next starts. Commit and push to `origin main` (github.com/MikaLaurila/WillPowerEngine) at each working milestone, and record notable changes in `CHANGELOG.md`.
 
 1. Build system, core and tests (done)
-2. ECS
+2. ECS, plus math and the scene transform hierarchy (done)
 3. Rasterizer and window (SDL3)
 4. glTF and materials
 5. Lighting, shadows and post-processing
@@ -26,7 +26,7 @@ Do not look outside the working directory. Third-party libraries come in through
 
 ## Commands
 
-The local toolchain is MSYS2 UCRT64 GCC 16 + Ninja + CMake 4 (no MSVC or Clang installed; no clang-format or clang-tidy, so the `format` and `lint` targets fail with a message).
+The local toolchain is MSYS2 UCRT64 GCC 16 + Ninja + CMake 4, plus clang-format and clang-tidy (MSYS2 clang-tools-extra). There's no MSVC.
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug   # Release: use a separate build-release/ dir
@@ -34,7 +34,12 @@ cmake --build build
 cmake --build build --target test_all                   # build all tests and run ctest
 ctest --test-dir build -R "^core_" --output-on-failure  # one module (tests are named <module>_<area>)
 ./build/tests/unit/test_core_log --filter <substring>   # individual cases; --list lists them
+ctest --test-dir build -L stress                        # stress suite (randomized model check, 10k perf budget)
+cmake --build build --target format                     # clang-format; run before committing
+cmake --build build --target lint                       # clang-tidy over src/ (warnings are errors)
 ```
+
+Run the Release build in a separate tree (`build-release/`). Some checks only happen there; for example, the 10k-transform perf budget is asserted only when `WPE_DEBUG` is off.
 
 CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with ASan/UBSan in Debug) and on Windows MSYS2. Keep code portable to both platforms.
 
@@ -47,9 +52,19 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - `wpe_assert`: debug-only; a failure means a bug.
   - `wpe_check`: always evaluated; returns a bool for runtime validation.
   - `wpe_alloc`/`wpe_free`: tracked allocation that counts live allocations.
+- **math** (`math/wpe_math.h`): `WPE_Vec3`/`WPE_Quat`/`WPE_Mat4` unions. Matrices are column-major (`m[col][row]`), and `wpe_mat4_mul(a, b)` applies `b` first. Euler angles apply X, then Y, then Z. cglm is used only inside `wpe_math.c`, and anything handed to cglm must be non-const.
+- **ecs** (`ecs/ecs.h`, depends only on core): sparse-set pools with generational entities (20-bit index, 12-bit generation).
+  - Component IDs are a plain `uint32_t`; built-ins are `WPE_COMP_*` with stable values, and games use IDs from `WPE_COMP_USER_FIRST`.
+  - Every component type must be registered before use.
+  - Never remove components or despawn during a query; use the deferred despawn functions. Adding components and spawning are allowed.
+  - Re-fetch component pointers after any structural change.
+  - `on_remove` hooks are where resource cleanup goes; hooks must not make structural changes.
+- **scene** (`scene/scene.h`): Transform (local TRS plus a cached `world`), Hierarchy (parent/child links) and Name.
+  - Only change parenting through `wpe_scene_set_parent`.
+  - `wpe_scene_update_transforms` recomputes all world matrices; it uses an explicit stack, not recursion.
+  - Despawning a parent turns its children into roots (a hook does this); `wpe_scene_destroy_recursive` deletes a whole subtree.
 - **Tests:** `tests/framework/wpe_test.h` is a custom runner. Every case automatically fails if it changes the live `wpe_alloc` count (a leak) or triggers an engine `wpe_assert`; use `WPE_TEST_EXPECT_ASSERT` when an assert is expected. Register test executables with `wpe_add_test(...)` in `tests/<category>/CMakeLists.txt`.
 - **Planned (see AGENTS.md §4–5 and §9):**
-  - ECS: POD components, sparse set, generational 32-bit IDs.
   - Renderer pipeline: cull → sort → tile-parallel raster → post-process → SDL texture. The main thread owns window, input and scene; worker threads render.
   - Fixed-timestep physics and Luau `on_fixed_update`.
   - Separate `editor/` and `runtime/` executables. The editor must be fully drivable by AI agents.

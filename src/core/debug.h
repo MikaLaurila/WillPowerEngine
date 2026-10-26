@@ -21,8 +21,8 @@
 #define WPE_CORE_DEBUG_H
 
 /**
- * Called when an assertion fails. A handler that returns causes execution to continue past the
- * failed assertion, so production handlers should not return; the test framework longjmps out.
+ * Called when an assertion fails. Handlers must not return normally (the test framework longjmps
+ * out); if one does, the process aborts, so code after a failed assertion never runs.
  *
  * @param expression Stringified condition. @param file Source file. @param line Source line.
  */
@@ -39,7 +39,7 @@ typedef void (*WPE_AssertHandlerFn)(const char* expression, const char* file, in
 WPE_AssertHandlerFn wpe_set_assert_handler(WPE_AssertHandlerFn handler);
 
 /** Implementation of wpe_assert(); call through the macro. @thread_safety Any thread */
-void wpe_assert_fail(const char* expression, const char* file, int line);
+[[noreturn]] void wpe_assert_fail(const char* expression, const char* file, int line);
 
 /**
  * Implementation of wpe_check(); call through the macro.

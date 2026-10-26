@@ -2,3 +2,6 @@ wpe_add_test(core_result SOURCES core/test_result.c LIBS wpe::core LABELS unit c
 wpe_add_test(core_log SOURCES core/test_log.c LIBS wpe::core LABELS unit core)
 wpe_add_test(core_debug SOURCES core/test_debug.c LIBS wpe::core LABELS unit core)
 wpe_add_test(core_alloc SOURCES core/test_alloc.c LIBS wpe::core LABELS unit core)
+wpe_add_test(math_math SOURCES math/test_math.c LIBS wpe::math LABELS unit math)
+wpe_add_test(ecs_ecs SOURCES ecs/test_ecs.c LIBS wpe::ecs LABELS unit ecs)
+wpe_add_test(scene_scene SOURCES scene/test_scene.c LIBS wpe::scene LABELS unit scene)

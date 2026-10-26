@@ -24,6 +24,7 @@ option(SANITIZERS "Build with address and undefined-behavior sanitizers (GCC/Cla
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(WpeCompilerOptions)
 include(WpeTooling)
+include(WpeDependencies)
 
 add_subdirectory(src)
 

@@ -19,6 +19,7 @@ function(wpe_add_test name)
 endfunction()
 
 add_subdirectory(unit)
+add_subdirectory(stress)
 
 # Builds every test executable, then runs the whole suite.
 add_custom_target(test_all

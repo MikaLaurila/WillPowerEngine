@@ -183,35 +183,30 @@ The master test scene (`scenes/test_full.scene`) must:
 
 ### 4.1 ECS Design
 
+Implemented in `src/ecs/ecs.h` (see its file comment for the full contract):
+
 ```c
-// Component registry - each component type has a unique ID
-typedef enum {
-    WPE_COMP_NONE = 0,
-    WPE_COMP_TRANSFORM,
-    WPE_COMP_MESH,
-    WPE_COMP_MATERIAL,
-    WPE_COMP_LIGHT,
-    WPE_COMP_SCRIPT,
-    WPE_COMP_PHYSICS_RIGIDBODY,
-    WPE_COMP_COUNT
-} WPE_ComponentType;
+// Component type ids are integers; built-ins have stable values (they are serialized),
+// games use ids from WPE_COMP_USER_FIRST upward.
+typedef uint32_t WPE_ComponentType;
+enum WPE_BuiltinComponent { WPE_COMP_NONE = 0, WPE_COMP_TRANSFORM = 1, /* ... */ WPE_COMP_USER_FIRST = 32 };
 
-// Component storage - contiguous arrays for cache efficiency
-typedef struct {
-    WPE_Transform* data;
-    uint32_t capacity;
-    uint32_t count;
-} WPE_TransformStorage;
+// Each module registers its own components (with optional on_add/on_remove hooks) at init.
+wpe_ecs_register_component(ecs, WPE_COMP_MESH, &(WPE_ComponentDesc){.name = "Mesh", .size = sizeof(WPE_Mesh), .alignment = alignof(WPE_Mesh)});
 
-// Internal allocator (private, not exposed in header)
-static void wpe__ecs_reserve_storage(WPE_Ecs* ecs, WPE_ComponentType type, uint32_t count);
+// Iterate: the smallest required pool drives the loop.
+WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+while (wpe_ecs_iter_next(&it)) { WPE_Transform* t = wpe_ecs_iter_get(&it, WPE_COMP_TRANSFORM); }
 ```
 
 **Rules:**
-- Components are POD (Plain Old Data). No constructors, no virtual methods.
-- Systems operate on archetype batches (contiguous component arrays).
-- Entity IDs are 32-bit integers with generation counter.
-- Dense storage for active entities; sparse set for lookup.
+- Components are POD (Plain Old Data). No constructors, no virtual methods. Resource cleanup goes in `on_remove` hooks.
+- One sparse-set pool per component type: a dense contiguous array with swap-remove, plus a sparse index for O(1) lookup. Batch systems can use `wpe_ecs_pool_view()`.
+- Entity IDs are 32-bit: 20-bit slot index and 12-bit generation. Generation 0 is never issued, so `WPE_ENTITY_NULL == 0`. Slots whose generation is exhausted are retired, never wrapped.
+- Never remove components or despawn while a query is iterating. Use `wpe_ecs_despawn_deferred()` + `wpe_ecs_flush_deferred()`. Adding components and spawning entities during iteration is allowed.
+- Any structural change can invalidate component pointers, so re-fetch them afterwards.
+- Hooks may edit component data but must not make structural changes.
+- Transforms and the parent/child hierarchy live in `src/scene/` (`wpe_scene_*`). Always change parenting through `wpe_scene_set_parent()`.
 
 ### 4.2 Renderer Pipeline
 
@@ -302,7 +297,9 @@ static wpe__AssetCache wpe__g_asset_cache;
 willpower_engine/
 ├── src/
 │   ├── core/           # Base utilities, logging, alloc
+│   ├── math/           # Vectors/quaternions/matrices (cglm wrapper)
 │   ├── ecs/            # Entity Component System
+│   ├── scene/          # Transform, hierarchy, name components and systems
 │   ├── renderer/       # Software rasterizer
 │   ├── physics/        # Box3D wrapper
 │   ├── audio/          # miniaudio wrapper
@@ -326,7 +323,8 @@ willpower_engine/
 **Module boundaries:**
 - Each `src/*` module is a static library dependency.
 - No circular dependencies allowed.
-- Module interfaces declared in `module.h` files.
+- Module interfaces declared in `<module>/<module>.h` files. Exception: `math/wpe_math.h`, named so it can't be confused with `<math.h>`.
+- Current dependencies: `math` and `ecs` each depend only on `core`; `scene` depends on `core`, `math` and `ecs`.
 
 ---
 

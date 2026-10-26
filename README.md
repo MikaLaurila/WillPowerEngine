@@ -4,8 +4,8 @@ A multithreaded **software rasterizer** 3D game engine in C23 for Windows and Li
 retro resolutions (320×240 to 640×480, scalable to 1280×960). It comes with an editor that AI
 agents can drive fully, and it exports standalone game executables.
 
-> Status: early development. The core module (results, logging, assertions, tracked allocation) and
-> the test infrastructure are in place. See [CHANGELOG.md](CHANGELOG.md) for progress.
+> Status: early development. Done so far: the core module, math, the ECS, and the scene
+> transform hierarchy, along with the test infrastructure. See [CHANGELOG.md](CHANGELOG.md) for progress.
 
 ## Documents
 
