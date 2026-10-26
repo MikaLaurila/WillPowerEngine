@@ -1,6 +1,7 @@
 #include "core/fixed_step.h"
 
 #include <math.h>
+#include <stddef.h>
 
 #include "core/debug.h"
 
