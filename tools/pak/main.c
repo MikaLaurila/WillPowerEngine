@@ -50,7 +50,8 @@ static int command_list(const WPE_Pak* pak) {
         size += e.size;
         stored += e.stored_size;
     }
-    printf("%12llu %12llu  %u files\n", (unsigned long long)size, (unsigned long long)stored, wpe_pak_entry_count(pak));
+    printf("%12llu %12llu  %u files\n", (unsigned long long)size, (unsigned long long)stored,
+           wpe_pak_entry_count(pak));
     return EXIT_SUCCESS;
 }
 
@@ -105,8 +106,10 @@ int main(int argc, char** argv) {
 
     if (strcmp(command, "create") == 0) {
         if (argc != 4 && !(argc == 6 && strcmp(argv[4], "--level") == 0)) return usage();
-        const int level = argc == 6 ? atoi(argv[5]) : 0;
-        if (level < 0 || level > 19) {
+        char* end = NULL;
+        const long parsed = argc == 6 ? strtol(argv[5], &end, 10) : 0;
+        const int level = (argc != 6 || *end == '\0') && parsed >= 0 && parsed <= 19 ? (int)parsed : -1;
+        if (level < 0) {
             fprintf(stderr, "--level must be 1..19\n");
             return EXIT_FAILURE;
         }
@@ -122,7 +125,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "cannot open '%s': %s\n", archive, wpe_result_to_string(result));
         return EXIT_FAILURE;
     }
-    const int code = extract ? command_extract(pak, argv[3])
+    const int code = extract                        ? command_extract(pak, argv[3])
                      : strcmp(command, "list") == 0 ? command_list(pak)
                                                     : command_verify(pak);
     wpe_pak_close(pak);

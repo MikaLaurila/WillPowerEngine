@@ -11,3 +11,7 @@ compile_commands.json
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Exported games and archives (wpe_export, wpe_pak) made while testing
+*.exe
+*.pak

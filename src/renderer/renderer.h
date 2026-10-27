@@ -183,6 +183,10 @@ typedef struct WPE_DrawDesc {
      */
     uint32_t subdivision_levels;
     float subdivision_edge_pixels;
+    /* Scissor test: when `scissor` is set, only pixels inside the rectangle (framebuffer pixels,
+     * origin top-left, clamped to the framebuffer) are written. An empty rectangle draws nothing. */
+    bool scissor;
+    uint32_t scissor_x, scissor_y, scissor_width, scissor_height;
 } WPE_DrawDesc;
 
 typedef struct WPE_ClearDesc {

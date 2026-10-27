@@ -131,6 +131,9 @@ bool wpe__json_read_enum(wpe__JsonReader* r, const WPE_JsonValue* object, const 
         const size_t used = strlen(options);
         snprintf(options + used, sizeof options - used, "%s\"%s\"", i ? ", " : "", names[i]);
     }
+    if (text)
+        return wpe__json_fail(r, v, WPE_RESULT_ERROR_PARSE, "\"%s\" is \"%.64s\"; it must be one of %s", key,
+                              text, options);
     return wpe__json_fail(r, v, WPE_RESULT_ERROR_PARSE, "\"%s\" must be one of %s", key, options);
 }
 

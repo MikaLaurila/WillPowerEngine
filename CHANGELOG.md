@@ -4,7 +4,32 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 10: the editor)
+- `wpe_editor` (`editor/`, docs in `docs/editor.md`): Dear ImGui (cimgui) interface drawn by the
+  engine's software rasterizer, with docked panels: viewport (fly camera, picking, move/rotate/scale
+  gizmos, model drag and drop), hierarchy (reparenting by drag and drop), inspector (every component
+  and script property, add/remove), environment, assets, and a console that runs commands. Play,
+  pause and stop run the game in place and restore the scene afterwards; undo/redo covers every
+  edit (continuous drags are one step); scenes are created, opened and saved; games are exported.
+- Agent control: one JSON command set (entities, components, environment, scenes, undo, play,
+  frames, screenshots of the game or the whole editor, Luau, assets, export) used by the UI itself,
+  headless batches (`--run`), one-shot calls (`--command`) and a live local channel to the running
+  editor (127.0.0.1:47800, `--send` client). Replies carry the log messages raised by the command.
+- Engine: embedded mode (the host owns the window and forwards events), a simulation switch (edit
+  mode), scenes loaded from text, entity- and component-level scene functions
+  (`wpe_scene_save_entity`, `wpe_scene_create_entity`, `wpe_scene_set_component`,
+  `wpe_scene_remove_component`, environment read/write) and a save filter.
+- Renderer: per-draw scissor rectangles; `wpe_texture_update`. Platform: local TCP sockets
+  (`platform/net.h`), window size and text input. Core: compact JSON writing.
+- Dependency: Dear ImGui v1.92.9b (docking) with cimgui 1.92.9bdock (both approved, MIT).
+- Tests: scissor, texture updates, the UI backend (rendered headless), sockets, scene editing
+  functions, edit mode, editor commands (undo/redo, coalescing, scenes, play mode, screenshots),
+  and a command-line test that drives the editor like an agent.
+
 ### Changed
+- `format` and `lint` also cover `editor/`, `runtime/` and `tools/` (two unchecked `atoi` calls in
+  the tools were replaced).
+- Enumeration errors in scene and project files name the rejected value.
 - Command-line programs (`wpe_pak`, the new `wpe_export` and `wpe_runtime`) build into `build/bin/`.
 - `WPE_PakEntryInfo.offset` is the byte offset in the file, which includes the embedding offset for
   archives appended to another file.

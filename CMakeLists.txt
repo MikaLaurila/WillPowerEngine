@@ -28,6 +28,7 @@ include(WpeDependencies)
 
 add_subdirectory(src)
 add_subdirectory(runtime)
+add_subdirectory(editor)
 add_subdirectory(tools)
 
 option(WPE_BUILD_SAMPLES "Build the sample applications" ON)

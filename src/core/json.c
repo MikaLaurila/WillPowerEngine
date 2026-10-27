@@ -588,6 +588,7 @@ struct WPE_JsonWriter {
     wpe__JsonFrame frames[WPE_JSON_MAX_DEPTH];
     uint32_t depth;
     bool root_written;
+    bool compact;  /* One line: no newlines or indentation. */
     bool finished; /* Terminating newline appended; further values are misuse. */
     bool failed;
     bool out_of_memory;
@@ -598,6 +599,10 @@ WPE_Result wpe_json_writer_create(WPE_JsonWriter** out_writer) {
     if (!out_writer) return WPE_RESULT_ERROR_NULL_ARG;
     *out_writer = wpe_alloc_zeroed(1, sizeof **out_writer);
     return *out_writer ? WPE_RESULT_OK : WPE_RESULT_ERROR_OUT_OF_MEMORY;
+}
+
+void wpe_json_writer_set_compact(WPE_JsonWriter* writer, bool compact) {
+    if (writer) writer->compact = compact;
 }
 
 void wpe_json_writer_destroy(WPE_JsonWriter* writer) {
@@ -637,6 +642,10 @@ static void wpe__append_str(WPE_JsonWriter* w, const char* text) {
 }
 
 static void wpe__newline(WPE_JsonWriter* w, uint32_t depth) {
+    if (w->compact) {
+        wpe__append(w, " ", 1);
+        return;
+    }
     wpe__append(w, "\n", 1);
     for (uint32_t i = 0; i < depth; ++i)
         wpe__append(w, "  ", 2);

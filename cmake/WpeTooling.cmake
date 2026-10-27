@@ -1,9 +1,14 @@
 # `format` and `lint` targets. Both are optional tools: when missing, the target still exists
 # and fails with an explanatory message instead of silently succeeding.
 
+# First-party code: the engine, its programs (runtime, editor, tools) and the tests.
 file(GLOB_RECURSE WPE_FORMAT_SOURCES CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/src/*.c"
     "${PROJECT_SOURCE_DIR}/src/*.h"
+    "${PROJECT_SOURCE_DIR}/editor/*.c"
+    "${PROJECT_SOURCE_DIR}/editor/*.h"
+    "${PROJECT_SOURCE_DIR}/runtime/*.c"
+    "${PROJECT_SOURCE_DIR}/tools/*.c"
     "${PROJECT_SOURCE_DIR}/tests/*.c"
     "${PROJECT_SOURCE_DIR}/tests/*.h")
 
@@ -25,7 +30,8 @@ endif()
 
 find_program(WPE_CLANG_TIDY NAMES clang-tidy)
 if(WPE_CLANG_TIDY)
-    file(GLOB_RECURSE WPE_LINT_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/*.c")
+    file(GLOB_RECURSE WPE_LINT_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/*.c"
+         "${PROJECT_SOURCE_DIR}/editor/*.c" "${PROJECT_SOURCE_DIR}/runtime/*.c" "${PROJECT_SOURCE_DIR}/tools/*.c")
     add_custom_target(lint
         COMMAND ${WPE_CLANG_TIDY} -p ${PROJECT_BINARY_DIR} --quiet ${WPE_LINT_SOURCES}
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}

@@ -85,6 +85,18 @@ typedef struct WPE_Sampler {
  */
 [[nodiscard]] WPE_Result wpe_texture_create(const WPE_TextureDesc* desc, WPE_Texture** out_texture);
 
+/**
+ * Replaces the texels of a texture without mips (created with generate_mips = false and no
+ * downscaling), e.g. to show a frame rendered elsewhere. Do not call while a frame that samples the
+ * texture is being rendered.
+ *
+ * @param texels width * height texels, as at creation.
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_INVALID_STATE (the texture has mips).
+ *
+ * @thread_safety Owning thread, no concurrent sampling
+ */
+WPE_Result wpe_texture_update(WPE_Texture* texture, const uint32_t* texels);
+
 /** Destroys a texture (ownership consumed); NULL is a no-op. @thread_safety Any thread, no concurrent
  * sampling */
 void wpe_texture_destroy(WPE_Texture* texture);

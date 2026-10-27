@@ -43,6 +43,8 @@ struct WPE_Engine {
     char music[WPE_VFS_PATH_MAX]; /* Track started by the current scene ("" = none). */
     char pending_scene[WPE_VFS_PATH_MAX];
     bool quit;
+    bool embedded;        /* The host forwards events and shows the framebuffer. */
+    bool simulating;      /* Scripts, physics, animation and audio run (false: edit mode). */
     bool mouse_captured;  /* As applied to the window. */
     double audio_backlog; /* Device-less mixing: frames owed to the mixer (fractional). */
     float* audio_mix;
@@ -97,7 +99,7 @@ static WPE_Result wpe__create_graphics(WPE_Engine* engine, const WPE_EngineDesc*
             &(WPE_RendererDesc){.width = p->width, .height = p->height, .jobs = engine->jobs},
             &engine->renderer);
     }
-    if (result == WPE_RESULT_OK && !desc->headless) {
+    if (result == WPE_RESULT_OK && !desc->headless && !desc->embedded) {
         result = wpe_window_create(&(WPE_WindowDesc){.title = p->name,
                                                      .width = p->width * p->scale,
                                                      .height = p->height * p->scale,
@@ -190,6 +192,8 @@ WPE_Result wpe_engine_create(const WPE_EngineDesc* desc, WPE_Engine** out_engine
     WPE_Engine* engine = wpe_alloc_zeroed(1, sizeof *engine);
     if (!engine) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     engine->environment = wpe_scene_environment_default();
+    engine->embedded = desc->embedded;
+    engine->simulating = true;
 
     WPE_Result result = wpe__mount(engine, desc);
     if (result == WPE_RESULT_OK) result = wpe__create_graphics(engine, desc);
@@ -248,8 +252,9 @@ static void wpe__apply_music(WPE_Engine* engine) {
     }
 }
 
-WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
-    if (!engine || !path) return WPE_RESULT_ERROR_NULL_ARG;
+WPE_Result wpe_engine_load_scene_text(WPE_Engine* engine, const char* text, size_t size, const char* name) {
+    if (!engine || !text) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!name) name = "scene";
     WPE_Result result = wpe_scene_clear(engine->ecs);
     engine->camera = WPE_ENTITY_NULL;
     engine->environment = wpe_scene_environment_default();
@@ -257,9 +262,9 @@ WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
         .ecs = engine->ecs, .assets = engine->assets, .scripts = engine->scripts};
     WPE_SceneEnvironment environment = wpe_scene_environment_default();
     WPE_Entity camera = WPE_ENTITY_NULL;
-    if (result == WPE_RESULT_OK) result = wpe_scene_load_asset(&context, path, &environment, &camera);
+    if (result == WPE_RESULT_OK) result = wpe_scene_load(&context, text, size, name, &environment, &camera);
     if (result != WPE_RESULT_OK) {
-        wpe_log_error("cannot load scene '%s': %s", path, wpe_result_to_string(result));
+        wpe_log_error("cannot load scene '%s': %s", name, wpe_result_to_string(result));
         return result;
     }
     engine->environment = environment;
@@ -268,11 +273,29 @@ WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
     /* Bodies exist before the first fixed step, so scripts can use them from their first callback. */
     result = wpe_physics_create_bodies(engine->physics);
     if (result != WPE_RESULT_OK) return result;
-    wpe__apply_music(engine);
-    wpe_log_info("loaded scene '%s' (%u entities)", path, wpe_ecs_entity_count(engine->ecs));
+    if (engine->simulating) wpe__apply_music(engine);
+    wpe_log_info("loaded scene '%s' (%u entities)", name, wpe_ecs_entity_count(engine->ecs));
     return WPE_RESULT_OK;
 }
 
+WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
+    if (!engine || !path) return WPE_RESULT_ERROR_NULL_ARG;
+    void* data = NULL;
+    size_t size = 0;
+    WPE_Result result = wpe_vfs_read_all(engine->vfs, path, &data, &size);
+    if (result == WPE_RESULT_ERROR_NOT_FOUND) wpe_log_error("scene '%s' not found", path);
+    if (result == WPE_RESULT_OK) {
+        result = wpe_engine_load_scene_text(engine, data, size, path);
+    } else {
+        /* As with a failed load, the world is left empty. */
+        const WPE_Result cleared = wpe_scene_clear(engine->ecs);
+        engine->camera = WPE_ENTITY_NULL;
+        if (cleared != WPE_RESULT_OK) result = cleared;
+        wpe_log_error("cannot load scene '%s': %s", path, wpe_result_to_string(result));
+    }
+    wpe_free(data);
+    return result;
+}
 WPE_Result wpe_engine_save_scene(const WPE_Engine* engine, const char* os_path) {
     if (!engine || !os_path) return WPE_RESULT_ERROR_NULL_ARG;
     const WPE_SceneContext context = {
@@ -373,10 +396,14 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
     if (!(dt >= 0.0)) dt = 0.0;
     if (dt > WPE__MAX_FRAME_SECONDS) dt = WPE__MAX_FRAME_SECONDS;
 
-    wpe_input_begin_frame(engine->input);
-    const bool open = engine->window ? wpe_window_poll_events(engine->window)
-                                     : wpe_platform_poll_events(wpe__on_event, engine);
-    if (!open) engine->quit = true;
+    /* Embedded engines get their events from the host (wpe_engine_handle_event) before the frame;
+     * their input frame started at the end of the previous one. */
+    if (!engine->embedded) {
+        wpe_input_begin_frame(engine->input);
+        const bool open = engine->window ? wpe_window_poll_events(engine->window)
+                                         : wpe_platform_poll_events(wpe__on_event, engine);
+        if (!open) engine->quit = true;
+    }
     wpe_input_update(engine->input);
     const bool captured = wpe_input_mouse_captured(engine->input);
     if (engine->window && captured != engine->mouse_captured &&
@@ -384,10 +411,12 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
         engine->mouse_captured = captured;
 
     wpe_draw2d_begin(engine->draw2d, engine->project.width, engine->project.height);
-    WPE_Result result = wpe__simulate(engine, dt);
+    WPE_Result result =
+        engine->simulating ? wpe__simulate(engine, dt) : wpe_scene_update_transforms(engine->ecs);
     const WPE_Entity camera = wpe_engine_camera(engine);
-    if (result == WPE_RESULT_OK) result = wpe__mix_audio(engine, camera, dt);
+    if (result == WPE_RESULT_OK && engine->simulating) result = wpe__mix_audio(engine, camera, dt);
     if (result == WPE_RESULT_OK) result = wpe__render(engine, camera);
+    if (engine->embedded) wpe_input_begin_frame(engine->input); /* Events for the next frame follow. */
 
     /* Scene switches requested by scripts happen between frames. */
     if (result == WPE_RESULT_OK && engine->pending_scene[0]) {
@@ -401,12 +430,37 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
     return result;
 }
 
+void wpe_engine_handle_event(WPE_Engine* engine, const WPE_PlatformEvent* event) {
+    if (engine && event) wpe_input_handle_event(engine->input, event);
+}
+
+void wpe_engine_set_simulating(WPE_Engine* engine, bool simulating) {
+    if (!wpe_check(engine != NULL) || engine->simulating == simulating) return;
+    engine->simulating = simulating;
+    if (simulating) {
+        /* Start from a clean clock so the first frame does not catch up on the paused time. */
+        wpe_fixed_step_init(&engine->clock, 1.0 / engine->project.fixed_rate, engine->project.max_steps);
+        wpe__apply_music(engine);
+    } else if (engine->music[0]) {
+        wpe_audio_stop_music(engine->audio, 0.25f);
+        engine->music[0] = '\0';
+    }
+}
+
+bool wpe_engine_simulating(const WPE_Engine* engine) {
+    return engine && engine->simulating;
+}
+
 bool wpe_engine_running(const WPE_Engine* engine) {
     return engine && !engine->quit;
 }
 
 void wpe_engine_request_quit(WPE_Engine* engine) {
     if (engine) engine->quit = true;
+}
+
+void wpe_engine_cancel_quit(WPE_Engine* engine) {
+    if (engine) engine->quit = false;
 }
 
 WPE_Result wpe_engine_run(WPE_Engine* engine, const WPE_RunOptions* options) {
@@ -444,6 +498,10 @@ WPE_Result wpe_engine_screenshot(const WPE_Engine* engine, const char* os_path) 
 
 WPE_Ecs* wpe_engine_ecs(const WPE_Engine* engine) {
     return engine ? engine->ecs : NULL;
+}
+
+const WPE_Vfs* wpe_engine_vfs(const WPE_Engine* engine) {
+    return engine ? engine->vfs : NULL;
 }
 
 WPE_AssetManager* wpe_engine_assets(const WPE_Engine* engine) {

@@ -1,0 +1,1347 @@
+/*
+ * The editor UI. Panels read the world directly but change it only through editor commands
+ * (wpe_editor_execute), so the UI and agents share validation, undo and behavior.
+ */
+#define WPE_LOG_MODULE "editor"
+#include "editor/editor_ui.h"
+
+#include <SDL3/SDL.h>
+#include <cimgui.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "core/alloc.h"
+#include "core/log.h"
+#include "editor/editor_internal.h"
+#include "editor/ui_backend.h"
+#include "graphics/graphics.h"
+#include "graphics/scene_render.h"
+#include "scene/scene.h"
+
+#define WPE__UI_PATH 256
+#define WPE__ASSET_PAYLOAD "WPE_ASSET"
+#define WPE__ENTITY_PAYLOAD "WPE_ENTITY"
+
+/* ImGui colors are 0xAABBGGRR. */
+#define WPE__COL(r, g, b, a)                                                                                 \
+    (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(r))
+
+typedef enum wpe__GizmoMode { WPE__GIZMO_MOVE = 0, WPE__GIZMO_ROTATE, WPE__GIZMO_SCALE } wpe__GizmoMode;
+
+typedef struct wpe__Edit {
+    const WPE_JsonValue* target; /* The leaf being replaced. */
+    WPE_JsonType type;
+    double number;
+    bool boolean;
+    char string[WPE__UI_PATH];
+    float vector[4];
+    uint32_t vector_count;
+} wpe__Edit;
+
+struct WPE_EditorUi {
+    WPE_Editor* editor;
+    WPE_UiBackend* backend;
+    WPE_Texture* view_texture;
+    uint32_t view_width, view_height;
+
+    /* The viewport image on screen during the last frame. */
+    float image_x, image_y, image_w, image_h;
+    bool view_hovered, view_focused;
+
+    /* Fly camera. */
+    float yaw, pitch, speed;
+    bool flying, camera_initialized;
+
+    /* Gizmo. */
+    wpe__GizmoMode gizmo_mode;
+    int gizmo_axis; /* -1: none, 0..2: dragged axis. */
+    int gizmo_hover;
+    uint32_t gizmo_drag;
+    WPE_Transform gizmo_start;
+    float gizmo_mouse_x, gizmo_mouse_y;
+
+    /* Inspector edits. */
+    uint32_t edit_serial; /* Bumped when a widget becomes active: one undo step per edit gesture. */
+    char add_path[WPE__UI_PATH];
+
+    /* Assets. */
+    char** assets;
+    uint32_t asset_count, asset_capacity;
+    bool assets_stale;
+    char asset_filter[64];
+
+    /* Popups and console. */
+    char scene_path[WPE__UI_PATH];
+    char export_path[512];
+    char command[4096];
+    char reply[4096];
+    bool open_scene_popup, save_as_popup, export_popup;
+    bool layout_built;
+    bool quit;
+};
+
+/* ---- Commands --------------------------------------------------------------------------------------- */
+
+/* Runs a command built by `build` (which writes the arguments after "cmd"); keeps the reply text. */
+static WPE_Result wpe__ui_run(WPE_EditorUi* ui, const char* text) {
+    WPE_JsonWriter* reply = NULL;
+    WPE_Result result = wpe_json_writer_create(&reply);
+    if (result != WPE_RESULT_OK) return result;
+    result = wpe_editor_execute(ui->editor, text, strlen(text), reply);
+    const char* reply_text = NULL;
+    if (wpe_json_writer_finish(reply, &reply_text, NULL) == WPE_RESULT_OK)
+        snprintf(ui->reply, sizeof ui->reply, "%s", reply_text);
+    wpe_json_writer_destroy(reply);
+    return result;
+}
+
+/* Starts a command object: {"cmd": name, ...}; finish with wpe__ui_send(). */
+static WPE_JsonWriter* wpe__ui_begin(const char* name) {
+    WPE_JsonWriter* w = NULL;
+    if (wpe_json_writer_create(&w) != WPE_RESULT_OK) return NULL;
+    wpe_json_writer_set_compact(w, true);
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "cmd");
+    wpe_json_write_string(w, name);
+    return w;
+}
+
+static WPE_Result wpe__ui_send(WPE_EditorUi* ui, WPE_JsonWriter* w) {
+    if (!w) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    wpe_json_write_object_end(w);
+    const char* text = NULL;
+    WPE_Result result = wpe_json_writer_finish(w, &text, NULL);
+    if (result == WPE_RESULT_OK) result = wpe__ui_run(ui, text);
+    wpe_json_writer_destroy(w);
+    return result;
+}
+
+static void wpe__ui_simple(WPE_EditorUi* ui, const char* name) {
+    wpe__ui_send(ui, wpe__ui_begin(name));
+}
+
+static void wpe__ui_entity_command(WPE_EditorUi* ui, const char* name, WPE_Entity entity) {
+    WPE_JsonWriter* w = wpe__ui_begin(name);
+    if (!w) return;
+    wpe_json_write_key(w, "id");
+    wpe_json_write_integer(w, entity);
+    wpe__ui_send(ui, w);
+}
+
+/* ---- Generic JSON field editing ------------------------------------------------------------------------ */
+
+/* Writes `v` with the edited leaf replaced. */
+static void wpe__write_edited(WPE_JsonWriter* w, const WPE_JsonValue* v, const wpe__Edit* edit) {
+    if (v == edit->target) {
+        switch (edit->type) {
+        case WPE_JSON_NUMBER:
+            wpe_json_write_double(w, edit->number);
+            break;
+        case WPE_JSON_BOOL:
+            wpe_json_write_bool(w, edit->boolean);
+            break;
+        case WPE_JSON_STRING:
+            wpe_json_write_string(w, edit->string);
+            break;
+        case WPE_JSON_ARRAY:
+            wpe_json_write_array_begin(w, true);
+            for (uint32_t i = 0; i < edit->vector_count; ++i)
+                wpe_json_write_number(w, edit->vector[i]);
+            wpe_json_write_array_end(w);
+            break;
+        default:
+            wpe_json_write_null(w);
+            break;
+        }
+        return;
+    }
+    switch (wpe_json_type(v)) {
+    case WPE_JSON_NULL:
+        wpe_json_write_null(w);
+        break;
+    case WPE_JSON_BOOL:
+        wpe_json_write_bool(w, wpe_json_bool(v, false));
+        break;
+    case WPE_JSON_NUMBER:
+        wpe_json_write_double(w, wpe_json_number(v, 0.0));
+        break;
+    case WPE_JSON_STRING:
+        wpe_json_write_string(w, wpe_json_string(v));
+        break;
+    case WPE_JSON_ARRAY:
+        wpe_json_write_array_begin(w, true);
+        for (uint32_t i = 0; i < wpe_json_count(v); ++i)
+            wpe__write_edited(w, wpe_json_at(v, i), edit);
+        wpe_json_write_array_end(w);
+        break;
+    case WPE_JSON_OBJECT:
+        wpe_json_write_object_begin(w);
+        for (uint32_t i = 0; i < wpe_json_count(v); ++i) {
+            const char* key = NULL;
+            const WPE_JsonValue* member = wpe_json_member(v, i, &key);
+            wpe_json_write_key(w, key);
+            wpe__write_edited(w, member, edit);
+        }
+        wpe_json_write_object_end(w);
+        break;
+    }
+}
+
+/* Choices for enumerated string fields, by component and key. */
+static const char* const* wpe__choices(const char* component, const char* key, uint32_t* out_count) {
+    static const char* const lights[] = {"directional", "point", "spot"};
+    static const char* const bodies[] = {"static", "kinematic", "dynamic"};
+    static const char* const shapes[] = {"box", "sphere", "capsule", "convex", "mesh"};
+    static const char* const buses[] = {"effects", "music"};
+    static const char* const fogs[] = {"none", "linear", "exponential"};
+    static const char* const effects[] = {"ssao", "chromatic_aberration", "ps1", "vignette", "color_adjust"};
+    const struct {
+        const char* component;
+        const char* key;
+        const char* const* choices;
+        uint32_t count;
+    } table[] = {
+        {"light", "type", lights, 3},     {"rigidbody", "type", bodies, 3},
+        {"collider", "shape", shapes, 5}, {"audio_source", "bus", buses, 2},
+        {"environment", "mode", fogs, 3}, {"environment", "effect", effects, 5},
+    };
+    for (size_t i = 0; i < sizeof table / sizeof table[0]; ++i) {
+        if (strcmp(table[i].component, component) == 0 && strcmp(table[i].key, key) == 0) {
+            *out_count = table[i].count;
+            return table[i].choices;
+        }
+    }
+    return NULL;
+}
+
+/* Tracks edit gestures: a widget becoming active starts a new undo step. */
+static void wpe__note_activation(WPE_EditorUi* ui) {
+    if (igIsItemActivated()) ++ui->edit_serial;
+}
+
+/* Draws an editable view of `v`; returns true (filling `edit`) when the user changed a leaf. */
+static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char* key, const WPE_JsonValue* v,
+                            wpe__Edit* edit) {
+    bool changed = false;
+    switch (wpe_json_type(v)) {
+    case WPE_JSON_NUMBER: {
+        float value = (float)wpe_json_number(v, 0.0);
+        changed = igDragFloat(key, &value, 0.05f, 0.0f, 0.0f, "%.4g", 0);
+        wpe__note_activation(ui);
+        if (changed) *edit = (wpe__Edit){.target = v, .type = WPE_JSON_NUMBER, .number = value};
+        break;
+    }
+    case WPE_JSON_BOOL: {
+        bool value = wpe_json_bool(v, false);
+        changed = igCheckbox(key, &value);
+        ++ui->edit_serial;
+        if (changed) *edit = (wpe__Edit){.target = v, .type = WPE_JSON_BOOL, .boolean = value};
+        break;
+    }
+    case WPE_JSON_STRING: {
+        uint32_t count = 0;
+        const char* const* choices = wpe__choices(component, key, &count);
+        if (choices && igBeginCombo(key, wpe_json_string(v), 0)) {
+            for (uint32_t i = 0; i < count; ++i) {
+                if (igSelectable_Bool(choices[i], strcmp(choices[i], wpe_json_string(v)) == 0, 0,
+                                      (ImVec2_c){0, 0})) {
+                    *edit = (wpe__Edit){.target = v, .type = WPE_JSON_STRING};
+                    snprintf(edit->string, sizeof edit->string, "%s", choices[i]);
+                    ++ui->edit_serial;
+                    changed = true;
+                }
+            }
+            igEndCombo();
+        } else if (!choices) {
+            char buffer[WPE__UI_PATH];
+            snprintf(buffer, sizeof buffer, "%s", wpe_json_string(v));
+            /* Applied on Enter or when the field loses focus, not per keystroke. */
+            igInputText(key, buffer, sizeof buffer, 0, NULL, NULL);
+            if (igIsItemDeactivatedAfterEdit()) {
+                *edit = (wpe__Edit){.target = v, .type = WPE_JSON_STRING};
+                snprintf(edit->string, sizeof edit->string, "%s", buffer);
+                ++ui->edit_serial;
+                changed = true;
+            }
+        }
+        break;
+    }
+    case WPE_JSON_ARRAY: {
+        const uint32_t count = wpe_json_count(v);
+        bool numbers = count >= 2 && count <= 4;
+        for (uint32_t i = 0; numbers && i < count; ++i)
+            numbers = wpe_json_type(wpe_json_at(v, i)) == WPE_JSON_NUMBER;
+        if (numbers) {
+            float values[4] = {0};
+            for (uint32_t i = 0; i < count; ++i)
+                values[i] = (float)wpe_json_number(wpe_json_at(v, i), 0.0);
+            changed = count == 2   ? igDragFloat2(key, values, 0.05f, 0, 0, "%.3g", 0)
+                      : count == 3 ? igDragFloat3(key, values, 0.05f, 0, 0, "%.3g", 0)
+                                   : igDragFloat4(key, values, 0.01f, 0, 0, "%.3g", 0);
+            wpe__note_activation(ui);
+            if (changed) {
+                *edit = (wpe__Edit){.target = v, .type = WPE_JSON_ARRAY, .vector_count = count};
+                memcpy(edit->vector, values, sizeof values);
+            }
+        } else if (igTreeNodeEx_Str(key, 0)) {
+            /* Lists (joints, post effects): elements are edited in place. */
+            for (uint32_t i = 0; i < count && !changed; ++i) {
+                char label[16];
+                snprintf(label, sizeof label, "[%u]", i);
+                igPushID_Int((int)i);
+                changed = wpe__draw_value(ui, component, label, wpe_json_at(v, i), edit);
+                igPopID();
+            }
+            igTreePop();
+        }
+        break;
+    }
+    case WPE_JSON_OBJECT:
+        if (igTreeNodeEx_Str(key, ImGuiTreeNodeFlags_DefaultOpen)) {
+            for (uint32_t i = 0; i < wpe_json_count(v) && !changed; ++i) {
+                const char* member_key = NULL;
+                const WPE_JsonValue* member = wpe_json_member(v, i, &member_key);
+                changed = wpe__draw_value(ui, component, member_key, member, edit);
+            }
+            igTreePop();
+        }
+        break;
+    case WPE_JSON_NULL:
+        igTextDisabled("%s: none", key);
+        break;
+    }
+    return changed;
+}
+
+/* ---- Viewport helpers ------------------------------------------------------------------------------ */
+
+static WPE_Ecs* wpe__ui_ecs(const WPE_EditorUi* ui) {
+    return wpe_engine_ecs(wpe_editor_engine(ui->editor));
+}
+
+/* View-projection of the camera rendering the viewport. */
+static bool wpe__view_projection(const WPE_EditorUi* ui, WPE_Mat4* out) {
+    WPE_Engine* engine = wpe_editor_engine(ui->editor);
+    const WPE_ProjectSettings* p = wpe_engine_project(engine);
+    WPE_Mat4 view, projection;
+    if (!wpe_scene_camera_matrices(wpe__ui_ecs(ui), wpe_engine_camera(engine),
+                                   (float)p->width / (float)p->height, &view, &projection))
+        return false;
+    *out = wpe_mat4_mul(&projection, &view);
+    return true;
+}
+
+/* World point to screen (ImGui) coordinates; false when behind the camera. */
+static bool wpe__to_screen(const WPE_EditorUi* ui, const WPE_Mat4* view_projection, WPE_Vec3 p,
+                           ImVec2_c* out) {
+    const WPE_Vec4 clip = wpe_mat4_mul_vec4(view_projection, wpe_vec4(p.x, p.y, p.z, 1.0f));
+    if (!(clip.w > 1e-4f)) return false;
+    out->x = ui->image_x + (clip.x / clip.w * 0.5f + 0.5f) * ui->image_w;
+    out->y = ui->image_y + (0.5f - clip.y / clip.w * 0.5f) * ui->image_h;
+    return true;
+}
+
+/* Ray through a screen point (world space). */
+static bool wpe__ray(const WPE_EditorUi* ui, float sx, float sy, WPE_Vec3* out_origin,
+                     WPE_Vec3* out_direction) {
+    WPE_Mat4 view_projection, inverse;
+    if (!wpe__view_projection(ui, &view_projection) || !wpe_mat4_inverse(&view_projection, &inverse))
+        return false;
+    const float nx = (sx - ui->image_x) / ui->image_w * 2.0f - 1.0f;
+    const float ny = 1.0f - (sy - ui->image_y) / ui->image_h * 2.0f;
+    const WPE_Vec4 a = wpe_mat4_mul_vec4(&inverse, wpe_vec4(nx, ny, -1.0f, 1.0f));
+    const WPE_Vec4 b = wpe_mat4_mul_vec4(&inverse, wpe_vec4(nx, ny, 1.0f, 1.0f));
+    if (fabsf(a.w) < 1e-12f || fabsf(b.w) < 1e-12f) return false;
+    *out_origin = wpe_vec3(a.x / a.w, a.y / a.w, a.z / a.w);
+    *out_direction = wpe_vec3_normalize(wpe_vec3_sub(wpe_vec3(b.x / b.w, b.y / b.w, b.z / b.w), *out_origin));
+    return true;
+}
+
+/* Slab test of a local-space ray against a box; returns the entry parameter or -1. */
+static float wpe__ray_box(WPE_Vec3 origin, WPE_Vec3 direction, WPE_Vec3 lo, WPE_Vec3 hi) {
+    float t0 = 0.0f, t1 = 1e30f;
+    for (int i = 0; i < 3; ++i) {
+        if (fabsf(direction.v[i]) < 1e-12f) {
+            if (origin.v[i] < lo.v[i] || origin.v[i] > hi.v[i]) return -1.0f;
+            continue;
+        }
+        float a = (lo.v[i] - origin.v[i]) / direction.v[i], b = (hi.v[i] - origin.v[i]) / direction.v[i];
+        if (a > b) {
+            const float swap = a;
+            a = b;
+            b = swap;
+        }
+        t0 = a > t0 ? a : t0;
+        t1 = b < t1 ? b : t1;
+        if (t0 > t1) return -1.0f;
+    }
+    return t0;
+}
+
+/* The nearest mesh under a screen point; selects its outermost ancestor below a model root when the
+ * mesh belongs to an instance (clicking a helmet selects the helmet, not its inner node). */
+static WPE_Entity wpe__pick(WPE_EditorUi* ui, float sx, float sy) {
+    WPE_Vec3 origin, direction;
+    if (!wpe__ray(ui, sx, sy, &origin, &direction)) return WPE_ENTITY_NULL;
+    WPE_Ecs* ecs = wpe__ui_ecs(ui);
+    WPE_Entity best = WPE_ENTITY_NULL;
+    float best_distance = 1e30f;
+    WPE_EcsIter it = wpe_ecs_query(
+        ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_MeshRenderer* mesh = wpe_ecs_iter_get(&it, WPE_COMP_MESH);
+        const WPE_Transform* t = wpe_ecs_iter_get(&it, WPE_COMP_TRANSFORM);
+        if (!mesh->model || !mesh->visible || mesh->mesh >= mesh->model->mesh_count) continue;
+        WPE_Mat4 inverse;
+        if (!wpe_mat4_inverse(&t->world, &inverse)) continue;
+        const WPE_Vec3 lo = wpe_mat4_transform_point(&inverse, origin);
+        const WPE_Vec3 ld = wpe_mat4_transform_dir(&inverse, direction);
+        const WPE_Aabb* bounds = &mesh->model->meshes[mesh->mesh].bounds;
+        const float hit = wpe__ray_box(lo, ld, bounds->min, bounds->max);
+        if (hit < 0.0f) continue;
+        const WPE_Vec3 world_hit =
+            wpe_mat4_transform_point(&t->world, wpe_vec3_add(lo, wpe_vec3_scale(ld, hit)));
+        const float distance = wpe_vec3_length(wpe_vec3_sub(world_hit, origin));
+        if (distance < best_distance) {
+            best_distance = distance;
+            best = it.entity;
+        }
+    }
+    /* Walk up past the "model" roots created by instances to the entity the scene file describes. */
+    for (WPE_Entity e = best; e != WPE_ENTITY_NULL; e = wpe_scene_get_parent(ecs, e)) {
+        const char* name = wpe_scene_get_name(ecs, e);
+        if (name && strcmp(name, "model") == 0 && wpe_scene_get_parent(ecs, e) != WPE_ENTITY_NULL)
+            return wpe_scene_get_parent(ecs, e);
+    }
+    return best;
+}
+
+/* ---- Fly camera ------------------------------------------------------------------------------------- */
+
+static void wpe__ui_camera(WPE_EditorUi* ui, float dt) {
+    WPE_Ecs* ecs = wpe__ui_ecs(ui);
+    WPE_Transform* t = wpe_ecs_get_component(ecs, wpe_editor_camera(ui->editor), WPE_COMP_TRANSFORM);
+    if (!t) return;
+    if (!ui->camera_initialized) {
+        const WPE_Vec3 euler = wpe_quat_to_euler_xyz(t->rotation);
+        ui->pitch = euler.x;
+        ui->yaw = euler.y;
+        ui->speed = 6.0f;
+        ui->camera_initialized = true;
+    }
+    ImGuiIO* io = igGetIO_Nil();
+    if (ui->view_hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Right, false)) ui->flying = true;
+    if (!igIsMouseDown_Nil(ImGuiMouseButton_Right)) ui->flying = false;
+    if (ui->view_hovered && io->MouseWheel != 0.0f && !ui->flying) {
+        t->position =
+            wpe_vec3_add(t->position, wpe_vec3_scale(wpe_quat_rotate_vec3(t->rotation, wpe_vec3(0, 0, -1)),
+                                                     io->MouseWheel * ui->speed * 0.25f));
+    }
+    if (!ui->flying) return;
+    ui->yaw -= io->MouseDelta.x * 0.005f;
+    ui->pitch -= io->MouseDelta.y * 0.005f;
+    ui->pitch = ui->pitch < -1.55f ? -1.55f : ui->pitch > 1.55f ? 1.55f : ui->pitch;
+    if (io->MouseWheel != 0.0f) ui->speed *= io->MouseWheel > 0.0f ? 1.25f : 0.8f;
+    t->rotation = wpe_quat_mul(wpe_quat_from_axis_angle(wpe_vec3(0, 1, 0), ui->yaw),
+                               wpe_quat_from_axis_angle(wpe_vec3(1, 0, 0), ui->pitch));
+    WPE_Vec3 move = wpe_vec3(0, 0, 0);
+    if (igIsKeyDown_Nil(ImGuiKey_W)) move.z -= 1.0f;
+    if (igIsKeyDown_Nil(ImGuiKey_S)) move.z += 1.0f;
+    if (igIsKeyDown_Nil(ImGuiKey_A)) move.x -= 1.0f;
+    if (igIsKeyDown_Nil(ImGuiKey_D)) move.x += 1.0f;
+    if (igIsKeyDown_Nil(ImGuiKey_E)) move.y += 1.0f;
+    if (igIsKeyDown_Nil(ImGuiKey_Q)) move.y -= 1.0f;
+    const float speed = ui->speed * (io->KeyShift ? 3.0f : 1.0f) * dt;
+    t->position = wpe_vec3_add(t->position, wpe_vec3_scale(wpe_quat_rotate_vec3(t->rotation, move), speed));
+}
+
+/* ---- Gizmo ------------------------------------------------------------------------------------------ */
+
+/* Unit vector along axis 0 (X), 1 (Y) or 2 (Z). */
+static WPE_Vec3 wpe__unit(int axis) {
+    return wpe_vec3(axis == 0 ? 1.0f : 0.0f, axis == 1 ? 1.0f : 0.0f, axis == 2 ? 1.0f : 0.0f);
+}
+
+static void wpe__send_transform(WPE_EditorUi* ui, WPE_Entity entity, const WPE_Transform* t) {
+    WPE_JsonWriter* w = wpe__ui_begin("set_component");
+    if (!w) return;
+    wpe_json_write_key(w, "id");
+    wpe_json_write_integer(w, entity);
+    wpe_json_write_key(w, "component");
+    wpe_json_write_string(w, "transform");
+    wpe_json_write_key(w, "value");
+    wpe_json_write_object_begin(w);
+    const struct {
+        const char* key;
+        const float* v;
+        int n;
+    } parts[] = {{"position", t->position.v, 3}, {"rotation", t->rotation.v, 4}, {"scale", t->scale.v, 3}};
+    for (size_t p = 0; p < 3; ++p) {
+        wpe_json_write_key(w, parts[p].key);
+        wpe_json_write_array_begin(w, true);
+        for (int i = 0; i < parts[p].n; ++i)
+            wpe_json_write_number(w, parts[p].v[i]);
+        wpe_json_write_array_end(w);
+    }
+    wpe_json_write_object_end(w);
+    char key[32];
+    snprintf(key, sizeof key, "gizmo-%u", ui->gizmo_drag);
+    wpe_json_write_key(w, "coalesce");
+    wpe_json_write_string(w, key);
+    wpe__ui_send(ui, w);
+}
+
+/* Draws the gizmo of the selection and handles dragging; returns true while it uses the mouse. */
+static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
+    const WPE_Entity entity = wpe_editor_selection(ui->editor);
+    WPE_Ecs* ecs = wpe__ui_ecs(ui);
+    const WPE_Transform* t = wpe_ecs_get_component(ecs, entity, WPE_COMP_TRANSFORM);
+    WPE_Mat4 view_projection;
+    if (!t || wpe_editor_mode(ui->editor) != WPE_EDITOR_EDIT || !wpe__view_projection(ui, &view_projection)) {
+        ui->gizmo_axis = -1;
+        return false;
+    }
+    /* Axes of the parent's space, in which the local transform is expressed. */
+    WPE_Mat4 parent_world = wpe_mat4_identity();
+    const WPE_Entity parent = wpe_scene_get_parent(ecs, entity);
+    if (parent) wpe_scene_compute_world_matrix(ecs, parent, &parent_world);
+    WPE_Mat4 world;
+    wpe_scene_compute_world_matrix(ecs, entity, &world);
+    const WPE_Vec3 center = wpe_mat4_transform_point(&world, wpe_vec3(0, 0, 0));
+    ImVec2_c c;
+    if (!wpe__to_screen(ui, &view_projection, center, &c)) return false;
+    /* Constant on-screen size: a world length that projects to about 70 pixels. */
+    WPE_Vec3 eye_origin, eye_dir;
+    if (!wpe__ray(ui, c.x, c.y, &eye_origin, &eye_dir)) return false;
+    const float distance = wpe_vec3_length(wpe_vec3_sub(center, eye_origin));
+    const float length = distance * 0.18f;
+    static const uint32_t colors[3] = {WPE__COL(230, 70, 70, 255), WPE__COL(70, 210, 70, 255),
+                                       WPE__COL(70, 110, 240, 255)};
+    ImVec2_c ends[3];
+    bool visible[3];
+    const ImVec2_c mouse = igGetMousePos();
+    int hover = -1;
+    float hover_distance = 8.0f;
+    for (int a = 0; a < 3; ++a) {
+        const WPE_Vec3 axis = wpe_vec3_normalize(wpe_mat4_transform_dir(&parent_world, wpe__unit(a)));
+        visible[a] = wpe__to_screen(ui, &view_projection, wpe_vec3_add(center, wpe_vec3_scale(axis, length)),
+                                    &ends[a]);
+        if (!visible[a]) continue;
+        /* Distance from the mouse to the handle segment. */
+        const float dx = ends[a].x - c.x, dy = ends[a].y - c.y, len2 = dx * dx + dy * dy;
+        float s = len2 > 0 ? ((mouse.x - c.x) * dx + (mouse.y - c.y) * dy) / len2 : 0;
+        s = s < 0 ? 0 : s > 1 ? 1 : s;
+        const float px = c.x + dx * s - mouse.x, py = c.y + dy * s - mouse.y;
+        const float d = sqrtf(px * px + py * py);
+        if (d < hover_distance && s > 0.15f) {
+            hover_distance = d;
+            hover = a;
+        }
+    }
+    if (ui->gizmo_axis < 0) ui->gizmo_hover = ui->view_hovered ? hover : -1;
+    for (int a = 0; a < 3; ++a) {
+        if (!visible[a]) continue;
+        const bool hot = a == ui->gizmo_axis || (ui->gizmo_axis < 0 && a == ui->gizmo_hover);
+        const uint32_t color = hot ? WPE__COL(250, 220, 60, 255) : colors[a];
+        ImDrawList_AddLine(draw, c, ends[a], color, 3.0f);
+        if (ui->gizmo_mode == WPE__GIZMO_SCALE) {
+            ImDrawList_AddRectFilled(draw, (ImVec2_c){ends[a].x - 4, ends[a].y - 4},
+                                     (ImVec2_c){ends[a].x + 4, ends[a].y + 4}, color, 0.0f, 0);
+        } else {
+            ImDrawList_AddCircleFilled(draw, ends[a], ui->gizmo_mode == WPE__GIZMO_ROTATE ? 6.0f : 4.0f,
+                                       color, 12);
+        }
+    }
+    ImDrawList_AddCircleFilled(draw, c, 3.0f, WPE__COL(255, 255, 255, 255), 8);
+
+    if (ui->gizmo_axis < 0 && ui->gizmo_hover >= 0 && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
+        ui->gizmo_axis = ui->gizmo_hover;
+        ui->gizmo_start = *t;
+        ui->gizmo_mouse_x = mouse.x;
+        ui->gizmo_mouse_y = mouse.y;
+        ++ui->gizmo_drag;
+    }
+    if (ui->gizmo_axis < 0) return false;
+    if (!igIsMouseDown_Nil(ImGuiMouseButton_Left)) {
+        ui->gizmo_axis = -1;
+        return true;
+    }
+    const int a = ui->gizmo_axis;
+    const float dx = ends[a].x - c.x, dy = ends[a].y - c.y;
+    const float screen_length = sqrtf(dx * dx + dy * dy);
+    if (screen_length < 1e-3f) return true;
+    /* Mouse movement along the handle's screen direction, in pixels. */
+    const float along =
+        ((mouse.x - ui->gizmo_mouse_x) * dx + (mouse.y - ui->gizmo_mouse_y) * dy) / screen_length;
+    WPE_Transform moved = ui->gizmo_start;
+    const WPE_Vec3 unit = wpe__unit(a);
+    switch (ui->gizmo_mode) {
+    case WPE__GIZMO_MOVE: {
+        /* Parent-space units per pixel along the handle (the handle spans `length` world units). */
+        const WPE_Vec3 parent_axis = wpe_mat4_transform_dir(&parent_world, unit);
+        const float parent_scale = wpe_vec3_length(parent_axis) > 1e-9f ? wpe_vec3_length(parent_axis) : 1.0f;
+        moved.position =
+            wpe_vec3_add(moved.position, wpe_vec3_scale(unit, along * length / screen_length / parent_scale));
+        break;
+    }
+    case WPE__GIZMO_ROTATE:
+        moved.rotation =
+            wpe_quat_normalize(wpe_quat_mul(wpe_quat_from_axis_angle(unit, along * 0.02f), moved.rotation));
+        break;
+    case WPE__GIZMO_SCALE: {
+        const float factor = expf(along * 0.01f);
+        moved.scale.v[a] *= factor;
+        break;
+    }
+    }
+    wpe__send_transform(ui, entity, &moved);
+    return true;
+}
+
+/* ---- Panels ----------------------------------------------------------------------------------------- */
+
+static void wpe__ui_create_model(WPE_EditorUi* ui, const char* path) {
+    /* Place it 6 units in front of the editor camera. */
+    WPE_Vec3 position = wpe_vec3(0, 0, 0);
+    const WPE_Transform* cam =
+        wpe_ecs_get_component(wpe__ui_ecs(ui), wpe_editor_camera(ui->editor), WPE_COMP_TRANSFORM);
+    if (cam)
+        position = wpe_vec3_add(
+            cam->position, wpe_vec3_scale(wpe_quat_rotate_vec3(cam->rotation, wpe_vec3(0, 0, -1)), 6.0f));
+    const char* slash = strrchr(path, '/');
+    char name[64];
+    snprintf(name, sizeof name, "%s", slash ? slash + 1 : path);
+    char* dot = strrchr(name, '.');
+    if (dot) *dot = '\0';
+    WPE_JsonWriter* w = wpe__ui_begin("create_entity");
+    if (!w) return;
+    wpe_json_write_key(w, "entity");
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "name");
+    wpe_json_write_string(w, name);
+    wpe_json_write_key(w, "transform");
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "position");
+    wpe_json_write_array_begin(w, true);
+    for (int i = 0; i < 3; ++i)
+        wpe_json_write_number(w, roundf(position.v[i] * 10.0f) / 10.0f);
+    wpe_json_write_array_end(w);
+    wpe_json_write_object_end(w);
+    wpe_json_write_key(w, "instance");
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "model");
+    wpe_json_write_string(w, path);
+    wpe_json_write_object_end(w);
+    wpe_json_write_object_end(w);
+    wpe__ui_send(ui, w);
+}
+
+static void wpe__ui_set_parent(WPE_EditorUi* ui, WPE_Entity child, WPE_Entity parent) {
+    WPE_JsonWriter* w = wpe__ui_begin("set_parent");
+    if (!w) return;
+    wpe_json_write_key(w, "id");
+    wpe_json_write_integer(w, child);
+    wpe_json_write_key(w, "parent");
+    if (parent) {
+        wpe_json_write_integer(w, parent);
+    } else {
+        wpe_json_write_null(w);
+    }
+    wpe__ui_send(ui, w);
+}
+
+static void wpe__hierarchy_node(WPE_EditorUi* ui, WPE_Entity e) {
+    WPE_Ecs* ecs = wpe__ui_ecs(ui);
+    const WPE_Hierarchy* h = wpe_ecs_get_component(ecs, e, WPE_COMP_HIERARCHY);
+    const char* name = wpe_scene_get_name(ecs, e);
+    char label[96];
+    snprintf(label, sizeof label, "%s##%u", name ? name : "(unnamed)", e);
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+    if (!h || h->child_count == 0) flags |= ImGuiTreeNodeFlags_Leaf;
+    if (e == wpe_editor_selection(ui->editor)) flags |= ImGuiTreeNodeFlags_Selected;
+    const bool open = igTreeNodeEx_Str(label, flags);
+    if (igIsItemClicked(ImGuiMouseButton_Left) && !igIsItemToggledOpen())
+        wpe__ui_entity_command(ui, "select", e);
+    if (igBeginDragDropSource(0)) {
+        igSetDragDropPayload(WPE__ENTITY_PAYLOAD, &e, sizeof e, 0);
+        igText("%s", name ? name : "entity");
+        igEndDragDropSource();
+    }
+    if (igBeginDragDropTarget()) {
+        const ImGuiPayload* payload = igAcceptDragDropPayload(WPE__ENTITY_PAYLOAD, 0);
+        if (payload && payload->DataSize == sizeof(WPE_Entity)) {
+            WPE_Entity child;
+            memcpy(&child, payload->Data, sizeof child);
+            wpe__ui_set_parent(ui, child, e);
+        }
+        igEndDragDropTarget();
+    }
+    if (igBeginPopupContextItem(NULL, ImGuiPopupFlags_MouseButtonRight)) {
+        if (igMenuItem_Bool("Duplicate", NULL, false, true))
+            wpe__ui_entity_command(ui, "duplicate_entity", e);
+        if (igMenuItem_Bool("Delete", NULL, false, true)) wpe__ui_entity_command(ui, "delete_entity", e);
+        if (igMenuItem_Bool("Detach from parent", NULL, false,
+                            wpe_scene_get_parent(ecs, e) != WPE_ENTITY_NULL))
+            wpe__ui_set_parent(ui, e, WPE_ENTITY_NULL);
+        igEndPopup();
+    }
+    if (!open) return;
+    /* Children: the hierarchy may change while drawing (commands), so re-read the links per step. */
+    for (WPE_Entity c = h ? h->first_child : WPE_ENTITY_NULL; c != WPE_ENTITY_NULL;) {
+        const WPE_Hierarchy* ch = wpe_ecs_get_component(ecs, c, WPE_COMP_HIERARCHY);
+        const WPE_Entity next = ch ? ch->next_sibling : WPE_ENTITY_NULL;
+        if (wpe_ecs_is_alive(ecs, c)) wpe__hierarchy_node(ui, c);
+        c = next;
+    }
+    igTreePop();
+}
+
+typedef struct wpe__Root {
+    uint64_t serial;
+    WPE_Entity entity;
+} wpe__Root;
+
+static int wpe__compare_roots(const void* a, const void* b) {
+    const uint64_t x = ((const wpe__Root*)a)->serial, y = ((const wpe__Root*)b)->serial;
+    return (x > y) - (x < y);
+}
+
+static void wpe__ui_hierarchy(WPE_EditorUi* ui) {
+    if (!igBegin("Hierarchy", NULL, 0)) {
+        igEnd();
+        return;
+    }
+    if (igButton("+ Entity", (ImVec2_c){0, 0})) {
+        WPE_JsonWriter* w = wpe__ui_begin("create_entity");
+        if (w) {
+            wpe_json_write_key(w, "entity");
+            wpe_json_write_object_begin(w);
+            wpe_json_write_key(w, "name");
+            wpe_json_write_string(w, "entity");
+            wpe_json_write_key(w, "transform");
+            wpe_json_write_object_begin(w);
+            wpe_json_write_object_end(w);
+            wpe_json_write_object_end(w);
+            wpe__ui_send(ui, w);
+        }
+    }
+    igSeparator();
+    WPE_Ecs* ecs = wpe__ui_ecs(ui);
+    const uint32_t count = wpe_ecs_entity_count(ecs);
+    wpe__Root* roots = wpe_alloc((count ? count : 1) * sizeof *roots);
+    uint32_t n = 0;
+    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){0});
+    while (roots && wpe_ecs_iter_next(&it) && n < count) {
+        if (wpe_scene_get_parent(ecs, it.entity) == WPE_ENTITY_NULL &&
+            !wpe_editor_is_helper(ui->editor, it.entity))
+            roots[n++] = (wpe__Root){.serial = wpe_ecs_spawn_serial(ecs, it.entity), .entity = it.entity};
+    }
+    if (roots) qsort(roots, n, sizeof *roots, wpe__compare_roots);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (wpe_ecs_is_alive(ecs, roots[i].entity)) wpe__hierarchy_node(ui, roots[i].entity);
+    }
+    wpe_free(roots);
+    /* Dropping on empty space makes an entity a root. */
+    igInvisibleButton("##hierarchy_drop", (ImVec2_c){-1.0f, 40.0f}, 0);
+    if (igBeginDragDropTarget()) {
+        const ImGuiPayload* payload = igAcceptDragDropPayload(WPE__ENTITY_PAYLOAD, 0);
+        if (payload && payload->DataSize == sizeof(WPE_Entity)) {
+            WPE_Entity child;
+            memcpy(&child, payload->Data, sizeof child);
+            wpe__ui_set_parent(ui, child, WPE_ENTITY_NULL);
+        }
+        igEndDragDropTarget();
+    }
+    igEnd();
+}
+
+/* Applies an edit of one part ("name", a component key, or "environment") through a command. */
+static void wpe__ui_apply_edit(WPE_EditorUi* ui, WPE_Entity entity, const char* key,
+                               const WPE_JsonValue* value, const wpe__Edit* edit) {
+    const bool environment = strcmp(key, "environment") == 0;
+    WPE_JsonWriter* w = wpe__ui_begin(environment ? "set_environment" : "set_component");
+    if (!w) return;
+    if (!environment) {
+        wpe_json_write_key(w, "id");
+        wpe_json_write_integer(w, entity);
+        wpe_json_write_key(w, "component");
+        wpe_json_write_string(w, key);
+    }
+    wpe_json_write_key(w, "value");
+    wpe__write_edited(w, value, edit);
+    char coalesce[32];
+    snprintf(coalesce, sizeof coalesce, "ui-%u", ui->edit_serial);
+    wpe_json_write_key(w, "coalesce");
+    wpe_json_write_string(w, coalesce);
+    wpe__ui_send(ui, w);
+}
+
+static void wpe__ui_inspector(WPE_EditorUi* ui) {
+    if (!igBegin("Inspector", NULL, 0)) {
+        igEnd();
+        return;
+    }
+    const WPE_Entity entity = wpe_editor_selection(ui->editor);
+    if (entity == WPE_ENTITY_NULL) {
+        igTextDisabled("Select an entity in the hierarchy or the viewport.");
+        igEnd();
+        return;
+    }
+    /* The entity as the scene-file schema describes it, read fresh every frame. */
+    WPE_Editor* editor = ui->editor;
+    const WPE_SceneContext context = wpe__editor_context(editor);
+    WPE_JsonWriter* writer = NULL;
+    WPE_JsonDocument* doc = NULL;
+    const char* text = NULL;
+    size_t size = 0;
+    if (wpe_json_writer_create(&writer) == WPE_RESULT_OK &&
+        wpe_scene_save_entity(&context, entity, writer) == WPE_RESULT_OK &&
+        wpe_json_writer_finish(writer, &text, &size) == WPE_RESULT_OK)
+        (void)wpe_json_parse(text, size, &doc, NULL);
+    wpe_json_writer_destroy(writer);
+    const WPE_JsonValue* root = wpe_json_root(doc);
+    igText("Entity %u", entity);
+    bool done = false;
+    for (uint32_t i = 0; doc && i < wpe_json_count(root) && !done; ++i) {
+        const char* key = NULL;
+        const WPE_JsonValue* value = wpe_json_member(root, i, &key);
+        if (strcmp(key, "id") == 0 || strcmp(key, "parent") == 0) continue;
+        wpe__Edit edit;
+        igPushID_Str(key);
+        if (strcmp(key, "name") == 0) {
+            if (wpe__draw_value(ui, key, "name", value, &edit)) {
+                wpe__ui_apply_edit(ui, entity, key, value, &edit);
+                done = true;
+            }
+        } else if (wpe_json_type(value) == WPE_JSON_OBJECT) {
+            bool keep = true;
+            if (igCollapsingHeader_BoolPtr(key, &keep, ImGuiTreeNodeFlags_DefaultOpen)) {
+                for (uint32_t m = 0; m < wpe_json_count(value) && !done; ++m) {
+                    const char* member_key = NULL;
+                    const WPE_JsonValue* member = wpe_json_member(value, m, &member_key);
+                    if (wpe__draw_value(ui, key, member_key, member, &edit)) {
+                        wpe__ui_apply_edit(ui, entity, key, value, &edit);
+                        done = true;
+                    }
+                }
+            }
+            if (!keep && !done) {
+                WPE_JsonWriter* w = wpe__ui_begin("remove_component");
+                if (w) {
+                    wpe_json_write_key(w, "id");
+                    wpe_json_write_integer(w, entity);
+                    wpe_json_write_key(w, "component");
+                    wpe_json_write_string(w, key);
+                    wpe__ui_send(ui, w);
+                }
+                done = true;
+            }
+        }
+        igPopID();
+    }
+    wpe_json_free(doc);
+
+    igSeparator();
+    /* Adding a component: those needing an asset take the path typed here. */
+    static const char* const addable[] = {"transform", "mesh",     "camera",       "light",
+                                          "rigidbody", "collider", "audio_source", "script"};
+    igSetNextItemWidth(-1.0f);
+    igInputText("##asset_path", ui->add_path, sizeof ui->add_path, 0, NULL, NULL);
+    if (igIsItemHovered(0)) igSetTooltip("Asset path for mesh (model), audio_source (sound) or script");
+    if (igBeginCombo("##add", "Add component", 0)) {
+        for (size_t i = 0; i < sizeof addable / sizeof addable[0]; ++i) {
+            if (!igSelectable_Bool(addable[i], false, 0, (ImVec2_c){0, 0})) continue;
+            WPE_JsonWriter* w = wpe__ui_begin("set_component");
+            if (!w) break;
+            wpe_json_write_key(w, "id");
+            wpe_json_write_integer(w, entity);
+            wpe_json_write_key(w, "component");
+            wpe_json_write_string(w, addable[i]);
+            wpe_json_write_key(w, "value");
+            wpe_json_write_object_begin(w);
+            const char* path_key = strcmp(addable[i], "mesh") == 0           ? "model"
+                                   : strcmp(addable[i], "audio_source") == 0 ? "sound"
+                                   : strcmp(addable[i], "script") == 0       ? "path"
+                                                                             : NULL;
+            if (path_key && ui->add_path[0]) {
+                wpe_json_write_key(w, path_key);
+                wpe_json_write_string(w, ui->add_path);
+            }
+            wpe_json_write_object_end(w);
+            wpe__ui_send(ui, w);
+        }
+        igEndCombo();
+    }
+    igEnd();
+}
+
+static void wpe__ui_environment(WPE_EditorUi* ui) {
+    if (!igBegin("Environment", NULL, 0)) {
+        igEnd();
+        return;
+    }
+    WPE_JsonWriter* writer = NULL;
+    WPE_JsonDocument* doc = NULL;
+    const char* text = NULL;
+    size_t size = 0;
+    if (wpe_json_writer_create(&writer) == WPE_RESULT_OK &&
+        wpe_scene_write_environment(wpe_engine_environment(wpe_editor_engine(ui->editor)), writer) ==
+            WPE_RESULT_OK &&
+        wpe_json_writer_finish(writer, &text, &size) == WPE_RESULT_OK)
+        (void)wpe_json_parse(text, size, &doc, NULL);
+    wpe_json_writer_destroy(writer);
+    const WPE_JsonValue* root = wpe_json_root(doc);
+    for (uint32_t i = 0; doc && i < wpe_json_count(root); ++i) {
+        const char* key = NULL;
+        const WPE_JsonValue* value = wpe_json_member(root, i, &key);
+        wpe__Edit edit;
+        if (wpe__draw_value(ui, "environment", key, value, &edit)) {
+            wpe__ui_apply_edit(ui, WPE_ENTITY_NULL, "environment", root, &edit);
+            break;
+        }
+    }
+    wpe_json_free(doc);
+    igEnd();
+}
+
+static bool wpe__collect_asset(const char* path, void* user_data) {
+    WPE_EditorUi* ui = user_data;
+    if (ui->asset_count == ui->asset_capacity) {
+        const uint32_t capacity = ui->asset_capacity ? ui->asset_capacity * 2 : 64;
+        char** assets = wpe_realloc(ui->assets, capacity * sizeof *assets);
+        if (!assets) return false;
+        ui->assets = assets;
+        ui->asset_capacity = capacity;
+    }
+    const size_t length = strlen(path);
+    char* copy = wpe_alloc(length + 1);
+    if (!copy) return false;
+    memcpy(copy, path, length + 1);
+    ui->assets[ui->asset_count++] = copy;
+    return true;
+}
+
+static void wpe__clear_assets(WPE_EditorUi* ui) {
+    for (uint32_t i = 0; i < ui->asset_count; ++i)
+        wpe_free(ui->assets[i]);
+    ui->asset_count = 0;
+}
+
+static bool wpe__has_suffix(const char* text, const char* suffix) {
+    const size_t a = strlen(text), b = strlen(suffix);
+    return a >= b && strcmp(text + a - b, suffix) == 0;
+}
+
+static void wpe__ui_assets(WPE_EditorUi* ui) {
+    if (!igBegin("Assets", NULL, 0)) {
+        igEnd();
+        return;
+    }
+    if (ui->assets_stale) {
+        wpe__clear_assets(ui);
+        wpe_vfs_list(wpe_engine_vfs(wpe_editor_engine(ui->editor)), wpe__collect_asset, ui);
+        ui->assets_stale = false;
+    }
+    if (igButton("Refresh", (ImVec2_c){0, 0})) ui->assets_stale = true;
+    igSameLine(0, -1);
+    igSetNextItemWidth(-1.0f);
+    igInputText("##filter", ui->asset_filter, sizeof ui->asset_filter, 0, NULL, NULL);
+    igTextDisabled("Double-click: open a scene / add a model. Drag a model into the viewport.");
+    igBeginChild_Str("##asset_list", (ImVec2_c){0, 0}, 0, 0);
+    for (uint32_t i = 0; i < ui->asset_count; ++i) {
+        const char* path = ui->assets[i];
+        if (ui->asset_filter[0] && !strstr(path, ui->asset_filter)) continue;
+        const bool model =
+            wpe__has_suffix(path, ".glb") || wpe__has_suffix(path, ".gltf") || wpe__has_suffix(path, ".prim");
+        const bool scene = wpe__has_suffix(path, ".scene");
+        igSelectable_Bool(path, strcmp(path, wpe_editor_scene_path(ui->editor)) == 0,
+                          ImGuiSelectableFlags_AllowDoubleClick, (ImVec2_c){0, 0});
+        if (igIsItemHovered(0) && igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
+            if (scene) {
+                WPE_JsonWriter* w = wpe__ui_begin("load_scene");
+                if (w) {
+                    wpe_json_write_key(w, "path");
+                    wpe_json_write_string(w, path);
+                    wpe__ui_send(ui, w);
+                }
+            } else if (model) {
+                wpe__ui_create_model(ui, path);
+            }
+        }
+        if (model && igBeginDragDropSource(0)) {
+            igSetDragDropPayload(WPE__ASSET_PAYLOAD, path, strlen(path) + 1, 0);
+            igText("%s", path);
+            igEndDragDropSource();
+        }
+    }
+    igEndChild();
+    igEnd();
+}
+
+static void wpe__console_line(const wpe__LogLine* line, void* user_data) {
+    (void)user_data;
+    const ImVec4_c color = line->level >= WPE_LOG_LEVEL_ERROR  ? (ImVec4_c){1.0f, 0.45f, 0.4f, 1.0f}
+                           : line->level >= WPE_LOG_LEVEL_WARN ? (ImVec4_c){1.0f, 0.85f, 0.4f, 1.0f}
+                                                               : (ImVec4_c){0.8f, 0.82f, 0.85f, 1.0f};
+    igTextColored(color, "%s", line->text);
+}
+
+static void wpe__ui_console(WPE_EditorUi* ui) {
+    if (!igBegin("Console", NULL, 0)) {
+        igEnd();
+        return;
+    }
+    /* Commands typed here run exactly as an agent's would. */
+    igSetNextItemWidth(-90.0f);
+    const bool enter = igInputText("##command", ui->command, sizeof ui->command,
+                                   ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
+    igSameLine(0, -1);
+    if ((igButton("Run", (ImVec2_c){80, 0}) || enter) && ui->command[0]) {
+        wpe__ui_run(ui, ui->command);
+        wpe_log_info("> %s", ui->command);
+    }
+    if (ui->reply[0]) igTextWrapped("%s", ui->reply);
+    igSeparator();
+    igBeginChild_Str("##log", (ImVec2_c){0, 0}, 0, 0);
+    wpe__editor_log_since(ui->editor, 0, WPE__EDITOR_LOG_LINES, wpe__console_line, NULL);
+    if (igGetScrollY() >= igGetScrollMaxY()) igSetScrollHereY(1.0f);
+    igEndChild();
+    igEnd();
+}
+
+static void wpe__ui_viewport(WPE_EditorUi* ui) {
+    igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2_c){0, 0});
+    const bool open =
+        igBegin("Viewport", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    igPopStyleVar(1);
+    if (!open) {
+        ui->view_hovered = ui->view_focused = false;
+        igEnd();
+        return;
+    }
+    /* The game's framebuffer, scaled to fit while keeping its aspect ratio. */
+    const ImVec2_c origin = igGetCursorScreenPos();
+    const ImVec2_c avail = igGetContentRegionAvail();
+    const float aspect = (float)ui->view_width / (float)ui->view_height;
+    float w = avail.x, h = avail.x / aspect;
+    if (h > avail.y) {
+        h = avail.y;
+        w = h * aspect;
+    }
+    w = w < 1 ? 1 : w;
+    h = h < 1 ? 1 : h;
+    ui->image_x = origin.x + (avail.x - w) * 0.5f;
+    ui->image_y = origin.y + (avail.y - h) * 0.5f;
+    ui->image_w = w;
+    ui->image_h = h;
+    igSetCursorScreenPos((ImVec2_c){ui->image_x, ui->image_y});
+    igImage((ImTextureRef_c){._TexID = wpe_ui_texture_id(ui->backend, ui->view_texture)}, (ImVec2_c){w, h},
+            (ImVec2_c){0, 0}, (ImVec2_c){1, 1});
+    ui->view_hovered = igIsItemHovered(0);
+    ui->view_focused = igIsWindowFocused(0);
+    if (igBeginDragDropTarget()) {
+        const ImGuiPayload* payload = igAcceptDragDropPayload(WPE__ASSET_PAYLOAD, 0);
+        if (payload && payload->DataSize > 1) wpe__ui_create_model(ui, payload->Data);
+        igEndDragDropTarget();
+    }
+    ImDrawList* draw = igGetWindowDrawList();
+    const bool gizmo = wpe__ui_gizmo(ui, draw);
+    if (!gizmo && ui->view_hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) &&
+        wpe_editor_mode(ui->editor) == WPE_EDITOR_EDIT) {
+        const ImVec2_c mouse = igGetMousePos();
+        const WPE_Entity picked = wpe__pick(ui, mouse.x, mouse.y);
+        if (picked) {
+            wpe__ui_entity_command(ui, "select", picked);
+        } else {
+            WPE_JsonWriter* sel = wpe__ui_begin("select");
+            if (sel) {
+                wpe_json_write_key(sel, "id");
+                wpe_json_write_null(sel);
+                wpe__ui_send(ui, sel);
+            }
+        }
+    }
+    static const char* const modes[] = {"EDIT", "PLAY", "PAUSED"};
+    ImDrawList_AddText_Vec2(draw, (ImVec2_c){ui->image_x + 6, ui->image_y + 4}, WPE__COL(255, 255, 255, 200),
+                            modes[wpe_editor_mode(ui->editor)], NULL);
+    igEnd();
+}
+
+static void wpe__ui_menu(WPE_EditorUi* ui) {
+    const WPE_EditorMode mode = wpe_editor_mode(ui->editor);
+    if (!igBeginMainMenuBar()) return;
+    if (igBeginMenu("File", true)) {
+        if (igMenuItem_Bool("New scene", NULL, false, true)) wpe__ui_simple(ui, "new_scene");
+        if (igMenuItem_Bool("Open scene...", NULL, false, true)) ui->open_scene_popup = true;
+        if (igMenuItem_Bool("Save", "Ctrl+S", false, mode == WPE_EDITOR_EDIT)) {
+            if (wpe_editor_scene_path(ui->editor)[0]) {
+                wpe__ui_simple(ui, "save_scene");
+            } else {
+                ui->save_as_popup = true;
+            }
+        }
+        if (igMenuItem_Bool("Save as...", NULL, false, mode == WPE_EDITOR_EDIT)) ui->save_as_popup = true;
+        if (igMenuItem_Bool("Export game...", NULL, false, true)) ui->export_popup = true;
+        igSeparator();
+        if (igMenuItem_Bool("Quit", NULL, false, true)) ui->quit = true;
+        igEndMenu();
+    }
+    if (igBeginMenu("Edit", true)) {
+        if (igMenuItem_Bool("Undo", "Ctrl+Z", false, wpe_editor_undo_count(ui->editor) > 0))
+            wpe__ui_simple(ui, "undo");
+        if (igMenuItem_Bool("Redo", "Ctrl+Y", false, wpe_editor_redo_count(ui->editor) > 0))
+            wpe__ui_simple(ui, "redo");
+        const WPE_Entity selection = wpe_editor_selection(ui->editor);
+        if (igMenuItem_Bool("Duplicate", "Ctrl+D", false, selection != WPE_ENTITY_NULL))
+            wpe__ui_entity_command(ui, "duplicate_entity", selection);
+        if (igMenuItem_Bool("Delete", "Del", false, selection != WPE_ENTITY_NULL))
+            wpe__ui_entity_command(ui, "delete_entity", selection);
+        igEndMenu();
+    }
+    if (igBeginMenu("Window", true)) {
+        if (igMenuItem_Bool("Reset layout", NULL, false, true)) ui->layout_built = false;
+        igEndMenu();
+    }
+    /* Toolbar: play controls and gizmo modes. */
+    igSeparator();
+    if (mode == WPE_EDITOR_PLAY) {
+        if (igMenuItem_Bool("Pause", "F6", false, true)) wpe__ui_simple(ui, "pause");
+    } else if (igMenuItem_Bool(mode == WPE_EDITOR_PAUSED ? "Resume" : "Play", "F5", false, true)) {
+        wpe__ui_simple(ui, "play");
+    }
+    if (igMenuItem_Bool("Stop", "Shift+F5", false, mode != WPE_EDITOR_EDIT)) wpe__ui_simple(ui, "stop");
+    igSeparator();
+    if (igMenuItem_Bool("Move", "W", ui->gizmo_mode == WPE__GIZMO_MOVE, true))
+        ui->gizmo_mode = WPE__GIZMO_MOVE;
+    if (igMenuItem_Bool("Rotate", "E", ui->gizmo_mode == WPE__GIZMO_ROTATE, true))
+        ui->gizmo_mode = WPE__GIZMO_ROTATE;
+    if (igMenuItem_Bool("Scale", "R", ui->gizmo_mode == WPE__GIZMO_SCALE, true))
+        ui->gizmo_mode = WPE__GIZMO_SCALE;
+    igSeparator();
+    const char* path = wpe_editor_scene_path(ui->editor);
+    igTextDisabled("%s%s", path[0] ? path : "(unsaved scene)", wpe_editor_dirty(ui->editor) ? " *" : "");
+    igEndMainMenuBar();
+}
+
+/* A modal asking for one path; runs `command` with it under `key` when confirmed. */
+static void wpe__ui_path_popup(WPE_EditorUi* ui, bool* request, const char* title, const char* hint,
+                               char* buffer, size_t size, const char* command, const char* key) {
+    if (*request) {
+        igOpenPopup_Str(title, 0);
+        *request = false;
+    }
+    if (!igBeginPopupModal(title, NULL, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    igTextUnformatted(hint, NULL);
+    igSetNextItemWidth(420.0f);
+    const bool enter = igInputText("##path", buffer, size, ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
+    if ((igButton("OK", (ImVec2_c){120, 0}) || enter) && buffer[0]) {
+        WPE_JsonWriter* w = wpe__ui_begin(command);
+        if (w) {
+            wpe_json_write_key(w, key);
+            wpe_json_write_string(w, buffer);
+            wpe__ui_send(ui, w);
+        }
+        ui->assets_stale = true;
+        igCloseCurrentPopup();
+    }
+    igSameLine(0, -1);
+    if (igButton("Cancel", (ImVec2_c){120, 0})) igCloseCurrentPopup();
+    igEndPopup();
+}
+
+static void wpe__ui_shortcuts(WPE_EditorUi* ui) {
+    ImGuiIO* io = igGetIO_Nil();
+    if (io->WantTextInput) return;
+    const WPE_EditorMode mode = wpe_editor_mode(ui->editor);
+    if (igIsKeyPressed_Bool(ImGuiKey_F5, false))
+        wpe__ui_simple(ui, io->KeyShift || mode != WPE_EDITOR_EDIT ? "stop" : "play");
+    if (igIsKeyPressed_Bool(ImGuiKey_F6, false))
+        wpe__ui_simple(ui, mode == WPE_EDITOR_PLAY ? "pause" : "play");
+    if (mode != WPE_EDITOR_EDIT) return; /* The game owns the keyboard while playing. */
+    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_Z, false)) wpe__ui_simple(ui, "undo");
+    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_Y, false)) wpe__ui_simple(ui, "redo");
+    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_S, false)) {
+        if (wpe_editor_scene_path(ui->editor)[0]) {
+            wpe__ui_simple(ui, "save_scene");
+        } else {
+            ui->save_as_popup = true;
+        }
+    }
+    const WPE_Entity selection = wpe_editor_selection(ui->editor);
+    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_D, false) && selection)
+        wpe__ui_entity_command(ui, "duplicate_entity", selection);
+    if (igIsKeyPressed_Bool(ImGuiKey_Delete, false) && selection)
+        wpe__ui_entity_command(ui, "delete_entity", selection);
+    if (!ui->flying && !io->KeyCtrl) {
+        if (igIsKeyPressed_Bool(ImGuiKey_W, false)) ui->gizmo_mode = WPE__GIZMO_MOVE;
+        if (igIsKeyPressed_Bool(ImGuiKey_E, false)) ui->gizmo_mode = WPE__GIZMO_ROTATE;
+        if (igIsKeyPressed_Bool(ImGuiKey_R, false)) ui->gizmo_mode = WPE__GIZMO_SCALE;
+    }
+}
+
+static void wpe__ui_layout(WPE_EditorUi* ui, ImGuiID dockspace, const ImGuiViewport* viewport) {
+    igDockBuilderRemoveNode(dockspace);
+    igDockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
+    igDockBuilderSetNodeSize(dockspace, viewport->WorkSize);
+    ImGuiID center = dockspace, left = 0, right = 0, bottom = 0;
+    left = igDockBuilderSplitNode(center, ImGuiDir_Left, 0.18f, NULL, &center);
+    right = igDockBuilderSplitNode(center, ImGuiDir_Right, 0.28f, NULL, &center);
+    bottom = igDockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, NULL, &center);
+    igDockBuilderDockWindow("Hierarchy", left);
+    igDockBuilderDockWindow("Inspector", right);
+    igDockBuilderDockWindow("Environment", right);
+    igDockBuilderDockWindow("Console", bottom);
+    igDockBuilderDockWindow("Assets", bottom);
+    igDockBuilderDockWindow("Viewport", center);
+    igDockBuilderFinish(dockspace);
+    ui->layout_built = true;
+}
+
+/* ---- Public ----------------------------------------------------------------------------------------- */
+
+WPE_Result wpe_editor_ui_create(WPE_Editor* editor, WPE_EditorUi** out_ui) {
+    if (!editor || !out_ui) return WPE_RESULT_ERROR_NULL_ARG;
+    *out_ui = NULL;
+    WPE_EditorUi* ui = wpe_alloc_zeroed(1, sizeof *ui);
+    if (!ui) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    ui->editor = editor;
+    ui->gizmo_axis = -1;
+    ui->gizmo_hover = -1;
+    ui->assets_stale = true;
+    snprintf(ui->scene_path, sizeof ui->scene_path, "scenes/new.scene");
+    snprintf(ui->export_path, sizeof ui->export_path, "game%s", WPE_EXE_SUFFIX);
+    const WPE_Result result = wpe_ui_create(&ui->backend);
+    if (result != WPE_RESULT_OK) {
+        wpe_free(ui);
+        return result;
+    }
+    *out_ui = ui;
+    return WPE_RESULT_OK;
+}
+
+void wpe_editor_ui_destroy(WPE_EditorUi* ui) {
+    if (!ui) return;
+    wpe_ui_destroy(ui->backend);
+    wpe_texture_destroy(ui->view_texture);
+    wpe__clear_assets(ui);
+    wpe_free(ui->assets);
+    wpe_free(ui);
+}
+
+void wpe_editor_ui_handle_event(WPE_EditorUi* ui, const WPE_PlatformEvent* event) {
+    if (!ui || !event) return;
+    wpe_ui_handle_event(ui->backend, event);
+    const SDL_Event* e = (const SDL_Event*)event;
+    WPE_Engine* engine = wpe_editor_engine(ui->editor);
+    const bool playing = wpe_editor_mode(ui->editor) == WPE_EDITOR_PLAY;
+    switch (e->type) {
+    case SDL_EVENT_GAMEPAD_ADDED:
+    case SDL_EVENT_GAMEPAD_REMOVED:
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        wpe_engine_handle_event(engine,
+                                event); /* Pads always reach the game (connections must be tracked). */
+        break;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        if (playing && (ui->view_focused || e->type == SDL_EVENT_WINDOW_FOCUS_LOST))
+            wpe_engine_handle_event(engine, event);
+        break;
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_MOUSE_WHEEL: {
+        if (!playing || !ui->view_focused) break;
+        /* Mouse positions in the game's framebuffer pixels. */
+        SDL_Event copy = *e;
+        const float sx = (float)ui->view_width / (ui->image_w > 0 ? ui->image_w : 1.0f);
+        const float sy = (float)ui->view_height / (ui->image_h > 0 ? ui->image_h : 1.0f);
+        if (e->type == SDL_EVENT_MOUSE_MOTION) {
+            copy.motion.x = (e->motion.x - ui->image_x) * sx;
+            copy.motion.y = (e->motion.y - ui->image_y) * sy;
+            copy.motion.xrel = e->motion.xrel * sx;
+            copy.motion.yrel = e->motion.yrel * sy;
+        } else if (e->type != SDL_EVENT_MOUSE_WHEEL) {
+            copy.button.x = (e->button.x - ui->image_x) * sx;
+            copy.button.y = (e->button.y - ui->image_y) * sy;
+        }
+        wpe_engine_handle_event(engine, (const WPE_PlatformEvent*)&copy);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+/* Copies the engine's framebuffer into the texture shown by the viewport. */
+static WPE_Result wpe__ui_update_view(WPE_EditorUi* ui) {
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(wpe_editor_engine(ui->editor)));
+    if (!ui->view_texture || ui->view_width != fb->width || ui->view_height != fb->height) {
+        wpe_texture_destroy(ui->view_texture);
+        ui->view_texture = NULL;
+        const WPE_Result result = wpe_texture_create(
+            &(WPE_TextureDesc){.width = fb->width, .height = fb->height, .texels = fb->color},
+            &ui->view_texture);
+        if (result != WPE_RESULT_OK) return result;
+        ui->view_width = fb->width;
+        ui->view_height = fb->height;
+        return WPE_RESULT_OK;
+    }
+    return wpe_texture_update(ui->view_texture, fb->color);
+}
+
+WPE_Result wpe_editor_ui_frame(WPE_EditorUi* ui, WPE_Renderer* renderer, float dt) {
+    if (!ui || !renderer) return WPE_RESULT_ERROR_NULL_ARG;
+    if (wpe_editor_mode(ui->editor) == WPE_EDITOR_EDIT) {
+        wpe__ui_camera(ui, dt);
+    } else {
+        ui->camera_initialized = false; /* The editor camera is recreated when play stops. */
+    }
+    WPE_Result result = wpe_editor_frame(ui->editor, dt);
+    const WPE_Result view = wpe__ui_update_view(ui);
+    if (result == WPE_RESULT_OK) result = view;
+
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(renderer);
+    wpe_ui_new_frame(ui->backend, fb->width, fb->height, dt);
+    const ImGuiViewport* viewport = igGetMainViewport();
+    const ImGuiID dockspace = igDockSpaceOverViewport(0, viewport, 0, NULL);
+    if (!ui->layout_built) wpe__ui_layout(ui, dockspace, viewport);
+    wpe__ui_shortcuts(ui);
+    wpe__ui_menu(ui);
+    wpe__ui_viewport(ui);
+    wpe__ui_hierarchy(ui);
+    wpe__ui_inspector(ui);
+    wpe__ui_environment(ui);
+    wpe__ui_assets(ui);
+    wpe__ui_console(ui);
+    wpe__ui_path_popup(ui, &ui->open_scene_popup, "Open scene", "Scene asset path:", ui->scene_path,
+                       sizeof ui->scene_path, "load_scene", "path");
+    wpe__ui_path_popup(ui, &ui->save_as_popup, "Save scene as", "Scene asset path:", ui->scene_path,
+                       sizeof ui->scene_path, "save_scene", "path");
+    wpe__ui_path_popup(ui, &ui->export_popup, "Export game",
+                       "Output executable (outside the project):", ui->export_path, sizeof ui->export_path,
+                       "export", "output");
+
+    const WPE_Result begin = wpe_renderer_begin_frame(
+        renderer,
+        &(WPE_ClearDesc){.clear_color = true, .color = 0xFF202226u, .clear_depth = true, .depth = 1.0f});
+    if (begin != WPE_RESULT_OK) return begin;
+    const WPE_Result drawn = wpe_ui_render(ui->backend, renderer);
+    const WPE_Result ended = wpe_renderer_end_frame(renderer);
+    if (result == WPE_RESULT_OK) result = drawn;
+    if (result == WPE_RESULT_OK) result = ended;
+    return result;
+}
+
+bool wpe_editor_ui_quit_requested(const WPE_EditorUi* ui) {
+    return ui && ui->quit;
+}
+
+bool wpe_editor_ui_mouse_captured(const WPE_EditorUi* ui) {
+    return ui && wpe_editor_mode(ui->editor) == WPE_EDITOR_PLAY &&
+           wpe_input_mouse_captured(wpe_engine_input(wpe_editor_engine(ui->editor)));
+}

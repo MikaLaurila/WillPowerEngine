@@ -36,9 +36,10 @@ typedef struct Options {
 } Options;
 
 static int usage(void) {
-    fprintf(stderr, "usage: wpe_runtime [--project <dir> | --pak <archive>] [--scene <path>] [--watch] [--mute]\n"
-                    "                   [--headless] [--frames <n>] [--fixed-dt <seconds>] [--screenshot <png>]\n"
-                    "                   [--workers <n>]\n");
+    fprintf(stderr,
+            "usage: wpe_runtime [--project <dir> | --pak <archive>] [--scene <path>] [--watch] [--mute]\n"
+            "                   [--headless] [--frames <n>] [--fixed-dt <seconds>] [--screenshot <png>]\n"
+            "                   [--workers <n>]\n");
     return EXIT_FAILURE;
 }
 
@@ -108,12 +109,14 @@ int main(int argc, char** argv) {
     if (result == WPE_RESULT_OK) {
         if (o.mute) wpe_audio_set_volume(wpe_engine_audio(engine), WPE_AUDIO_BUS_MASTER, 0.0f);
         result = wpe_engine_run(engine, &o.run);
-        if (result == WPE_RESULT_OK && o.run.screenshot) wpe_log_info("saved screenshot to %s", o.run.screenshot);
+        if (result == WPE_RESULT_OK && o.run.screenshot)
+            wpe_log_info("saved screenshot to %s", o.run.screenshot);
     }
     wpe_engine_destroy(engine);
     if (result != WPE_RESULT_OK) {
         char message[256];
-        snprintf(message, sizeof message, "The game stopped because of an error (%s).\nSee the log for details.",
+        snprintf(message, sizeof message,
+                 "The game stopped because of an error (%s).\nSee the log for details.",
                  wpe_result_to_string(result));
         if (!o.engine.headless) wpe_platform_show_error("Game error", message);
         return EXIT_FAILURE;

@@ -117,6 +117,21 @@ WPE_Result wpe_window_set_relative_mouse(WPE_Window* window, bool enabled) {
     return WPE_RESULT_ERROR;
 }
 
+void wpe_window_size(const WPE_Window* window, uint32_t* out_width, uint32_t* out_height) {
+    int w = 0, h = 0;
+    if (window && !SDL_GetWindowSizeInPixels(window->window, &w, &h)) w = h = 0;
+    if (out_width) *out_width = w > 0 ? (uint32_t)w : 0;
+    if (out_height) *out_height = h > 0 ? (uint32_t)h : 0;
+}
+
+WPE_Result wpe_window_set_text_input(WPE_Window* window, bool enabled) {
+    if (!window) return WPE_RESULT_ERROR_NULL_ARG;
+    const bool ok = enabled ? SDL_StartTextInput(window->window) : SDL_StopTextInput(window->window);
+    if (ok) return WPE_RESULT_OK;
+    wpe_log_error("cannot %s text input: %s", enabled ? "start" : "stop", SDL_GetError());
+    return WPE_RESULT_ERROR;
+}
+
 void wpe_window_set_title(WPE_Window* window, const char* title) {
     if (!wpe_check(window != NULL && title != NULL)) return;
     if (!SDL_SetWindowTitle(window->window, title))

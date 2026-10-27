@@ -1,0 +1,94 @@
+# The editor
+
+`wpe_editor` edits a project: it opens the project's scenes, lets you change entities, components and the environment, plays the game in place, and exports it. People use its window; AI agents (and scripts) use the same editor through **JSON commands**. The two are equal: every change the window makes is one of those commands, so the commands have the same validation, the same undo history and the same results as clicking.
+
+```bash
+./build/bin/wpe_editor assets                                   # the window (and the command server)
+./build/bin/wpe_editor assets --command '{"cmd": "list_entities"}'   # one-shot, headless
+./build/bin/wpe_editor assets --run commands.jsonl              # a batch, headless
+./build/bin/wpe_editor --send '{"cmd": "status"}'               # talk to a running editor
+```
+
+## The window
+
+![The editor with the demo scene, the ground selected](images/editor.png)
+
+| Area | What it does |
+|---|---|
+| Menu and toolbar | **File:** new, open, save, save as, export, quit. **Edit:** undo, redo, duplicate, delete. **Window:** reset the layout. **Play controls:** play, pause, stop. **Gizmo modes:** move, rotate, scale. The open scene is shown with `*` when it has unsaved changes. |
+| Viewport | The game's framebuffer, rendered by the engine. In edit mode it uses the editor's camera:<br>• **Fly:** hold the right mouse button and use WASD (Q/E down/up, Shift faster; the wheel changes the speed).<br>• **Dolly:** the wheel without the right button moves forward and back.<br>• **Select:** click an object; clicking a model selects the entity that placed it.<br>• **Gizmo:** drag a handle of the selection, in the mode W (move), E (rotate) or R (scale).<br>• **Add a model:** drop one from Assets. |
+| Hierarchy | Every entity, as a tree. Click to select. Drag onto another entity to reparent, or onto the empty area below to make it a root. The right-click menu duplicates, deletes or detaches. |
+| Inspector | The selected entity in the scene-file schema: every field of every component, editable. Each component's × removes it. "Add component" adds one; a mesh, sound or script takes the asset path typed in the box above it. |
+| Environment | The scene's render settings, fog, shadows, post-processing, gravity and music. |
+| Assets | The project's files. Double-click a scene to open it, or a model (`.glb`, `.gltf`, `.prim`) to place it. Drag models into the viewport. |
+| Console | Log messages, and a command line that runs JSON commands exactly as an agent would. |
+
+Shortcuts: Ctrl+Z / Ctrl+Y undo and redo, Ctrl+S save, Ctrl+D duplicate, Del delete, F5 play (Shift+F5 or F5 while playing stops), F6 pause.
+
+**Play mode** runs the game from the current scene: scripts, physics, audio and input work as in the runtime, with the game's own camera. Keyboard and mouse reach the game while the viewport is focused; gamepads always do. **Stop** returns the scene to exactly how it was when play started, and the scene can't be edited while it plays. A game that calls `wpe.quit()` simply stops.
+
+## Commands
+
+A command is a JSON object `{"cmd": name, ...}`. The reply is always a JSON object:
+
+```json
+{"result": ..., "ok": true, "log": []}
+{"result": null, "ok": false, "error": "entity 999 does not exist (list_entities shows the ids)", "log": ["[ERROR][...] ..."]}
+```
+
+`log` holds the warnings and errors logged while the command ran, such as a loader's exact complaint and line. Entities are identified by their **ids** (live handles): `list_entities` shows them and commands return them. Undo, redo, stop and loading re-create the world, which changes ids, so list again after those.
+
+Entities and components use the **scene-file schema** ([scenes.md](scenes.md)), with ids as references. `get_entity` returns an entity exactly as `create_entity` takes it.
+
+| Command | Arguments → result |
+|---|---|
+| `help` | → every command with its arguments |
+| `status` | → project, scene, mode (`edit`/`play`/`paused`), dirty, selection, entity count, undo/redo depth |
+| `project` | → the project settings (project.json) |
+| `list_entities` | → `[{id, name, parent, components}]` |
+| `get_entity` | `{id}` → the entity (`{"id", "name", "parent", "transform": {...}, "light": {...}, ...}`) |
+| `create_entity` | `{entity: {name, parent, transform, instance, mesh, light, ..., script}}` → id (and selects it) |
+| `duplicate_entity` | `{id}` → id of the copy (children are not copied) |
+| `delete_entity` | `{id}` (with its children) |
+| `set_component` | `{id, component, value}` → the entity. Replaces the component as a whole: fields left out take their defaults, so read the entity first to change one field. `component` can also be `"name"` or `"parent"`. |
+| `remove_component` | `{id, component}` |
+| `set_parent` | `{id, parent: id or null, keep_world = true}` |
+| `select` | `{id or null}` |
+| `get_environment` / `set_environment` | `{}` / `{value: {...}}` (merged: keys left out keep their values) → the environment |
+| `new_scene`, `load_scene`, `save_scene` | `{}`, `{path}`, `{path?}`: asset paths inside the project; `save_scene` without a path saves the open scene |
+| `undo`, `redo` | `{}` |
+| `play`, `pause`, `stop` | `{}` (play also resumes) |
+| `frames` | `{count = 1, dt = 1/60}`: runs frames (simulated in play mode) |
+| `screenshot` | `{path, target = "game" or "editor"}`: the game view, or the whole editor window (also headless) |
+| `camera` | `{position: [x,y,z], target: [x,y,z]}`: aims the editor camera |
+| `run_lua` | `{code}`: runs Luau with the `wpe` API (undoable; a failing chunk changes nothing) |
+| `list_assets` | `{prefix?}` → asset paths |
+| `export` | `{output, runtime?}` → `{files, bytes}`: exports the game (runtime/export, [runtime.md](runtime.md)) |
+| `log` | `{count = 50}` → recent log lines |
+| `quit` | `{}`: closes the editor window |
+
+Any command may carry `"coalesce": key`. Consecutive edits with the same key form one undo step; the window uses this so that dragging a slider is one step.
+
+### Three ways to send commands
+
+- **Headless, one-shot:** `wpe_editor <project> --command '<json>' [--command ...]` opens the project, runs the commands, prints one reply per line and exits. The exit code is 0 only if every command succeeded.
+- **Headless, batch:** `wpe_editor <project> --run <file>` does the same for a JSON array of commands or one command per line (JSON lines). Changes persist only through `save_scene`.
+- **Live:** the editor window listens on `127.0.0.1:47800` (`--port <n>` to change it, `--no-server` to turn it off). The protocol is one JSON command per line and one reply per line. `wpe_editor --send '<json>' [--send ...] [--port <n>]` is a ready-made client. An agent and a person can work in the same session this way, since the window shows every change at once. Only local programs can connect.
+
+A typical agent session:
+
+```bash
+wpe_editor assets --command '{"cmd": "list_entities"}'
+wpe_editor assets --run edit.jsonl     # creates and changes entities, then {"cmd": "save_scene"}
+wpe_editor assets --command '{"cmd": "screenshot", "target": "editor", "path": "out/editor.png"}'
+```
+
+`editor.png` shows the full editor, rendered by the same software rasterizer as the game, so the agent sees exactly what a person would.
+
+## Architecture
+
+- `editor/editor.{h,c}`: the model. It holds the project in an embedded `WPE_Engine` (no window of its own; edit mode stops simulation), the editor camera, the selection, and undo/redo as whole-scene snapshots (64 steps). Play mode keeps a snapshot to restore. A log ring holds recent messages.
+- `editor/editor_commands.c`: the commands, built on `engine/scene_file.h`'s entity and component functions.
+- `editor/ui_backend.{h,c}`: Dear ImGui (cimgui) drawn by the engine's software rasterizer, with SDL events translated to ImGui.
+- `editor/editor_ui.{h,c}`: the panels. They read the world, and change it only through commands.
+- `editor/main.c`: the window and its loop, the command server, and the headless and client modes.

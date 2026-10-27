@@ -368,6 +368,17 @@ Implemented in `src/engine/`. Docs: `docs/scenes.md` and `docs/runtime.md`.
 - Script components save their path and properties: fields set through `wpe_script_set_property()`, saved with their current values.
 - Export appends a `.pak` of the project to `wpe_runtime`, producing one self-contained executable. The runtime links its compiler runtimes statically and, on Windows, is a GUI program that attaches to a parent console.
 
+### 4.8 Editor
+
+Implemented in `editor/` (docs: `docs/editor.md`).
+- **One command path.** The editor model (`editor.c`) holds the project in an embedded `WPE_Engine` and exposes JSON commands (`editor_commands.c`) in the scene-file schema, with live entity ids. The UI (`editor_ui.c`) makes every change through those commands, so agents and people share validation, undo and behavior.
+  - Agents reach the commands headless (`--run`, `--command`) or live over a local TCP channel (`--send`).
+  - Replies include the warnings and errors logged while a command ran.
+- **Undo** keeps whole-scene snapshots, so any command is undoable with one mechanism. Failed commands leave no step, and a `coalesce` key merges continuous edits.
+- **Play mode** snapshots the scene and restores it on stop. Edit mode renders from an editor camera that is never saved (the scene context's include filter).
+- **The UI is Dear ImGui (cimgui) drawn by the software rasterizer** (scissor rectangles, `wpe_texture_update`), so headless runs can capture the whole editor, exactly as shown, for agents.
+- **No hidden state.** Every editor feature must be reachable through a command; when adding UI, add or reuse a command first.
+
 ---
 ## 5. File Organization
 
@@ -389,9 +400,8 @@ willpower_engine/
 │   ├── script/         # Luau VM and bindings
 │   ├── input/          # SDL3 keyboard, mouse and gamepad input with actions
 │   └── engine/         # Game runtime: project and scene files, frame loop, export
-├── editor/             # Standalone editor application
-│   ├── ui/             # cimgui-based UI
-│   ├── tools/          # Editor-specific tools
+├── editor/             # wpe_editor: model and commands (editor.c, editor_commands.c), UI (editor_ui.c,
+│   │                   # ui_backend.c: ImGui on the software rasterizer), main.c (window, server, CLI)
 │   └── main.c
 ├── runtime/            # Standalone game runtime (wpe_runtime; exported games are this executable)
 │   └── main.c
@@ -423,7 +433,8 @@ willpower_engine/
   - `input` depends on `core` and `platform`, and uses SDL3 privately.
   - `script` depends on `graphics`, `assets`, `physics`, `audio`, `input` and `platform`, and uses Luau privately.
   - `engine` depends on all of the above.
-- Only `jobs`, `platform` and `input` may include SDL headers; the renderer stays pure CPU so it can be tested headless.
+  - The editor (`editor/`, an application, not an engine module) depends on `engine`, cimgui and SDL3.
+- Only `jobs`, `platform`, `input` and the editor may include SDL headers; the renderer stays pure CPU so it can be tested headless.
 
 ---
 
@@ -663,4 +674,4 @@ cmake --build build --target lint
 **Version:** 1.2  
 **Last Updated:** 27 Oct 2026  
 **Maintainer:** WillPowerEngine Development Team  
-**Changes from v1.1:** Input, engine runtime, scene files and export (§4.6, §4.7); scenes live in `assets/scenes`; test layout.
+**Changes from v1.1:** Input, engine runtime, scene files and export (§4.6, §4.7); the editor (§4.8); scenes live in `assets/scenes`; test layout.

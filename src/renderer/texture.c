@@ -63,6 +63,15 @@ static void wpe__fill_to_linear(float to_linear[256]) {
 static WPE_Result wpe__texture_create_from(const WPE_TextureDesc* desc, uint32_t width, uint32_t height,
                                            const uint32_t* texels, WPE_Texture** out_texture);
 
+WPE_Result wpe_texture_update(WPE_Texture* texture, const uint32_t* texels) {
+    if (!texture || !texels) return WPE_RESULT_ERROR_NULL_ARG;
+    if (texture->level_count != 1) return WPE_RESULT_ERROR_INVALID_STATE;
+    /* Level 0 starts right after the header, in the same allocation (see wpe__texture_create_from). */
+    uint32_t* storage = (uint32_t*)(texture + 1);
+    memcpy(storage, texels, (size_t)texture->levels[0].width * texture->levels[0].height * sizeof *storage);
+    return WPE_RESULT_OK;
+}
+
 WPE_Result wpe_texture_create(const WPE_TextureDesc* desc, WPE_Texture** out_texture) {
     if (!desc || !desc->texels || !out_texture) return WPE_RESULT_ERROR_NULL_ARG;
     *out_texture = NULL;

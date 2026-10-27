@@ -170,6 +170,18 @@ static void wpe__setup_triangle(WPE_Renderer* renderer, wpe__TriOutput* output, 
         max_px > (int32_t)renderer->framebuffer.width - 1 ? (int32_t)renderer->framebuffer.width - 1 : max_px;
     max_py = max_py > (int32_t)renderer->framebuffer.height - 1 ? (int32_t)renderer->framebuffer.height - 1
                                                                 : max_py;
+    if (desc->scissor) {
+        /* 64-bit so huge rectangles cannot overflow; the bounds are hard limits for the rasterizer. */
+        const int64_t sx1 = (int64_t)desc->scissor_x + desc->scissor_width - 1;
+        const int64_t sy1 = (int64_t)desc->scissor_y + desc->scissor_height - 1;
+        if (desc->scissor_width == 0 || desc->scissor_height == 0 ||
+            desc->scissor_x >= renderer->framebuffer.width || desc->scissor_y >= renderer->framebuffer.height)
+            return;
+        if ((int64_t)min_px < (int64_t)desc->scissor_x) min_px = (int32_t)desc->scissor_x;
+        if ((int64_t)min_py < (int64_t)desc->scissor_y) min_py = (int32_t)desc->scissor_y;
+        if ((int64_t)max_px > sx1) max_px = (int32_t)sx1;
+        if ((int64_t)max_py > sy1) max_py = (int32_t)sy1;
+    }
     if (min_px > max_px || min_py > max_py) return; /* Covers no pixel center on screen. */
 
     wpe__SetupTri* tri = wpe__output_push(renderer, output);

@@ -278,7 +278,24 @@ static void test_texture_perspective_derivatives_grow_with_distance(void) {
     wpe_renderer_destroy(renderer);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_texture_mip_chain_sizes),
+static void test_texture_update_replaces_texels(void) {
+    const uint32_t a[4] = {0xFF000001u, 0xFF000002u, 0xFF000003u, 0xFF000004u};
+    const uint32_t b[4] = {0xFF0000AAu, 0xFF0000BBu, 0xFF0000CCu, 0xFF0000DDu};
+    WPE_Texture* texture = NULL;
+    WPE_TEST_ASSERT_OK(
+        wpe_texture_create(&(WPE_TextureDesc){.width = 2, .height = 2, .texels = a}, &texture));
+    WPE_TEST_ASSERT_OK(wpe_texture_update(texture, b));
+    WPE_TEST_ASSERT(memcmp(texture->levels[0].texels, b, sizeof b) == 0);
+    WPE_Texture* mipped = NULL;
+    WPE_TEST_ASSERT_OK(wpe_texture_create(
+        &(WPE_TextureDesc){.width = 2, .height = 2, .texels = a, .generate_mips = true}, &mipped));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_STATE, wpe_texture_update(mipped, b));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_texture_update(NULL, b));
+    wpe_texture_destroy(mipped);
+    wpe_texture_destroy(texture);
+}
+
+WPE_TEST_MAIN(WPE_TEST_CASE(test_texture_update_replaces_texels), WPE_TEST_CASE(test_texture_mip_chain_sizes),
               WPE_TEST_CASE(test_texture_srgb_mips_average_in_linear_light),
               WPE_TEST_CASE(test_texture_max_dimension_downscales),
               WPE_TEST_CASE(test_texture_create_validation),

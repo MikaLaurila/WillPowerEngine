@@ -87,6 +87,19 @@ bool wpe_platform_poll_events(WPE_PlatformEventFn fn, void* user_data);
  */
 WPE_Result wpe_window_set_relative_mouse(WPE_Window* window, bool enabled);
 
+/** Gets the window's client size in pixels (0 x 0 for NULL or on failure). @thread_safety Main thread only */
+void wpe_window_size(const WPE_Window* window, uint32_t* out_width, uint32_t* out_height);
+
+/**
+ * Turns delivery of text input events (typed characters, with keyboard layout and IME applied) on or
+ * off, e.g. while a text field has focus.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR (SDL failure; logged).
+ *
+ * @thread_safety Main thread only
+ */
+WPE_Result wpe_window_set_text_input(WPE_Window* window, bool enabled);
+
 /** Changes the window title (copied). @thread_safety Main thread only */
 void wpe_window_set_title(WPE_Window* window, const char* title);
 

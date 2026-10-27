@@ -106,6 +106,7 @@ struct WPE_SceneIds {
     wpe__IdPair* by_entity; /* Sorted by entity (saving). */
     wpe__IdPair* by_id;     /* Sorted by id (loading). */
     uint32_t count;
+    const WPE_Ecs* identity; /* Set: ids are live entity handles of this world (editing commands). */
 };
 
 static int wpe__compare_by_entity(const void* a, const void* b) {
@@ -119,6 +120,7 @@ static int wpe__compare_by_id(const void* a, const void* b) {
 }
 
 uint32_t wpe_scene_ids_to_file(const WPE_SceneIds* ids, WPE_Entity entity) {
+    if (ids && ids->identity) return wpe_ecs_is_alive(ids->identity, entity) ? entity : 0;
     if (!ids || !ids->by_entity || entity == WPE_ENTITY_NULL) return 0;
     const wpe__IdPair key = {.entity = entity};
     const wpe__IdPair* pair = bsearch(&key, ids->by_entity, ids->count, sizeof key, wpe__compare_by_entity);
@@ -126,6 +128,7 @@ uint32_t wpe_scene_ids_to_file(const WPE_SceneIds* ids, WPE_Entity entity) {
 }
 
 WPE_Entity wpe_scene_ids_to_entity(const WPE_SceneIds* ids, uint32_t id) {
+    if (ids && ids->identity) return wpe_ecs_is_alive(ids->identity, id) ? id : WPE_ENTITY_NULL;
     if (!ids || !ids->by_id || id == 0) return WPE_ENTITY_NULL;
     const wpe__IdPair key = {.id = id};
     const wpe__IdPair* pair = bsearch(&key, ids->by_id, ids->count, sizeof key, wpe__compare_by_id);
@@ -211,7 +214,6 @@ static void wpe__write_asset(wpe__Saver* s, const char* key, WPE_AssetHandle han
 
 static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment* env) {
     const WPE_SceneRenderSettings* r = &env->render;
-    wpe_json_write_key(w, "environment");
     wpe_json_write_object_begin(w);
     wpe__write_vec3(w, "clear_color", env->clear_color);
     wpe__write_vec3(w, "ambient", r->ambient);
@@ -481,9 +483,14 @@ static int wpe__compare_spawn_order(const void* a, const void* b) {
     return (x > y) - (x < y);
 }
 
-/* Appends `root` and its descendants (depth first, child order) to `order`. */
-static uint32_t wpe__append_subtree(WPE_Ecs* ecs, WPE_Entity root, WPE_Entity* order, uint32_t count,
-                                    WPE_Entity* stack) {
+static bool wpe__included(const WPE_SceneContext* context, WPE_Entity entity) {
+    return !context->include || context->include(entity, context->include_user_data);
+}
+
+/* Appends `root` and its included descendants (depth first, child order) to `order`. */
+static uint32_t wpe__append_subtree(const WPE_SceneContext* context, WPE_Entity root, WPE_Entity* order,
+                                    uint32_t count, WPE_Entity* stack) {
+    WPE_Ecs* ecs = context->ecs;
     uint32_t top = 0;
     stack[top++] = root;
     while (top > 0) {
@@ -494,7 +501,7 @@ static uint32_t wpe__append_subtree(WPE_Ecs* ecs, WPE_Entity root, WPE_Entity* o
         /* Push children in reverse so the first child is visited first. */
         const uint32_t first = top;
         for (WPE_Entity c = h->first_child; c != WPE_ENTITY_NULL;) {
-            stack[top++] = c;
+            if (wpe__included(context, c)) stack[top++] = c;
             const WPE_Hierarchy* ch = wpe_ecs_get_component(ecs, c, WPE_COMP_HIERARCHY);
             c = ch ? ch->next_sibling : WPE_ENTITY_NULL;
         }
@@ -534,10 +541,11 @@ WPE_Result wpe_scene_save(const WPE_SceneContext* context, const WPE_SceneEnviro
     qsort(alive, n, sizeof *alive, wpe__compare_spawn_order);
     uint32_t ordered = 0;
     for (uint32_t i = 0; i < n; ++i) {
-        if (wpe_scene_get_parent(ecs, alive[i].entity) == WPE_ENTITY_NULL)
-            ordered = wpe__append_subtree(ecs, alive[i].entity, order, ordered, stack);
+        if (wpe_scene_get_parent(ecs, alive[i].entity) == WPE_ENTITY_NULL &&
+            wpe__included(context, alive[i].entity))
+            ordered = wpe__append_subtree(context, alive[i].entity, order, ordered, stack);
     }
-    wpe_assert(ordered == n);
+    wpe_assert(ordered <= n);
     for (uint32_t i = 0; i < ordered; ++i)
         s.ids.by_entity[i] = (wpe__IdPair){.id = i + 1, .entity = order[i]};
     s.ids.count = ordered;
@@ -546,6 +554,7 @@ WPE_Result wpe_scene_save(const WPE_SceneContext* context, const WPE_SceneEnviro
     wpe_json_write_object_begin(writer);
     wpe__write_string(writer, "format", "wpe.scene");
     wpe__write_integer(writer, "version", WPE_SCENE_FORMAT_VERSION);
+    wpe_json_write_key(writer, "environment");
     wpe__save_environment(writer, environment);
     wpe__write_ref(&s, "camera", camera);
     wpe_json_write_key(writer, "entities");
@@ -617,7 +626,8 @@ static bool wpe__read_ref_value(wpe__Loader* l, const WPE_JsonValue* v, const ch
     *out = WPE_ENTITY_NULL;
     if (!v || wpe_json_type(v) == WPE_JSON_NULL) return true;
     const double id = wpe_json_number(v, 0.0);
-    if (wpe_json_type(v) != WPE_JSON_NUMBER || id != floor(id) || id < 1.0 || id > WPE__MAX_FILE_ID)
+    const double max_id = l->ids.identity ? (double)UINT32_MAX : (double)WPE__MAX_FILE_ID;
+    if (wpe_json_type(v) != WPE_JSON_NUMBER || id != floor(id) || id < 1.0 || id > max_id)
         return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE, "\"%s\" must be an entity id or null", key);
     *out = wpe_scene_ids_to_entity(&l->ids, (uint32_t)id);
     if (*out == WPE_ENTITY_NULL)
@@ -1306,5 +1316,188 @@ WPE_Result wpe_scene_clear(WPE_Ecs* ecs) {
         if (wpe_ecs_is_alive(ecs, entities[i])) wpe_ecs_despawn(ecs, entities[i]);
     }
     wpe_free(entities);
+    return WPE_RESULT_OK;
+}
+
+/* ---- Editing: single entities and components ------------------------------------------------------- */
+
+/* Loader whose ids are the world's live entity handles. */
+static wpe__Loader wpe__edit_loader(const WPE_SceneContext* context, const char* what) {
+    return (wpe__Loader){
+        .r = {.name = what, .kind = "edit"}, .context = context, .ids = {.identity = context->ecs}};
+}
+
+WPE_Result wpe_scene_save_entity(const WPE_SceneContext* context, WPE_Entity entity, WPE_JsonWriter* writer) {
+    if (!context || !context->ecs || !context->assets || !writer) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!wpe_ecs_is_alive(context->ecs, entity)) return WPE_RESULT_ERROR_NOT_FOUND;
+    wpe__Saver s = {.context = context, .w = writer, .ids = {.identity = context->ecs}};
+    wpe__save_entity(&s, entity);
+    return s.result;
+}
+
+typedef bool (*wpe__ComponentLoadFn)(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
+
+static const struct {
+    const char* key;
+    WPE_ComponentType type;
+    wpe__ComponentLoadFn load;
+} wpe__edit_components[] = {
+    {"transform", WPE_COMP_TRANSFORM, wpe__load_transform},
+    {"mesh", WPE_COMP_MESH, wpe__load_mesh},
+    {"camera", WPE_COMP_CAMERA, wpe__load_camera},
+    {"light", WPE_COMP_LIGHT, wpe__load_light},
+    {"animator", WPE_COMP_ANIMATOR, wpe__load_animator},
+    {"rigidbody", WPE_COMP_PHYSICS_RIGIDBODY, wpe__load_rigidbody},
+    {"collider", WPE_COMP_PHYSICS_COLLIDER, wpe__load_collider},
+    {"audio_source", WPE_COMP_AUDIO_SOURCE, wpe__load_audio_source},
+    {"script", WPE_COMP_SCRIPT, wpe__load_script},
+};
+
+static WPE_ComponentType wpe__edit_type(const WPE_SceneContext* context, const char* key) {
+    for (size_t i = 0; i < sizeof wpe__edit_components / sizeof wpe__edit_components[0]; ++i) {
+        if (strcmp(wpe__edit_components[i].key, key) == 0) return wpe__edit_components[i].type;
+    }
+    for (uint32_t i = 0; i < context->serializer_count; ++i) {
+        if (strcmp(context->serializers[i].name, key) == 0) return context->serializers[i].type;
+    }
+    return WPE_COMP_NONE;
+}
+
+/* Loads one component description (no removal of an existing one). */
+static bool wpe__apply(wpe__Loader* l, WPE_Entity e, const char* key, const WPE_JsonValue* value) {
+    if (strcmp(key, "name") == 0) {
+        const char* name = wpe_json_string(value);
+        if (!name) return wpe__json_fail(&l->r, value, WPE_RESULT_ERROR_PARSE, "\"name\" must be a string");
+        const WPE_Result result = wpe_scene_set_name(l->context->ecs, e, name);
+        return result == WPE_RESULT_OK || wpe__json_fail(&l->r, value, result, "cannot set the name");
+    }
+    if (strcmp(key, "parent") == 0) {
+        WPE_Entity parent = WPE_ENTITY_NULL;
+        if (!wpe__read_ref_value(l, value, "parent", &parent)) return false;
+        const WPE_Result result = wpe_scene_set_parent(l->context->ecs, e, parent, false);
+        return result == WPE_RESULT_OK || wpe__json_fail(&l->r, value, WPE_RESULT_ERROR_PARSE,
+                                                         "invalid parent (%s)", wpe_result_to_string(result));
+    }
+    if (strcmp(key, "instance") == 0) return wpe__load_instance(l, e, value);
+    for (size_t i = 0; i < sizeof wpe__edit_components / sizeof wpe__edit_components[0]; ++i) {
+        if (strcmp(wpe__edit_components[i].key, key) == 0) return wpe__edit_components[i].load(l, e, value);
+    }
+    /* Game components by serializer name, through the same path as a scene's "components" object. */
+    for (uint32_t i = 0; i < l->context->serializer_count; ++i) {
+        if (strcmp(l->context->serializers[i].name, key) != 0) continue;
+        const WPE_ComponentSerializer* serializer = &l->context->serializers[i];
+        const uint32_t size = wpe_ecs_component_size(l->context->ecs, serializer->type);
+        if (size == 0)
+            return wpe__json_fail(&l->r, value, WPE_RESULT_ERROR_UNSUPPORTED, "\"%s\" is not registered",
+                                  key);
+        void* data = wpe_alloc_zeroed(1, size);
+        if (!data) return wpe__json_fail(&l->r, value, WPE_RESULT_ERROR_OUT_OF_MEMORY, "out of memory");
+        const WPE_Result result =
+            serializer->load(l->context, &l->ids, e, value, data, serializer->user_data);
+        const bool ok = result == WPE_RESULT_OK
+                            ? wpe__add(l, value, e, serializer->type, data, key)
+                            : wpe__json_fail(&l->r, value, result, "loading \"%s\" failed", key);
+        wpe_free(data);
+        return ok;
+    }
+    return wpe__json_fail(&l->r, value, WPE_RESULT_ERROR_PARSE, "unknown component \"%s\"", key);
+}
+
+WPE_Result wpe_scene_set_component(const WPE_SceneContext* context, WPE_Entity entity, const char* key,
+                                   const WPE_JsonValue* value) {
+    if (!context || !context->ecs || !context->assets || !key || !value) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!wpe_ecs_is_alive(context->ecs, entity)) return WPE_RESULT_ERROR_NOT_FOUND;
+    wpe__Loader l = wpe__edit_loader(context, key);
+    const WPE_ComponentType type = wpe__edit_type(context, key);
+    if (type == WPE_COMP_NONE || type == WPE_COMP_SCRIPT ||
+        !wpe_ecs_has_component(context->ecs, entity, type)) {
+        /* Nothing to replace (scripts replace themselves when attached). */
+        wpe__apply(&l, entity, key, value);
+        return l.r.result;
+    }
+    /* Replace atomically: remember the current component, remove it, load the new one, and restore
+     * the old one if the new description is rejected. */
+    WPE_JsonWriter* writer = NULL;
+    WPE_Result result = wpe_json_writer_create(&writer);
+    if (result != WPE_RESULT_OK) return result;
+    result = wpe_scene_save_entity(context, entity, writer);
+    const char* text = NULL;
+    size_t size = 0;
+    if (result == WPE_RESULT_OK) result = wpe_json_writer_finish(writer, &text, &size);
+    WPE_JsonDocument* previous = NULL;
+    if (result == WPE_RESULT_OK) result = wpe_json_parse(text, size, &previous, NULL);
+    if (result == WPE_RESULT_OK) result = wpe_ecs_remove_component(context->ecs, entity, type);
+    if (result == WPE_RESULT_OK && !wpe__apply(&l, entity, key, value)) {
+        result = l.r.result;
+        wpe__Loader restore = wpe__edit_loader(context, key);
+        const WPE_JsonValue* old = wpe_json_get(wpe_json_root(previous), key);
+        if (wpe_ecs_has_component(context->ecs, entity, type))
+            wpe_ecs_remove_component(context->ecs, entity, type);
+        if (old) wpe__apply(&restore, entity, key, old);
+    }
+    wpe_json_free(previous);
+    wpe_json_writer_destroy(writer);
+    return result;
+}
+
+WPE_Result wpe_scene_remove_component(const WPE_SceneContext* context, WPE_Entity entity, const char* key) {
+    if (!context || !context->ecs || !key) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!wpe_ecs_is_alive(context->ecs, entity)) return WPE_RESULT_ERROR_NOT_FOUND;
+    const WPE_ComponentType type = wpe__edit_type(context, key);
+    if (type == WPE_COMP_NONE) {
+        wpe_log_error("unknown component \"%s\"", key);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    if (!wpe_ecs_has_component(context->ecs, entity, type)) return WPE_RESULT_ERROR_NOT_FOUND;
+    return wpe_ecs_remove_component(context->ecs, entity, type);
+}
+
+WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_JsonValue* description,
+                                   WPE_Entity* out_entity) {
+    if (!context || !context->ecs || !context->assets || !description || !out_entity)
+        return WPE_RESULT_ERROR_NULL_ARG;
+    *out_entity = WPE_ENTITY_NULL;
+    wpe__Loader l = wpe__edit_loader(context, "create_entity");
+    /* "id" is accepted and ignored, so a saved entity (wpe_scene_save_entity) can be fed back as a copy. */
+    if (!WPE__JSON_CHECK_OBJECT(&l.r, description, "entity", "id", "name", "parent", "transform", "instance",
+                                "mesh", "camera", "light", "animator", "rigidbody", "collider",
+                                "audio_source", "script", "components"))
+        return l.r.result;
+    const WPE_Entity e = wpe_ecs_spawn(context->ecs);
+    if (e == WPE_ENTITY_NULL) return WPE_RESULT_ERROR_CAPACITY;
+    /* The scene-file order: identity first, then components, scripts last. */
+    static const char* const order[] = {"name",      "transform", "parent",      "instance",
+                                        "mesh",      "camera",    "light",       "animator",
+                                        "rigidbody", "collider",  "audio_source"};
+    bool ok = true;
+    for (size_t i = 0; ok && i < sizeof order / sizeof order[0]; ++i) {
+        const WPE_JsonValue* value = wpe_json_get(description, order[i]);
+        if (value) ok = wpe__apply(&l, e, order[i], value);
+    }
+    const WPE_JsonValue* components = wpe_json_get(description, "components");
+    if (ok && components) ok = wpe__load_components(&l, e, components);
+    const WPE_JsonValue* script = wpe_json_get(description, "script");
+    if (ok && script) ok = wpe__load_script(&l, e, script);
+    if (!ok) {
+        wpe_scene_destroy_recursive(context->ecs, e);
+        return l.r.result;
+    }
+    *out_entity = e;
+    return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_scene_write_environment(const WPE_SceneEnvironment* environment, WPE_JsonWriter* writer) {
+    if (!environment || !writer) return WPE_RESULT_ERROR_NULL_ARG;
+    wpe__save_environment(writer, environment);
+    return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_scene_read_environment(const WPE_JsonValue* value, const char* name,
+                                      WPE_SceneEnvironment* io_environment) {
+    if (!value || !io_environment) return WPE_RESULT_ERROR_NULL_ARG;
+    wpe__Loader l = {.r = {.name = name ? name : "environment", .kind = "edit"}};
+    WPE_SceneEnvironment environment = *io_environment;
+    if (!wpe__load_environment(&l, value, &environment)) return l.r.result;
+    *io_environment = environment;
     return WPE_RESULT_OK;
 }

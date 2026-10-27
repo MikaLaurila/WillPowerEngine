@@ -104,6 +104,10 @@ struct WPE_SceneContext {
     WPE_ScriptHost* scripts;  /* Optional: needed for scenes with scripts. */
     const WPE_ComponentSerializer* serializers; /* Game components (may be NULL). */
     uint32_t serializer_count;
+    /* Optional: entities for which this returns false are not saved, nor are their descendants
+     * (e.g. an editor's own camera). */
+    bool (*include)(WPE_Entity entity, void* user_data);
+    void* include_user_data;
 };
 
 /** @return The default environment: render defaults, no post-processing, gravity -9.81 Y, a dark blue
@@ -160,6 +164,56 @@ WPE_Result wpe_scene_load(const WPE_SceneContext* context, const char* text, siz
  * thread */
 WPE_Result wpe_scene_load_asset(const WPE_SceneContext* context, const char* path,
                                 WPE_SceneEnvironment* out_environment, WPE_Entity* out_camera);
+
+/* ---- Editing (tools, the editor's commands) --------------------------------------------------------
+ * These use the scene-file schema for one entity or component, but entity references (ids,
+ * "parent", joints...) are the world's live entity handles instead of file-local ids. Errors are
+ * logged like loading errors and nothing is changed on failure. */
+
+/** Writes one entity as a JSON object in the scene-file schema ("id" is its handle). Returns
+ * WPE_RESULT_ERROR_NOT_FOUND for dead entities. @thread_safety Owning thread */
+WPE_Result wpe_scene_save_entity(const WPE_SceneContext* context, WPE_Entity entity, WPE_JsonWriter* writer);
+
+/**
+ * Creates an entity from a description with the keys of a scene entity ("id" is ignored, so the output of
+ * wpe_scene_save_entity() makes a copy): "name",
+ * "parent", "transform", "instance", "mesh", ..., "script", "components".
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_CAPACITY or a loading error.
+ *
+ * @thread_safety Owning thread
+ */
+WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_JsonValue* description,
+                                   WPE_Entity* out_entity);
+
+/**
+ * Sets one part of an entity from its scene-file description: "name", "parent", "transform",
+ * "mesh", "camera", "light", "animator", "rigidbody", "collider", "audio_source", "script", or a
+ * game component's serializer name. An existing component is replaced as a whole (fields not given
+ * take their defaults), so read the entity first to change single fields.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_NOT_FOUND (dead entity) or a
+ *         loading error (the previous component is kept).
+ *
+ * @thread_safety Owning thread
+ */
+WPE_Result wpe_scene_set_component(const WPE_SceneContext* context, WPE_Entity entity, const char* key,
+                                   const WPE_JsonValue* value);
+
+/** Removes a component by its scene-file key. @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG,
+ * WPE_RESULT_ERROR_NOT_FOUND (dead entity or no such component) or WPE_RESULT_ERROR_INVALID_ARG (unknown
+ * key; logged). @thread_safety Owning thread */
+WPE_Result wpe_scene_remove_component(const WPE_SceneContext* context, WPE_Entity entity, const char* key);
+
+/** Writes an environment as the JSON object stored under a scene's "environment". @thread_safety Any thread
+ */
+WPE_Result wpe_scene_write_environment(const WPE_SceneEnvironment* environment, WPE_JsonWriter* writer);
+
+/** Applies an "environment" object onto an environment (keys not given keep their values; a given
+ * "postfx" list replaces the effects). @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or
+ * WPE_RESULT_ERROR_PARSE (logged; nothing changed). @thread_safety Any thread */
+WPE_Result wpe_scene_read_environment(const WPE_JsonValue* value, const char* name,
+                                      WPE_SceneEnvironment* io_environment);
 
 /**
  * Despawns every entity of the world (on_remove hooks run as usual, so scripts get on_destroy).

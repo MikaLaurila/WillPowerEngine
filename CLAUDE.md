@@ -20,9 +20,9 @@ Development runs in milestones; the user reviews each one before the next starts
 7. Box3D physics (done)
 8. Audio, `.pak` archives, VFS and the asset manager (done)
 9. Runtime/export, scene files and input (done)
-10. Editor
+10. Editor (done)
 
-Do not look outside the working directory. Third-party libraries come in through CMake FetchContent, pinned to release tags or commits. Only use the approved list in AGENTS.md §7 (SDL3, cglm, cgltf, stb_image, miniaudio, Luau, cimgui, Box3D, zstd); anything else needs the user's approval. Add each one in the milestone that needs it, wrapped so its API is not exposed in public headers, and compiled *without* `wpe_configure_target` so its warnings don't break the build.
+Do not look outside the working directory. Third-party libraries come in through CMake FetchContent, pinned to release tags or commits. Only use the approved list in AGENTS.md §7 (SDL3, cglm, cgltf, stb_image, miniaudio, Luau, cimgui (with Dear ImGui), Box3D, zstd); anything else needs the user's approval. Add each one in the milestone that needs it, wrapped so its API is not exposed in public headers, and compiled *without* `wpe_configure_target` so its warnings don't break the build.
 
 ## Commands
 
@@ -48,6 +48,10 @@ WPE_UPDATE_GOLDEN=1 ctest --test-dir build -R golden    # regenerate golden PNGs
 ./build/bin/wpe_runtime --project assets --scene scenes/test_full.scene --headless --frames 300 --fixed-dt 0.0333 --screenshot out.png
 ./build/bin/wpe_export assets out/demo.exe                        # standalone game: the runtime with the project appended as a .pak
 ctest --test-dir build -L integration                             # the master test scene for 60 simulated seconds (every scripting API)
+./build/bin/wpe_editor assets                                     # the editor (window + command server on 127.0.0.1:47800)
+./build/bin/wpe_editor assets --command '{"cmd": "help"}'         # editor commands headless (--run file.jsonl for batches)
+./build/bin/wpe_editor assets --command '{"cmd": "screenshot", "target": "editor", "path": "out.png"}'   # see the whole editor
+./build/bin/wpe_editor --send '{"cmd": "status"}'                 # a command to a running editor
 ```
 
 miniaudio is compiled from its `miniaudio.c` in `src/audio` (`-O2 -w`) with `MA_NO_RESOURCE_MANAGER MA_NO_ENCODING MA_NO_GENERATION` as *interface* definitions on `wpe_dep_miniaudio`: they change struct layouts, so every includer must see them.
@@ -98,7 +102,7 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - Shaders are C functions called concurrently from worker threads; varyings are capped at 32 (`WPE_MAX_VARYINGS`).
   - Output is deterministic across thread counts, and steady-state frames don't allocate; tests enforce both.
   - The rasterizer files are always compiled with `-O2`, even in Debug.
-- **platform** (`platform/platform.h`): the SDL3 window, presenting (nearest-neighbour, letterboxed), event pumping, time, PNG load/save, file streams and UTF-8-safe `wpe_file_read_all`. Only `jobs`, `platform` and `input` may include SDL.
+- **platform** (`platform/platform.h`): the SDL3 window, presenting (nearest-neighbour, letterboxed), event pumping, time, PNG load/save, file streams and UTF-8-safe `wpe_file_read_all`. Only `jobs`, `platform`, `input` and the editor may include SDL.
 - **renderer textures** (`renderer/texture.h`):
   - Textures are mipmapped, with sRGB-correct mip generation, and have an optional `max_dimension` downscale.
   - For LOD selection, a program sets `uv_derivatives`/`uv_varying`, and the rasterizer then provides exact per-pixel `uv_dx`/`uv_dy`.
@@ -151,8 +155,14 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - `wpe_renderer_framebuffer_for_write` returns NULL while a frame is recording.
 - **Tests:** `tests/framework/wpe_test.h` is a custom runner. Every case automatically fails if it changes the live `wpe_alloc` count (a leak) or triggers an engine `wpe_assert`; use `WPE_TEST_EXPECT_ASSERT` when an assert is expected. Register test executables with `wpe_add_test(...)` in `tests/<category>/CMakeLists.txt`. `tests/framework/wpe_test_assets.h` creates a VFS plus asset manager, adds/loads models with assertions and synthesizes WAV files; tests that write scratch files set `WORKING_DIRECTORY` to the build tree. Categories are `unit/`, `scene/` (the master scene, label `integration`), `stress/` (label `stress`), `tools/` (CMake scripts that drive the executables) and `golden/` (reference PNGs in `tests/golden/references/`, compared with a small tolerance).
 - **graphics debug lines** (`graphics/debug_lines.h`): world-space segments become screen-width quads, depth-tested with a small bias, drawn with sort key `UINT64_MAX - 1` (after the scene, before draw2d). Feed it from `wpe_physics_debug_draw`.
-- **Planned (see AGENTS.md §4–5 and §9):**
-  - The `editor/` executable (Milestone 10), built on `WPE_Engine`. It must be fully drivable by AI agents.
+- **editor** (`editor/`, docs in `docs/editor.md`, AGENTS.md §4.8):
+  - The model (`editor.c`) holds an embedded `WPE_Engine` with the simulation off in edit mode, plus a never-saved editor camera.
+  - Undo/redo and play/stop use whole-scene snapshots. Failed commands drop their undo step; a `coalesce` key merges drags.
+  - Every change, the UI's included, is a JSON command (`editor_commands.c`, scene-file schema with live ids), so a new UI feature needs a command.
+  - The UI is cimgui drawn by the software rasterizer (`ui_backend.c`: the ImGui 1.92 texture protocol, scissor), so `screenshot` with target `"editor"` works headless.
+  - `wpe_editor` is a console program, so PowerShell waits for it and captures its output.
+  - The `tools_editor_cli` test drives it like an agent would.
+  - cimgui/Dear ImGui come from two pinned archives copied into `build/cimgui/` (`wpe_dep_cimgui`, which needs `imgui_demo.cpp`).
 
 ## Conventions that are easy to get wrong
 

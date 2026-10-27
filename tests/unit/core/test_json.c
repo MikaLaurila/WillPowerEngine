@@ -169,6 +169,23 @@ static void test_json_writer_pretty_prints(void) {
     wpe_json_writer_destroy(w);
 }
 
+static void test_json_writer_compact(void) {
+    WPE_JsonWriter* w = NULL;
+    WPE_TEST_ASSERT_OK(wpe_json_writer_create(&w));
+    wpe_json_writer_set_compact(w, true);
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "a");
+    wpe_json_write_array_begin(w, false);
+    wpe_json_write_integer(w, 1);
+    wpe_json_write_string(w, "x\ny");
+    wpe_json_write_array_end(w);
+    wpe_json_write_object_end(w);
+    const char* text = NULL;
+    WPE_TEST_ASSERT_OK(wpe_json_writer_finish(w, &text, NULL));
+    WPE_TEST_ASSERT_EQ_STR("{ \"a\": [ 1, \"x\\ny\" ] }\n", text);
+    wpe_json_writer_destroy(w);
+}
+
 static void test_json_writer_round_trips_floats(void) {
     WPE_JsonWriter* w = NULL;
     WPE_TEST_ASSERT_OK(wpe_json_writer_create(&w));
@@ -279,5 +296,5 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_json_parses_all_value_types),
               WPE_TEST_CASE(test_json_reports_errors_with_positions),
               WPE_TEST_CASE(test_json_parse_rejects_null_arguments),
               WPE_TEST_CASE(test_json_writer_pretty_prints),
-              WPE_TEST_CASE(test_json_writer_round_trips_floats),
+              WPE_TEST_CASE(test_json_writer_round_trips_floats), WPE_TEST_CASE(test_json_writer_compact),
               WPE_TEST_CASE(test_json_writer_detects_misuse), WPE_TEST_CASE(test_json_large_document))

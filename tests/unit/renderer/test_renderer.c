@@ -233,6 +233,48 @@ static void test_renderer_fullscreen_quad_covers_each_pixel_once(void) {
     wpe_renderer_destroy(renderer);
 }
 
+static void test_renderer_scissor_limits_pixels(void) {
+    WPE_Renderer* renderer = make_renderer(W, H, NULL);
+    static uint32_t counts[W * H];
+    const ClipVertex quad[6] = {cv(-1, -1, 0, 1), cv(1, -1, 0, 1), cv(1, 1, 0, 1),
+                                cv(-1, -1, 0, 1), cv(1, 1, 0, 1),  cv(-1, 1, 0, 1)};
+    const TestUniforms u = {.color = wpe_vec4(1, 1, 1, 1), .counts = counts, .width = W};
+    /* A rectangle crossing tile boundaries, and one hanging over the framebuffer's edge. */
+    const uint32_t rects[2][4] = {{5, 7, 40, 30}, {W - 3, H - 2, 100, 100}};
+    for (int r = 0; r < 2; ++r) {
+        memset(counts, 0, sizeof counts);
+        WPE_DrawDesc d = draw_of(quad, 6, &u, wpe_render_state_default());
+        d.scissor = true;
+        d.scissor_x = rects[r][0];
+        d.scissor_y = rects[r][1];
+        d.scissor_width = rects[r][2];
+        d.scissor_height = rects[r][3];
+        render(renderer, &d, 1);
+        for (uint32_t y = 0; y < H; ++y) {
+            for (uint32_t x = 0; x < W; ++x) {
+                const bool inside = x >= rects[r][0] && x < rects[r][0] + rects[r][2] && y >= rects[r][1] &&
+                                    y < rects[r][1] + rects[r][3];
+                WPE_TEST_ASSERT_MSG(counts[y * W + x] == (inside ? 1u : 0u), "rect %d pixel %u,%u: %u", r, x,
+                                    y, counts[y * W + x]);
+            }
+        }
+    }
+    /* Empty or off-screen rectangles draw nothing. */
+    const uint32_t empty[3][4] = {{0, 0, 0, 10}, {W, 0, 10, 10}, {0, H + 5, 10, 10}};
+    for (int r = 0; r < 3; ++r) {
+        memset(counts, 0, sizeof counts);
+        WPE_DrawDesc d = draw_of(quad, 6, &u, wpe_render_state_default());
+        d.scissor = true;
+        d.scissor_x = empty[r][0];
+        d.scissor_y = empty[r][1];
+        d.scissor_width = empty[r][2];
+        d.scissor_height = empty[r][3];
+        render(renderer, &d, 1);
+        assert_counts_all(counts, W, H, 0);
+    }
+    wpe_renderer_destroy(renderer);
+}
+
 static void run_jittered_mesh_coverage(uint32_t subdivision_levels) {
     /* A grid of irregular triangles with shared edges and vertices must cover every pixel exactly once. */
     enum { CELLS_X = 13, CELLS_Y = 9 };
@@ -870,6 +912,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_renderer_frame_state_machine), WPE_TEST_CASE(test_renderer_submit_validates_draws),
     WPE_TEST_CASE(test_renderer_clear_only_frame),
     WPE_TEST_CASE(test_renderer_fullscreen_quad_covers_each_pixel_once),
+    WPE_TEST_CASE(test_renderer_scissor_limits_pixels),
     WPE_TEST_CASE(test_renderer_jittered_mesh_is_watertight),
     WPE_TEST_CASE(test_renderer_fill_rule_on_pixel_center_edges),
     WPE_TEST_CASE(test_renderer_subdivision_is_watertight),

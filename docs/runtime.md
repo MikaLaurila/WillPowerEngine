@@ -32,7 +32,7 @@ assets/
 | `--screenshot <png>` | Save the last frame. |
 | `--workers <n>` | Render threads (default: one per core). |
 
-On Windows the runtime is a windowed (GUI) program: an exported game started by double-click opens no console. Started from a terminal it still logs there. A startup error shows a message box unless `--headless` is given.
+On Windows the runtime is a windowed (GUI) program: an exported game started by double-click opens no console. Started from a terminal it still logs there. A startup error shows a message box unless `--headless` is given. PowerShell does not wait for GUI programs unless their output is piped, so in scripts pipe it (`wpe_runtime ... | Out-Host`) or use `Start-Process -Wait`. The editor (`wpe_editor`) is a console program and needs neither.
 
 The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which the editor will reuse. Each frame the engine does the following:
 

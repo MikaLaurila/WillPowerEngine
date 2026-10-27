@@ -430,7 +430,146 @@ static void test_engine_scene_game_components(void) {
     free_world(&w);
 }
 
+static WPE_JsonDocument* parse_json(const char* text) {
+    WPE_JsonDocument* doc = NULL;
+    WPE_TEST_ASSERT_OK(wpe_json_parse(text, strlen(text), &doc, NULL));
+    return doc;
+}
+
+static void test_engine_scene_editing_functions(void) {
+    World w = make_world();
+    const WPE_SceneContext ctx = context_of(&w);
+    /* Create with live-handle references. */
+    WPE_JsonDocument* parent_doc =
+        parse_json("{\"name\": \"parent\", \"transform\": {\"position\": [1, 2, 3]}}");
+    WPE_Entity parent = WPE_ENTITY_NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_create_entity(&ctx, wpe_json_root(parent_doc), &parent));
+    char text[512];
+    snprintf(text, sizeof text,
+             "{\"name\": \"lamp\", \"parent\": %u, \"light\": {\"type\": \"point\", \"intensity\": 3},"
+             " \"script\": {\"path\": \"scripts/spinner.luau\", \"properties\": {\"speed\": 2}}}",
+             parent);
+    WPE_JsonDocument* lamp_doc = parse_json(text);
+    WPE_Entity lamp = WPE_ENTITY_NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_create_entity(&ctx, wpe_json_root(lamp_doc), &lamp));
+    WPE_TEST_ASSERT_EQ_UINT(parent, wpe_scene_get_parent(w.ecs, lamp));
+    WPE_TEST_ASSERT_NEAR(3.0, ((WPE_Light*)wpe_ecs_get_component(w.ecs, lamp, WPE_COMP_LIGHT))->intensity, 0);
+
+    /* Save one entity: ids are live handles. */
+    WPE_JsonWriter* writer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_json_writer_create(&writer));
+    WPE_TEST_ASSERT_OK(wpe_scene_save_entity(&ctx, lamp, writer));
+    const char* saved = NULL;
+    WPE_TEST_ASSERT_OK(wpe_json_writer_finish(writer, &saved, NULL));
+    char expect[64];
+    snprintf(expect, sizeof expect, "\"parent\": %u", parent);
+    WPE_TEST_ASSERT(strstr(saved, expect) && strstr(saved, "\"speed\": 2"));
+    wpe_json_writer_destroy(writer);
+
+    /* Replace a component; a bad description keeps the previous one. */
+    WPE_JsonDocument* spot = parse_json("{\"type\": \"spot\", \"range\": 4}");
+    WPE_TEST_ASSERT_OK(wpe_scene_set_component(&ctx, lamp, "light", wpe_json_root(spot)));
+    const WPE_Light* light = wpe_ecs_get_component(w.ecs, lamp, WPE_COMP_LIGHT);
+    WPE_TEST_ASSERT(light->type == WPE_LIGHT_SPOT && light->range == 4.0f && light->intensity == 1.0f);
+    WPE_JsonDocument* bad = parse_json("{\"type\": \"laser\"}");
+    quiet(true);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_PARSE,
+                           wpe_scene_set_component(&ctx, lamp, "light", wpe_json_root(bad)));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_PARSE,
+                           wpe_scene_set_component(&ctx, lamp, "lamp", wpe_json_root(spot)));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_scene_remove_component(&ctx, lamp, "lamp"));
+    quiet(false);
+    light = wpe_ecs_get_component(w.ecs, lamp, WPE_COMP_LIGHT);
+    WPE_TEST_ASSERT(light && light->type == WPE_LIGHT_SPOT);
+    /* Mesh with a model reference, name and parent changes, removal. */
+    WPE_JsonDocument* mesh = parse_json("{\"model\": \"meshes/box.prim\"}");
+    WPE_TEST_ASSERT_OK(wpe_scene_set_component(&ctx, lamp, "mesh", wpe_json_root(mesh)));
+    WPE_TEST_ASSERT_OK(wpe_scene_set_component(&ctx, lamp, "mesh", wpe_json_root(mesh))); /* Replace. */
+    WPE_JsonDocument* name = parse_json("\"renamed\"");
+    WPE_TEST_ASSERT_OK(wpe_scene_set_component(&ctx, lamp, "name", wpe_json_root(name)));
+    WPE_TEST_ASSERT_EQ_STR("renamed", wpe_scene_get_name(w.ecs, lamp));
+    WPE_JsonDocument* detach = parse_json("null");
+    WPE_TEST_ASSERT_OK(wpe_scene_set_component(&ctx, lamp, "parent", wpe_json_root(detach)));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_scene_get_parent(w.ecs, lamp));
+    WPE_TEST_ASSERT_OK(wpe_scene_remove_component(&ctx, lamp, "mesh"));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_scene_remove_component(&ctx, lamp, "mesh"));
+
+    /* Environment: partial updates. */
+    WPE_SceneEnvironment env = wpe_scene_environment_default();
+    WPE_JsonDocument* fog = parse_json("{\"fog\": {\"mode\": \"linear\", \"start\": 1, \"end\": 9}}");
+    WPE_TEST_ASSERT_OK(wpe_scene_read_environment(wpe_json_root(fog), "test", &env));
+    WPE_TEST_ASSERT(env.render.fog.mode == WPE_FOG_LINEAR && env.render.fog.end == 9.0f &&
+                    env.gravity.y < -9.0f);
+    WPE_TEST_ASSERT_OK(wpe_json_writer_create(&writer));
+    WPE_TEST_ASSERT_OK(wpe_scene_write_environment(&env, writer));
+    WPE_TEST_ASSERT_OK(wpe_json_writer_finish(writer, &saved, NULL));
+    WPE_TEST_ASSERT(strstr(saved, "\"mode\": \"linear\"") != NULL);
+    wpe_json_writer_destroy(writer);
+
+    /* The include filter keeps an entity (and its children) out of saved scenes. */
+    WPE_SceneContext filtered = ctx;
+    filtered.include = NULL;
+    WPE_JsonWriter* all = NULL;
+    const char* all_text = save_text(&filtered, &env, WPE_ENTITY_NULL, &all);
+    WPE_TEST_ASSERT(strstr(all_text, "\"parent\"") != NULL);
+    wpe_json_writer_destroy(all);
+
+    WPE_JsonDocument* docs[] = {parent_doc, lamp_doc, spot, bad, mesh, name, detach, fog};
+    for (size_t i = 0; i < sizeof docs / sizeof docs[0]; ++i)
+        wpe_json_free(docs[i]);
+    free_world(&w);
+}
+
+static bool exclude_named_parent(WPE_Entity entity, void* user_data) {
+    const char* name = wpe_scene_get_name(user_data, entity);
+    return !name || strcmp(name, "parent") != 0;
+}
+
+static void test_engine_scene_save_filter(void) {
+    World w = make_world();
+    WPE_SceneContext ctx = context_of(&w);
+    const WPE_Entity parent = wpe_ecs_spawn(w.ecs);
+    WPE_TEST_ASSERT_OK(wpe_scene_set_name(w.ecs, parent, "parent"));
+    const WPE_Entity child = wpe_ecs_spawn(w.ecs);
+    WPE_TEST_ASSERT_OK(wpe_scene_set_name(w.ecs, child, "child"));
+    WPE_TEST_ASSERT_OK(wpe_scene_set_parent(w.ecs, child, parent, false));
+    const WPE_Entity other = wpe_ecs_spawn(w.ecs);
+    WPE_TEST_ASSERT_OK(wpe_scene_set_name(w.ecs, other, "other"));
+    ctx.include = exclude_named_parent;
+    ctx.include_user_data = w.ecs;
+    const WPE_SceneEnvironment env = wpe_scene_environment_default();
+    WPE_JsonWriter* writer = NULL;
+    const char* text = save_text(&ctx, &env, WPE_ENTITY_NULL, &writer);
+    WPE_TEST_ASSERT(strstr(text, "\"other\"") && !strstr(text, "\"parent\"") && !strstr(text, "\"child\""));
+    wpe_json_writer_destroy(writer);
+    free_world(&w);
+}
+
 /* ---- The engine ------------------------------------------------------------------------------------ */
+
+static void write_tiny_game(void);
+
+static void test_engine_embedded_edit_mode(void) {
+    write_tiny_game();
+    WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_engine_create(
+        &(WPE_EngineDesc){
+            .project_dir = ROOT "/game", .embedded = true, .no_audio_device = true, .workers = 2},
+        &engine));
+    /* Edit mode: frames render but scripts do not run (the switch script would load scene b). */
+    wpe_engine_set_simulating(engine, false);
+    WPE_TEST_ASSERT(!wpe_engine_simulating(engine));
+    for (int i = 0; i < 5; ++i)
+        WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(wpe_engine_scripts(engine)).errors);
+    WPE_TEST_ASSERT_NEAR(-1.0, wpe_physics_gravity(wpe_engine_physics(engine)).y, 1e-6); /* Still scene a. */
+    /* Play: the scripts start and switch scenes after three updates. */
+    wpe_engine_set_simulating(engine, true);
+    for (int i = 0; i < 4; ++i)
+        WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    WPE_TEST_ASSERT_NEAR(-2.0, wpe_physics_gravity(wpe_engine_physics(engine)).y, 1e-6);
+    wpe_engine_destroy(engine);
+}
 
 /* A tiny game: scene a switches to scene b after three frames; b quits after two more. */
 static void write_tiny_game(void) {
@@ -566,11 +705,10 @@ static void test_engine_export_embeds_the_project(void) {
     write_tiny_game(); /* Restore for other cases. */
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_engine_project_from_assets),
-              WPE_TEST_CASE(test_engine_project_rejects_mistakes),
-              WPE_TEST_CASE(test_engine_project_write_round_trip),
-              WPE_TEST_CASE(test_engine_scene_round_trip),
-              WPE_TEST_CASE(test_engine_scene_rejects_mistakes_and_rolls_back),
-              WPE_TEST_CASE(test_engine_scene_game_components),
-              WPE_TEST_CASE(test_engine_runs_scenes_headless),
-              WPE_TEST_CASE(test_engine_export_embeds_the_project))
+WPE_TEST_MAIN(
+    WPE_TEST_CASE(test_engine_project_from_assets), WPE_TEST_CASE(test_engine_project_rejects_mistakes),
+    WPE_TEST_CASE(test_engine_project_write_round_trip), WPE_TEST_CASE(test_engine_scene_round_trip),
+    WPE_TEST_CASE(test_engine_scene_rejects_mistakes_and_rolls_back),
+    WPE_TEST_CASE(test_engine_scene_game_components), WPE_TEST_CASE(test_engine_scene_editing_functions),
+    WPE_TEST_CASE(test_engine_scene_save_filter), WPE_TEST_CASE(test_engine_embedded_edit_mode),
+    WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_export_embeds_the_project))

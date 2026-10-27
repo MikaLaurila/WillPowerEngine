@@ -143,3 +143,38 @@ target_include_directories(wpe_dep_miniaudio SYSTEM INTERFACE "${miniaudio_SOURC
 target_compile_definitions(wpe_dep_miniaudio INTERFACE
     MA_NO_RESOURCE_MANAGER MA_NO_ENCODING MA_NO_GENERATION)
 set(WPE_MINIAUDIO_SOURCE "${miniaudio_SOURCE_DIR}/miniaudio.c")
+
+# Dear ImGui v1.92.9b, docking branch (MIT), with its C binding cimgui 1.92.9bdock (MIT): the
+# editor's user interface. cimgui's archive leaves its imgui/ submodule empty, so Dear ImGui comes
+# from its own archive at the matching tag; both are copied into one generated tree with the layout
+# cimgui.cpp expects. Compiled without the engine's warnings, like the other third-party code.
+FetchContent_Declare(imgui
+    URL https://github.com/ocornut/imgui/archive/refs/tags/v1.92.9b-docking.tar.gz
+    URL_HASH SHA256=90ded916bd57db2e0e171b6b098940a47c6f5042725dcdc67fb19940ca8bfdcc
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    SOURCE_SUBDIR wpe_header_only)
+FetchContent_Declare(cimgui
+    URL https://github.com/cimgui/cimgui/archive/refs/tags/1.92.9bdock.tar.gz
+    URL_HASH SHA256=7478134b33ca858140858bdf95e37ab8f0dfdbbe92a149523094f2c723aeb7c7
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    SOURCE_SUBDIR wpe_header_only)
+FetchContent_MakeAvailable(imgui cimgui)
+set(WPE_CIMGUI_DIR "${CMAKE_BINARY_DIR}/cimgui")
+file(COPY "${cimgui_SOURCE_DIR}/cimgui.cpp" "${cimgui_SOURCE_DIR}/cimgui.h" "${cimgui_SOURCE_DIR}/cimconfig.h"
+     DESTINATION "${WPE_CIMGUI_DIR}")
+file(GLOB WPE_IMGUI_FILES "${imgui_SOURCE_DIR}/*.h" "${imgui_SOURCE_DIR}/*.cpp")
+file(COPY ${WPE_IMGUI_FILES} DESTINATION "${WPE_CIMGUI_DIR}/imgui")
+add_library(wpe_dep_cimgui STATIC
+    "${WPE_CIMGUI_DIR}/cimgui.cpp"
+    "${WPE_CIMGUI_DIR}/imgui/imgui.cpp"
+    "${WPE_CIMGUI_DIR}/imgui/imgui_demo.cpp" # cimgui binds the demo and style-editor windows too
+    "${WPE_CIMGUI_DIR}/imgui/imgui_draw.cpp"
+    "${WPE_CIMGUI_DIR}/imgui/imgui_tables.cpp"
+    "${WPE_CIMGUI_DIR}/imgui/imgui_widgets.cpp")
+target_include_directories(wpe_dep_cimgui SYSTEM PUBLIC "${WPE_CIMGUI_DIR}")
+# C users need the struct and enum definitions from cimgui.h.
+target_compile_definitions(wpe_dep_cimgui INTERFACE CIMGUI_DEFINE_ENUMS_AND_STRUCTS)
+set_target_properties(wpe_dep_cimgui PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(wpe_dep_cimgui PRIVATE -w)
+endif()

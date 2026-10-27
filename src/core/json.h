@@ -123,6 +123,11 @@ typedef struct WPE_JsonWriter WPE_JsonWriter;
 /** Frees a writer and its text (ownership consumed); NULL is a no-op. @thread_safety Owning thread */
 void wpe_json_writer_destroy(WPE_JsonWriter* writer);
 
+/** Writes everything on one line (single spaces instead of line breaks and indentation), e.g. for
+ * line-based protocols. The text still ends with one newline. Set before writing. @thread_safety Owning
+ * thread */
+void wpe_json_writer_set_compact(WPE_JsonWriter* writer, bool compact);
+
 /*
  * Value emitters. Inside an object every value must be preceded by wpe_json_write_key(). Misuse
  * (a value without a key in an object, unbalanced end calls, nesting deeper than

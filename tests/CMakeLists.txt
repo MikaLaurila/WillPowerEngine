@@ -38,6 +38,13 @@ add_test(NAME tools_export_roundtrip
 set_tests_properties(tools_export_roundtrip PROPERTIES LABELS "tools;engine" TIMEOUT 600)
 add_dependencies(wpe_tests wpe_export wpe_runtime)
 
+# The editor's command line, driven like an agent would drive it.
+add_test(NAME tools_editor_cli
+    COMMAND "${CMAKE_COMMAND}" -DWPE_EDITOR=$<TARGET_FILE:wpe_editor> -DWORK=${CMAKE_CURRENT_BINARY_DIR}/editor_cli
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/editor_cli.cmake)
+set_tests_properties(tools_editor_cli PROPERTIES LABELS "tools;editor" TIMEOUT 600)
+add_dependencies(wpe_tests wpe_editor)
+
 # Builds every test executable, then runs the whole suite.
 add_custom_target(test_all
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -C $<CONFIG>

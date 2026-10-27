@@ -18,7 +18,8 @@
 #define OS_PATH_MAX 4096
 
 static int usage(void) {
-    fprintf(stderr, "usage: wpe_export <project-dir> <output-executable> [--runtime <wpe_runtime>] [--level N]\n");
+    fprintf(stderr,
+            "usage: wpe_export <project-dir> <output-executable> [--runtime <wpe_runtime>] [--level N]\n");
     return EXIT_FAILURE;
 }
 
@@ -40,8 +41,10 @@ int main(int argc, char** argv) {
         if (i + 1 < argc && strcmp(argv[i], "--runtime") == 0) {
             desc.runtime_path = argv[++i];
         } else if (i + 1 < argc && strcmp(argv[i], "--level") == 0) {
-            desc.compression_level = atoi(argv[++i]);
-            if (desc.compression_level < 1 || desc.compression_level > 19) {
+            char* end = NULL;
+            const long level = strtol(argv[++i], &end, 10);
+            desc.compression_level = *end == '\0' && level >= 1 && level <= 19 ? (int)level : 0;
+            if (desc.compression_level == 0) {
                 fprintf(stderr, "--level must be 1..19\n");
                 return EXIT_FAILURE;
             }
@@ -63,7 +66,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "export failed: %s\n", wpe_result_to_string(result));
         return EXIT_FAILURE;
     }
-    printf("exported %s: %u files (%llu bytes of assets), %llu bytes in total\n", desc.output_path, stats.files,
-           (unsigned long long)stats.asset_bytes, (unsigned long long)stats.output_bytes);
+    printf("exported %s: %u files (%llu bytes of assets), %llu bytes in total\n", desc.output_path,
+           stats.files, (unsigned long long)stats.asset_bytes, (unsigned long long)stats.output_bytes);
     return EXIT_SUCCESS;
 }

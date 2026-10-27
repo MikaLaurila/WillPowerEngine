@@ -18,8 +18,20 @@ agents can drive fully, and it exports standalone game executables.
 > - Keyboard, mouse and gamepad input with named actions; JSON scene and project files; a game
 >   runtime and export to a single standalone executable (see [docs/runtime.md](docs/runtime.md)
 >   and [docs/scenes.md](docs/scenes.md))
+> - An editor that people use through its window and AI agents through JSON commands (headless or
+>   live), see [docs/editor.md](docs/editor.md)
 >
 > See [CHANGELOG.md](CHANGELOG.md) for progress.
+
+Edit the demo project, or let an agent do it:
+
+```bash
+./build/bin/wpe_editor assets                                        # the editor window
+./build/bin/wpe_editor assets --command '{"cmd": "list_entities"}'   # a command, headless
+./build/bin/wpe_editor --send '{"cmd": "status"}'                    # a command to the running editor
+```
+
+![The editor](docs/images/editor.png)
 
 Play the demo game (keyboard and mouse or a gamepad) and export it:
 

@@ -49,8 +49,12 @@ typedef struct WPE_EngineDesc {
     const char* project_dir; /* An OS directory (development; scripts can be hot-reloaded). */
     const char* pak_path;    /* An archive, or an executable carrying one. */
 
-    const char* scene;    /* Scene to start with instead of the project's start scene (NULL = project's). */
-    bool headless;        /* No window: nothing is shown and no audio device is opened. */
+    const char* scene; /* Scene to start with instead of the project's start scene (NULL = project's). */
+    bool headless;     /* No window: nothing is shown and no audio device is opened. */
+    /* No window of its own, for hosts such as the editor: the host shows the framebuffer
+     * (wpe_engine_renderer()) and forwards OS events with wpe_engine_handle_event(). Audio still
+     * plays through a device. */
+    bool embedded;
     bool no_audio_device; /* Mix audio without an output device even with a window (silent). */
     uint32_t workers;     /* Render worker threads (0 = one per core). */
 } WPE_EngineDesc;
@@ -81,6 +85,13 @@ void wpe_engine_destroy(WPE_Engine* engine);
  */
 WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path);
 
+/** wpe_engine_load_scene() from a scene document in memory (`name` labels messages). @thread_safety Main
+ * thread only */
+WPE_Result wpe_engine_load_scene_text(WPE_Engine* engine, const char* text, size_t size, const char* name);
+
+/** @return The VFS the game's files are read from (borrowed). @thread_safety Main thread only */
+const WPE_Vfs* wpe_engine_vfs(const WPE_Engine* engine);
+
 /**
  * Runs one frame (see the file comment).
  *
@@ -91,11 +102,29 @@ WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path);
  */
 WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt);
 
+/** Forwards an OS event to the game's input (embedded engines; others pump their own). @thread_safety Main
+ * thread only */
+void wpe_engine_handle_event(WPE_Engine* engine, const WPE_PlatformEvent* event);
+
+/**
+ * Turns the simulation on or off (on by default). While off, frames still read input, update
+ * transforms and render, but scripts, physics, animation and audio do not run: the editor's edit
+ * mode. Turning it on starts the scene's music; turning it off stops it.
+ *
+ * @thread_safety Main thread only
+ */
+void wpe_engine_set_simulating(WPE_Engine* engine, bool simulating);
+bool wpe_engine_simulating(const WPE_Engine* engine);
+
 /** @return false once the window was closed or a quit was requested. @thread_safety Main thread only */
 bool wpe_engine_running(const WPE_Engine* engine);
 
 /** Asks the game to stop (wpe_engine_running() turns false). @thread_safety Main thread only */
 void wpe_engine_request_quit(WPE_Engine* engine);
+
+/** Withdraws a quit request (hosts such as the editor end play mode instead). @thread_safety Main thread only
+ */
+void wpe_engine_cancel_quit(WPE_Engine* engine);
 
 typedef struct WPE_RunOptions {
     uint32_t frames;        /* Stop after this many frames (0 = until quit). */
