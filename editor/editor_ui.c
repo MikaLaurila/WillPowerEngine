@@ -1213,8 +1213,9 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
     if (igMenuItem_Bool("Move", "W", ui->gizmo_mode == WPE__GIZMO_MOVE, true))
         ui->gizmo_mode = WPE__GIZMO_MOVE;
     if (igMenuItem_Bool("Rotate", "E", ui->gizmo_mode == WPE__GIZMO_ROTATE, true))
-        if (igMenuItem_Bool("Scale", "R", ui->gizmo_mode == WPE__GIZMO_SCALE, true))
-            ui->gizmo_mode = WPE__GIZMO_SCALE;
+        ui->gizmo_mode = WPE__GIZMO_ROTATE;
+    if (igMenuItem_Bool("Scale", "R", ui->gizmo_mode == WPE__GIZMO_SCALE, true))
+        ui->gizmo_mode = WPE__GIZMO_SCALE;
     igSeparator();
     const char* path = wpe_editor_scene_path(ui->editor);
     igTextDisabled("%s%s", path[0] ? path : "(unsaved scene)", wpe_editor_dirty(ui->editor) ? " *" : "");
