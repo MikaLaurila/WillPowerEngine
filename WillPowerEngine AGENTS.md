@@ -376,7 +376,12 @@ Implemented in `editor/` (docs: `docs/editor.md`).
   - Replies include the warnings and errors logged while a command ran.
 - **Undo** keeps whole-scene snapshots, so any command is undoable with one mechanism. Failed commands leave no step, and a `coalesce` key merges continuous edits.
 - **Play mode** snapshots the scene and restores it on stop. Edit mode renders from an editor camera that is never saved (the scene context's include filter).
-- **The UI is Dear ImGui (cimgui) drawn by the software rasterizer** (scissor rectangles, `wpe_texture_update`), so headless runs can capture the whole editor, exactly as shown, for agents.
+- **The UI is Dear ImGui (cimgui) with two renderers** in `ui_backend.c`:
+  - **The window draws it on the GPU** through its SDL renderer (`wpe_window_renderer`), in C after Dear ImGui's `imgui_impl_sdlrenderer3`. Rasterizing the UI in software took about 13 ms per frame at 1600x900; only the game view stays software.
+  - **Headless runs draw it with the software rasterizer** (scissor rectangles), so agents can capture the whole editor without a window.
+  - **The live `screenshot` command reads back the frame the window showed**, so it captures exactly what the user sees.
+  - **`editor_ui_backend` tests that both paths draw the same frame**, running the GPU path on SDL's software `SDL_Renderer` with no GPU needed.
+  - **Keep GPU vertices interleaved**: SDL's software renderer mis-strides separate UV arrays.
 - **No hidden state.** Every editor feature must be reachable through a command; when adding UI, add or reuse a command first.
 
 ---
@@ -401,7 +406,7 @@ willpower_engine/
 │   ├── input/          # SDL3 keyboard, mouse and gamepad input with actions
 │   └── engine/         # Game runtime: project and scene files, frame loop, export
 ├── editor/             # wpe_editor: model and commands (editor.c, editor_commands.c), UI (editor_ui.c,
-│   │                   # ui_backend.c: ImGui on the software rasterizer), main.c (window, server, CLI)
+│   │                   # ui_backend.c: ImGui on the GPU or the software rasterizer), main.c (window, server, CLI)
 │   └── main.c
 ├── runtime/            # Standalone game runtime (wpe_runtime; exported games are this executable)
 │   └── main.c

@@ -26,6 +26,25 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   functions, edit mode, editor commands (undo/redo, coalescing, scenes, play mode, screenshots),
   and a command-line test that drives the editor like an agent.
 
+### Changed (editor performance)
+- The editor window draws its interface on the GPU through SDL's renderer (a C backend after Dear
+  ImGui's `imgui_impl_sdlrenderer3`) instead of the software rasterizer. Measured at 1600x900:
+  - before: about 13 ms per frame for the interface alone, so frame rates were capped well below the
+    display's refresh rate;
+  - after: the editor reaches the display's refresh rate (about 236 fps on a 240 Hz display).
+  - The game view is still rendered by the engine.
+- Headless runs keep the software path. In a running editor, `screenshot` with target `"editor"`
+  reads back the frame the window showed.
+- Platform: `wpe_window_renderer` gives hosts that draw the window themselves its SDL renderer
+  (opaque `WPE_PlatformRenderer`).
+- UI backend API: `wpe_ui_create` takes the renderer (or NULL for software); `wpe_ui_present`,
+  `wpe_ui_capture` and `wpe_ui_output_size` are new. `wpe_ui_set_image` replaces
+  `wpe_ui_texture_id`.
+- Test: the GPU path, run on SDL's software `SDL_Renderer`, must draw the same frame as the
+  software path.
+- Vertices for SDL are interleaved. SDL's software renderer reads UVs with the color stride in its
+  rectangle fast path, so separate arrays crashed it (found by the new test, about 70% of runs).
+
 ### Fixed (editor, after hands-on testing)
 - The rotate gizmo draws one colored ring per axis instead of handles that looked like the move
   gizmo's; dragging follows the ring's direction where it was grabbed, and the angle is shown.

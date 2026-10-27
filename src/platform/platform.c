@@ -169,6 +169,10 @@ WPE_Result wpe_window_present(WPE_Window* window, const WPE_Framebuffer* framebu
     return WPE_RESULT_OK;
 }
 
+WPE_PlatformRenderer* wpe_window_renderer(WPE_Window* window) {
+    return window ? (WPE_PlatformRenderer*)window->renderer : NULL;
+}
+
 double wpe_platform_time_seconds(void) {
     return (double)SDL_GetTicksNS() / 1e9;
 }

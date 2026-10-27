@@ -1,3 +1,8 @@
+/*
+ * The editor's ImGui backend. Events are translated from SDL. Drawing goes either through the
+ * window's SDL renderer (the GPU path follows Dear ImGui's imgui_impl_sdlrenderer3.cpp) or through
+ * the engine's software rasterizer (headless).
+ */
 #define WPE_LOG_MODULE "editor"
 #include "editor/ui_backend.h"
 
@@ -8,6 +13,7 @@
 #include "core/alloc.h"
 #include "core/debug.h"
 #include "core/log.h"
+#include "renderer/texture.h"
 
 /* Engine-side copy of an ImGui vertex: screen position, texture coordinates, color (0..1). */
 typedef struct wpe__UiVertex {
@@ -21,22 +27,41 @@ typedef struct wpe__UiUniforms {
     float inv_width, inv_height;
 } wpe__UiUniforms;
 
-/* A texture slot: ImTextureID n refers to textures[n - 1]. */
+/* A vertex for SDL_RenderGeometryRaw. The streams are interleaved, so all three have one stride: SDL's
+ * own software renderer (its fallback without a GPU driver) steps through UVs with the color stride in
+ * its rectangle fast path (SDL_render.c, SDL_SW_RenderGeometryRaw), which reads past separate arrays. */
+typedef struct wpe__GpuVertex {
+    float xy[2];
+    SDL_FColor color;
+    float uv[2];
+} wpe__GpuVertex;
+
+/* A texture slot: ImTextureID n refers to textures[n - 1]. A slot holds one kind of texture, the
+ * kind the backend draws with; a free slot holds neither. */
 typedef struct wpe__UiTexture {
-    const WPE_Texture* texture;
-    WPE_Texture* owned; /* Created for an ImGui texture (NULL for registered engine textures). */
+    WPE_Texture* texture; /* Software. */
+    SDL_Texture* gpu;     /* GPU. */
+    uint32_t width, height;
 } wpe__UiTexture;
 
 struct WPE_UiBackend {
     ImGuiContext* context;
-    wpe__UiVertex* vertices;
-    uint32_t vertex_capacity;
-    uint32_t* indices;
-    uint32_t index_capacity;
     wpe__UiTexture* textures;
     uint32_t texture_count, texture_capacity;
     uint32_t* staging; /* Texel conversion scratch. */
     size_t staging_capacity;
+
+    /* Software: the frame's vertices and absolute indices. */
+    wpe__UiVertex* vertices;
+    uint32_t vertex_capacity;
+    uint32_t* indices;
+    uint32_t index_capacity;
+
+    /* GPU: the window's renderer, the frame (kept for capture) and the frame's vertices. */
+    SDL_Renderer* gpu;
+    SDL_Texture* frame;
+    wpe__GpuVertex* gpu_vertices;
+    uint32_t gpu_vertex_capacity;
 };
 
 static bool wpe__ui_exists = false;
@@ -85,7 +110,7 @@ static void wpe__ui_free(void* pointer, void* user_data) {
     wpe_free(pointer);
 }
 
-WPE_Result wpe_ui_create(WPE_UiBackend** out_ui) {
+WPE_Result wpe_ui_create(WPE_PlatformRenderer* gpu, WPE_UiBackend** out_ui) {
     if (!out_ui) return WPE_RESULT_ERROR_NULL_ARG;
     *out_ui = NULL;
     if (wpe__ui_exists) {
@@ -100,11 +125,12 @@ WPE_Result wpe_ui_create(WPE_UiBackend** out_ui) {
         wpe_free(ui);
         return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     }
+    ui->gpu = (SDL_Renderer*)gpu;
     ImGuiIO* io = igGetIO_Nil();
     io->IniFilename = NULL; /* Layouts are built in code; nothing is written next to the editor. */
     io->ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
     io->BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
-    io->BackendRendererName = "wpe_software";
+    io->BackendRendererName = gpu ? "wpe_sdl_renderer" : "wpe_software";
     io->BackendPlatformName = "wpe_sdl3";
     igStyleColorsDark(NULL);
     wpe__ui_exists = true;
@@ -116,21 +142,29 @@ void wpe_ui_destroy(WPE_UiBackend* ui) {
     if (!ui) return;
     /* ImGui marks its textures for destruction when the context goes; the slots own them either way. */
     igDestroyContext(ui->context);
-    for (uint32_t i = 0; i < ui->texture_count; ++i)
-        wpe_texture_destroy(ui->textures[i].owned);
+    for (uint32_t i = 0; i < ui->texture_count; ++i) {
+        wpe_texture_destroy(ui->textures[i].texture);
+        if (ui->textures[i].gpu) SDL_DestroyTexture(ui->textures[i].gpu);
+    }
+    if (ui->frame) SDL_DestroyTexture(ui->frame);
     wpe_free(ui->textures);
     wpe_free(ui->vertices);
     wpe_free(ui->indices);
+    wpe_free(ui->gpu_vertices);
     wpe_free(ui->staging);
     wpe_free(ui);
     wpe__ui_exists = false;
+}
+
+bool wpe_ui_is_gpu(const WPE_UiBackend* ui) {
+    return ui && ui->gpu;
 }
 
 /* ---- Textures ------------------------------------------------------------------------------------- */
 
 static uint32_t wpe__ui_slot(WPE_UiBackend* ui) {
     for (uint32_t i = 0; ui->textures && i < ui->texture_count; ++i) {
-        if (!ui->textures[i].texture) return i;
+        if (!ui->textures[i].texture && !ui->textures[i].gpu) return i;
     }
     if (!ui->textures || ui->texture_count == ui->texture_capacity) {
         const uint32_t capacity = ui->texture_capacity ? ui->texture_capacity * 2 : 8;
@@ -143,15 +177,65 @@ static uint32_t wpe__ui_slot(WPE_UiBackend* ui) {
     return ui->texture_count++;
 }
 
-uint64_t wpe_ui_texture_id(WPE_UiBackend* ui, const WPE_Texture* texture) {
-    if (!ui || !texture) return 0;
-    for (uint32_t i = 0; i < ui->texture_count; ++i) {
-        if (ui->textures[i].texture == texture) return (uint64_t)i + 1;
+/* Fills a slot with width x height texels (0xAARRGGBB): updated in place at the same size, otherwise
+ * replaced. `linear` picks the GPU filter (ImGui's atlas wants bilinear; images stay sharp). */
+static WPE_Result wpe__ui_upload(WPE_UiBackend* ui, wpe__UiTexture* slot, uint32_t width, uint32_t height,
+                                 const uint32_t* texels, bool linear) {
+    const bool same_size = slot->width == width && slot->height == height;
+    if (!ui->gpu) {
+        if (slot->texture && same_size) return wpe_texture_update(slot->texture, texels);
+        WPE_Texture* texture = NULL;
+        const WPE_Result result = wpe_texture_create(
+            &(WPE_TextureDesc){.width = width, .height = height, .texels = texels}, &texture);
+        if (result != WPE_RESULT_OK) return result;
+        wpe_texture_destroy(slot->texture);
+        *slot = (wpe__UiTexture){.texture = texture, .width = width, .height = height};
+        return WPE_RESULT_OK;
     }
-    const uint32_t slot = wpe__ui_slot(ui);
-    if (slot == UINT32_MAX) return 0;
-    ui->textures[slot] = (wpe__UiTexture){.texture = texture};
-    return (uint64_t)slot + 1;
+    if (!slot->gpu || !same_size) {
+        SDL_Texture* texture = SDL_CreateTexture(ui->gpu, SDL_PIXELFORMAT_ARGB8888,
+                                                 SDL_TEXTUREACCESS_STREAMING, (int)width, (int)height);
+        if (!texture || !SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND) ||
+            !SDL_SetTextureScaleMode(texture, linear ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST)) {
+            wpe_log_error("cannot create a %ux%u UI texture: %s", width, height, SDL_GetError());
+            if (texture) SDL_DestroyTexture(texture);
+            return WPE_RESULT_ERROR;
+        }
+        if (slot->gpu) SDL_DestroyTexture(slot->gpu);
+        *slot = (wpe__UiTexture){.gpu = texture, .width = width, .height = height};
+    }
+    if (!SDL_UpdateTexture(slot->gpu, NULL, texels, (int)(width * sizeof *texels))) {
+        wpe_log_error("cannot upload a UI texture: %s", SDL_GetError());
+        return WPE_RESULT_ERROR;
+    }
+    return WPE_RESULT_OK;
+}
+
+static void wpe__ui_release(wpe__UiTexture* slot) {
+    wpe_texture_destroy(slot->texture);
+    if (slot->gpu) SDL_DestroyTexture(slot->gpu);
+    *slot = (wpe__UiTexture){0};
+}
+
+WPE_Result wpe_ui_set_image(WPE_UiBackend* ui, uint64_t* id, uint32_t width, uint32_t height,
+                            const WPE_Color* texels) {
+    if (!ui || !id || !texels) return WPE_RESULT_ERROR_NULL_ARG;
+    if (width == 0 || height == 0 || width > INT32_MAX / 4 || height > INT32_MAX / 4) {
+        wpe_log_error("invalid UI image size %ux%u", width, height);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    if (*id == 0) {
+        const uint32_t index = wpe__ui_slot(ui);
+        if (index == UINT32_MAX) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        const WPE_Result result = wpe__ui_upload(ui, &ui->textures[index], width, height, texels, false);
+        if (result == WPE_RESULT_OK) *id = (uint64_t)index + 1;
+        return result;
+    }
+    if (*id > ui->texture_count) {
+        wpe_log_error("unknown UI image %llu", (unsigned long long)*id);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    return wpe__ui_upload(ui, &ui->textures[*id - 1], width, height, texels, false);
 }
 
 /* Converts ImGui's RGBA32 (bytes R, G, B, A) or Alpha8 texels to the engine's 0xAARRGGBB. */
@@ -182,41 +266,23 @@ static WPE_Result wpe__ui_update_textures(WPE_UiBackend* ui, ImDrawData* data) {
     for (int i = 0; i < data->Textures->Size; ++i) {
         ImTextureData* t = data->Textures->Data[i];
         if (t->Status == ImTextureStatus_WantCreate || t->Status == ImTextureStatus_WantUpdates) {
+            /* The whole texture is uploaded: updates are rare (the atlas gaining glyphs). */
             const uint32_t* texels = wpe__ui_convert(ui, t);
             if (!texels) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
             const uint64_t id = t->TexID;
-            wpe__UiTexture* slot = id >= 1 && id <= ui->texture_count ? &ui->textures[id - 1] : NULL;
-            if (slot && slot->owned && slot->owned->levels[0].width == (uint32_t)t->Width &&
-                slot->owned->levels[0].height == (uint32_t)t->Height) {
-                const WPE_Result result = wpe_texture_update(slot->owned, texels);
-                if (result != WPE_RESULT_OK) return result;
-            } else {
-                /* New, or resized (the atlas grew): build a fresh texture in the same or a new slot. */
-                WPE_Texture* texture = NULL;
-                const WPE_Result result = wpe_texture_create(&(WPE_TextureDesc){.width = (uint32_t)t->Width,
-                                                                                .height = (uint32_t)t->Height,
-                                                                                .texels = texels},
-                                                             &texture);
-                if (result != WPE_RESULT_OK) return result;
-                if (!slot) {
-                    const uint32_t index = wpe__ui_slot(ui);
-                    if (index == UINT32_MAX) {
-                        wpe_texture_destroy(texture);
-                        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
-                    }
-                    slot = &ui->textures[index];
-                    ImTextureData_SetTexID(t, (ImTextureID)index + 1);
-                }
-                wpe_texture_destroy(slot->owned);
-                *slot = (wpe__UiTexture){.texture = texture, .owned = texture};
+            uint32_t index = id >= 1 && id <= ui->texture_count ? (uint32_t)(id - 1) : UINT32_MAX;
+            if (index == UINT32_MAX) {
+                index = wpe__ui_slot(ui);
+                if (index == UINT32_MAX) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
             }
+            const WPE_Result result = wpe__ui_upload(ui, &ui->textures[index], (uint32_t)t->Width,
+                                                     (uint32_t)t->Height, texels, true);
+            if (result != WPE_RESULT_OK) return result;
+            ImTextureData_SetTexID(t, (ImTextureID)index + 1);
             ImTextureData_SetStatus(t, ImTextureStatus_OK);
         } else if (t->Status == ImTextureStatus_WantDestroy && t->UnusedFrames > 0) {
             const uint64_t id = t->TexID;
-            if (id >= 1 && id <= ui->texture_count) {
-                wpe_texture_destroy(ui->textures[id - 1].owned);
-                ui->textures[id - 1] = (wpe__UiTexture){0};
-            }
+            if (id >= 1 && id <= ui->texture_count) wpe__ui_release(&ui->textures[id - 1]);
             ImTextureData_SetTexID(t, ImTextureID_Invalid);
             ImTextureData_SetStatus(t, ImTextureStatus_Destroyed);
         }
@@ -257,6 +323,10 @@ static uint32_t wpe__ui_clip(float value, uint32_t limit) {
 
 WPE_Result wpe_ui_render(WPE_UiBackend* ui, WPE_Renderer* renderer) {
     if (!ui || !renderer) return WPE_RESULT_ERROR_NULL_ARG;
+    if (ui->gpu) {
+        wpe_log_error("wpe_ui_render draws in software; this backend presents with wpe_ui_present");
+        return WPE_RESULT_ERROR_INVALID_STATE;
+    }
     igRender();
     ImDrawData* data = igGetDrawData();
     WPE_Result result = wpe__ui_update_textures(ui, data);
@@ -324,6 +394,151 @@ WPE_Result wpe_ui_render(WPE_UiBackend* ui, WPE_Renderer* renderer) {
         index_base += (uint32_t)list->IdxBuffer.Size;
     }
     return result;
+}
+
+/* ---- GPU ------------------------------------------------------------------------------------------ */
+
+void wpe_ui_output_size(const WPE_UiBackend* ui, uint32_t* out_width, uint32_t* out_height) {
+    int w = 0, h = 0;
+    if (ui && ui->gpu && !SDL_GetCurrentRenderOutputSize(ui->gpu, &w, &h)) w = h = 0;
+    if (out_width) *out_width = w > 0 ? (uint32_t)w : 0;
+    if (out_height) *out_height = h > 0 ? (uint32_t)h : 0;
+}
+
+static bool wpe__ui_reserve_gpu_vertices(WPE_UiBackend* ui, uint32_t vertices) {
+    if (vertices <= ui->gpu_vertex_capacity) return true;
+    wpe__GpuVertex* v = wpe_realloc(ui->gpu_vertices, (size_t)vertices * sizeof *v);
+    if (!v) return false;
+    ui->gpu_vertices = v;
+    ui->gpu_vertex_capacity = vertices;
+    return true;
+}
+
+/* Draws the frame's lists into the current render target. */
+static bool wpe__ui_draw_gpu(WPE_UiBackend* ui, const ImDrawData* data, int width, int height) {
+    uint32_t vertex_base = 0;
+    for (int l = 0; l < data->CmdLists.Size; ++l) {
+        const ImDrawList* list = data->CmdLists.Data[l];
+        for (int v = 0; v < list->VtxBuffer.Size; ++v) {
+            const ImDrawVert* src = &list->VtxBuffer.Data[v];
+            ui->gpu_vertices[(size_t)vertex_base + (size_t)v] =
+                (wpe__GpuVertex){.xy = {src->pos.x - data->DisplayPos.x, src->pos.y - data->DisplayPos.y},
+                                 .uv = {src->uv.x, src->uv.y},
+                                 .color = {.r = (float)(src->col & 0xFFu) / 255.0f, /* ImU32 is ABGR. */
+                                           .g = (float)((src->col >> 8) & 0xFFu) / 255.0f,
+                                           .b = (float)((src->col >> 16) & 0xFFu) / 255.0f,
+                                           .a = (float)((src->col >> 24) & 0xFFu) / 255.0f}};
+        }
+        for (int c = 0; c < list->CmdBuffer.Size; ++c) {
+            ImDrawCmd* cmd = &list->CmdBuffer.Data[c];
+            if (cmd->UserCallback || cmd->ElemCount == 0) continue; /* The editor registers no callbacks. */
+            /* The clip rectangle in pixels, as ImGui's backend projects it. */
+            float x0 = cmd->ClipRect.x - data->DisplayPos.x, y0 = cmd->ClipRect.y - data->DisplayPos.y;
+            float x1 = cmd->ClipRect.z - data->DisplayPos.x, y1 = cmd->ClipRect.w - data->DisplayPos.y;
+            x0 = x0 < 0.0f ? 0.0f : x0;
+            y0 = y0 < 0.0f ? 0.0f : y0;
+            x1 = x1 > (float)width ? (float)width : x1;
+            y1 = y1 > (float)height ? (float)height : y1;
+            if (x1 <= x0 || y1 <= y0) continue;
+            const SDL_Rect clip = {(int)x0, (int)y0, (int)(x1 - x0), (int)(y1 - y0)};
+            const uint64_t id = ImDrawCmd_GetTexID(cmd);
+            SDL_Texture* texture = id >= 1 && id <= ui->texture_count ? ui->textures[id - 1].gpu : NULL;
+            const wpe__GpuVertex* first = ui->gpu_vertices + vertex_base + cmd->VtxOffset;
+            if (!SDL_SetRenderClipRect(ui->gpu, &clip) ||
+                !SDL_RenderGeometryRaw(
+                    ui->gpu, texture, first->xy, sizeof *first, &first->color, sizeof *first, first->uv,
+                    sizeof *first, list->VtxBuffer.Size - (int)cmd->VtxOffset,
+                    list->IdxBuffer.Data + cmd->IdxOffset, (int)cmd->ElemCount, sizeof(ImDrawIdx)))
+                return false;
+        }
+        vertex_base += (uint32_t)list->VtxBuffer.Size;
+    }
+    return SDL_SetRenderClipRect(ui->gpu, NULL);
+}
+
+WPE_Result wpe_ui_present(WPE_UiBackend* ui, WPE_Color clear_color) {
+    if (!ui) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!ui->gpu) {
+        wpe_log_error("wpe_ui_present needs a GPU backend; software backends draw with wpe_ui_render");
+        return WPE_RESULT_ERROR_INVALID_STATE;
+    }
+    igRender();
+    ImDrawData* data = igGetDrawData();
+    WPE_Result result = wpe__ui_update_textures(ui, data);
+    if (result != WPE_RESULT_OK) return result;
+    if (!wpe__ui_reserve_gpu_vertices(ui, (uint32_t)data->TotalVtxCount))
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    int width = 0, height = 0;
+    if (!SDL_GetCurrentRenderOutputSize(ui->gpu, &width, &height)) {
+        wpe_log_error("cannot read the window's size: %s", SDL_GetError());
+        return WPE_RESULT_ERROR;
+    }
+    if (width <= 0 || height <= 0) return WPE_RESULT_OK; /* Minimized. */
+    /* The frame is drawn into a texture, which then fills the window; the texture keeps it for capture. */
+    float frame_w = 0.0f, frame_h = 0.0f;
+    if (ui->frame) SDL_GetTextureSize(ui->frame, &frame_w, &frame_h);
+    if (!ui->frame || (int)frame_w != width || (int)frame_h != height) {
+        if (ui->frame) SDL_DestroyTexture(ui->frame);
+        ui->frame =
+            SDL_CreateTexture(ui->gpu, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, width, height);
+        if (!ui->frame || !SDL_SetTextureScaleMode(ui->frame, SDL_SCALEMODE_NEAREST)) {
+            wpe_log_error("cannot create the %dx%d UI frame: %s", width, height, SDL_GetError());
+            if (ui->frame) SDL_DestroyTexture(ui->frame);
+            ui->frame = NULL;
+            return WPE_RESULT_ERROR;
+        }
+    }
+    const bool ok = SDL_SetRenderTarget(ui->gpu, ui->frame) &&
+                    SDL_SetRenderDrawColor(ui->gpu, (uint8_t)(clear_color >> 16), (uint8_t)(clear_color >> 8),
+                                           (uint8_t)clear_color, 255) &&
+                    SDL_RenderClear(ui->gpu) && SDL_SetRenderDrawBlendMode(ui->gpu, SDL_BLENDMODE_BLEND) &&
+                    wpe__ui_draw_gpu(ui, data, width, height);
+    /* Back to the window even after a failure, so the renderer is left as found. */
+    const bool shown = SDL_SetRenderTarget(ui->gpu, NULL) && ok &&
+                       SDL_RenderTexture(ui->gpu, ui->frame, NULL, NULL) && SDL_RenderPresent(ui->gpu);
+    if (!shown) {
+        wpe_log_error("drawing the UI failed: %s", SDL_GetError());
+        return WPE_RESULT_ERROR;
+    }
+    return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_ui_capture(WPE_UiBackend* ui, WPE_Image* out_image) {
+    if (!ui || !out_image) return WPE_RESULT_ERROR_NULL_ARG;
+    *out_image = (WPE_Image){0};
+    if (!ui->gpu || !ui->frame) {
+        wpe_log_error("no UI frame to capture (%s)",
+                      ui->gpu ? "nothing presented yet" : "a software backend");
+        return WPE_RESULT_ERROR_INVALID_STATE;
+    }
+    if (!SDL_SetRenderTarget(ui->gpu, ui->frame)) {
+        wpe_log_error("cannot read the UI frame: %s", SDL_GetError());
+        return WPE_RESULT_ERROR;
+    }
+    SDL_Surface* read = SDL_RenderReadPixels(ui->gpu, NULL);
+    const bool restored = SDL_SetRenderTarget(ui->gpu, NULL);
+    SDL_Surface* surface = read ? SDL_ConvertSurface(read, SDL_PIXELFORMAT_ARGB8888) : NULL;
+    if (read) SDL_DestroySurface(read);
+    if (!surface || !restored) {
+        wpe_log_error("cannot read the UI frame: %s", SDL_GetError());
+        if (surface) SDL_DestroySurface(surface);
+        return WPE_RESULT_ERROR;
+    }
+    const uint32_t width = (uint32_t)surface->w, height = (uint32_t)surface->h;
+    WPE_Color* pixels = wpe_alloc((size_t)width * height * sizeof *pixels);
+    if (!pixels) {
+        SDL_DestroySurface(surface);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    for (uint32_t y = 0; y < height; ++y) {
+        const unsigned char* row = (const unsigned char*)surface->pixels + (size_t)y * (size_t)surface->pitch;
+        memcpy(pixels + (size_t)y * width, row, width * sizeof *pixels);
+        for (uint32_t x = 0; x < width; ++x)
+            pixels[(size_t)y * width + x] |= 0xFF000000u; /* The window is opaque. */
+    }
+    SDL_DestroySurface(surface);
+    *out_image = (WPE_Image){.width = width, .height = height, .pixels = pixels};
+    return WPE_RESULT_OK;
 }
 
 /* ---- Input ---------------------------------------------------------------------------------------- */

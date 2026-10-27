@@ -143,14 +143,22 @@ static bool run_text(WPE_Editor* editor, const char* text, size_t size, const ch
 
 typedef struct Shot {
     WPE_EditorUi* ui;
-    WPE_Renderer* renderer;
-    bool render_first; /* Headless: draw the UI first (nothing has been drawn yet). */
+    WPE_Renderer* renderer; /* Headless: the software UI's framebuffer. NULL: the window's last frame. */
 } Shot;
 
 static WPE_Result save_editor_image(void* user_data, const char* os_path) {
     Shot* shot = user_data;
-    /* A few frames: windows appear and dock in the first, tab bars and layout settle after. */
-    for (int i = 0; shot->render_first && i < 4; ++i) {
+    if (!shot->renderer) {
+        /* The window: the frame on screen, read back from the GPU. */
+        WPE_Image image;
+        WPE_Result result = wpe_editor_ui_capture(shot->ui, &image);
+        if (result == WPE_RESULT_OK)
+            result = wpe_image_save_png(os_path, image.width, image.height, image.pixels);
+        wpe_image_free(&image);
+        return result;
+    }
+    /* Headless: a few frames first; windows appear and dock in the first, tab bars settle after. */
+    for (int i = 0; i < 4; ++i) {
         const WPE_Result result = wpe_editor_ui_frame(shot->ui, shot->renderer, 1.0f / 60.0f);
         if (result != WPE_RESULT_OK) return result;
     }
@@ -164,11 +172,11 @@ static int run_headless(const Options* o) {
     WPE_Renderer* renderer = NULL;
     WPE_Result result = wpe_editor_create(
         &(WPE_EditorDesc){.project_dir = o->project, .scene = o->scene, .no_audio_device = true}, &editor);
-    if (result == WPE_RESULT_OK) result = wpe_editor_ui_create(editor, &ui);
+    if (result == WPE_RESULT_OK) result = wpe_editor_ui_create(editor, NULL, &ui);
     if (result == WPE_RESULT_OK)
         result = wpe_renderer_create(&(WPE_RendererDesc){.width = HEADLESS_WIDTH, .height = HEADLESS_HEIGHT},
                                      &renderer);
-    Shot shot = {.ui = ui, .renderer = renderer, .render_first = true};
+    Shot shot = {.ui = ui, .renderer = renderer};
     if (result == WPE_RESULT_OK) wpe_editor_set_screenshot_hook(editor, save_editor_image, &shot);
     bool ok = result == WPE_RESULT_OK;
     if (ok && o->run) {
@@ -294,26 +302,18 @@ static int run_window(const Options* o) {
     WPE_Editor* editor = NULL;
     WPE_EditorUi* ui = NULL;
     WPE_Window* window = NULL;
-    WPE_Renderer* renderer = NULL;
-    WPE_JobSystem* jobs = NULL;
     WPE_Socket* listener = NULL;
     Connection connections[MAX_CONNECTIONS] = {0};
     char title[512];
     snprintf(title, sizeof title, "WillPowerEngine Editor - %s", o->project);
     WPE_Result result =
         wpe_editor_create(&(WPE_EditorDesc){.project_dir = o->project, .scene = o->scene}, &editor);
-    if (result == WPE_RESULT_OK) result = wpe_editor_ui_create(editor, &ui);
     if (result == WPE_RESULT_OK)
         result = wpe_window_create(
             &(WPE_WindowDesc){.title = title, .width = 1600, .height = 900, .resizable = true, .vsync = true},
             &window);
-    uint32_t width = 0, height = 0;
-    wpe_window_size(window, &width, &height);
-    if (result == WPE_RESULT_OK) result = wpe_jobs_create(WPE_JOBS_AUTO_WORKERS, &jobs);
-    if (result == WPE_RESULT_OK)
-        result = wpe_renderer_create(
-            &(WPE_RendererDesc){.width = width ? width : 1600, .height = height ? height : 900, .jobs = jobs},
-            &renderer);
+    /* The UI is drawn on the GPU through the window's renderer; only the game view is software. */
+    if (result == WPE_RESULT_OK) result = wpe_editor_ui_create(editor, wpe_window_renderer(window), &ui);
     if (result == WPE_RESULT_OK && o->server && wpe_net_listen(o->port, &listener) == WPE_RESULT_OK)
         wpe_log_info("accepting commands on 127.0.0.1:%u", o->port);
     if (result != WPE_RESULT_OK) {
@@ -321,7 +321,7 @@ static int run_window(const Options* o) {
     } else {
         wpe_window_set_event_handler(window, on_event, ui);
         wpe_window_set_text_input(window, true);
-        Shot shot = {.ui = ui, .renderer = renderer};
+        Shot shot = {.ui = ui};
         wpe_editor_set_screenshot_hook(editor, save_editor_image, &shot);
         bool captured = false;
         double previous = wpe_platform_time_seconds();
@@ -330,14 +330,8 @@ static int run_window(const Options* o) {
             const double now = wpe_platform_time_seconds();
             const float dt = (float)(now - previous);
             previous = now;
-            wpe_window_size(window, &width, &height);
-            const WPE_Framebuffer* fb = wpe_renderer_framebuffer(renderer);
-            if (width && height && (fb->width != width || fb->height != height))
-                result = wpe_renderer_resize(renderer, width, height);
             if (listener) serve(editor, listener, connections);
-            if (result == WPE_RESULT_OK) result = wpe_editor_ui_frame(ui, renderer, dt);
-            if (result == WPE_RESULT_OK)
-                result = wpe_window_present(window, wpe_renderer_framebuffer(renderer));
+            result = wpe_editor_ui_frame(ui, NULL, dt);
             const bool want_capture = wpe_editor_ui_mouse_captured(ui);
             if (want_capture != captured &&
                 wpe_window_set_relative_mouse(window, want_capture) == WPE_RESULT_OK)
@@ -353,8 +347,6 @@ static int run_window(const Options* o) {
     wpe_net_close(listener);
     wpe_editor_ui_destroy(ui);
     wpe_editor_destroy(editor);
-    wpe_renderer_destroy(renderer);
-    wpe_jobs_destroy(jobs);
     wpe_window_destroy(window);
     return result == WPE_RESULT_OK ? EXIT_SUCCESS : EXIT_FAILURE;
 }

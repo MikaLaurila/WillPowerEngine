@@ -159,7 +159,11 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - The model (`editor.c`) holds an embedded `WPE_Engine` with the simulation off in edit mode, plus a never-saved editor camera.
   - Undo/redo and play/stop use whole-scene snapshots. Failed commands drop their undo step; a `coalesce` key merges drags.
   - Every change, the UI's included, is a JSON command (`editor_commands.c`, scene-file schema with live ids), so a new UI feature needs a command.
-  - The UI is cimgui drawn by the software rasterizer (`ui_backend.c`: the ImGui 1.92 texture protocol, scissor), so `screenshot` with target `"editor"` works headless.
+  - The UI is cimgui with two renderers in `ui_backend.c`:
+    - The window draws it on the GPU through `wpe_window_renderer` (SDL_Renderer, in C after `imgui_impl_sdlrenderer3`), and the live `screenshot` command reads back the shown frame.
+    - Headless runs rasterize it in software (scissor), so `screenshot` with target `"editor"` works without a window.
+    - The `editor_ui_backend` test compares the two paths, running the GPU path on SDL's software renderer.
+    - Keep GPU vertices interleaved: SDL's software renderer steps through UVs with the color stride.
   - `wpe_editor` is a console program, so PowerShell waits for it and captures its output.
   - The `tools_editor_cli` test drives it like an agent would.
   - cimgui/Dear ImGui come from two pinned archives copied into `build/cimgui/` (`wpe_dep_cimgui`, which needs `imgui_demo.cpp`).

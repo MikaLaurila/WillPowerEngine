@@ -83,12 +83,12 @@ wpe_editor assets --run edit.jsonl     # creates and changes entities, then {"cm
 wpe_editor assets --command '{"cmd": "screenshot", "target": "editor", "path": "out/editor.png"}'
 ```
 
-`editor.png` shows the full editor, rendered by the same software rasterizer as the game, so the agent sees exactly what a person would.
+`editor.png` shows the full editor. Headless, the interface is drawn by the engine's software rasterizer. In a running editor, the screenshot is read back from the frame the window just showed, so the agent sees exactly what the person sees.
 
 ## Architecture
 
 - `editor/editor.{h,c}`: the model. It holds the project in an embedded `WPE_Engine` (no window of its own; edit mode stops simulation), the editor camera, the selection, and undo/redo as whole-scene snapshots (64 steps). Play mode keeps a snapshot to restore. A log ring holds recent messages.
 - `editor/editor_commands.c`: the commands, built on `engine/scene_file.h`'s entity and component functions.
-- `editor/ui_backend.{h,c}`: Dear ImGui (cimgui) drawn by the engine's software rasterizer, with SDL events translated to ImGui.
+- `editor/ui_backend.{h,c}`: Dear ImGui (cimgui), with SDL events translated to ImGui. The window draws the interface on the GPU through SDL's renderer, which picks Direct3D, Metal, Vulkan or OpenGL. Headless runs draw it with the engine's software rasterizer. Only the game view is software-rendered in the window, so the interface keeps up with the display's refresh rate.
 - `editor/editor_ui.{h,c}`: the panels. They read the world, and change it only through commands.
 - `editor/main.c`: the window and its loop, the command server, and the headless and client modes.

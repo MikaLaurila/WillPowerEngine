@@ -25,6 +25,12 @@ typedef struct WPE_Window WPE_Window;
  */
 typedef struct WPE_PlatformEvent WPE_PlatformEvent;
 
+/**
+ * A window's GPU-accelerated 2D renderer. Opaque like WPE_PlatformEvent: only modules allowed to use
+ * SDL (the editor) interpret it, as an `SDL_Renderer*`.
+ */
+typedef struct WPE_PlatformRenderer WPE_PlatformRenderer;
+
 /** Receives each event read by the pump; `event` is valid only during the call. */
 typedef void (*WPE_PlatformEventFn)(const WPE_PlatformEvent* event, void* user_data);
 
@@ -111,6 +117,17 @@ void wpe_window_set_title(WPE_Window* window, const char* title);
  * @thread_safety Main thread only
  */
 WPE_Result wpe_window_present(WPE_Window* window, const WPE_Framebuffer* framebuffer);
+
+/**
+ * The renderer that presents the window, for hosts that draw the window themselves instead of
+ * presenting framebuffers (the editor draws its interface on the GPU). Such a host never calls
+ * wpe_window_present(), and event mouse coordinates are then the renderer's output pixels.
+ *
+ * @return The renderer, owned by the window (valid until wpe_window_destroy()), or NULL for NULL.
+ *
+ * @thread_safety Main thread only
+ */
+WPE_PlatformRenderer* wpe_window_renderer(WPE_Window* window);
 
 /** @return Monotonic time in seconds since an unspecified point. @thread_safety Any thread */
 double wpe_platform_time_seconds(void);

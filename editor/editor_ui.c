@@ -24,7 +24,8 @@
 #define WPE__ASSET_PAYLOAD "WPE_ASSET"
 #define WPE__ENTITY_PAYLOAD "WPE_ENTITY"
 #define WPE__RING_SEGMENTS 48
-#define WPE__LABEL_WIDTH 130.0f /* Inspector and environment: room for field names right of the fields. */
+#define WPE__BACKGROUND 0xFF202226u /* Behind the docked windows. */
+#define WPE__LABEL_WIDTH 130.0f     /* Inspector and environment: room for field names right of the fields. */
 
 /* ImGui colors are 0xAABBGGRR. */
 #define WPE__COL(r, g, b, a)                                                                                 \
@@ -45,7 +46,7 @@ typedef struct wpe__Edit {
 struct WPE_EditorUi {
     WPE_Editor* editor;
     WPE_UiBackend* backend;
-    WPE_Texture* view_texture;
+    uint64_t view_image; /* The game's framebuffer as a UI image (0 before the first frame). */
     uint32_t view_width, view_height;
 
     /* The viewport image on screen during the last frame. */
@@ -1134,8 +1135,7 @@ static void wpe__ui_viewport(WPE_EditorUi* ui) {
     ui->image_w = w;
     ui->image_h = h;
     igSetCursorScreenPos((ImVec2_c){ui->image_x, ui->image_y});
-    igImage((ImTextureRef_c){._TexID = wpe_ui_texture_id(ui->backend, ui->view_texture)}, (ImVec2_c){w, h},
-            (ImVec2_c){0, 0}, (ImVec2_c){1, 1});
+    igImage((ImTextureRef_c){._TexID = ui->view_image}, (ImVec2_c){w, h}, (ImVec2_c){0, 0}, (ImVec2_c){1, 1});
     ui->view_hovered = igIsItemHovered(0);
     ui->view_focused = igIsWindowFocused(0);
     if (igBeginDragDropTarget()) {
@@ -1370,7 +1370,7 @@ static void wpe__ui_style(void) {
 
 /* ---- Public ----------------------------------------------------------------------------------------- */
 
-WPE_Result wpe_editor_ui_create(WPE_Editor* editor, WPE_EditorUi** out_ui) {
+WPE_Result wpe_editor_ui_create(WPE_Editor* editor, WPE_PlatformRenderer* gpu, WPE_EditorUi** out_ui) {
     if (!editor || !out_ui) return WPE_RESULT_ERROR_NULL_ARG;
     *out_ui = NULL;
     WPE_EditorUi* ui = wpe_alloc_zeroed(1, sizeof *ui);
@@ -1381,7 +1381,7 @@ WPE_Result wpe_editor_ui_create(WPE_Editor* editor, WPE_EditorUi** out_ui) {
     ui->assets_stale = true;
     snprintf(ui->scene_path, sizeof ui->scene_path, "scenes/new.scene");
     snprintf(ui->export_path, sizeof ui->export_path, "game%s", WPE_EXE_SUFFIX);
-    const WPE_Result result = wpe_ui_create(&ui->backend);
+    const WPE_Result result = wpe_ui_create(gpu, &ui->backend);
     if (result != WPE_RESULT_OK) {
         wpe_free(ui);
         return result;
@@ -1394,7 +1394,6 @@ WPE_Result wpe_editor_ui_create(WPE_Editor* editor, WPE_EditorUi** out_ui) {
 void wpe_editor_ui_destroy(WPE_EditorUi* ui) {
     if (!ui) return;
     wpe_ui_destroy(ui->backend);
-    wpe_texture_destroy(ui->view_texture);
     wpe__clear_assets(ui);
     wpe_free(ui->assets);
     wpe_free(ui);
@@ -1447,25 +1446,21 @@ void wpe_editor_ui_handle_event(WPE_EditorUi* ui, const WPE_PlatformEvent* event
     }
 }
 
-/* Copies the engine's framebuffer into the texture shown by the viewport. */
+/* Copies the engine's framebuffer into the image shown by the viewport. */
 static WPE_Result wpe__ui_update_view(WPE_EditorUi* ui) {
     const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(wpe_editor_engine(ui->editor)));
-    if (!ui->view_texture || ui->view_width != fb->width || ui->view_height != fb->height) {
-        wpe_texture_destroy(ui->view_texture);
-        ui->view_texture = NULL;
-        const WPE_Result result = wpe_texture_create(
-            &(WPE_TextureDesc){.width = fb->width, .height = fb->height, .texels = fb->color},
-            &ui->view_texture);
-        if (result != WPE_RESULT_OK) return result;
-        ui->view_width = fb->width;
-        ui->view_height = fb->height;
-        return WPE_RESULT_OK;
-    }
-    return wpe_texture_update(ui->view_texture, fb->color);
+    const WPE_Result result =
+        wpe_ui_set_image(ui->backend, &ui->view_image, fb->width, fb->height, fb->color);
+    if (result != WPE_RESULT_OK) return result;
+    ui->view_width = fb->width;
+    ui->view_height = fb->height;
+    return WPE_RESULT_OK;
 }
 
 WPE_Result wpe_editor_ui_frame(WPE_EditorUi* ui, WPE_Renderer* renderer, float dt) {
-    if (!ui || !renderer) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!ui) return WPE_RESULT_ERROR_NULL_ARG;
+    const bool gpu = wpe_ui_is_gpu(ui->backend);
+    if (!gpu && !renderer) return WPE_RESULT_ERROR_NULL_ARG;
     if (wpe_editor_mode(ui->editor) == WPE_EDITOR_EDIT) {
         wpe__ui_camera(ui, dt);
     } else {
@@ -1475,8 +1470,14 @@ WPE_Result wpe_editor_ui_frame(WPE_EditorUi* ui, WPE_Renderer* renderer, float d
     const WPE_Result view = wpe__ui_update_view(ui);
     if (result == WPE_RESULT_OK) result = view;
 
-    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(renderer);
-    wpe_ui_new_frame(ui->backend, fb->width, fb->height, dt);
+    uint32_t width = 0, height = 0;
+    if (gpu) {
+        wpe_ui_output_size(ui->backend, &width, &height);
+    } else {
+        width = wpe_renderer_framebuffer(renderer)->width;
+        height = wpe_renderer_framebuffer(renderer)->height;
+    }
+    wpe_ui_new_frame(ui->backend, width, height, dt);
     const ImGuiViewport* viewport = igGetMainViewport();
     const ImGuiID dockspace = igDockSpaceOverViewport(0, viewport, 0, NULL);
     if (!ui->layout_built) wpe__ui_layout(ui, dockspace, viewport);
@@ -1496,15 +1497,24 @@ WPE_Result wpe_editor_ui_frame(WPE_EditorUi* ui, WPE_Renderer* renderer, float d
                        "Output executable (outside the project):", ui->export_path, sizeof ui->export_path,
                        "export", "output");
 
+    if (gpu) {
+        const WPE_Result presented = wpe_ui_present(ui->backend, WPE__BACKGROUND);
+        return result == WPE_RESULT_OK ? presented : result;
+    }
     const WPE_Result begin = wpe_renderer_begin_frame(
         renderer,
-        &(WPE_ClearDesc){.clear_color = true, .color = 0xFF202226u, .clear_depth = true, .depth = 1.0f});
+        &(WPE_ClearDesc){.clear_color = true, .color = WPE__BACKGROUND, .clear_depth = true, .depth = 1.0f});
     if (begin != WPE_RESULT_OK) return begin;
     const WPE_Result drawn = wpe_ui_render(ui->backend, renderer);
     const WPE_Result ended = wpe_renderer_end_frame(renderer);
     if (result == WPE_RESULT_OK) result = drawn;
     if (result == WPE_RESULT_OK) result = ended;
     return result;
+}
+
+WPE_Result wpe_editor_ui_capture(WPE_EditorUi* ui, WPE_Image* out_image) {
+    if (!ui) return WPE_RESULT_ERROR_NULL_ARG;
+    return wpe_ui_capture(ui->backend, out_image);
 }
 
 bool wpe_editor_ui_quit_requested(const WPE_EditorUi* ui) {
