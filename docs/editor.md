@@ -17,10 +17,10 @@
 |---|---|
 | Menu and toolbar | **File:** new, open, save, save as, export, quit.<br>**Edit:** undo, redo, duplicate, delete, focus on the selection.<br>**View:** the grid and its spacing, physics shapes, reloading changed scripts, snapping and its steps.<br>**Window:** reset the layout.<br>**Play controls:** play, pause, stop.<br>**Gizmo:** move, rotate or scale; **World**/**Local** axes; **Snap**.<br>The open scene is shown with `*` when it has unsaved changes. |
 | Viewport | The game's framebuffer, rendered by the engine. In edit mode it uses the editor's camera:<br>• **Fly:** hold the right mouse button and use WASD (Q/E down/up, Shift faster; the wheel changes the speed).<br>• **Dolly:** the wheel without the right button moves forward and back.<br>• **Select:** click an object; clicking a model selects the entity that placed it.<br>• **Gizmo:** drag a handle of the selection, in the mode W (move), E (rotate) or R (scale). Move and scale have a handle per axis (X red, Y green, Z blue); rotate has a ring per axis. Drag a ring along its edge, and the angle is shown while you drag. X switches between the world's axes and the entity's own; scaling always uses the entity's own.<br>• **Add a model:** drop one from Assets.<br>• **Grid:** lines on the ground plane (y = 0) around the camera, X axis red and Z axis blue, shown in edit mode.<br>• **Physics shapes:** collider wireframes:<br>&nbsp;&nbsp;– static: green<br>&nbsp;&nbsp;– kinematic: blue<br>&nbsp;&nbsp;– dynamic: orange, or grey while asleep<br>&nbsp;&nbsp;– triggers: yellow<br>They're shown in edit mode, where they follow every move and rescale, and while playing. |
-| Hierarchy | Every entity, as a tree. Click to select, double-click to bring it into view. Drag onto another entity to reparent, or onto the empty area below to make it a root. The right-click menu duplicates, deletes or detaches. |
-| Inspector | The selected entity in the scene-file schema: every field of every component, editable. Each component's × removes it. "Add component" adds one; a mesh, sound or script takes the asset path typed in the box above it. |
+| Hierarchy | Every entity, as a tree. Click to select, double-click to bring it into view. Drag onto another entity to reparent, or onto the empty area below to make it a root. The right-click menu duplicates, deletes or detaches, and saves an entity and its children as a prefab. Prefab instances show in blue (the root brighter), and their menu applies, reverts or unpacks them. |
+| Inspector | The selected entity in the scene-file schema: every field of every component, editable. Each component's × removes it. "Add component" adds one; a mesh, sound or script takes the asset path typed in the box above it. For prefab instances, a bar names the prefab and offers Apply, Revert all and Unpack. Components that differ from the prefab are marked "(overridden)", and right-clicking their header reverts them. |
 | Environment | The scene's render settings, fog, shadows, post-processing, gravity and music. |
-| Assets | The project's files. Double-click a scene to open it, or a model (`.glb`, `.gltf`, `.prim`) to place it. Drag models into the viewport. |
+| Assets | The project's files. Double-click a scene to open it, or a model (`.glb`, `.gltf`, `.prim`) or prefab (`.prefab`) to place it. Drag models and prefabs into the viewport. |
 | Console | Log messages, and a command line that runs JSON commands exactly as an agent would. |
 
 Shortcuts:
@@ -63,14 +63,18 @@ Entities and components use the **scene-file schema** ([scenes.md](scenes.md)), 
 | `help` | → every command with its arguments |
 | `status` | → project, scene, mode (`edit`/`play`/`paused`), dirty, selection, entity count, undo/redo depth |
 | `project` | → the project settings (project.json) |
-| `list_entities` | → `[{id, name, parent, components}]` |
+| `list_entities` | → `[{id, name, parent, components, prefab?}]`. `prefab` is `{path, root}` for members of prefab instances. |
 | `get_entity` | `{id}` → the entity (`{"id", "name", "parent", "transform": {...}, "light": {...}, ...}`) |
-| `create_entity` | `{entity: {name, parent, transform, instance, mesh, light, ..., script}}` → id (and selects it) |
+| `create_entity` | `{entity: {name, parent, transform, instance, mesh, light, ..., script}}` → id (and selects it). With `"prefab": {"path": ...}` it places a prefab instance; the other keys given then replace the root's. |
 | `duplicate_entity` | `{id}` → id of the copy (children are not copied) |
 | `delete_entity` | `{id}` (with its children) |
 | `set_component` | `{id, component, value}` → the entity. Replaces the component as a whole: fields left out take their defaults, so read the entity first to change one field. `component` can also be `"name"` or `"parent"`. |
 | `remove_component` | `{id, component}` |
-| `set_parent` | `{id, parent: id or null, keep_world = true}` |
+| `set_parent` | `{id, parent: id or null, keep_world = true}`. Members of prefab instances keep their place; only the instance root can move. |
+| `save_prefab` | `{id, path}` → `{path, reloaded}`: saves the entity and its descendants as a prefab file, and they become an instance of it. Its root is stored at the origin. |
+| `apply_prefab` | `{id}` (any member) → `{path, reloaded}`: writes the instance's changes and added children into its prefab. Other instances get the changes through a scene reload (`reloaded: true`, entity ids change). |
+| `revert_prefab` | `{id, component?}` → root id: reverts one component (or `"name"`) of a member to the prefab, or, without `component`, rebuilds the whole instance (overrides and added children go). |
+| `unpack_prefab` | `{id}`: turns the instance into plain entities, no longer linked to the prefab |
 | `select` | `{id or null}` |
 | `get_environment` / `set_environment` | `{}` / `{value: {...}}` (merged: keys left out keep their values) → the environment |
 | `new_scene`, `load_scene`, `save_scene` | `{discard?}`, `{path, discard?}`, `{path?}`: asset paths inside the project; `save_scene` without a path saves the open scene. `new_scene` and `load_scene` refuse while the scene has unsaved changes, unless `"discard": true`. |

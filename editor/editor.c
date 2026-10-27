@@ -59,7 +59,8 @@ WPE_SceneContext wpe__editor_context(WPE_Editor* editor) {
                               .assets = wpe_engine_assets(editor->engine),
                               .scripts = wpe_engine_scripts(editor->engine),
                               .include = wpe__editor_include,
-                              .include_user_data = editor};
+                              .include_user_data = editor,
+                              .prefabs = wpe_engine_prefabs(editor->engine)};
 }
 
 /* Creates the editor camera, looking at the origin from above and behind. */

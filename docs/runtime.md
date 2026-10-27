@@ -70,7 +70,7 @@ The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which t
 | `assets` | `max_texture_size` caps model textures (0 = original size). |
 | `audio` | Bus volumes. |
 | `scripting` | Luau heap limit and per-callback time budget. |
-| `prefabs` | Names for `wpe.instantiate(name)`, each mapped to a model asset path. |
+| `prefabs` | Names for `wpe.instantiate(name)`, each mapped to a prefab file (`.prefab`) or a model asset path. |
 | `input` | Dead zones, the press threshold, the keyboard's player and the actions (below). |
 
 Like scene files, the project file is read strictly: unknown keys and bad values are errors that report the line.

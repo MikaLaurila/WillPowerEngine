@@ -572,6 +572,32 @@ const WPE_JsonValue* wpe_json_member(const WPE_JsonValue* object, uint32_t index
     return &object->items[index];
 }
 
+bool wpe_json_equal(const WPE_JsonValue* a, const WPE_JsonValue* b) {
+    if (!a || !b) return a == b;
+    if (a->type != b->type || a->count != b->count) return false;
+    switch (a->type) {
+    case WPE_JSON_NULL:
+        return true;
+    case WPE_JSON_BOOL:
+        return a->boolean == b->boolean;
+    case WPE_JSON_NUMBER:
+        return a->number == b->number;
+    case WPE_JSON_STRING:
+        return strcmp(a->string, b->string) == 0;
+    case WPE_JSON_ARRAY:
+        for (uint32_t i = 0; i < a->count; ++i) {
+            if (!wpe_json_equal(&a->items[i], &b->items[i])) return false;
+        }
+        return true;
+    case WPE_JSON_OBJECT:
+        for (uint32_t i = 0; i < a->count; ++i) {
+            if (!wpe_json_equal(&a->items[i], wpe_json_get(b, a->keys[i]))) return false;
+        }
+        return true;
+    }
+    return false;
+}
+
 /* ---- Writing -------------------------------------------------------------------------------------- */
 
 typedef struct wpe__JsonFrame {
@@ -795,6 +821,63 @@ static void wpe__write_formatted_number(WPE_JsonWriter* w, double value, int pre
     char buffer[40];
     snprintf(buffer, sizeof buffer, "%.*g", precision, value);
     wpe__append_str(w, buffer);
+}
+
+/* The fewest significant digits that read back as exactly `value`. */
+static int wpe__shortest_precision(double value) {
+    for (int precision = 1; precision < 17; ++precision) {
+        char buffer[40];
+        snprintf(buffer, sizeof buffer, "%.*g", precision, value);
+        if (strtod(buffer, NULL) == value) return precision;
+    }
+    return 17;
+}
+
+void wpe_json_write_value(WPE_JsonWriter* writer, const WPE_JsonValue* value) {
+    if (!writer) return;
+    if (!value) {
+        wpe__writer_misuse(writer, "NULL value");
+        return;
+    }
+    switch (value->type) {
+    case WPE_JSON_NULL:
+        wpe_json_write_null(writer);
+        break;
+    case WPE_JSON_BOOL:
+        wpe_json_write_bool(writer, value->boolean);
+        break;
+    case WPE_JSON_NUMBER:
+        /* Whole numbers as integers: "%g" with few digits would write 10 as "1e+01". */
+        if (value->number == floor(value->number) && fabs(value->number) < 1e15) {
+            wpe_json_write_integer(writer, (int64_t)value->number);
+        } else if (isfinite(value->number)) {
+            wpe__write_formatted_number(writer, value->number, wpe__shortest_precision(value->number));
+        } else {
+            wpe__writer_misuse(writer, "non-finite number");
+        }
+        break;
+    case WPE_JSON_STRING:
+        wpe_json_write_string(writer, value->string);
+        break;
+    case WPE_JSON_ARRAY: {
+        bool scalars = true;
+        for (uint32_t i = 0; i < value->count && scalars; ++i)
+            scalars = value->items[i].type != WPE_JSON_ARRAY && value->items[i].type != WPE_JSON_OBJECT;
+        wpe_json_write_array_begin(writer, scalars);
+        for (uint32_t i = 0; i < value->count; ++i)
+            wpe_json_write_value(writer, &value->items[i]);
+        wpe_json_write_array_end(writer);
+        break;
+    }
+    case WPE_JSON_OBJECT:
+        wpe_json_write_object_begin(writer);
+        for (uint32_t i = 0; i < value->count; ++i) {
+            wpe_json_write_key(writer, value->keys[i]);
+            wpe_json_write_value(writer, &value->items[i]);
+        }
+        wpe_json_write_object_end(writer);
+        break;
+    }
 }
 
 void wpe_json_write_number(WPE_JsonWriter* writer, double value) {

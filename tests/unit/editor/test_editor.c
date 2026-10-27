@@ -501,8 +501,122 @@ static void test_editor_snap_settings(void) {
     wpe_editor_destroy(editor);
 }
 
+/* The id of the first listed entity named `name`. */
+static WPE_Entity id_of(WPE_Editor* editor, const char* name) {
+    WPE_JsonDocument* list = run(editor, "{\"cmd\": \"list_entities\"}", true);
+    WPE_Entity id = WPE_ENTITY_NULL;
+    for (uint32_t i = 0; i < wpe_json_count(result_of(list)) && !id; ++i) {
+        const WPE_JsonValue* e = wpe_json_at(result_of(list), i);
+        const char* n = wpe_json_string(wpe_json_get(e, "name"));
+        if (n && strcmp(n, name) == 0) id = (WPE_Entity)wpe_json_number(wpe_json_get(e, "id"), 0);
+    }
+    wpe_json_free(list);
+    return id;
+}
+
+static float light_intensity(WPE_Editor* editor, WPE_Entity e) {
+    const WPE_Light* light =
+        wpe_ecs_get_component(wpe_engine_ecs(wpe_editor_engine(editor)), e, WPE_COMP_LIGHT);
+    WPE_TEST_ASSERT(light != NULL);
+    return light->intensity;
+}
+
+static void test_editor_prefab_commands(void) {
+    WPE_Editor* editor = open_editor();
+    char command[512];
+    /* A lamp with a bulb child, saved as a prefab: it becomes an instance in place. */
+    run_ok(editor,
+           "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"lamp\", \"light\": {\"type\": \"point\", "
+           "\"intensity\": 2}}}");
+    const WPE_Entity lamp = id_of(editor, "lamp");
+    snprintf(
+        command, sizeof command,
+        "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"bulb\", \"parent\": %u, \"mesh\": {\"model\": "
+        "\"meshes/box.prim\"}}}",
+        lamp);
+    run_ok(editor, command);
+    snprintf(command, sizeof command,
+             "{\"cmd\": \"save_prefab\", \"id\": %u, \"path\": \"prefabs/lamp.prefab\"}", lamp);
+    WPE_JsonDocument* saved = run(editor, command, true);
+    WPE_TEST_ASSERT(!wpe_json_bool(wpe_json_get(result_of(saved), "reloaded"), true));
+    wpe_json_free(saved);
+    int64_t written = 0;
+    WPE_TEST_ASSERT_OK(wpe_file_modified_time(ROOT "/project/prefabs/lamp.prefab", &written));
+    WPE_JsonDocument* list = run(editor, "{\"cmd\": \"list_entities\"}", true);
+    uint32_t members = 0;
+    for (uint32_t i = 0; i < wpe_json_count(result_of(list)); ++i)
+        members += wpe_json_get(wpe_json_at(result_of(list), i), "prefab") != NULL;
+    WPE_TEST_ASSERT_EQ_UINT(2, members);
+    wpe_json_free(list);
+
+    /* A second instance, as an agent places one; members can't be moved out of an instance. */
+    run_ok(editor,
+           "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"lamp 2\", \"transform\": {\"position\": "
+           "[5, 0, 0]}, \"prefab\": {\"path\": \"prefabs/lamp.prefab\"}}}");
+    WPE_TEST_ASSERT(id_of(editor, "lamp 2") != WPE_ENTITY_NULL);
+    wpe_log_set_stderr_enabled(false);
+    snprintf(command, sizeof command, "{\"cmd\": \"set_parent\", \"id\": %u, \"parent\": null}",
+             id_of(editor, "bulb"));
+    wpe_json_free(run(editor, command, false));
+    wpe_log_set_stderr_enabled(true);
+
+    /* Applying a change to one instance reloads the scene so the other one gets it too. */
+    snprintf(
+        command, sizeof command,
+        "{\"cmd\": \"set_component\", \"id\": %u, \"component\": \"light\", \"value\": {\"type\": \"point\", "
+        "\"intensity\": 7}}",
+        lamp);
+    run_ok(editor, command);
+    snprintf(command, sizeof command, "{\"cmd\": \"apply_prefab\", \"id\": %u}", lamp);
+    WPE_JsonDocument* applied = run(editor, command, true);
+    WPE_TEST_ASSERT(wpe_json_bool(wpe_json_get(result_of(applied), "reloaded"), false));
+    wpe_json_free(applied);
+    WPE_TEST_ASSERT_NEAR(7.0, light_intensity(editor, id_of(editor, "lamp 2")), 1e-6);
+
+    /* An override can be reverted alone, or the whole instance rebuilt. */
+    const WPE_Entity second = id_of(editor, "lamp 2");
+    snprintf(
+        command, sizeof command,
+        "{\"cmd\": \"set_component\", \"id\": %u, \"component\": \"light\", \"value\": {\"type\": \"spot\"}}",
+        second);
+    run_ok(editor, command);
+    snprintf(command, sizeof command, "{\"cmd\": \"revert_prefab\", \"id\": %u, \"component\": \"light\"}",
+             second);
+    run_ok(editor, command);
+    WPE_TEST_ASSERT_NEAR(7.0, light_intensity(editor, second), 1e-6);
+    snprintf(command, sizeof command, "{\"cmd\": \"revert_prefab\", \"id\": %u}", second);
+    WPE_JsonDocument* rebuilt = run(editor, command, true);
+    const WPE_Entity fresh = (WPE_Entity)wpe_json_number(result_of(rebuilt), 0);
+    wpe_json_free(rebuilt);
+    WPE_TEST_ASSERT(fresh != second && fresh == id_of(editor, "lamp 2"));
+
+    /* Saved scenes refer to the prefab; unpacking makes plain entities; undo brings the link back. */
+    run_ok(editor, "{\"cmd\": \"save_scene\", \"path\": \"scenes/lamps.scene\"}");
+    char* text = NULL;
+    size_t size = 0;
+    WPE_TEST_ASSERT_OK(wpe_file_read_all(ROOT "/project/scenes/lamps.scene", (void**)&text, &size));
+    WPE_TEST_ASSERT(strstr(text, "\"path\": \"prefabs/lamp.prefab\"") != NULL &&
+                    strstr(text, "\"bulb\"") == NULL);
+    wpe_free(text);
+    snprintf(command, sizeof command, "{\"cmd\": \"unpack_prefab\", \"id\": %u}", fresh);
+    run_ok(editor, command);
+    WPE_TEST_ASSERT_EQ_UINT(
+        WPE_ENTITY_NULL, wpe_prefab_root(wpe_engine_ecs(wpe_editor_engine(editor)), id_of(editor, "lamp 2")));
+    run_ok(editor, "{\"cmd\": \"undo\"}");
+    WPE_TEST_ASSERT(wpe_prefab_root(wpe_engine_ecs(wpe_editor_engine(editor)), id_of(editor, "lamp 2")) !=
+                    WPE_ENTITY_NULL);
+    wpe_log_set_stderr_enabled(false);
+    snprintf(command, sizeof command, "{\"cmd\": \"apply_prefab\", \"id\": %u}", id_of(editor, "box"));
+    wpe_json_free(run(editor, command, false)); /* Not an instance. */
+    snprintf(command, sizeof command, "{\"cmd\": \"save_prefab\", \"id\": %u, \"path\": \"prefabs/x.scene\"}",
+             id_of(editor, "box"));
+    wpe_json_free(run(editor, command, false)); /* Not a prefab path. */
+    wpe_log_set_stderr_enabled(true);
+    wpe_editor_destroy(editor);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_editor_coalesces_continuous_edits),
-              WPE_TEST_CASE(test_editor_guards_unsaved_changes),
+              WPE_TEST_CASE(test_editor_prefab_commands), WPE_TEST_CASE(test_editor_guards_unsaved_changes),
               WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
               WPE_TEST_CASE(test_editor_view_settings_and_overlays),
               WPE_TEST_CASE(test_editor_physics_follows_edits),

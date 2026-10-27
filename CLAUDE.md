@@ -149,8 +149,15 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - `assets/` is the sample project (`project.json`, `scenes/`).
   - Export embeds a `.pak` in a copy of `wpe_runtime` (trailer magic `WPE_EMBD`). `wpe_runtime` is a GUI program on Windows that links statically.
   - Executables of `runtime/` and `tools/` build into `build/bin`.
+  - **Prefabs** (`engine/prefab.{h,c}`, format in `docs/scenes.md#prefabs`):
+    - A `.prefab` file holds entities in the scene schema, exactly one of them the root.
+    - Instances are linked: every member has `WPE_COMP_PREFAB` (13; the root's link holds the path and a baseline).
+    - The baseline is the members as instantiated, in prefab-local ids. It is reference-counted and shared through the engine's `WPE_PrefabCache`, which re-reads a file when its modification time changes.
+    - Saving compares members with the baseline and writes only the differences (`prefab.overrides`), so changes from any source count. Scene saves skip members and write `"prefab": {path, ids, overrides}`.
+    - `scene_file_internal.h` shares the loader and saver with `prefab.c`. `core/json` has `wpe_json_write_value`/`wpe_json_equal` for the comparison.
+    - Prefab files can't nest instances yet. Worlds built by hand must call `wpe_prefab_register` before loading scenes with instances.
   - `wpe_engine_set_debug_draw` turns on the ground grid and physics wireframes. They're drawn in the overlay pass after post-processing, depth tested, under the scripts' 2D drawing.
-- **ECS hook order:** on despawn, `on_remove` hooks run in descending type-id order: AudioSource (11), Collider (10) and RigidBody (9) before Script (8), which runs before Hierarchy (2). So the physics body is already gone when `on_destroy` runs.
+- **ECS hook order:** on despawn, `on_remove` hooks run in descending type-id order: PrefabLink (13) first, then AudioSource (11), Collider (10) and RigidBody (9) before Script (8), which runs before Hierarchy (2). So the physics body is already gone when `on_destroy` runs.
 - **renderer extras:**
   - `WPE_RenderState.depth_only` writes depth only; the fragment shader may be NULL in that mode. This is used for shadow passes.
   - `WPE_DrawDesc.subdivision_levels/edge_pixels` require `program->vertex_lerp`.

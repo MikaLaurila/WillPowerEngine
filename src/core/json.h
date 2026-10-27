@@ -112,6 +112,14 @@ const WPE_JsonValue* wpe_json_get(const WPE_JsonValue* object, const char* key);
  */
 const WPE_JsonValue* wpe_json_member(const WPE_JsonValue* object, uint32_t index, const char** out_key);
 
+/**
+ * Compares two values: same type and the same number, string or boolean, the same elements in order,
+ * and the same members in any order. NULL equals only NULL.
+ *
+ * @thread_safety Any thread
+ */
+bool wpe_json_equal(const WPE_JsonValue* a, const WPE_JsonValue* b);
+
 /* ---- Writing ------------------------------------------------------------------------------------- */
 
 typedef struct WPE_JsonWriter WPE_JsonWriter;
@@ -150,6 +158,10 @@ void wpe_json_write_rounded(WPE_JsonWriter* writer, double value, int significan
 void wpe_json_write_integer(WPE_JsonWriter* writer, int64_t value);
 void wpe_json_write_bool(WPE_JsonWriter* writer, bool value);
 void wpe_json_write_null(WPE_JsonWriter* writer);
+/* A parsed value with everything in it. Numbers take the shortest form that reads back as the same
+ * double, so rewriting a document written by this writer reproduces its numbers; arrays of scalars
+ * print inline. */
+void wpe_json_write_value(WPE_JsonWriter* writer, const WPE_JsonValue* value);
 
 /**
  * Completes the text (exactly one top-level value must have been written).

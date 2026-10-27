@@ -19,6 +19,8 @@
 #include "core/debug.h"
 #include "core/log.h"
 #include "engine/json_read.h"
+#include "engine/prefab.h"
+#include "engine/scene_file_internal.h"
 #include "graphics/graphics.h"
 #include "physics/physics.h"
 #include "platform/platform.h"
@@ -26,7 +28,6 @@
 
 #define WPE__DEG_PER_RAD (180.0 / 3.14159265358979323846)
 #define WPE__ANGLE_DIGITS 6 /* Degrees are written rounded: "60" rather than "59.9999986". */
-#define WPE__MAX_FILE_ID 0x7FFFFFFFu
 
 /* ---- Names of enumerations ---------------------------------------------------------------------------- */
 
@@ -97,24 +98,12 @@ uint32_t wpe_scene_environment_effects(const WPE_SceneEnvironment* environment, 
 
 /* ---- Entity ids ------------------------------------------------------------------------------------- */
 
-typedef struct wpe__IdPair {
-    uint32_t id;
-    WPE_Entity entity;
-} wpe__IdPair;
-
-struct WPE_SceneIds {
-    wpe__IdPair* by_entity; /* Sorted by entity (saving). */
-    wpe__IdPair* by_id;     /* Sorted by id (loading). */
-    uint32_t count;
-    const WPE_Ecs* identity; /* Set: ids are live entity handles of this world (editing commands). */
-};
-
-static int wpe__compare_by_entity(const void* a, const void* b) {
+int wpe__compare_by_entity(const void* a, const void* b) {
     const WPE_Entity x = ((const wpe__IdPair*)a)->entity, y = ((const wpe__IdPair*)b)->entity;
     return (x > y) - (x < y);
 }
 
-static int wpe__compare_by_id(const void* a, const void* b) {
+int wpe__compare_by_id(const void* a, const void* b) {
     const uint32_t x = ((const wpe__IdPair*)a)->id, y = ((const wpe__IdPair*)b)->id;
     return (x > y) - (x < y);
 }
@@ -136,13 +125,6 @@ WPE_Entity wpe_scene_ids_to_entity(const WPE_SceneIds* ids, uint32_t id) {
 }
 
 /* ---- Saving --------------------------------------------------------------------------------------- */
-
-typedef struct wpe__Saver {
-    const WPE_SceneContext* context;
-    WPE_JsonWriter* w;
-    WPE_SceneIds ids;
-    WPE_Result result;
-} wpe__Saver;
 
 static void wpe__write_vec3(WPE_JsonWriter* w, const char* key, WPE_Vec3 v) {
     wpe_json_write_key(w, key);
@@ -316,7 +298,22 @@ static void wpe__save_script_property(const char* name, const WPE_ScriptValue* v
     }
 }
 
-static void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
+/* "transform" (nothing when `t` is NULL). The rotation is written as stored, so load-save keeps it. */
+static void wpe__save_transform(WPE_JsonWriter* w, const WPE_Transform* t) {
+    if (!t) return;
+    wpe_json_write_key(w, "transform");
+    wpe_json_write_object_begin(w);
+    wpe__write_vec3(w, "position", t->position);
+    wpe_json_write_key(w, "rotation");
+    wpe_json_write_array_begin(w, true);
+    for (int i = 0; i < 4; ++i)
+        wpe_json_write_number(w, t->rotation.v[i]);
+    wpe_json_write_array_end(w);
+    wpe__write_vec3(w, "scale", t->scale);
+    wpe_json_write_object_end(w);
+}
+
+void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
     WPE_Ecs* ecs = s->context->ecs;
     WPE_JsonWriter* w = s->w;
     wpe_json_write_object_begin(w);
@@ -326,19 +323,7 @@ static void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
     const WPE_Entity parent = wpe_scene_get_parent(ecs, e);
     if (parent != WPE_ENTITY_NULL) wpe__write_ref(s, "parent", parent);
 
-    const WPE_Transform* t = wpe_ecs_get_component(ecs, e, WPE_COMP_TRANSFORM);
-    if (t) {
-        wpe_json_write_key(w, "transform");
-        wpe_json_write_object_begin(w);
-        wpe__write_vec3(w, "position", t->position);
-        wpe_json_write_key(w, "rotation");
-        wpe_json_write_array_begin(w, true);
-        for (int i = 0; i < 4; ++i)
-            wpe_json_write_number(w, t->rotation.v[i]);
-        wpe_json_write_array_end(w);
-        wpe__write_vec3(w, "scale", t->scale);
-        wpe_json_write_object_end(w);
-    }
+    wpe__save_transform(w, wpe_ecs_get_component(ecs, e, WPE_COMP_TRANSFORM));
     const WPE_MeshRenderer* mesh = wpe_ecs_get_component(ecs, e, WPE_COMP_MESH);
     if (mesh) {
         wpe_json_write_key(w, "mesh");
@@ -470,6 +455,27 @@ static void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
         }
     }
     if (components_open) wpe_json_write_object_end(w);
+    if (s->describe_prefabs && wpe__prefab_root(ecs, e) == e) {
+        wpe_json_write_key(w, "prefab");
+        wpe__prefab_save_reference(s, e, false);
+    }
+    wpe_json_write_object_end(w);
+}
+
+/* A prefab instance in a scene: its own name, parent and transform, and the prefab reference (members
+ * are not written; they come from the prefab). */
+static void wpe__save_instance(wpe__Saver* s, WPE_Entity root) {
+    WPE_Ecs* ecs = s->context->ecs;
+    WPE_JsonWriter* w = s->w;
+    wpe_json_write_object_begin(w);
+    wpe__write_integer(w, "id", wpe_scene_ids_to_file(&s->ids, root));
+    const char* name = wpe_scene_get_name(ecs, root);
+    if (name) wpe__write_string(w, "name", name);
+    const WPE_Entity parent = wpe_scene_get_parent(ecs, root);
+    if (parent != WPE_ENTITY_NULL) wpe__write_ref(s, "parent", parent);
+    wpe__save_transform(w, wpe_ecs_get_component(ecs, root, WPE_COMP_TRANSFORM));
+    wpe_json_write_key(w, "prefab");
+    wpe__prefab_save_reference(s, root, true);
     wpe_json_write_object_end(w);
 }
 
@@ -559,8 +565,15 @@ WPE_Result wpe_scene_save(const WPE_SceneContext* context, const WPE_SceneEnviro
     wpe__write_ref(&s, "camera", camera);
     wpe_json_write_key(writer, "entities");
     wpe_json_write_array_begin(writer, false);
-    for (uint32_t i = 0; i < ordered && s.result == WPE_RESULT_OK; ++i)
-        wpe__save_entity(&s, order[i]);
+    for (uint32_t i = 0; i < ordered && s.result == WPE_RESULT_OK; ++i) {
+        /* Prefab instances are written as references; their members come from the prefab. */
+        const WPE_Entity root = wpe__prefab_root(ecs, order[i]);
+        if (root == order[i]) {
+            wpe__save_instance(&s, order[i]);
+        } else if (root == WPE_ENTITY_NULL) {
+            wpe__save_entity(&s, order[i]);
+        }
+    }
     wpe_json_write_array_end(writer);
     wpe_json_write_object_end(writer);
 
@@ -581,30 +594,29 @@ WPE_Result wpe_scene_save_file(const WPE_SceneContext* context, const WPE_SceneE
     const char* text = NULL;
     size_t size = 0;
     if (result == WPE_RESULT_OK) result = wpe_json_writer_finish(writer, &text, &size);
-    /* Write next to the target, then replace it, so a failed save never leaves a truncated scene. */
-    char temp[1024];
-    if (result == WPE_RESULT_OK && snprintf(temp, sizeof temp, "%s.tmp", os_path) >= (int)sizeof temp)
-        result = WPE_RESULT_ERROR_INVALID_ARG;
-    WPE_File* file = NULL;
-    if (result == WPE_RESULT_OK) result = wpe_file_open(temp, true, &file);
-    if (result == WPE_RESULT_OK) {
-        result = wpe_file_write(file, text, size);
-        const WPE_Result closed = wpe_file_close(file);
-        if (result == WPE_RESULT_OK) result = closed;
-        if (result == WPE_RESULT_OK) result = wpe_path_rename(temp, os_path);
-        if (result != WPE_RESULT_OK) wpe_path_remove(temp);
-    }
+    if (result == WPE_RESULT_OK) result = wpe__write_file_atomic(os_path, text, size);
     wpe_json_writer_destroy(writer);
+    return result;
+}
+
+WPE_Result wpe__write_file_atomic(const char* os_path, const char* text, size_t size) {
+    /* Write next to the target, then replace it, so a failed save never leaves a truncated file. */
+    char temp[1024];
+    if (snprintf(temp, sizeof temp, "%s.tmp", os_path) >= (int)sizeof temp)
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    WPE_File* file = NULL;
+    WPE_Result result = wpe_file_open(temp, true, &file);
+    if (result != WPE_RESULT_OK) return result;
+    result = wpe_file_write(file, text, size);
+    const WPE_Result closed = wpe_file_close(file);
+    if (result == WPE_RESULT_OK) result = closed;
+    if (result == WPE_RESULT_OK) result = wpe_path_rename(temp, os_path);
+    if (result != WPE_RESULT_OK) wpe_path_remove(temp);
     return result;
 }
 
 /* ---- Loading -------------------------------------------------------------------------------------- */
 
-typedef struct wpe__Loader {
-    wpe__JsonReader r;
-    const WPE_SceneContext* context;
-    WPE_SceneIds ids;
-} wpe__Loader;
 /* Optional asset path; loads it (the caller owns the reference). NULL in the file means none. */
 static bool wpe__read_asset(wpe__Loader* l, const WPE_JsonValue* object, const char* key, WPE_AssetType type,
                             WPE_AssetHandle* out) {
@@ -1140,34 +1152,114 @@ static bool wpe__load_transform(wpe__Loader* l, WPE_Entity e, const WPE_JsonValu
     return wpe__add(l, v, e, WPE_COMP_TRANSFORM, &t, "transform");
 }
 
+uint32_t wpe__entity_id_capacity(const WPE_JsonValue* entities) {
+    uint32_t capacity = wpe_json_count(entities);
+    for (uint32_t i = 0; i < wpe_json_count(entities); ++i)
+        capacity += wpe_json_count(wpe_json_get(wpe_json_get(wpe_json_at(entities, i), "prefab"), "ids"));
+    return capacity;
+}
+
+/* A file id: a whole number from 1 to WPE__MAX_FILE_ID. */
+static bool wpe__read_file_id(wpe__Loader* l, const WPE_JsonValue* v, const WPE_JsonValue* at,
+                              uint32_t* out) {
+    const double id = wpe_json_number(v, 0.0);
+    if (wpe_json_type(v) != WPE_JSON_NUMBER || id != floor(id) || id < 1.0 || id > WPE__MAX_FILE_ID)
+        return wpe__json_fail(&l->r, v ? v : at, WPE_RESULT_ERROR_PARSE,
+                              "entity ids are whole numbers from 1 to %u", WPE__MAX_FILE_ID);
+    *out = (uint32_t)id;
+    return true;
+}
+
+/* A prefab instance entry: instantiates the prefab (with its overrides) and registers the scene ids of
+ * its members ("ids": prefab-local id -> scene id). */
+static bool wpe__load_instance_entry(wpe__Loader* l, const WPE_JsonValue* v, const WPE_JsonValue* prefab,
+                                     WPE_Entity* out_root, uint32_t* io_id_count) {
+    if (l->in_prefab)
+        return wpe__json_fail(&l->r, prefab, WPE_RESULT_ERROR_UNSUPPORTED,
+                              "prefab files cannot contain prefab instances");
+    static const char* const own[] = {"id", "name", "parent", "transform", "prefab"};
+    for (uint32_t i = 0; !l->ids.identity && i < wpe_json_count(v); ++i) {
+        const char* key = NULL;
+        const WPE_JsonValue* value = wpe_json_member(v, i, &key);
+        bool allowed = false;
+        for (size_t k = 0; k < sizeof own / sizeof own[0]; ++k)
+            allowed = allowed || strcmp(key, own[k]) == 0;
+        if (!allowed)
+            return wpe__json_fail(&l->r, value, WPE_RESULT_ERROR_PARSE,
+                                  "\"%s\": an instance's components come from its prefab; change them under "
+                                  "\"prefab\": {\"overrides\": {\"<prefab entity id>\": {...}}}",
+                                  key);
+    }
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, prefab, "prefab", "path", "ids", "overrides")) return false;
+    const char* path = wpe_json_string(wpe_json_get(prefab, "path"));
+    if (!path || !wpe_vfs_path_is_valid(path))
+        return wpe__json_fail(&l->r, prefab, WPE_RESULT_ERROR_PARSE,
+                              "\"path\" must be the prefab's asset path");
+    wpe__IdPair* members = NULL;
+    uint32_t member_count = 0;
+    if (!wpe__prefab_load(l, prefab, path, wpe_json_get(prefab, "overrides"), out_root, &members,
+                          &member_count))
+        return false;
+    const WPE_JsonValue* ids = wpe_json_get(prefab, "ids");
+    bool ok = !ids || wpe_json_type(ids) == WPE_JSON_OBJECT ||
+              wpe__json_fail(&l->r, ids, WPE_RESULT_ERROR_PARSE, "\"ids\" must map prefab ids to scene ids");
+    for (uint32_t i = 0; ok && !l->ids.identity && i < wpe_json_count(ids); ++i) {
+        const char* key = NULL;
+        const WPE_JsonValue* scene_id = wpe_json_member(ids, i, &key);
+        char* end = NULL;
+        const unsigned long local = strtoul(key, &end, 10);
+        WPE_Entity member = WPE_ENTITY_NULL;
+        for (uint32_t m = 0; m < member_count && *end == '\0'; ++m) {
+            if (members[m].id == local) member = members[m].entity;
+        }
+        uint32_t id = 0;
+        ok = wpe__read_file_id(l, scene_id, ids, &id);
+        /* Members removed by an override have no entity: their ids are not registered. */
+        if (ok && *end != '\0')
+            ok = wpe__json_fail(&l->r, scene_id, WPE_RESULT_ERROR_PARSE, "\"%s\" is not a prefab entity id",
+                                key);
+        if (ok && member != WPE_ENTITY_NULL)
+            l->ids.by_id[(*io_id_count)++] = (wpe__IdPair){.id = id, .entity = member};
+    }
+    wpe_free(members);
+    if (!ok) wpe_scene_destroy_recursive(l->context->ecs, *out_root);
+    return ok;
+}
+
 /* Every load stage; returns false on the first error (recorded in l->r.result). */
-static bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entity* created,
-                               uint32_t* io_count) {
+bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entity* created,
+                        uint32_t* io_count) {
     WPE_Ecs* ecs = l->context->ecs;
     const uint32_t count = wpe_json_count(entities);
-    /* 1. Create every entity first so references can resolve in any order. */
+    /* 1. Create every entity first so references can resolve in any order. Prefab instances are
+     * created whole, so their members' scene ids resolve too. */
+    uint32_t id_count = 0;
     for (uint32_t i = 0; i < count; ++i) {
         const WPE_JsonValue* v = wpe_json_at(entities, i);
         if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "entity", "id", "name", "parent", "transform", "instance",
                                     "mesh", "camera", "light", "animator", "rigidbody", "collider",
-                                    "audio_source", "script", "components"))
+                                    "audio_source", "script", "components", "prefab"))
             return false;
-        const WPE_JsonValue* id_value = wpe_json_get(v, "id");
-        const double id = wpe_json_number(id_value, 0.0);
-        if (wpe_json_type(id_value) != WPE_JSON_NUMBER || id != floor(id) || id < 1.0 ||
-            id > WPE__MAX_FILE_ID)
-            return wpe__json_fail(&l->r, id_value ? id_value : v, WPE_RESULT_ERROR_PARSE,
+        uint32_t id = 0;
+        if (!wpe__read_file_id(l, wpe_json_get(v, "id"), v, &id))
+            return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE,
                                   "every entity needs an \"id\" (a whole number from 1 to %u)",
                                   WPE__MAX_FILE_ID);
-        const WPE_Entity e = wpe_ecs_spawn(ecs);
-        if (e == WPE_ENTITY_NULL)
-            return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_CAPACITY, "entity limit reached");
+        const WPE_JsonValue* prefab = wpe_json_get(v, "prefab");
+        WPE_Entity e = WPE_ENTITY_NULL;
+        if (prefab) {
+            if (!wpe__load_instance_entry(l, v, prefab, &e, &id_count)) return false;
+        } else {
+            e = wpe_ecs_spawn(ecs);
+            if (e == WPE_ENTITY_NULL)
+                return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_CAPACITY, "entity limit reached");
+        }
         created[(*io_count)++] = e;
-        l->ids.by_id[i] = (wpe__IdPair){.id = (uint32_t)id, .entity = e};
+        l->ids.by_id[id_count++] = (wpe__IdPair){.id = id, .entity = e};
     }
-    l->ids.count = count;
-    qsort(l->ids.by_id, count, sizeof *l->ids.by_id, wpe__compare_by_id);
-    for (uint32_t i = 1; i < count; ++i) {
+    l->ids.count = id_count;
+    qsort(l->ids.by_id, id_count, sizeof *l->ids.by_id, wpe__compare_by_id);
+    for (uint32_t i = 1; i < id_count; ++i) {
         if (l->ids.by_id[i].id == l->ids.by_id[i - 1].id)
             return wpe__json_fail(&l->r, entities, WPE_RESULT_ERROR_PARSE, "entity id %u is used twice",
                                   l->ids.by_id[i].id);
@@ -1182,6 +1274,9 @@ static bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WP
         if (name && wpe_scene_set_name(ecs, e, wpe_json_string(name)) != WPE_RESULT_OK)
             return wpe__json_fail(&l->r, name, WPE_RESULT_ERROR_OUT_OF_MEMORY, "cannot set the name");
         const WPE_JsonValue* transform = wpe_json_get(v, "transform");
+        /* An instance's own transform replaces its prefab root's. */
+        if (transform && wpe_ecs_has_component(ecs, e, WPE_COMP_TRANSFORM))
+            wpe_ecs_remove_component(ecs, e, WPE_COMP_TRANSFORM);
         if (transform && !wpe__load_transform(l, e, transform)) return false;
     }
     for (uint32_t i = 0; i < count; ++i) {
@@ -1239,7 +1334,8 @@ WPE_Result wpe_scene_load(const WPE_SceneContext* context, const char* text, siz
     const WPE_JsonValue* entities = wpe_json_get(root, "entities");
     const uint32_t count = wpe_json_count(entities);
     WPE_Entity* created = wpe_alloc_zeroed(count ? count : 1, sizeof *created);
-    l.ids.by_id = wpe_alloc_zeroed(count ? count : 1, sizeof *l.ids.by_id);
+    const uint32_t id_capacity = wpe__entity_id_capacity(entities);
+    l.ids.by_id = wpe_alloc_zeroed(id_capacity ? id_capacity : 1, sizeof *l.ids.by_id);
     uint32_t created_count = 0;
     WPE_Entity camera = WPE_ENTITY_NULL;
     if (!created || !l.ids.by_id) {
@@ -1330,7 +1426,8 @@ static wpe__Loader wpe__edit_loader(const WPE_SceneContext* context, const char*
 WPE_Result wpe_scene_save_entity(const WPE_SceneContext* context, WPE_Entity entity, WPE_JsonWriter* writer) {
     if (!context || !context->ecs || !context->assets || !writer) return WPE_RESULT_ERROR_NULL_ARG;
     if (!wpe_ecs_is_alive(context->ecs, entity)) return WPE_RESULT_ERROR_NOT_FOUND;
-    wpe__Saver s = {.context = context, .w = writer, .ids = {.identity = context->ecs}};
+    wpe__Saver s = {
+        .context = context, .w = writer, .ids = {.identity = context->ecs}, .describe_prefabs = true};
     wpe__save_entity(&s, entity);
     return s.result;
 }
@@ -1353,7 +1450,7 @@ static const struct {
     {"script", WPE_COMP_SCRIPT, wpe__load_script},
 };
 
-static WPE_ComponentType wpe__edit_type(const WPE_SceneContext* context, const char* key) {
+WPE_ComponentType wpe__edit_type(const WPE_SceneContext* context, const char* key) {
     for (size_t i = 0; i < sizeof wpe__edit_components / sizeof wpe__edit_components[0]; ++i) {
         if (strcmp(wpe__edit_components[i].key, key) == 0) return wpe__edit_components[i].type;
     }
@@ -1364,7 +1461,7 @@ static WPE_ComponentType wpe__edit_type(const WPE_SceneContext* context, const c
 }
 
 /* Loads one component description (no removal of an existing one). */
-static bool wpe__apply(wpe__Loader* l, WPE_Entity e, const char* key, const WPE_JsonValue* value) {
+bool wpe__apply(wpe__Loader* l, WPE_Entity e, const char* key, const WPE_JsonValue* value) {
     if (strcmp(key, "name") == 0) {
         const char* name = wpe_json_string(value);
         if (!name) return wpe__json_fail(&l->r, value, WPE_RESULT_ERROR_PARSE, "\"name\" must be a string");
@@ -1461,10 +1558,18 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
     /* "id" is accepted and ignored, so a saved entity (wpe_scene_save_entity) can be fed back as a copy. */
     if (!WPE__JSON_CHECK_OBJECT(&l.r, description, "entity", "id", "name", "parent", "transform", "instance",
                                 "mesh", "camera", "light", "animator", "rigidbody", "collider",
-                                "audio_source", "script", "components"))
+                                "audio_source", "script", "components", "prefab"))
         return l.r.result;
-    const WPE_Entity e = wpe_ecs_spawn(context->ecs);
-    if (e == WPE_ENTITY_NULL) return WPE_RESULT_ERROR_CAPACITY;
+    /* A prefab instance starts from its prefab; the description's parts then replace the root's. */
+    const WPE_JsonValue* prefab = wpe_json_get(description, "prefab");
+    WPE_Entity e = WPE_ENTITY_NULL;
+    if (prefab) {
+        uint32_t no_ids = 0;
+        if (!wpe__load_instance_entry(&l, description, prefab, &e, &no_ids)) return l.r.result;
+    } else {
+        e = wpe_ecs_spawn(context->ecs);
+        if (e == WPE_ENTITY_NULL) return WPE_RESULT_ERROR_CAPACITY;
+    }
     /* The scene-file order: identity first, then components, scripts last. */
     static const char* const order[] = {"name",      "transform", "parent",      "instance",
                                         "mesh",      "camera",    "light",       "animator",
@@ -1472,11 +1577,24 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
     bool ok = true;
     for (size_t i = 0; ok && i < sizeof order / sizeof order[0]; ++i) {
         const WPE_JsonValue* value = wpe_json_get(description, order[i]);
-        if (value) ok = wpe__apply(&l, e, order[i], value);
+        if (!value) continue;
+        const WPE_ComponentType type = wpe__edit_type(context, order[i]);
+        if (type != WPE_COMP_NONE && wpe_ecs_has_component(context->ecs, e, type))
+            wpe_ecs_remove_component(context->ecs, e, type);
+        ok = wpe__apply(&l, e, order[i], value);
     }
     const WPE_JsonValue* components = wpe_json_get(description, "components");
+    for (uint32_t i = 0; ok && i < wpe_json_count(components); ++i) {
+        const char* key = NULL;
+        wpe_json_member(components, i, &key);
+        const WPE_ComponentType type = wpe__edit_type(context, key);
+        if (type != WPE_COMP_NONE && wpe_ecs_has_component(context->ecs, e, type))
+            wpe_ecs_remove_component(context->ecs, e, type);
+    }
     if (ok && components) ok = wpe__load_components(&l, e, components);
     const WPE_JsonValue* script = wpe_json_get(description, "script");
+    if (ok && script && wpe_ecs_has_component(context->ecs, e, WPE_COMP_SCRIPT))
+        wpe_ecs_remove_component(context->ecs, e, WPE_COMP_SCRIPT);
     if (ok && script) ok = wpe__load_script(&l, e, script);
     if (!ok) {
         wpe_scene_destroy_recursive(context->ecs, e);

@@ -57,6 +57,10 @@ function Tour:on_start()
 
 	-- Prefabs, visibility, animation.
 	self.figure = wpe.instantiate("figure", vector.create(-2, 0, 0))
+	-- Prefab files instantiate by asset path (or by a project prefab name mapped to one).
+	local crate = wpe.instantiate("prefabs/crate.prefab", vector.create(6, 3, 6))
+	assert(wpe.get_position(crate).y == 3, "prefab instance placed")
+	wpe.destroy(crate)
 	wpe.set_visible(self.figure, false)
 	wpe.set_visible(self.figure, true)
 	wpe.play_animation(self.figure, 1, true)

@@ -79,6 +79,7 @@ enum WPE_BuiltinComponent {
     WPE_COMP_PHYSICS_COLLIDER = 10,
     WPE_COMP_AUDIO_SOURCE = 11,
     WPE_COMP_ANIMATOR = 12,
+    WPE_COMP_PREFAB = 13, /* Prefab instance membership (engine/prefab.h). */
     WPE_COMP_USER_FIRST = 32,
 };
 

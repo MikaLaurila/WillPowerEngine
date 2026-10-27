@@ -39,6 +39,7 @@ struct WPE_Engine {
     WPE_AssetHandle font;
     WPE_Ecs* ecs;
     WPE_Physics* physics;
+    WPE_PrefabCache* prefabs;
     WPE_Audio* audio;
     WPE_Input* input;
     WPE_ScriptHost* scripts;
@@ -80,6 +81,23 @@ static void wpe__app_screen_size(void* user_data, uint32_t* out_width, uint32_t*
     const WPE_Engine* engine = user_data;
     *out_width = engine->project.width;
     *out_height = engine->project.height;
+}
+
+static WPE_SceneContext wpe__context(const WPE_Engine* engine) {
+    return (WPE_SceneContext){
+        .ecs = engine->ecs, .assets = engine->assets, .scripts = engine->scripts, .prefabs = engine->prefabs};
+}
+
+/* wpe.instantiate of a prefab file: by the project's prefab name, or by asset path. */
+static WPE_Result wpe__app_instantiate(void* user_data, const char* name, WPE_Entity* out_root) {
+    const WPE_Engine* engine = user_data;
+    const char* path = name;
+    for (uint32_t i = 0; i < engine->project.prefab_count; ++i) {
+        if (strcmp(engine->project.prefabs[i].name, name) == 0) path = engine->project.prefabs[i].path;
+    }
+    if (!wpe_prefab_is_path(path)) return WPE_RESULT_ERROR_NOT_FOUND; /* A model: the host instantiates it. */
+    const WPE_SceneContext context = wpe__context(engine);
+    return wpe_prefab_instantiate(&context, path, out_root);
 }
 
 static void wpe__on_event(const WPE_PlatformEvent* event, void* user_data) {
@@ -133,6 +151,8 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
     if (result == WPE_RESULT_OK) result = wpe_ecs_create(&engine->ecs);
     if (result == WPE_RESULT_OK) result = wpe_scene_register_components(engine->ecs);
     if (result == WPE_RESULT_OK) result = wpe_graphics_register_components(engine->ecs, engine->assets);
+    if (result == WPE_RESULT_OK) result = wpe_prefab_register(engine->ecs);
+    if (result == WPE_RESULT_OK) result = wpe_prefab_cache_create(&engine->prefabs);
     if (result == WPE_RESULT_OK) {
         result = wpe_physics_create(&(WPE_PhysicsDesc){.ecs = engine->ecs,
                                                        .assets = engine->assets,
@@ -162,7 +182,8 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                    .quit = wpe__app_quit,
                                    .set_camera = wpe__app_set_camera,
                                    .get_camera = wpe__app_get_camera,
-                                   .screen_size = wpe__app_screen_size};
+                                   .screen_size = wpe__app_screen_size,
+                                   .instantiate = wpe__app_instantiate};
         result =
             wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = engine->ecs,
                                                          .assets = engine->assets,
@@ -176,8 +197,15 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                                          .time_limit_ms = p->script_time_limit_ms},
                                    &engine->scripts);
     }
-    /* Named prefabs for wpe.instantiate(); the host keeps the models loaded. */
+    /* Named prefabs for wpe.instantiate(). The host keeps the models loaded; prefab files are
+     * instantiated through the app service (and cached once used). */
     for (uint32_t i = 0; result == WPE_RESULT_OK && i < p->prefab_count; ++i) {
+        if (wpe_prefab_is_path(p->prefabs[i].path)) {
+            if (wpe_vfs_exists(engine->vfs, p->prefabs[i].path)) continue;
+            wpe_log_error("prefab '%s' ('%s') not found", p->prefabs[i].name, p->prefabs[i].path);
+            result = WPE_RESULT_ERROR_NOT_FOUND;
+            break;
+        }
         WPE_AssetHandle model = WPE_ASSET_NONE;
         result = wpe_asset_load(engine->assets, WPE_ASSET_MODEL, p->prefabs[i].path, &model);
         if (result == WPE_RESULT_OK)
@@ -226,6 +254,7 @@ void wpe_engine_destroy(WPE_Engine* engine) {
     wpe_audio_destroy(engine->audio);
     wpe_physics_destroy(engine->physics);
     wpe_ecs_destroy(engine->ecs);
+    wpe_prefab_cache_destroy(engine->prefabs);
     wpe_asset_release(engine->assets, engine->font);
     wpe_asset_manager_destroy(engine->assets);
     wpe_vfs_destroy(engine->vfs);
@@ -266,8 +295,7 @@ WPE_Result wpe_engine_load_scene_text(WPE_Engine* engine, const char* text, size
     WPE_Result result = wpe_scene_clear(engine->ecs);
     engine->camera = WPE_ENTITY_NULL;
     engine->environment = wpe_scene_environment_default();
-    const WPE_SceneContext context = {
-        .ecs = engine->ecs, .assets = engine->assets, .scripts = engine->scripts};
+    const WPE_SceneContext context = wpe__context(engine);
     WPE_SceneEnvironment environment = wpe_scene_environment_default();
     WPE_Entity camera = WPE_ENTITY_NULL;
     if (result == WPE_RESULT_OK) result = wpe_scene_load(&context, text, size, name, &environment, &camera);
@@ -306,8 +334,7 @@ WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
 }
 WPE_Result wpe_engine_save_scene(const WPE_Engine* engine, const char* os_path) {
     if (!engine || !os_path) return WPE_RESULT_ERROR_NULL_ARG;
-    const WPE_SceneContext context = {
-        .ecs = engine->ecs, .assets = engine->assets, .scripts = engine->scripts};
+    const WPE_SceneContext context = wpe__context(engine);
     return wpe_scene_save_file(&context, &engine->environment, wpe_engine_camera(engine), os_path);
 }
 
@@ -585,6 +612,10 @@ WPE_Input* wpe_engine_input(const WPE_Engine* engine) {
 
 WPE_Physics* wpe_engine_physics(const WPE_Engine* engine) {
     return engine ? engine->physics : NULL;
+}
+
+WPE_PrefabCache* wpe_engine_prefabs(const WPE_Engine* engine) {
+    return engine ? engine->prefabs : NULL;
 }
 
 WPE_Audio* wpe_engine_audio(const WPE_Engine* engine) {

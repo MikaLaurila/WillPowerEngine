@@ -146,6 +146,7 @@ static World make_world(void) {
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&w.ecs));
     WPE_TEST_ASSERT_OK(wpe_scene_register_components(w.ecs));
     WPE_TEST_ASSERT_OK(wpe_graphics_register_components(w.ecs, w.assets.assets));
+    WPE_TEST_ASSERT_OK(wpe_prefab_register(w.ecs)); /* The scene holds a prefab instance. */
     WPE_TEST_ASSERT_OK(wpe_physics_create(
         &(WPE_PhysicsDesc){.ecs = w.ecs, .assets = w.assets.assets, .gravity = {{0, -9.81f, 0}}},
         &w.physics));

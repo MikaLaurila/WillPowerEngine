@@ -93,6 +93,10 @@ typedef struct WPE_ScriptApp {
     WPE_Entity (*get_camera)(void* user_data);
     /* Size of the 2D canvas (framebuffer) in pixels. */
     void (*screen_size)(void* user_data, uint32_t* out_width, uint32_t* out_height);
+    /* wpe.instantiate of names the application resolves itself (prefab files): creates the instance,
+     * or returns WPE_RESULT_ERROR_NOT_FOUND for names that are not its own (the host then looks for a
+     * model). Other errors are raised in the script. */
+    WPE_Result (*instantiate)(void* user_data, const char* name, WPE_Entity* out_root);
 } WPE_ScriptApp;
 
 typedef struct WPE_ScriptHostDesc {

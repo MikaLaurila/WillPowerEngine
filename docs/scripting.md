@@ -88,7 +88,7 @@ Entity handles are numbers. Passing a handle that isn't alive raises an error. V
 | `wpe.get_parent(entity) -> entity?` | Parent, or nil. |
 | `wpe.set_parent(entity, parent?, keep_world = true)` | Reparent (nil detaches). With `keep_world`, the world placement is preserved. |
 | `wpe.children(entity) -> {entity}` | Direct children in order. |
-| `wpe.instantiate(prefab, [position]) -> entity` | Instantiate a named prefab (from the project's `prefabs`, or registered in C), or a model asset path (glTF or `.prim`, loaded once and cached). Returns the root entity. An animated model starts playing its first animation. |
+| `wpe.instantiate(prefab, [position]) -> entity` | Instantiate a prefab file (`.prefab`, see [scenes.md](scenes.md#prefabs)), a model asset path (glTF or `.prim`), or a name from the project's `prefabs` (or registered in C) that maps to either. Prefab files are parsed once and read again when they change; models are loaded once. Returns the root entity. An animated model starts playing its first animation. |
 | `wpe.attach_script(entity, path) -> bool` | Attach (or replace) a script. |
 | `wpe.get_position(entity)` / `wpe.set_position(entity, v)` | Local position. |
 | `wpe.get_rotation(entity)` / `wpe.set_rotation(entity, euler)` | Local rotation as XYZ Euler angles in radians (applied X, then Y, then Z). |

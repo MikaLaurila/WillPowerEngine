@@ -199,6 +199,15 @@
       "id": 28,
       "name": "game",
       "script": {"path": "scripts/game.luau", "properties": {"next_scene": "scenes/demo.scene", "title": "Test scene"}}
+    },
+    {
+      "id": 29,
+      "name": "heavy crate",
+      "transform": {"position": [-4, 2, 3]},
+      "prefab": {
+        "path": "prefabs/crate.prefab",
+        "overrides": {"1": {"collider": {"shape": "box", "size": [1, 1, 1], "density": 3}}}
+      }
     }
   ]
 }

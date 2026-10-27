@@ -83,6 +83,9 @@ WPE_Entity wpe_scene_ids_to_entity(const WPE_SceneIds* ids, uint32_t id);
 
 typedef struct WPE_SceneContext WPE_SceneContext;
 
+/** Parsed prefab files, reused while they are unchanged on disk (engine/prefab.h). */
+typedef struct WPE_PrefabCache WPE_PrefabCache;
+
 /** Saves and loads one game-defined component type. */
 typedef struct WPE_ComponentSerializer {
     WPE_ComponentType type;
@@ -108,6 +111,9 @@ struct WPE_SceneContext {
      * (e.g. an editor's own camera). */
     bool (*include)(WPE_Entity entity, void* user_data);
     void* include_user_data;
+    /* Optional: parsed prefab files to reuse (without it, every instance reads its prefab file). Scenes
+     * with prefab instances need WPE_COMP_PREFAB registered (wpe_prefab_register()). */
+    WPE_PrefabCache* prefabs;
 };
 
 /** @return The default environment: render defaults, no post-processing, gravity -9.81 Y, a dark blue

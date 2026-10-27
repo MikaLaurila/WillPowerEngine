@@ -1,0 +1,14 @@
+{
+  "format": "wpe.prefab",
+  "version": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "crate",
+      "transform": {},
+      "mesh": {"model": "meshes/crate.prim"},
+      "rigidbody": {"type": "dynamic"},
+      "collider": {"shape": "box", "size": [1, 1, 1], "density": 0.6}
+    }
+  ]
+}

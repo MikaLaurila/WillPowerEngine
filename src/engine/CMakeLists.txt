@@ -2,6 +2,7 @@ add_library(wpe_engine STATIC
     engine.c
     export.c
     json_read.c
+    prefab.c
     project.c
     scene_file.c)
 add_library(wpe::engine ALIAS wpe_engine)

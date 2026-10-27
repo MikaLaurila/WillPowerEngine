@@ -194,9 +194,20 @@ static int wpe__api_instantiate(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     const bool has_position = !lua_isnoneornil(L, 2);
     const WPE_Vec3 position = has_position ? wpe__check_vec3(L, 2) : wpe_vec3(0, 0, 0);
+    WPE_Entity root = WPE_ENTITY_NULL;
+    if (host->app.instantiate) {
+        /* Prefab files belong to the application; anything else is a model. */
+        const WPE_Result result = host->app.instantiate(host->app.user_data, name, &root);
+        if (result != WPE_RESULT_ERROR_NOT_FOUND) {
+            wpe__raise_result(L, "instantiate", result);
+            WPE_Transform* t = wpe_ecs_get_component(host->ecs, root, WPE_COMP_TRANSFORM);
+            if (has_position && t) t->position = position;
+            lua_pushnumber(L, (double)root);
+            return 1;
+        }
+    }
     const WPE_AssetHandle model = wpe__script_find_prefab(host, name);
     if (model == WPE_ASSET_NONE) luaL_errorL(L, "wpe.instantiate: unknown prefab '%s'", name);
-    WPE_Entity root = WPE_ENTITY_NULL;
     const WPE_InstantiateOptions options = {
         .animation = wpe_asset_model(host->assets, model)->animation_count ? 0 : WPE_MODEL_NONE,
         .play = true};

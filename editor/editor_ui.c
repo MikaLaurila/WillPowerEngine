@@ -94,6 +94,10 @@ struct WPE_EditorUi {
      * when the prompt's Save needs a path first). */
     wpe__Pending pending;
     char pending_path[WPE__UI_PATH];
+    /* "Save as prefab": the entity and the path being asked for. */
+    bool prefab_popup;
+    WPE_Entity prefab_entity;
+    char prefab_path[WPE__UI_PATH];
     bool unsaved_popup;
     bool pending_after_save;
     bool layout_built;
@@ -852,8 +856,8 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
 
 /* ---- Panels ----------------------------------------------------------------------------------------- */
 
+/* Places a model or prefab 6 units in front of the editor camera. */
 static void wpe__ui_create_model(WPE_EditorUi* ui, const char* path) {
-    /* Place it 6 units in front of the editor camera. */
     WPE_Vec3 position = wpe_vec3(0, 0, 0);
     const WPE_Transform* cam =
         wpe_ecs_get_component(wpe__ui_ecs(ui), wpe_editor_camera(ui->editor), WPE_COMP_TRANSFORM);
@@ -879,9 +883,11 @@ static void wpe__ui_create_model(WPE_EditorUi* ui, const char* path) {
         wpe_json_write_number(w, roundf(position.v[i] * 10.0f) / 10.0f);
     wpe_json_write_array_end(w);
     wpe_json_write_object_end(w);
-    wpe_json_write_key(w, "instance");
+    /* A prefab becomes a linked instance; a model is copied in. */
+    const bool prefab = wpe_prefab_is_path(path);
+    wpe_json_write_key(w, prefab ? "prefab" : "instance");
     wpe_json_write_object_begin(w);
-    wpe_json_write_key(w, "model");
+    wpe_json_write_key(w, prefab ? "path" : "model");
     wpe_json_write_string(w, path);
     wpe_json_write_object_end(w);
     wpe_json_write_object_end(w);
@@ -911,7 +917,13 @@ static void wpe__hierarchy_node(WPE_EditorUi* ui, WPE_Entity e) {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
     if (!h || h->child_count == 0) flags |= ImGuiTreeNodeFlags_Leaf;
     if (e == wpe_editor_selection(ui->editor)) flags |= ImGuiTreeNodeFlags_Selected;
+    /* Prefab instances in blue: the root brighter than its members. */
+    const WPE_Entity prefab_root = wpe_prefab_root(ecs, e);
+    if (prefab_root != WPE_ENTITY_NULL)
+        igPushStyleColor_U32(ImGuiCol_Text,
+                             prefab_root == e ? WPE__COL(120, 180, 255, 255) : WPE__COL(150, 175, 210, 255));
     const bool open = igTreeNodeEx_Str(label, flags);
+    if (prefab_root != WPE_ENTITY_NULL) igPopStyleColor(1);
     if (igIsItemClicked(ImGuiMouseButton_Left) && !igIsItemToggledOpen())
         wpe__ui_entity_command(ui, "select", e);
     /* Double-click: bring it into view. */
@@ -937,8 +949,25 @@ static void wpe__hierarchy_node(WPE_EditorUi* ui, WPE_Entity e) {
             wpe__ui_entity_command(ui, "duplicate_entity", e);
         if (igMenuItem_Bool("Delete", NULL, false, true)) wpe__ui_entity_command(ui, "delete_entity", e);
         if (igMenuItem_Bool("Detach from parent", NULL, false,
-                            wpe_scene_get_parent(ecs, e) != WPE_ENTITY_NULL))
+                            wpe_scene_get_parent(ecs, e) != WPE_ENTITY_NULL &&
+                                (prefab_root == WPE_ENTITY_NULL || prefab_root == e)))
             wpe__ui_set_parent(ui, e, WPE_ENTITY_NULL);
+        igSeparator();
+        /* A plain tree or an instance root can be saved as a (new) prefab; members can't on their own. */
+        if (igMenuItem_Bool("Save as prefab...", NULL, false,
+                            prefab_root == WPE_ENTITY_NULL || prefab_root == e)) {
+            ui->prefab_entity = e;
+            snprintf(ui->prefab_path, sizeof ui->prefab_path, "prefabs/%s.prefab", name ? name : "entity");
+            ui->prefab_popup = true;
+        }
+        if (prefab_root != WPE_ENTITY_NULL) {
+            if (igMenuItem_Bool("Apply to prefab", NULL, false, true))
+                wpe__ui_entity_command(ui, "apply_prefab", e);
+            if (igMenuItem_Bool("Revert to prefab", NULL, false, true))
+                wpe__ui_entity_command(ui, "revert_prefab", e);
+            if (igMenuItem_Bool("Unpack prefab", NULL, false, true))
+                wpe__ui_entity_command(ui, "unpack_prefab", e);
+        }
         igEndPopup();
     }
     if (!open) return;
@@ -1057,6 +1086,24 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
     wpe_json_writer_destroy(writer);
     const WPE_JsonValue* root = wpe_json_root(doc);
     igText("Entity %u", entity);
+    /* Prefab instances: where the entity comes from, and what to do with its changes. */
+    const char* command = NULL; /* A prefab command for the whole instance, run after drawing. */
+    const char* prefab = wpe_prefab_path(wpe__ui_ecs(ui), entity);
+    if (prefab) {
+        igTextColored((ImVec4_c){0.47f, 0.7f, 1.0f, 1.0f}, "Prefab %s%s", prefab,
+                      wpe_prefab_root(wpe__ui_ecs(ui), entity) == entity ? "" : " (member)");
+        if (igSmallButton("Apply")) command = "apply_prefab";
+        if (igIsItemHovered(0))
+            igSetTooltip("Write this instance's changes into the prefab (every instance gets them)");
+        igSameLine(0, -1);
+        if (igSmallButton("Revert all")) command = "revert_prefab";
+        if (igIsItemHovered(0))
+            igSetTooltip("Rebuild the instance from the prefab (its changes and added children go)");
+        igSameLine(0, -1);
+        if (igSmallButton("Unpack")) command = "unpack_prefab";
+        if (igIsItemHovered(0))
+            igSetTooltip("Make the instance plain entities, no longer linked to the prefab");
+    }
     igPushItemWidth(-WPE__LABEL_WIDTH);
     /* The whole panel is drawn first and the frame's change (at most one) applied afterwards, since a
      * command changes the entity the document describes. */
@@ -1064,10 +1111,11 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
     const char* edited_key = NULL;
     const WPE_JsonValue* edited_value = NULL;
     const char* removed_key = NULL;
+    const char* reverted_key = NULL;
     for (uint32_t i = 0; doc && i < wpe_json_count(root); ++i) {
         const char* key = NULL;
         const WPE_JsonValue* value = wpe_json_member(root, i, &key);
-        if (strcmp(key, "id") == 0 || strcmp(key, "parent") == 0) continue;
+        if (strcmp(key, "id") == 0 || strcmp(key, "parent") == 0 || strcmp(key, "prefab") == 0) continue;
         igPushID_Str(key);
         if (strcmp(key, "name") == 0) {
             if (wpe__draw_member(ui, key, "name", value, &edit, edited_key != NULL) && !edited_key) {
@@ -1076,7 +1124,19 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
             }
         } else if (wpe_json_type(value) == WPE_JSON_OBJECT) {
             bool keep = true;
-            if (igCollapsingHeader_BoolPtr(key, &keep, ImGuiTreeNodeFlags_DefaultOpen)) {
+            /* Components that differ from the prefab are marked and can be reverted (right-click). The
+             * "###" part keeps the header's id when the mark comes and goes. */
+            const bool overridden = prefab && wpe_prefab_is_overridden(&context, entity, key);
+            char header[96];
+            snprintf(header, sizeof header, "%s%s###header", key, overridden ? "  (overridden)" : "");
+            if (overridden) igPushStyleColor_U32(ImGuiCol_Text, WPE__COL(120, 180, 255, 255));
+            const bool open = igCollapsingHeader_BoolPtr(header, &keep, ImGuiTreeNodeFlags_DefaultOpen);
+            if (overridden) igPopStyleColor(1);
+            if (overridden && igBeginPopupContextItem("revert", ImGuiPopupFlags_MouseButtonRight)) {
+                if (igMenuItem_Bool("Revert to prefab", NULL, false, true)) reverted_key = key;
+                igEndPopup();
+            }
+            if (open) {
                 for (uint32_t m = 0; m < wpe_json_count(value); ++m) {
                     const char* member_key = NULL;
                     const WPE_JsonValue* member = wpe_json_member(value, m, &member_key);
@@ -1094,7 +1154,18 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
         igPopID();
     }
     igPopItemWidth();
-    if (removed_key) {
+    if (command) {
+        wpe__ui_entity_command(ui, command, entity);
+    } else if (reverted_key) {
+        WPE_JsonWriter* w = wpe__ui_begin("revert_prefab");
+        if (w) {
+            wpe_json_write_key(w, "id");
+            wpe_json_write_integer(w, entity);
+            wpe_json_write_key(w, "component");
+            wpe_json_write_string(w, reverted_key);
+            wpe__ui_send(ui, w);
+        }
+    } else if (removed_key) {
         WPE_JsonWriter* w = wpe__ui_begin("remove_component");
         if (w) {
             wpe_json_write_key(w, "id");
@@ -1216,13 +1287,13 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
     igSameLine(0, -1);
     igSetNextItemWidth(-1.0f);
     igInputText("##filter", ui->asset_filter, sizeof ui->asset_filter, 0, NULL, NULL);
-    igTextDisabled("Double-click: open a scene / add a model. Drag a model into the viewport.");
+    igTextDisabled("Double-click: open a scene / add a model or prefab. Drag them into the viewport.");
     igBeginChild_Str("##asset_list", (ImVec2_c){0, 0}, 0, 0);
     for (uint32_t i = 0; i < ui->asset_count; ++i) {
         const char* path = ui->assets[i];
         if (ui->asset_filter[0] && !strstr(path, ui->asset_filter)) continue;
-        const bool model =
-            wpe__has_suffix(path, ".glb") || wpe__has_suffix(path, ".gltf") || wpe__has_suffix(path, ".prim");
+        const bool model = wpe__has_suffix(path, ".glb") || wpe__has_suffix(path, ".gltf") ||
+                           wpe__has_suffix(path, ".prim") || wpe_prefab_is_path(path);
         const bool scene = wpe__has_suffix(path, ".scene");
         igSelectable_Bool(path, strcmp(path, wpe_editor_scene_path(ui->editor)) == 0,
                           ImGuiSelectableFlags_AllowDoubleClick, (ImVec2_c){0, 0});
@@ -1476,6 +1547,18 @@ static void wpe__ui_popups(WPE_EditorUi* ui) {
     if (wpe__ui_path_popup(&ui->export_popup, "Export game", "Output executable (outside the project):",
                            ui->export_path, sizeof ui->export_path) == WPE__POPUP_OK)
         wpe__ui_string_command(ui, "export", "output", ui->export_path, false);
+    if (wpe__ui_path_popup(&ui->prefab_popup, "Save as prefab", "Prefab asset path:", ui->prefab_path,
+                           sizeof ui->prefab_path) == WPE__POPUP_OK) {
+        WPE_JsonWriter* w = wpe__ui_begin("save_prefab");
+        if (w) {
+            wpe_json_write_key(w, "id");
+            wpe_json_write_integer(w, ui->prefab_entity);
+            wpe_json_write_key(w, "path");
+            wpe_json_write_string(w, ui->prefab_path);
+            wpe__ui_send(ui, w);
+        }
+        ui->assets_stale = true;
+    }
 }
 
 static void wpe__ui_shortcuts(WPE_EditorUi* ui) {

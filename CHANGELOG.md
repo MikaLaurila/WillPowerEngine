@@ -26,6 +26,33 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   functions, edit mode, editor commands (undo/redo, coalescing, scenes, play mode, screenshots),
   and a command-line test that drives the editor like an agent.
 
+### Added (prefabs)
+- Prefab files (`.prefab`): reusable entity trees in the scene schema, placed in scenes as linked
+  instances (`"prefab": {path, ids, overrides}`, docs in `docs/scenes.md#prefabs`). Editing a prefab
+  updates every instance except where an instance overrides it.
+  - Overrides are found by comparing each instance with its prefab as instantiated, so any change
+    counts (editor, agent, script or code).
+  - Members can be removed per instance, and entities attached beneath them.
+- Engine: `engine/prefab.h`:
+  - instantiate, save as prefab or apply to it, revert (a component or the whole instance),
+    unpack, and override queries;
+  - `WPE_COMP_PREFAB`;
+  - a cache of parsed prefab files, re-read when they change.
+- Scripts: `wpe.instantiate` takes prefab files, by path or by a project prefab name.
+- Editor:
+  - Commands `save_prefab`, `apply_prefab`, `revert_prefab` and `unpack_prefab`. `create_entity`
+    places prefabs, `list_entities` shows membership, and members can't be reparented.
+  - Hierarchy: instances in blue, right-click Save as prefab / Apply / Revert / Unpack.
+  - Inspector: a prefab bar with Apply, Revert all and Unpack; overridden components are marked
+    and revert from their header's right-click menu.
+  - Assets place prefabs by double-click or drag.
+- Core JSON: `wpe_json_write_value` (shortest exact numbers) and `wpe_json_equal`.
+- Demo: `prefabs/crate.prefab`. The demo's crates are instances of it, and the master test scene
+  has an instance with an override.
+- Tests: instances and overrides, exact scene round trips with instances, prefab edits reaching
+  instances, save/apply/revert/unpack, scripts, rejected mistakes; the editor's prefab commands;
+  JSON value writing and equality.
+
 ### Added (editor: unsaved changes, focus, snapping)
 - An unsaved-changes prompt (Save / Don't save / Cancel) before a new scene, opening a scene,
   quitting or closing the window. Saving a scene that was never saved asks for a name, then

@@ -291,7 +291,43 @@ static void test_json_large_document(void) {
     wpe_json_writer_destroy(w);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_json_parses_all_value_types),
+static void test_json_write_value_and_equal(void) {
+    const char* text =
+        "{\"ints\": [10, -2, 2147483647, 0], \"reals\": [0.1, 3.5, 1e-05, 123.456, 0.100000001],\n"
+        " \"nested\": [{\"a\": true, \"b\": null}, \"s\"], \"empty\": {}}";
+    WPE_JsonDocument* doc = parse_ok(text);
+    WPE_JsonWriter* w = NULL;
+    WPE_TEST_ASSERT_OK(wpe_json_writer_create(&w));
+    wpe_json_writer_set_compact(w, true);
+    wpe_json_write_value(w, wpe_json_root(doc));
+    const char* written = NULL;
+    WPE_TEST_ASSERT_OK(wpe_json_writer_finish(w, &written, NULL));
+    /* Shortest exact numbers (whole numbers as integers), scalar arrays inline. */
+    WPE_TEST_ASSERT(strstr(written, "[10, -2, 2147483647, 0]") != NULL);
+    WPE_TEST_ASSERT(strstr(written, "[0.1, 3.5, 1e-05, 123.456, 0.100000001]") != NULL);
+    WPE_JsonDocument* again = parse_ok(written);
+    WPE_TEST_ASSERT(wpe_json_equal(wpe_json_root(doc), wpe_json_root(again)));
+
+    /* Members compare in any order; types, values and lengths must match. */
+    WPE_JsonDocument* a = parse_ok("{\"x\": 1, \"y\": [1, 2]}");
+    WPE_JsonDocument* b = parse_ok("{\"y\": [1, 2], \"x\": 1}");
+    WPE_JsonDocument* c = parse_ok("{\"x\": 1, \"y\": [1, 2, 3]}");
+    WPE_JsonDocument* d = parse_ok("{\"x\": true, \"y\": [1, 2]}");
+    WPE_TEST_ASSERT(wpe_json_equal(wpe_json_root(a), wpe_json_root(b)));
+    WPE_TEST_ASSERT(!wpe_json_equal(wpe_json_root(a), wpe_json_root(c)));
+    WPE_TEST_ASSERT(!wpe_json_equal(wpe_json_root(a), wpe_json_root(d)));
+    WPE_TEST_ASSERT(!wpe_json_equal(wpe_json_root(a), NULL));
+    WPE_TEST_ASSERT(wpe_json_equal(NULL, NULL));
+    wpe_json_free(a);
+    wpe_json_free(b);
+    wpe_json_free(c);
+    wpe_json_free(d);
+    wpe_json_free(again);
+    wpe_json_free(doc);
+    wpe_json_writer_destroy(w);
+}
+
+WPE_TEST_MAIN(WPE_TEST_CASE(test_json_parses_all_value_types), WPE_TEST_CASE(test_json_write_value_and_equal),
               WPE_TEST_CASE(test_json_decodes_escapes_and_utf8),
               WPE_TEST_CASE(test_json_reports_errors_with_positions),
               WPE_TEST_CASE(test_json_parse_rejects_null_arguments),

@@ -34,6 +34,7 @@
 #include "core/result.h"
 #include "ecs/ecs.h"
 #include "engine/export.h"
+#include "engine/prefab.h"
 #include "engine/project.h"
 #include "engine/scene_file.h"
 #include "input/input.h"
@@ -160,6 +161,8 @@ WPE_Ecs* wpe_engine_ecs(const WPE_Engine* engine);
 WPE_AssetManager* wpe_engine_assets(const WPE_Engine* engine);
 WPE_Input* wpe_engine_input(const WPE_Engine* engine);
 WPE_Physics* wpe_engine_physics(const WPE_Engine* engine);
+/** Parsed prefab files (for scene contexts that load or instantiate prefabs). */
+WPE_PrefabCache* wpe_engine_prefabs(const WPE_Engine* engine);
 WPE_Audio* wpe_engine_audio(const WPE_Engine* engine);
 WPE_ScriptHost* wpe_engine_scripts(const WPE_Engine* engine);
 WPE_Renderer* wpe_engine_renderer(const WPE_Engine* engine);

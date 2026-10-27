@@ -385,6 +385,7 @@ Implemented in `editor/` (docs: `docs/editor.md`).
   - **`editor_ui_backend` tests that both paths draw the same frame**, running the GPU path on SDL's software `SDL_Renderer` with no GPU needed.
   - **Keep GPU vertices interleaved**: SDL's software renderer mis-strides separate UV arrays.
 - **No hidden state.** Every editor feature must be reachable through a command; when adding UI, add or reuse a command first.
+- **Prefabs are linked, and overrides are computed.** Instances keep a baseline (their prefab as instantiated). Saving writes only the differences from it, so no editing path needs to record what it changed. Applying an instance rewrites the prefab file, and the editor then rebuilds the other instances by reloading the scene. Instances keep their prefab's structure; restructuring means unpacking.
 - **Unsaved work is lost only on purpose.** Commands that replace the scene (`new_scene`, `load_scene`, `quit`) refuse while it has unsaved changes, unless they say `"discard": true`. The UI asks first, Save / Don't save / Cancel, and the window's close button goes through the same prompt. A new command that drops the scene must follow the same rule.
 
 ---
@@ -407,7 +408,7 @@ willpower_engine/
 │   ├── vfs/            # Virtual file system and .pak archives (zstd)
 │   ├── script/         # Luau VM and bindings
 │   ├── input/          # SDL3 keyboard, mouse and gamepad input with actions
-│   └── engine/         # Game runtime: project and scene files, frame loop, export
+│   └── engine/         # Game runtime: project, scene and prefab files, frame loop, export
 ├── editor/             # wpe_editor: model and commands (editor.c, editor_commands.c), UI (editor_ui.c,
 │   │                   # ui_backend.c: ImGui on the GPU or the software rasterizer), main.c (window, server, CLI)
 │   └── main.c

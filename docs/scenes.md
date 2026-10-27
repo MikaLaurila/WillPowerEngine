@@ -68,6 +68,52 @@ Loading is **strict**. Unknown keys, wrong types, out-of-range values, dangling 
 
 An entity may have no components at all (`{"id": 7}`).
 
+## Prefabs
+
+A prefab is a reusable entity tree: an enemy with its collider, script and lights, a lamp post, a crate. It is stored in a `.prefab` file and placed in scenes as **linked instances**. Edit the prefab, and every instance changes too, except where an instance overrides it.
+
+A prefab file holds entities in the scene schema above, exactly one of them without a parent (the root):
+
+```json
+{
+  "format": "wpe.prefab",
+  "version": 1,
+  "entities": [
+    {"id": 1, "name": "lamp", "transform": {}, "light": {"type": "point", "intensity": 2}},
+    {"id": 2, "name": "bulb", "parent": 1, "transform": {"position": [0, 1, 0]}, "mesh": {"model": "meshes/bulb.prim"}}
+  ]
+}
+```
+
+A scene places an instance with a `prefab` entry:
+
+```json
+{"id": 4, "name": "porch lamp", "transform": {"position": [2, 0, 0]},
+ "prefab": {"path": "prefabs/lamp.prefab", "ids": {"2": 5},
+            "overrides": {"1": {"light": {"type": "spot"}}, "2": {"mesh": null}}}}
+```
+
+| Key | Description |
+|---|---|
+| `id`, `name`, `parent`, `transform` | The instance's own. They replace the prefab root's name and transform. An instance takes no other components: they come from the prefab, changed by `overrides`. |
+| `prefab.path` | The prefab file. Required. |
+| `prefab.ids` | Scene ids for the prefab's other entities, keyed by their ids in the prefab file. With them, other scene entities can refer to them, for example to be attached to the bulb (`"parent": 5`) or to use a camera inside the prefab. Optional; tools write it. |
+| `prefab.overrides` | How this instance differs from the prefab, keyed by prefab entity id. Each entry maps a component key (or `"name"`) to its value for this instance, or to `null` to remove it. An entity mapped to `null` is removed from this instance. Values use the scene schema, and their entity references are prefab ids. |
+
+When a scene is saved, each instance is compared with its prefab as the prefab instantiates it. Only the differences are written, so changes made by the editor, by a script or by code all count, and nothing is duplicated. Entities attached beneath an instance are saved as ordinary scene entities.
+
+Rules and limits:
+- An instance keeps its prefab's structure. Its entities can be removed (a `null` override), and others attached beneath them, but they can't be moved. To restructure an instance, unpack it.
+- A prefab file can't contain prefab instances (no nesting yet).
+- Override values are whole components: a changed light writes the whole light.
+
+From C (`engine/prefab.h`):
+- `wpe_prefab_instantiate` creates an instance.
+- `wpe_prefab_save_file` saves an entity tree as a prefab file, or writes an instance back into its prefab ("apply").
+- `wpe_prefab_revert`, `wpe_prefab_unpack` and `wpe_prefab_is_overridden` revert, unpack and inspect instances.
+
+Scene contexts that load instances need `WPE_COMP_PREFAB` registered (`wpe_prefab_register`), and should pass a `WPE_PrefabCache`, which keeps parsed prefab files until they change on disk. The engine does both.
+
 ## Environment
 
 | Key | Description |

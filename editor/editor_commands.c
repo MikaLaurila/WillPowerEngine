@@ -104,6 +104,17 @@ static WPE_Result wpe__cmd_list_entities(wpe__Call* call) {
                 wpe_json_write_string(call->w, wpe__component_keys[i]);
         }
         wpe_json_write_array_end(call->w);
+        const WPE_Entity root = wpe_prefab_root(ecs, it.entity);
+        if (root != WPE_ENTITY_NULL) {
+            /* Part of a prefab instance: which prefab, and the instance's root. */
+            wpe_json_write_key(call->w, "prefab");
+            wpe_json_write_object_begin(call->w);
+            wpe_json_write_key(call->w, "path");
+            wpe_json_write_string(call->w, wpe_prefab_path(ecs, it.entity));
+            wpe_json_write_key(call->w, "root");
+            wpe_json_write_integer(call->w, root);
+            wpe_json_write_object_end(call->w);
+        }
         wpe_json_write_object_end(call->w);
     }
     wpe_json_write_array_end(call->w);
@@ -258,6 +269,12 @@ static WPE_Result wpe__cmd_set_parent(wpe__Call* call) {
     if (result == WPE_RESULT_OK && wpe_json_type(parent_value) != WPE_JSON_NULL && parent_value)
         result = wpe__entity_arg(call, "parent", &parent);
     const bool keep_world = wpe_json_bool(wpe_json_get(call->args, "keep_world"), true);
+    const WPE_Entity root = result == WPE_RESULT_OK ? wpe_prefab_root(wpe__ecs(call), e) : WPE_ENTITY_NULL;
+    if (root != WPE_ENTITY_NULL && root != e)
+        result = wpe__fail(call, WPE_RESULT_ERROR_INVALID_STATE,
+                           "entity %u is part of a '%s' instance, whose structure comes from the prefab: "
+                           "unpack_prefab it to restructure it",
+                           e, wpe_prefab_path(wpe__ecs(call), e));
     if (result == WPE_RESULT_OK) result = wpe__editor_begin_change(call->editor);
     if (result == WPE_RESULT_OK) {
         result = wpe_scene_set_parent(wpe__ecs(call), e, parent, keep_world);
@@ -518,6 +535,120 @@ static WPE_Result wpe__cmd_camera(wpe__Call* call) {
     return wpe__null(call, WPE_RESULT_OK);
 }
 
+/* ---- Prefabs ---------------------------------------------------------------------------------------- */
+
+/* Whether another instance of the prefab `path` exists (besides the one rooted at `except`). */
+static bool wpe__other_instances(WPE_Ecs* ecs, WPE_Entity except, const char* path) {
+    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_PREFAB)});
+    while (wpe_ecs_iter_next(&it)) {
+        if (it.entity != except && wpe_prefab_root(ecs, it.entity) == it.entity &&
+            strcmp(wpe_prefab_path(ecs, it.entity), path) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* Writes `root`'s tree as the prefab `path` (and links it); other instances of the prefab are rebuilt
+ * from the new file by reloading the scene, which changes entity ids. */
+static WPE_Result wpe__write_prefab(wpe__Call* call, WPE_Entity root, const char* path) {
+    WPE_Editor* editor = call->editor;
+    char os_path[2048], folder[2048];
+    if (!wpe_vfs_path_is_valid(path) || !wpe_prefab_is_path(path) ||
+        snprintf(os_path, sizeof os_path, "%s/%s", editor->project_dir, path) >= (int)sizeof os_path)
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                                         "\"path\" must be an asset path ending in \".prefab\""));
+    memcpy(folder, os_path, sizeof folder);
+    char* slash = strrchr(folder, '/');
+    if (slash) *slash = '\0';
+    WPE_Result result = wpe__editor_begin_change(editor);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    result = wpe_directory_create(folder);
+    const WPE_SceneContext context = wpe__editor_context(editor);
+    if (result == WPE_RESULT_OK) result = wpe_prefab_save_file(&context, root, path, os_path);
+    if (result != WPE_RESULT_OK) {
+        wpe__editor_abort_change(editor, true);
+        return wpe__null(call, result);
+    }
+    const bool reload = wpe__other_instances(wpe__ecs(call), root, path);
+    if (reload) {
+        wpe__Snapshot snapshot;
+        result = wpe__editor_snapshot(editor, &snapshot);
+        if (result == WPE_RESULT_OK) result = wpe__editor_restore(editor, &snapshot, "prefab update");
+        wpe_free(snapshot.text);
+        if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    } else {
+        editor->selection = root;
+    }
+    wpe_log_info("saved prefab %s", path);
+    wpe_json_write_object_begin(call->w);
+    wpe_json_write_key(call->w, "path");
+    wpe_json_write_string(call->w, path);
+    wpe_json_write_key(call->w, "reloaded"); /* Other instances were rebuilt: entity ids changed. */
+    wpe_json_write_bool(call->w, reload);
+    wpe_json_write_object_end(call->w);
+    return WPE_RESULT_OK;
+}
+
+static WPE_Result wpe__cmd_save_prefab(wpe__Call* call) {
+    WPE_Entity e = WPE_ENTITY_NULL;
+    const WPE_Result result = wpe__entity_arg(call, "id", &e);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    const char* path = wpe__string_arg(call, "path");
+    if (!path)
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                                         "\"path\" (e.g. prefabs/crate.prefab) is required"));
+    return wpe__write_prefab(call, e, path);
+}
+
+/* The instance root of the "id" argument's entity. */
+static WPE_Result wpe__instance_arg(wpe__Call* call, WPE_Entity* out_member, WPE_Entity* out_root) {
+    WPE_Result result = wpe__entity_arg(call, "id", out_member);
+    if (result != WPE_RESULT_OK) return result;
+    *out_root = wpe_prefab_root(wpe__ecs(call), *out_member);
+    if (*out_root == WPE_ENTITY_NULL)
+        return wpe__fail(call, WPE_RESULT_ERROR_NOT_FOUND, "entity %u is not part of a prefab instance",
+                         *out_member);
+    return WPE_RESULT_OK;
+}
+
+static WPE_Result wpe__cmd_apply_prefab(wpe__Call* call) {
+    WPE_Entity member = WPE_ENTITY_NULL, root = WPE_ENTITY_NULL;
+    const WPE_Result result = wpe__instance_arg(call, &member, &root);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    char path[WPE_VFS_PATH_MAX];
+    snprintf(path, sizeof path, "%s", wpe_prefab_path(wpe__ecs(call), root));
+    return wpe__write_prefab(call, root, path);
+}
+
+static WPE_Result wpe__cmd_revert_prefab(wpe__Call* call) {
+    WPE_Entity member = WPE_ENTITY_NULL, root = WPE_ENTITY_NULL;
+    WPE_Result result = wpe__instance_arg(call, &member, &root);
+    const char* component = wpe__string_arg(call, "component");
+    if (result == WPE_RESULT_OK && wpe_json_get(call->args, "component") && !component)
+        result = wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"component\" must be a component key");
+    if (result == WPE_RESULT_OK) result = wpe__editor_begin_change(call->editor);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    const WPE_SceneContext context = wpe__editor_context(call->editor);
+    result = wpe_prefab_revert(&context, member, component, &root);
+    if (result != WPE_RESULT_OK) {
+        wpe__editor_abort_change(call->editor, true);
+        return wpe__null(call, result);
+    }
+    if (!component) call->editor->selection = root; /* The instance was rebuilt: a new root. */
+    wpe_json_write_integer(call->w, root);
+    return WPE_RESULT_OK;
+}
+
+static WPE_Result wpe__cmd_unpack_prefab(wpe__Call* call) {
+    WPE_Entity member = WPE_ENTITY_NULL, root = WPE_ENTITY_NULL;
+    WPE_Result result = wpe__instance_arg(call, &member, &root);
+    if (result == WPE_RESULT_OK) result = wpe__editor_begin_change(call->editor);
+    if (result == WPE_RESULT_OK) result = wpe_prefab_unpack(wpe__ecs(call), member);
+    return wpe__null(call, result);
+}
+
+/* ---- Camera ---------------------------------------------------------------------------------------- */
+
 static void wpe__grow(WPE_Vec3* lo, WPE_Vec3* hi, WPE_Vec3 p) {
     for (int i = 0; i < 3; ++i) {
         lo->v[i] = p.v[i] < lo->v[i] ? p.v[i] : lo->v[i];
@@ -700,6 +831,13 @@ static const struct {
      "{id, component, value} -> the entity (replaces the component)"},
     {"remove_component", wpe__cmd_remove_component, "{id, component}"},
     {"set_parent", wpe__cmd_set_parent, "{id, parent: id|null, keep_world = true}"},
+    {"save_prefab", wpe__cmd_save_prefab,
+     "{id, path}: save the entity and its descendants as a prefab file; they become an instance of it"},
+    {"apply_prefab", wpe__cmd_apply_prefab,
+     "{id}: write the instance (any member's id) into its prefab -> {path, reloaded}"},
+    {"revert_prefab", wpe__cmd_revert_prefab,
+     "{id, component?}: revert one component of a member, or (no component) rebuild the instance -> root id"},
+    {"unpack_prefab", wpe__cmd_unpack_prefab, "{id}: make the instance plain entities"},
     {"select", wpe__cmd_select, "{id|null}"},
     {"get_environment", wpe__cmd_get_environment, "{} -> the scene environment"},
     {"set_environment", wpe__cmd_set_environment, "{value: {...}} (merged) -> the environment"},
