@@ -296,6 +296,14 @@ static WPE_Result wpe__write_view(WPE_JsonWriter* w, const WPE_EditorView* view)
     wpe_json_write_string(w, view->gizmo_local ? "local" : "world");
     wpe_json_write_key(w, "hot_reload");
     wpe_json_write_bool(w, view->hot_reload);
+    wpe_json_write_key(w, "snap");
+    wpe_json_write_bool(w, view->snap);
+    wpe_json_write_key(w, "snap_move");
+    wpe_json_write_number(w, view->snap_move);
+    wpe_json_write_key(w, "snap_rotate");
+    wpe_json_write_number(w, view->snap_rotate);
+    wpe_json_write_key(w, "snap_scale");
+    wpe_json_write_number(w, view->snap_scale);
     wpe_json_write_object_end(w);
     return WPE_RESULT_OK;
 }
@@ -310,6 +318,7 @@ static WPE_Result wpe__read_view_key(wpe__Call* call, const char* key, const WPE
     bool* flag = strcmp(key, "grid") == 0         ? &view->grid
                  : strcmp(key, "physics") == 0    ? &view->physics
                  : strcmp(key, "hot_reload") == 0 ? &view->hot_reload
+                 : strcmp(key, "snap") == 0       ? &view->snap
                                                   : NULL;
     if (flag) {
         if (wpe_json_type(v) != WPE_JSON_BOOL)
@@ -317,11 +326,22 @@ static WPE_Result wpe__read_view_key(wpe__Call* call, const char* key, const WPE
         *flag = wpe_json_bool(v, false);
         return WPE_RESULT_OK;
     }
-    if (strcmp(key, "grid_spacing") == 0) {
-        const double spacing = wpe_json_number(v, 0.0);
-        if (wpe_json_type(v) != WPE_JSON_NUMBER || !(spacing >= 0.01 && spacing <= 1000.0))
-            return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"grid_spacing\" must be 0.01..1000");
-        view->grid_spacing = (float)spacing;
+    /* Positive steps and sizes, with their ranges. */
+    const struct {
+        const char* key;
+        float* value;
+        double min, max;
+    } numbers[] = {{"grid_spacing", &view->grid_spacing, 0.01, 1000.0},
+                   {"snap_move", &view->snap_move, 0.001, 1000.0},
+                   {"snap_rotate", &view->snap_rotate, 0.1, 180.0},
+                   {"snap_scale", &view->snap_scale, 0.001, 100.0}};
+    for (size_t i = 0; i < sizeof numbers / sizeof numbers[0]; ++i) {
+        if (strcmp(key, numbers[i].key) != 0) continue;
+        const double number = wpe_json_number(v, 0.0);
+        if (wpe_json_type(v) != WPE_JSON_NUMBER || !(number >= numbers[i].min && number <= numbers[i].max))
+            return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"%s\" must be %g..%g", key, numbers[i].min,
+                             numbers[i].max);
+        *numbers[i].value = (float)number;
         return WPE_RESULT_OK;
     }
     const char* text = wpe_json_string(v);
@@ -343,7 +363,9 @@ static WPE_Result wpe__read_view_key(wpe__Call* call, const char* key, const WPE
     }
     return wpe__fail(
         call, WPE_RESULT_ERROR_INVALID_ARG,
-        "unknown view setting \"%s\" (grid, grid_spacing, physics, gizmo, gizmo_space, hot_reload)", key);
+        "unknown view setting \"%s\" (grid, grid_spacing, physics, gizmo, gizmo_space, hot_reload, snap, "
+        "snap_move, snap_rotate, snap_scale)",
+        key);
 }
 
 static WPE_Result wpe__cmd_set_view(wpe__Call* call) {
@@ -373,14 +395,27 @@ static WPE_Result wpe__cmd_select(wpe__Call* call) {
 
 /* ---- Scenes, history, modes ------------------------------------------------------------------------ */
 
+/* Unsaved changes are only ever lost on purpose: commands that replace the scene need "discard": true. */
+static WPE_Result wpe__guard_unsaved(wpe__Call* call, const char* command) {
+    if (!wpe_editor_dirty(call->editor) || wpe_json_bool(wpe_json_get(call->args, "discard"), false))
+        return WPE_RESULT_OK;
+    return wpe__fail(call, WPE_RESULT_ERROR_INVALID_STATE,
+                     "the scene has unsaved changes: save_scene first, or %s with \"discard\": true",
+                     command);
+}
+
 static WPE_Result wpe__cmd_new_scene(wpe__Call* call) {
-    return wpe__null(call, wpe__editor_new_scene(call->editor));
+    WPE_Result result = wpe__guard_unsaved(call, "new_scene");
+    if (result == WPE_RESULT_OK) result = wpe__editor_new_scene(call->editor);
+    return wpe__null(call, result);
 }
 
 static WPE_Result wpe__cmd_load_scene(wpe__Call* call) {
     const char* path = wpe__string_arg(call, "path");
     if (!path) return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"path\" is required"));
-    return wpe__null(call, wpe__editor_load_scene(call->editor, path));
+    WPE_Result result = wpe__guard_unsaved(call, "load_scene");
+    if (result == WPE_RESULT_OK) result = wpe__editor_load_scene(call->editor, path);
+    return wpe__null(call, result);
 }
 
 static WPE_Result wpe__cmd_save_scene(wpe__Call* call) {
@@ -483,6 +518,98 @@ static WPE_Result wpe__cmd_camera(wpe__Call* call) {
     return wpe__null(call, WPE_RESULT_OK);
 }
 
+static void wpe__grow(WPE_Vec3* lo, WPE_Vec3* hi, WPE_Vec3 p) {
+    for (int i = 0; i < 3; ++i) {
+        lo->v[i] = p.v[i] < lo->v[i] ? p.v[i] : lo->v[i];
+        hi->v[i] = p.v[i] > hi->v[i] ? p.v[i] : hi->v[i];
+    }
+}
+
+/* World-space bounds of the meshes of an entity and its descendants; false when there are none. */
+static bool wpe__subtree_bounds(WPE_Ecs* ecs, WPE_Entity root, WPE_Vec3* out_lo, WPE_Vec3* out_hi) {
+    WPE_Entity* stack = wpe_alloc((size_t)wpe_ecs_entity_count(ecs) * sizeof *stack);
+    if (!stack) return false;
+    WPE_Vec3 lo = wpe_vec3(1e30f, 1e30f, 1e30f), hi = wpe_vec3(-1e30f, -1e30f, -1e30f);
+    bool found = false;
+    uint32_t depth = 0;
+    stack[depth++] = root;
+    while (depth > 0) {
+        const WPE_Entity e = stack[--depth];
+        const WPE_MeshRenderer* mesh = wpe_ecs_get_component(ecs, e, WPE_COMP_MESH);
+        WPE_Mat4 world;
+        if (mesh && mesh->model && mesh->mesh < mesh->model->mesh_count &&
+            wpe_scene_compute_world_matrix(ecs, e, &world)) {
+            const WPE_Aabb* b = &mesh->model->meshes[mesh->mesh].bounds;
+            for (int corner = 0; corner < 8; ++corner) {
+                const WPE_Vec3 p =
+                    wpe_vec3(corner & 1 ? b->max.x : b->min.x, corner & 2 ? b->max.y : b->min.y,
+                             corner & 4 ? b->max.z : b->min.z);
+                wpe__grow(&lo, &hi, wpe_mat4_transform_point(&world, p));
+            }
+            found = true;
+        }
+        const WPE_Hierarchy* h = wpe_ecs_get_component(ecs, e, WPE_COMP_HIERARCHY);
+        for (WPE_Entity c = h ? h->first_child : WPE_ENTITY_NULL; c != WPE_ENTITY_NULL;) {
+            const WPE_Hierarchy* ch = wpe_ecs_get_component(ecs, c, WPE_COMP_HIERARCHY);
+            if (depth < wpe_ecs_entity_count(ecs)) stack[depth++] = c;
+            c = ch ? ch->next_sibling : WPE_ENTITY_NULL;
+        }
+    }
+    wpe_free(stack);
+    *out_lo = lo;
+    *out_hi = hi;
+    return found;
+}
+
+static WPE_Result wpe__cmd_focus(wpe__Call* call) {
+    WPE_Editor* editor = call->editor;
+    WPE_Ecs* ecs = wpe__ecs(call);
+    WPE_Entity e = wpe_editor_selection(editor);
+    if (wpe_json_get(call->args, "id")) {
+        const WPE_Result result = wpe__entity_arg(call, "id", &e);
+        if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    }
+    if (e == WPE_ENTITY_NULL)
+        return wpe__null(call,
+                         wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "select an entity or give \"id\""));
+    WPE_Transform* t = wpe_ecs_get_component(ecs, editor->camera, WPE_COMP_TRANSFORM);
+    if (!t)
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_STATE,
+                                         "the editor camera exists in edit mode only"));
+    /* A sphere around the entity's meshes (or a unit sphere at its origin), seen whole. */
+    WPE_Vec3 lo, hi, center;
+    float radius = 1.0f;
+    if (wpe__subtree_bounds(ecs, e, &lo, &hi)) {
+        center = wpe_vec3_scale(wpe_vec3_add(lo, hi), 0.5f);
+        radius = wpe_vec3_length(wpe_vec3_sub(hi, lo)) * 0.5f;
+        radius = radius > 0.25f ? radius : 0.25f;
+    } else {
+        WPE_Mat4 world;
+        center = wpe_scene_compute_world_matrix(ecs, e, &world)
+                     ? wpe_mat4_transform_point(&world, wpe_vec3(0, 0, 0))
+                     : wpe_vec3(0, 0, 0);
+    }
+    const WPE_Camera* camera = wpe_ecs_get_component(ecs, editor->camera, WPE_COMP_CAMERA);
+    const float fov = camera && camera->fov_y > 0.0f ? camera->fov_y : 1.0f;
+    const float distance = radius / sinf(fov * 0.5f) * 1.1f;
+    const WPE_Vec3 forward = wpe_quat_rotate_vec3(t->rotation, wpe_vec3(0, 0, -1));
+    t->position = wpe_vec3_sub(center, wpe_vec3_scale(forward, distance));
+    wpe_json_write_object_begin(call->w);
+    const struct {
+        const char* key;
+        WPE_Vec3 v;
+    } parts[] = {{"position", t->position}, {"target", center}};
+    for (size_t p = 0; p < 2; ++p) {
+        wpe_json_write_key(call->w, parts[p].key);
+        wpe_json_write_array_begin(call->w, true);
+        for (int i = 0; i < 3; ++i)
+            wpe_json_write_number(call->w, parts[p].v.v[i]);
+        wpe_json_write_array_end(call->w);
+    }
+    wpe_json_write_object_end(call->w);
+    return WPE_RESULT_OK;
+}
+
 static WPE_Result wpe__cmd_run_lua(wpe__Call* call) {
     const char* code = wpe__string_arg(call, "code");
     if (!code) return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"code\" is required"));
@@ -547,8 +674,9 @@ static WPE_Result wpe__cmd_log(wpe__Call* call) {
 }
 
 static WPE_Result wpe__cmd_quit(wpe__Call* call) {
-    call->editor->quit_requested = true;
-    return wpe__null(call, WPE_RESULT_OK);
+    const WPE_Result result = wpe__guard_unsaved(call, "quit");
+    if (result == WPE_RESULT_OK) call->editor->quit_requested = true;
+    return wpe__null(call, result);
 }
 
 static WPE_Result wpe__cmd_help(wpe__Call* call);
@@ -575,10 +703,13 @@ static const struct {
     {"select", wpe__cmd_select, "{id|null}"},
     {"get_environment", wpe__cmd_get_environment, "{} -> the scene environment"},
     {"set_environment", wpe__cmd_set_environment, "{value: {...}} (merged) -> the environment"},
-    {"get_view", wpe__cmd_get_view, "{} -> {grid, grid_spacing, physics, gizmo, gizmo_space, hot_reload}"},
+    {"get_view", wpe__cmd_get_view,
+     "{} -> {grid, grid_spacing, physics, gizmo, gizmo_space, hot_reload, snap, snap_move, snap_rotate, "
+     "snap_scale}"},
     {"set_view", wpe__cmd_set_view, "{value: {...}} (merged; not saved or undone) -> the view"},
-    {"new_scene", wpe__cmd_new_scene, "{}"},
-    {"load_scene", wpe__cmd_load_scene, "{path}"},
+    {"new_scene", wpe__cmd_new_scene, "{discard = false} (refused with unsaved changes unless discard)"},
+    {"load_scene", wpe__cmd_load_scene,
+     "{path, discard = false} (refused with unsaved changes unless discard)"},
     {"save_scene", wpe__cmd_save_scene, "{path?} (asset path; default: the open scene)"},
     {"undo", wpe__cmd_undo, "{} (entity ids change)"},
     {"redo", wpe__cmd_redo, "{} (entity ids change)"},
@@ -588,11 +719,13 @@ static const struct {
     {"frames", wpe__cmd_frames, "{count = 1, dt = 1/60}: run frames"},
     {"screenshot", wpe__cmd_screenshot, "{path, target = \"game\"|\"editor\"}"},
     {"camera", wpe__cmd_camera, "{position: [x,y,z], target: [x,y,z]}: place the editor camera"},
+    {"focus", wpe__cmd_focus, "{id = selection}: frame the entity and its children -> {position, target}"},
     {"run_lua", wpe__cmd_run_lua, "{code}: run Luau with the wpe API (undoable)"},
     {"list_assets", wpe__cmd_list_assets, "{prefix?} -> asset paths"},
     {"export", wpe__cmd_export, "{output, runtime?} -> {files, bytes}"},
     {"log", wpe__cmd_log, "{count = 50} -> recent log lines"},
-    {"quit", wpe__cmd_quit, "{} close the editor window (unsaved changes are lost)"},
+    {"quit", wpe__cmd_quit,
+     "{discard = false} close the editor window (refused with unsaved changes unless discard)"},
 };
 
 static WPE_Result wpe__cmd_help(wpe__Call* call) {

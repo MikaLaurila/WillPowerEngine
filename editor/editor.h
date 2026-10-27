@@ -55,6 +55,10 @@ typedef struct WPE_EditorView {
     bool gizmo_local;      /* Gizmo axes: the entity's own (true) or the world's (false, default). Scaling
                               always uses the entity's own axes. */
     bool hot_reload;       /* Reload changed scripts twice a second (default on). */
+    bool snap;             /* Gizmo drags snap (default off; holding Ctrl inverts it while dragging). */
+    float snap_move;   /* Move step in world units (default 0.5): world positions land on its multiples. */
+    float snap_rotate; /* Rotation step in degrees (default 15). */
+    float snap_scale;  /* Scale step (default 0.1): scales land on its multiples. */
 } WPE_EditorView;
 
 /**

@@ -334,7 +334,12 @@ WPE_Result wpe_editor_create(const WPE_EditorDesc* desc, WPE_Editor** out_editor
     WPE_Editor* editor = wpe_alloc_zeroed(1, sizeof *editor);
     if (!editor) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     snprintf(editor->project_dir, sizeof editor->project_dir, "%s", desc->project_dir);
-    editor->view = (WPE_EditorView){.grid = true, .grid_spacing = 1.0f, .hot_reload = true};
+    editor->view = (WPE_EditorView){.grid = true,
+                                    .grid_spacing = 1.0f,
+                                    .hot_reload = true,
+                                    .snap_move = 0.5f,
+                                    .snap_rotate = 15.0f,
+                                    .snap_scale = 0.1f};
     editor->log_mutex = SDL_CreateMutex();
     WPE_Result result = editor->log_mutex ? WPE_RESULT_OK : WPE_RESULT_ERROR_OUT_OF_MEMORY;
     if (result == WPE_RESULT_OK) result = wpe_log_add_sink(wpe__editor_log_sink, editor, &editor->log_sink);

@@ -26,6 +26,20 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   functions, edit mode, editor commands (undo/redo, coalescing, scenes, play mode, screenshots),
   and a command-line test that drives the editor like an agent.
 
+### Added (editor: unsaved changes, focus, snapping)
+- An unsaved-changes prompt (Save / Don't save / Cancel) before a new scene, opening a scene,
+  quitting or closing the window. Saving a scene that was never saved asks for a name, then
+  continues. Platform: `wpe_window_cancel_close`.
+- **BREAKING (commands):** `new_scene`, `load_scene` and `quit` refuse while the scene has unsaved
+  changes, unless they carry `"discard": true`.
+- Focus on the selection: F, Edit menu, double-click in the hierarchy, and the `focus` command.
+  The camera moves, keeping its direction, until the entity and its children fill the view.
+- Gizmo snapping: the Snap toggle (toolbar and View menu), adjustable steps, Ctrl to invert while
+  dragging. World-axis moves land on the step grid; rotations and local moves go in whole steps;
+  scales land on multiples. New view settings `snap`, `snap_move`, `snap_rotate` and `snap_scale`.
+- The fly camera starts from where commands left the camera: before, it snapped back to where the
+  user last flew.
+
 ### Added (editor: the rest of the spec's tool list)
 - Ground grid in the viewport: fades with distance, X axis red and Z axis blue, adjustable spacing.
 - Physics debug drawing: collider wireframes colored by body type, in edit and play mode.

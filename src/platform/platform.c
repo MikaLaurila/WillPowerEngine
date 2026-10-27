@@ -94,6 +94,10 @@ bool wpe_window_poll_events(WPE_Window* window) {
     return !window->quit_requested;
 }
 
+void wpe_window_cancel_close(WPE_Window* window) {
+    if (wpe_check(window != NULL)) window->quit_requested = false;
+}
+
 void wpe_window_set_event_handler(WPE_Window* window, WPE_PlatformEventFn fn, void* user_data) {
     if (!wpe_check(window != NULL)) return;
     window->event_fn = fn;

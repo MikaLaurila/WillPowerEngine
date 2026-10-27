@@ -420,7 +420,90 @@ static void test_editor_hot_reloads_scripts(void) {
     wpe_editor_destroy(editor);
 }
 
+/* Commands that replace the scene never drop unsaved changes by accident. */
+static void test_editor_guards_unsaved_changes(void) {
+    WPE_Editor* editor = open_editor();
+    run_ok(editor, "{\"cmd\": \"new_scene\"}"); /* Nothing unsaved yet. */
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"precious\"}}");
+    WPE_TEST_ASSERT(wpe_editor_dirty(editor));
+    WPE_JsonDocument* refused =
+        run(editor, "{\"cmd\": \"load_scene\", \"path\": \"scenes/start.scene\"}", false);
+    WPE_TEST_ASSERT(strstr(wpe_json_string(wpe_json_get(wpe_json_root(refused), "error")), "discard") !=
+                    NULL);
+    wpe_json_free(refused);
+    wpe_json_free(run(editor, "{\"cmd\": \"new_scene\"}", false));
+    wpe_json_free(run(editor, "{\"cmd\": \"quit\"}", false));
+    wpe_json_free(run(editor, "{\"cmd\": \"quit\", \"discard\": false}", false));
+    WPE_TEST_ASSERT(!wpe_editor_quit_requested(editor));
+    WPE_TEST_ASSERT_EQ_UINT(1, entity_count(editor)); /* Still there. */
+
+    /* Saving makes them safe to leave; "discard" drops them on purpose. */
+    run_ok(editor, "{\"cmd\": \"save_scene\", \"path\": \"scenes/precious.scene\"}");
+    run_ok(editor, "{\"cmd\": \"load_scene\", \"path\": \"scenes/start.scene\"}");
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {}}");
+    run_ok(editor, "{\"cmd\": \"load_scene\", \"path\": \"scenes/precious.scene\", \"discard\": true}");
+    WPE_TEST_ASSERT_EQ_UINT(1, entity_count(editor));
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {}}");
+    run_ok(editor, "{\"cmd\": \"quit\", \"discard\": true}");
+    WPE_TEST_ASSERT(wpe_editor_quit_requested(editor));
+    wpe_editor_destroy(editor);
+}
+
+static void test_editor_focus_frames_the_selection(void) {
+    WPE_Editor* editor = open_editor();
+    wpe_log_set_stderr_enabled(false);
+    wpe_json_free(run(editor, "{\"cmd\": \"focus\"}", false)); /* Nothing selected. */
+    wpe_log_set_stderr_enabled(true);
+    run_ok(editor, "{\"cmd\": \"camera\", \"position\": [0, 4, 0], \"target\": [-6, 0, -8]}");
+    /* A 1x1x1 box scaled to 4 wide, at x = 20: framed whole, from the direction the camera faces. */
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"far\", \"mesh\": {\"model\": "
+                   "\"meshes/box.prim\"}, \"transform\": {\"position\": [20, 1, 5], \"scale\": [4, 1, 1]}}}");
+    WPE_JsonDocument* reply = run(editor, "{\"cmd\": \"focus\"}", true);
+    const WPE_JsonValue* position = wpe_json_get(result_of(reply), "position");
+    const WPE_JsonValue* target = wpe_json_get(result_of(reply), "target");
+    WPE_TEST_ASSERT_NEAR(20.0, wpe_json_number(wpe_json_at(target, 0), 0), 1e-4);
+    WPE_TEST_ASSERT_NEAR(1.0, wpe_json_number(wpe_json_at(target, 1), 0), 1e-4);
+    WPE_Ecs* ecs = wpe_engine_ecs(wpe_editor_engine(editor));
+    const WPE_Transform* t = wpe_ecs_get_component(ecs, wpe_editor_camera(editor), WPE_COMP_TRANSFORM);
+    WPE_TEST_ASSERT_NEAR(wpe_json_number(wpe_json_at(position, 0), 0), t->position.x, 1e-4);
+    /* The target is straight ahead, far enough that the bounding sphere (radius ~2.1) fits. */
+    const WPE_Vec3 forward = wpe_quat_rotate_vec3(t->rotation, wpe_vec3(0, 0, -1));
+    const WPE_Vec3 to_target = wpe_vec3_sub(wpe_vec3(20, 1, 5), t->position);
+    const float distance = wpe_vec3_length(to_target);
+    WPE_TEST_ASSERT_NEAR(1.0, wpe_vec3_dot(forward, to_target) / distance, 1e-4);
+    const WPE_Camera* camera = wpe_ecs_get_component(ecs, wpe_editor_camera(editor), WPE_COMP_CAMERA);
+    WPE_TEST_ASSERT(distance * sinf(camera->fov_y * 0.5f) >= 2.1f);
+    WPE_TEST_ASSERT(distance < 12.0f);
+    wpe_json_free(reply);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_editor_undo_count(editor)); /* Only the creation; focusing is no edit. */
+    wpe_editor_destroy(editor);
+}
+
+static void test_editor_snap_settings(void) {
+    WPE_Editor* editor = open_editor();
+    const WPE_EditorView defaults = wpe_editor_view(editor);
+    WPE_TEST_ASSERT(!defaults.snap);
+    WPE_TEST_ASSERT_NEAR(0.5, defaults.snap_move, 0);
+    WPE_TEST_ASSERT_NEAR(15.0, defaults.snap_rotate, 0);
+    WPE_TEST_ASSERT_NEAR(0.1, defaults.snap_scale, 1e-7);
+    run_ok(editor,
+           "{\"cmd\": \"set_view\", \"value\": {\"snap\": true, \"snap_move\": 0.25, \"snap_rotate\": 45, "
+           "\"snap_scale\": 0.5}}");
+    const WPE_EditorView view = wpe_editor_view(editor);
+    WPE_TEST_ASSERT(view.snap);
+    WPE_TEST_ASSERT_NEAR(0.25, view.snap_move, 0);
+    WPE_TEST_ASSERT_NEAR(45.0, view.snap_rotate, 0);
+    WPE_TEST_ASSERT_NEAR(0.5, view.snap_scale, 0);
+    wpe_json_free(run(editor, "{\"cmd\": \"set_view\", \"value\": {\"snap_rotate\": 0}}", false));
+    wpe_json_free(run(editor, "{\"cmd\": \"set_view\", \"value\": {\"snap_move\": -1}}", false));
+    wpe_json_free(run(editor, "{\"cmd\": \"set_view\", \"value\": {\"snap\": \"yes\"}}", false));
+    WPE_TEST_ASSERT_NEAR(45.0, wpe_editor_view(editor).snap_rotate, 0);
+    wpe_editor_destroy(editor);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_editor_coalesces_continuous_edits),
+              WPE_TEST_CASE(test_editor_guards_unsaved_changes),
+              WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
               WPE_TEST_CASE(test_editor_view_settings_and_overlays),
               WPE_TEST_CASE(test_editor_physics_follows_edits),
               WPE_TEST_CASE(test_editor_hot_reloads_scripts),

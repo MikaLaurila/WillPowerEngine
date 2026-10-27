@@ -31,6 +31,16 @@
 #define WPE__COL(r, g, b, a)                                                                                 \
     (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(r))
 
+typedef enum wpe__Pending {
+    WPE__PENDING_NONE = 0,
+    WPE__PENDING_NEW,
+    WPE__PENDING_LOAD,
+    WPE__PENDING_QUIT
+} wpe__Pending;
+
+/* What a path popup did this frame. */
+typedef enum wpe__PopupResult { WPE__POPUP_NONE = 0, WPE__POPUP_OK, WPE__POPUP_CANCEL } wpe__PopupResult;
+
 typedef struct wpe__Edit {
     const WPE_JsonValue* target; /* The leaf being replaced. */
     WPE_JsonType type;
@@ -62,6 +72,7 @@ struct WPE_EditorUi {
     WPE_Transform gizmo_start;
     float gizmo_mouse_x, gizmo_mouse_y;
     float gizmo_tangent_x, gizmo_tangent_y; /* Rotate: screen direction of a positive rotation. */
+    WPE_Vec3 gizmo_start_center;            /* The entity's world position when the drag started. */
 
     /* Inspector edits. */
     uint32_t edit_serial; /* Bumped when a widget becomes active: one undo step per edit gesture. */
@@ -79,6 +90,12 @@ struct WPE_EditorUi {
     char command[4096];
     char reply[4096];
     bool open_scene_popup, save_as_popup, export_popup;
+    /* An action that would drop the scene, waiting for the unsaved-changes prompt (or for "save as"
+     * when the prompt's Save needs a path first). */
+    wpe__Pending pending;
+    char pending_path[WPE__UI_PATH];
+    bool unsaved_popup;
+    bool pending_after_save;
     bool layout_built;
     bool quit;
 };
@@ -119,11 +136,93 @@ static WPE_Result wpe__ui_send(WPE_EditorUi* ui, WPE_JsonWriter* w) {
     return result;
 }
 
-static void wpe__ui_simple(WPE_EditorUi* ui, const char* name) {
-    wpe__ui_send(ui, wpe__ui_begin(name));
+static WPE_Result wpe__ui_simple(WPE_EditorUi* ui, const char* name) {
+    return wpe__ui_send(ui, wpe__ui_begin(name));
 }
 
-/* set_view with one setting: a bool, a number, or (when `text` is set) a string. */
+/* A command with one string argument, optionally with "discard": true. */
+static WPE_Result wpe__ui_string_command(WPE_EditorUi* ui, const char* name, const char* key,
+                                         const char* value, bool discard) {
+    WPE_JsonWriter* w = wpe__ui_begin(name);
+    if (!w) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    if (key) {
+        wpe_json_write_key(w, key);
+        wpe_json_write_string(w, value);
+    }
+    if (discard) {
+        wpe_json_write_key(w, "discard");
+        wpe_json_write_bool(w, true);
+    }
+    return wpe__ui_send(ui, w);
+}
+
+/* Carries out the pending action; `discard` drops unsaved changes. */
+static void wpe__ui_perform(WPE_EditorUi* ui, bool discard) {
+    const wpe__Pending pending = ui->pending;
+    ui->pending = WPE__PENDING_NONE;
+    ui->pending_after_save = false;
+    switch (pending) {
+    case WPE__PENDING_NEW:
+        wpe__ui_string_command(ui, "new_scene", NULL, NULL, discard);
+        break;
+    case WPE__PENDING_LOAD:
+        wpe__ui_string_command(ui, "load_scene", "path", ui->pending_path, discard);
+        break;
+    case WPE__PENDING_QUIT:
+        ui->quit = true;
+        break;
+    case WPE__PENDING_NONE:
+        break;
+    }
+}
+
+/* Runs an action that replaces the scene, asking first when it has unsaved changes. */
+static void wpe__ui_guard(WPE_EditorUi* ui, wpe__Pending action, const char* path) {
+    /* Unsaved changes belong to the edited scene: stop playing so it can be saved. */
+    if (wpe_editor_mode(ui->editor) != WPE_EDITOR_EDIT) wpe__ui_simple(ui, "stop");
+    ui->pending = action;
+    snprintf(ui->pending_path, sizeof ui->pending_path, "%s", path ? path : "");
+    if (wpe_editor_dirty(ui->editor)) {
+        ui->unsaved_popup = true;
+    } else {
+        wpe__ui_perform(ui, false);
+    }
+}
+
+/* The unsaved-changes prompt: Save, Don't save or Cancel. */
+static void wpe__ui_unsaved_popup(WPE_EditorUi* ui) {
+    if (ui->unsaved_popup) {
+        igOpenPopup_Str("Unsaved changes", 0);
+        ui->unsaved_popup = false;
+    }
+    if (!igBeginPopupModal("Unsaved changes", NULL, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    const char* path = wpe_editor_scene_path(ui->editor);
+    igText("Save the changes to %s?", path[0] ? path : "the new scene");
+    if (igButton("Save", (ImVec2_c){120, 0})) {
+        igCloseCurrentPopup();
+        if (!path[0]) {
+            ui->pending_after_save = true; /* Continued once "save as" succeeds. */
+            ui->save_as_popup = true;
+        } else if (wpe__ui_simple(ui, "save_scene") == WPE_RESULT_OK) {
+            wpe__ui_perform(ui, false);
+        } else {
+            ui->pending = WPE__PENDING_NONE; /* The console shows why. */
+        }
+    }
+    igSameLine(0, -1);
+    if (igButton("Don't save", (ImVec2_c){120, 0})) {
+        igCloseCurrentPopup();
+        wpe__ui_perform(ui, true);
+    }
+    igSameLine(0, -1);
+    if (igButton("Cancel", (ImVec2_c){120, 0}) || igIsKeyPressed_Bool(ImGuiKey_Escape, false)) {
+        igCloseCurrentPopup();
+        ui->pending = WPE__PENDING_NONE;
+    }
+    igEndPopup();
+}
+
+/* set_view with one setting: a string (when `text` is set), a number (grid_spacing, snap_*) or a bool. */
 static void wpe__ui_set_view(WPE_EditorUi* ui, const char* key, const char* text, double number, bool flag) {
     WPE_JsonWriter* w = wpe__ui_begin("set_view");
     if (!w) return;
@@ -132,7 +231,7 @@ static void wpe__ui_set_view(WPE_EditorUi* ui, const char* key, const char* text
     wpe_json_write_key(w, key);
     if (text) {
         wpe_json_write_string(w, text);
-    } else if (strcmp(key, "grid_spacing") == 0) {
+    } else if (strcmp(key, "grid_spacing") == 0 || strncmp(key, "snap_", 5) == 0) {
         wpe_json_write_double(w, number);
     } else {
         wpe_json_write_bool(w, flag);
@@ -460,11 +559,14 @@ static void wpe__ui_camera(WPE_EditorUi* ui, float dt) {
     WPE_Transform* t = wpe_ecs_get_component(ecs, wpe_editor_camera(ui->editor), WPE_COMP_TRANSFORM);
     if (!t) return;
     if (!ui->camera_initialized) {
+        ui->speed = 6.0f;
+        ui->camera_initialized = true;
+    }
+    if (!ui->flying) {
+        /* Commands (camera, focus) may have turned the camera: flying starts from where it looks. */
         const WPE_Vec3 euler = wpe_quat_to_euler_xyz(t->rotation);
         ui->pitch = euler.x;
         ui->yaw = euler.y;
-        ui->speed = 6.0f;
-        ui->camera_initialized = true;
     }
     ImGuiIO* io = igGetIO_Nil();
     if (ui->view_hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Right, false)) ui->flying = true;
@@ -526,6 +628,11 @@ static void wpe__send_transform(WPE_EditorUi* ui, WPE_Entity entity, const WPE_T
     wpe_json_write_key(w, "coalesce");
     wpe_json_write_string(w, key);
     wpe__ui_send(ui, w);
+}
+
+/* The nearest multiple of `step`. */
+static float wpe__snap(float value, float step) {
+    return step > 0.0f ? roundf(value / step) * step : value;
 }
 
 /* The inverse of a unit quaternion. */
@@ -651,6 +758,7 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
         ui->gizmo_start = *t;
         ui->gizmo_mouse_x = mouse.x;
         ui->gizmo_mouse_y = mouse.y;
+        ui->gizmo_start_center = center;
         ++ui->gizmo_drag;
         if (rotate) {
             /* The screen direction in which the grabbed ring point moves under a positive rotation. */
@@ -677,12 +785,15 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
     }
     const int a = ui->gizmo_axis;
     if (a > 2) return true;
+    /* Ctrl inverts the snap setting for this drag. */
+    const bool snap = view.snap != igGetIO_Nil()->KeyCtrl;
     const float mx = mouse.x - ui->gizmo_mouse_x, my = mouse.y - ui->gizmo_mouse_y;
     WPE_Transform moved = ui->gizmo_start;
     if (rotate) {
         /* Mouse movement along the grabbed point's tangent: 0.6 degrees per pixel. A world-space turn
          * about the axis, expressed in the parent's space: parent^-1 * turn * parent * rotation. */
-        const float angle = (mx * ui->gizmo_tangent_x + my * ui->gizmo_tangent_y) * 0.01f;
+        float angle = (mx * ui->gizmo_tangent_x + my * ui->gizmo_tangent_y) * 0.01f;
+        if (snap) angle = wpe__snap(angle, view.snap_rotate * 0.0174532925f);
         WPE_Vec3 parent_position, parent_scale;
         WPE_Quat parent_rotation = wpe_quat_identity();
         if (!wpe_mat4_decompose(&parent_world, &parent_position, &parent_rotation, &parent_scale))
@@ -705,15 +816,36 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
     if (screen_length < 1e-3f) return true;
     /* Mouse movement along the handle's screen direction, in pixels. */
     const float along = (mx * dx + my * dy) / screen_length;
+    char label[32];
     if (view.gizmo == WPE_EDITOR_GIZMO_MOVE) {
         /* World units along the handle (it spans `length` of them), then into the parent's space. */
-        const WPE_Vec3 delta = wpe_vec3_scale(axes[a], along * length / screen_length);
+        float amount = along * length / screen_length;
+        if (snap && view.gizmo_local) {
+            amount = wpe__snap(amount, view.snap_move); /* Whole steps along the entity's own axis. */
+        } else if (snap) {
+            /* World axes: the world coordinate lands on the grid of steps. */
+            const float start = ui->gizmo_start_center.v[a];
+            amount = wpe__snap(start + amount, view.snap_move) - start;
+        }
+        const WPE_Vec3 delta = wpe_vec3_scale(axes[a], amount);
         WPE_Mat4 to_parent;
         if (!wpe_mat4_inverse(&parent_world, &to_parent)) return true;
         moved.position = wpe_vec3_add(moved.position, wpe_mat4_transform_dir(&to_parent, delta));
+        snprintf(label, sizeof label, "%+.3g", (double)amount);
     } else {
-        moved.scale.v[a] *= expf(along * 0.01f);
+        float scale = moved.scale.v[a] * expf(along * 0.01f);
+        if (snap) {
+            /* On the step's multiples, never collapsing to zero. */
+            const float snapped = wpe__snap(scale, view.snap_scale);
+            scale = fabsf(snapped) >= view.snap_scale ? snapped
+                    : scale < 0.0f                    ? -view.snap_scale
+                                                      : view.snap_scale;
+        }
+        moved.scale.v[a] = scale;
+        snprintf(label, sizeof label, "%.3g", (double)scale);
     }
+    ImDrawList_AddText_Vec2(draw, (ImVec2_c){c.x + 12.0f, c.y - 22.0f}, WPE__COL(255, 255, 255, 230), label,
+                            NULL);
     wpe__send_transform(ui, entity, &moved);
     return true;
 }
@@ -782,6 +914,10 @@ static void wpe__hierarchy_node(WPE_EditorUi* ui, WPE_Entity e) {
     const bool open = igTreeNodeEx_Str(label, flags);
     if (igIsItemClicked(ImGuiMouseButton_Left) && !igIsItemToggledOpen())
         wpe__ui_entity_command(ui, "select", e);
+    /* Double-click: bring it into view. */
+    if (igIsItemHovered(0) && igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left) &&
+        wpe_editor_mode(ui->editor) == WPE_EDITOR_EDIT)
+        wpe__ui_entity_command(ui, "focus", e);
     if (igBeginDragDropSource(0)) {
         igSetDragDropPayload(WPE__ENTITY_PAYLOAD, &e, sizeof e, 0);
         igText("%s", name ? name : "entity");
@@ -1092,12 +1228,7 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
                           ImGuiSelectableFlags_AllowDoubleClick, (ImVec2_c){0, 0});
         if (igIsItemHovered(0) && igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
             if (scene) {
-                WPE_JsonWriter* w = wpe__ui_begin("load_scene");
-                if (w) {
-                    wpe_json_write_key(w, "path");
-                    wpe_json_write_string(w, path);
-                    wpe__ui_send(ui, w);
-                }
+                wpe__ui_guard(ui, WPE__PENDING_LOAD, path);
             } else if (model) {
                 wpe__ui_create_model(ui, path);
             }
@@ -1204,7 +1335,7 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
     const WPE_EditorMode mode = wpe_editor_mode(ui->editor);
     if (!igBeginMainMenuBar()) return;
     if (igBeginMenu("File", true)) {
-        if (igMenuItem_Bool("New scene", NULL, false, true)) wpe__ui_simple(ui, "new_scene");
+        if (igMenuItem_Bool("New scene", NULL, false, true)) wpe__ui_guard(ui, WPE__PENDING_NEW, NULL);
         if (igMenuItem_Bool("Open scene...", NULL, false, true)) ui->open_scene_popup = true;
         if (igMenuItem_Bool("Save", "Ctrl+S", false, mode == WPE_EDITOR_EDIT)) {
             if (wpe_editor_scene_path(ui->editor)[0]) {
@@ -1216,7 +1347,7 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
         if (igMenuItem_Bool("Save as...", NULL, false, mode == WPE_EDITOR_EDIT)) ui->save_as_popup = true;
         if (igMenuItem_Bool("Export game...", NULL, false, true)) ui->export_popup = true;
         igSeparator();
-        if (igMenuItem_Bool("Quit", NULL, false, true)) ui->quit = true;
+        if (igMenuItem_Bool("Quit", NULL, false, true)) wpe__ui_guard(ui, WPE__PENDING_QUIT, NULL);
         igEndMenu();
     }
     if (igBeginMenu("Edit", true)) {
@@ -1229,6 +1360,10 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
             wpe__ui_entity_command(ui, "duplicate_entity", selection);
         if (igMenuItem_Bool("Delete", "Del", false, selection != WPE_ENTITY_NULL))
             wpe__ui_entity_command(ui, "delete_entity", selection);
+        igSeparator();
+        if (igMenuItem_Bool("Focus selection", "F", false,
+                            selection != WPE_ENTITY_NULL && mode == WPE_EDITOR_EDIT))
+            wpe__ui_simple(ui, "focus");
         igEndMenu();
     }
     if (igBeginMenu("View", true)) {
@@ -1243,6 +1378,23 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
             wpe__ui_set_view(ui, "physics", NULL, 0, !view.physics);
         if (igMenuItem_Bool("Reload changed scripts", NULL, view.hot_reload, true))
             wpe__ui_set_view(ui, "hot_reload", NULL, 0, !view.hot_reload);
+        igSeparator();
+        if (igMenuItem_Bool("Snap", NULL, view.snap, true)) wpe__ui_set_view(ui, "snap", NULL, 0, !view.snap);
+        const struct {
+            const char* label;
+            const char* key;
+            float value, speed, min, max;
+            const char* format;
+        } steps[] = {{"Move step", "snap_move", view.snap_move, 0.05f, 0.001f, 1000.0f, "%.3g"},
+                     {"Rotate step", "snap_rotate", view.snap_rotate, 0.5f, 0.1f, 180.0f, "%.3g deg"},
+                     {"Scale step", "snap_scale", view.snap_scale, 0.01f, 0.001f, 100.0f, "%.3g"}};
+        for (size_t i = 0; i < sizeof steps / sizeof steps[0]; ++i) {
+            float value = steps[i].value;
+            igSetNextItemWidth(120.0f);
+            if (igDragFloat(steps[i].label, &value, steps[i].speed, steps[i].min, steps[i].max,
+                            steps[i].format, ImGuiSliderFlags_AlwaysClamp))
+                wpe__ui_set_view(ui, steps[i].key, NULL, value, false);
+        }
         igEndMenu();
     }
     if (igBeginMenu("Window", true)) {
@@ -1270,36 +1422,60 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
         wpe__ui_set_view(ui, "gizmo_space", view.gizmo_local ? "world" : "local", 0, false);
     if (igIsItemHovered(0))
         igSetTooltip("Gizmo axes: the world's or the entity's own (scaling always uses its own)");
+    if (igMenuItem_Bool("Snap", NULL, view.snap, true)) wpe__ui_set_view(ui, "snap", NULL, 0, !view.snap);
+    if (igIsItemHovered(0))
+        igSetTooltip("Snap gizmo drags to steps (View menu); hold Ctrl while dragging to invert");
     igSeparator();
     const char* path = wpe_editor_scene_path(ui->editor);
     igTextDisabled("%s%s", path[0] ? path : "(unsaved scene)", wpe_editor_dirty(ui->editor) ? " *" : "");
     igEndMainMenuBar();
 }
 
-/* A modal asking for one path; runs `command` with it under `key` when confirmed. */
-static void wpe__ui_path_popup(WPE_EditorUi* ui, bool* request, const char* title, const char* hint,
-                               char* buffer, size_t size, const char* command, const char* key) {
+/* A modal asking for one path (into `buffer`); the caller acts on WPE__POPUP_OK. */
+static wpe__PopupResult wpe__ui_path_popup(bool* request, const char* title, const char* hint, char* buffer,
+                                           size_t size) {
     if (*request) {
         igOpenPopup_Str(title, 0);
         *request = false;
     }
-    if (!igBeginPopupModal(title, NULL, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    if (!igBeginPopupModal(title, NULL, ImGuiWindowFlags_AlwaysAutoResize)) return WPE__POPUP_NONE;
+    wpe__PopupResult result = WPE__POPUP_NONE;
     igTextUnformatted(hint, NULL);
     igSetNextItemWidth(420.0f);
     const bool enter = igInputText("##path", buffer, size, ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
     if ((igButton("OK", (ImVec2_c){120, 0}) || enter) && buffer[0]) {
-        WPE_JsonWriter* w = wpe__ui_begin(command);
-        if (w) {
-            wpe_json_write_key(w, key);
-            wpe_json_write_string(w, buffer);
-            wpe__ui_send(ui, w);
-        }
-        ui->assets_stale = true;
+        result = WPE__POPUP_OK;
         igCloseCurrentPopup();
     }
     igSameLine(0, -1);
-    if (igButton("Cancel", (ImVec2_c){120, 0})) igCloseCurrentPopup();
+    if (igButton("Cancel", (ImVec2_c){120, 0})) {
+        result = WPE__POPUP_CANCEL;
+        igCloseCurrentPopup();
+    }
     igEndPopup();
+    return result;
+}
+
+static void wpe__ui_popups(WPE_EditorUi* ui) {
+    wpe__ui_unsaved_popup(ui);
+    if (wpe__ui_path_popup(&ui->open_scene_popup, "Open scene", "Scene asset path:", ui->scene_path,
+                           sizeof ui->scene_path) == WPE__POPUP_OK)
+        wpe__ui_guard(ui, WPE__PENDING_LOAD, ui->scene_path);
+    const wpe__PopupResult save = wpe__ui_path_popup(
+        &ui->save_as_popup, "Save scene as", "Scene asset path:", ui->scene_path, sizeof ui->scene_path);
+    if (save == WPE__POPUP_OK) {
+        ui->assets_stale = true;
+        const WPE_Result saved = wpe__ui_string_command(ui, "save_scene", "path", ui->scene_path, false);
+        /* The unsaved-changes prompt's Save continues with what it was asked about. */
+        if (ui->pending_after_save && saved == WPE_RESULT_OK) wpe__ui_perform(ui, false);
+    }
+    if (save != WPE__POPUP_NONE && ui->pending_after_save) {
+        ui->pending = WPE__PENDING_NONE;
+        ui->pending_after_save = false;
+    }
+    if (wpe__ui_path_popup(&ui->export_popup, "Export game", "Output executable (outside the project):",
+                           ui->export_path, sizeof ui->export_path) == WPE__POPUP_OK)
+        wpe__ui_string_command(ui, "export", "output", ui->export_path, false);
 }
 
 static void wpe__ui_shortcuts(WPE_EditorUi* ui) {
@@ -1327,6 +1503,7 @@ static void wpe__ui_shortcuts(WPE_EditorUi* ui) {
         wpe__ui_entity_command(ui, "delete_entity", selection);
     if (!ui->flying && !io->KeyCtrl) {
         const WPE_EditorView view = wpe_editor_view(ui->editor);
+        if (igIsKeyPressed_Bool(ImGuiKey_F, false) && selection) wpe__ui_simple(ui, "focus");
         if (igIsKeyPressed_Bool(ImGuiKey_W, false)) wpe__ui_set_view(ui, "gizmo", "move", 0, false);
         if (igIsKeyPressed_Bool(ImGuiKey_E, false)) wpe__ui_set_view(ui, "gizmo", "rotate", 0, false);
         if (igIsKeyPressed_Bool(ImGuiKey_R, false)) wpe__ui_set_view(ui, "gizmo", "scale", 0, false);
@@ -1548,13 +1725,7 @@ WPE_Result wpe_editor_ui_frame(WPE_EditorUi* ui, WPE_Renderer* renderer, float d
     wpe__ui_environment(ui);
     wpe__ui_assets(ui);
     wpe__ui_console(ui);
-    wpe__ui_path_popup(ui, &ui->open_scene_popup, "Open scene", "Scene asset path:", ui->scene_path,
-                       sizeof ui->scene_path, "load_scene", "path");
-    wpe__ui_path_popup(ui, &ui->save_as_popup, "Save scene as", "Scene asset path:", ui->scene_path,
-                       sizeof ui->scene_path, "save_scene", "path");
-    wpe__ui_path_popup(ui, &ui->export_popup, "Export game",
-                       "Output executable (outside the project):", ui->export_path, sizeof ui->export_path,
-                       "export", "output");
+    wpe__ui_popups(ui);
 
     if (gpu) {
         const WPE_Result presented = wpe_ui_present(ui->backend, WPE__BACKGROUND);
@@ -1574,6 +1745,10 @@ WPE_Result wpe_editor_ui_frame(WPE_EditorUi* ui, WPE_Renderer* renderer, float d
 WPE_Result wpe_editor_ui_capture(WPE_EditorUi* ui, WPE_Image* out_image) {
     if (!ui) return WPE_RESULT_ERROR_NULL_ARG;
     return wpe_ui_capture(ui->backend, out_image);
+}
+
+void wpe_editor_ui_request_quit(WPE_EditorUi* ui) {
+    if (ui && ui->pending == WPE__PENDING_NONE) wpe__ui_guard(ui, WPE__PENDING_QUIT, NULL);
 }
 
 bool wpe_editor_ui_quit_requested(const WPE_EditorUi* ui) {

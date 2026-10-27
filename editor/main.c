@@ -325,8 +325,13 @@ static int run_window(const Options* o) {
         wpe_editor_set_screenshot_hook(editor, save_editor_image, &shot);
         bool captured = false;
         double previous = wpe_platform_time_seconds();
-        while (result == WPE_RESULT_OK && wpe_window_poll_events(window) &&
-               !wpe_editor_ui_quit_requested(ui) && !wpe_editor_quit_requested(editor)) {
+        while (result == WPE_RESULT_OK) {
+            if (!wpe_window_poll_events(window)) {
+                /* The close button: the UI asks about unsaved changes before quitting. */
+                wpe_window_cancel_close(window);
+                wpe_editor_ui_request_quit(ui);
+            }
+            if (wpe_editor_ui_quit_requested(ui) || wpe_editor_quit_requested(editor)) break;
             const double now = wpe_platform_time_seconds();
             const float dt = (float)(now - previous);
             previous = now;

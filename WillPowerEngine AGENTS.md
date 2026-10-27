@@ -385,6 +385,7 @@ Implemented in `editor/` (docs: `docs/editor.md`).
   - **`editor_ui_backend` tests that both paths draw the same frame**, running the GPU path on SDL's software `SDL_Renderer` with no GPU needed.
   - **Keep GPU vertices interleaved**: SDL's software renderer mis-strides separate UV arrays.
 - **No hidden state.** Every editor feature must be reachable through a command; when adding UI, add or reuse a command first.
+- **Unsaved work is lost only on purpose.** Commands that replace the scene (`new_scene`, `load_scene`, `quit`) refuse while it has unsaved changes, unless they say `"discard": true`. The UI asks first, Save / Don't save / Cancel, and the window's close button goes through the same prompt. A new command that drops the scene must follow the same rule.
 
 ---
 ## 5. File Organization

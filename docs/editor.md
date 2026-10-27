@@ -15,9 +15,9 @@
 
 | Area | What it does |
 |---|---|
-| Menu and toolbar | **File:** new, open, save, save as, export, quit.<br>**Edit:** undo, redo, duplicate, delete.<br>**View:** the grid and its spacing, physics shapes, reloading changed scripts.<br>**Window:** reset the layout.<br>**Play controls:** play, pause, stop.<br>**Gizmo:** move, rotate or scale, and **World**/**Local** axes.<br>The open scene is shown with `*` when it has unsaved changes. |
+| Menu and toolbar | **File:** new, open, save, save as, export, quit.<br>**Edit:** undo, redo, duplicate, delete, focus on the selection.<br>**View:** the grid and its spacing, physics shapes, reloading changed scripts, snapping and its steps.<br>**Window:** reset the layout.<br>**Play controls:** play, pause, stop.<br>**Gizmo:** move, rotate or scale; **World**/**Local** axes; **Snap**.<br>The open scene is shown with `*` when it has unsaved changes. |
 | Viewport | The game's framebuffer, rendered by the engine. In edit mode it uses the editor's camera:<br>• **Fly:** hold the right mouse button and use WASD (Q/E down/up, Shift faster; the wheel changes the speed).<br>• **Dolly:** the wheel without the right button moves forward and back.<br>• **Select:** click an object; clicking a model selects the entity that placed it.<br>• **Gizmo:** drag a handle of the selection, in the mode W (move), E (rotate) or R (scale). Move and scale have a handle per axis (X red, Y green, Z blue); rotate has a ring per axis. Drag a ring along its edge, and the angle is shown while you drag. X switches between the world's axes and the entity's own; scaling always uses the entity's own.<br>• **Add a model:** drop one from Assets.<br>• **Grid:** lines on the ground plane (y = 0) around the camera, X axis red and Z axis blue, shown in edit mode.<br>• **Physics shapes:** collider wireframes:<br>&nbsp;&nbsp;– static: green<br>&nbsp;&nbsp;– kinematic: blue<br>&nbsp;&nbsp;– dynamic: orange, or grey while asleep<br>&nbsp;&nbsp;– triggers: yellow<br>They're shown in edit mode, where they follow every move and rescale, and while playing. |
-| Hierarchy | Every entity, as a tree. Click to select. Drag onto another entity to reparent, or onto the empty area below to make it a root. The right-click menu duplicates, deletes or detaches. |
+| Hierarchy | Every entity, as a tree. Click to select, double-click to bring it into view. Drag onto another entity to reparent, or onto the empty area below to make it a root. The right-click menu duplicates, deletes or detaches. |
 | Inspector | The selected entity in the scene-file schema: every field of every component, editable. Each component's × removes it. "Add component" adds one; a mesh, sound or script takes the asset path typed in the box above it. |
 | Environment | The scene's render settings, fog, shadows, post-processing, gravity and music. |
 | Assets | The project's files. Double-click a scene to open it, or a model (`.glb`, `.gltf`, `.prim`) to place it. Drag models into the viewport. |
@@ -26,8 +26,20 @@
 Shortcuts:
 - **Editing:** Ctrl+Z / Ctrl+Y undo and redo, Ctrl+S save, Ctrl+D duplicate, Del delete.
 - **Playing:** F5 play (Shift+F5, or F5 while playing, stops), F6 pause.
-- **Gizmo:** W / E / R choose move, rotate or scale; X switches world/local axes.
-- **View:** G toggles the grid, P the physics shapes.
+- **Gizmo:** W / E / R choose move, rotate or scale; X switches world/local axes; hold Ctrl while dragging to snap (or, with Snap on, to move freely).
+- **View:** F focuses on the selection; G toggles the grid, P the physics shapes.
+
+**Focus** (F, or double-click in the hierarchy) moves the editor camera, keeping its direction, so the selection and its children fill the view.
+
+**Snapping** works in steps you set in the View menu (default 0.5 units, 15°, 0.1):
+- **Moving along world axes** puts the position on multiples of the step, lining objects up with the grid.
+- **Moving along local axes** moves in whole steps.
+- **Rotating** turns in whole steps.
+- **Scaling** lands on multiples of the step.
+
+The value shows next to the gizmo while you drag.
+
+**Unsaved changes are never lost by accident.** Starting a new scene, opening another one, quitting, or closing the window with unsaved changes asks first: Save, Don't save, or Cancel. A scene that was never saved asks for a name. Agents get the same protection: `new_scene`, `load_scene` and `quit` refuse while the scene has unsaved changes, unless they say `"discard": true`.
 
 **Script hot reload:** while it's on (the default), changed scripts are reloaded twice a second, in edit mode and while playing. Running instances switch to the new code and keep their state (`on_reload` is called). A script that fails to compile is reported in the console, and the previous version keeps running.
 
@@ -61,18 +73,19 @@ Entities and components use the **scene-file schema** ([scenes.md](scenes.md)), 
 | `set_parent` | `{id, parent: id or null, keep_world = true}` |
 | `select` | `{id or null}` |
 | `get_environment` / `set_environment` | `{}` / `{value: {...}}` (merged: keys left out keep their values) → the environment |
-| `new_scene`, `load_scene`, `save_scene` | `{}`, `{path}`, `{path?}`: asset paths inside the project; `save_scene` without a path saves the open scene |
-| `get_view` / `set_view` | `{}` / `{value: {grid, grid_spacing, physics, gizmo: "move"\|"rotate"\|"scale", gizmo_space: "world"\|"local", hot_reload}}` (merged; all or nothing) → the view. View settings aren't part of the scene: they are never saved or undone. |
+| `new_scene`, `load_scene`, `save_scene` | `{discard?}`, `{path, discard?}`, `{path?}`: asset paths inside the project; `save_scene` without a path saves the open scene. `new_scene` and `load_scene` refuse while the scene has unsaved changes, unless `"discard": true`. |
+| `get_view` / `set_view` | `{}` / `{value: {grid, grid_spacing, physics, gizmo: "move"\|"rotate"\|"scale", gizmo_space: "world"\|"local", hot_reload, snap, snap_move, snap_rotate (degrees), snap_scale}}` (merged; all or nothing) → the view. View settings aren't part of the scene: they are never saved or undone. |
 | `undo`, `redo` | `{}` |
 | `play`, `pause`, `stop` | `{}` (play also resumes) |
 | `frames` | `{count = 1, dt = 1/60}`: runs frames (simulated in play mode) |
 | `screenshot` | `{path, target = "game" or "editor"}`: the game view, or the whole editor window (also headless) |
 | `camera` | `{position: [x,y,z], target: [x,y,z]}`: aims the editor camera |
+| `focus` | `{id = the selection}` → `{position, target}`: moves the editor camera, keeping its direction, until the entity and its children fill the view |
 | `run_lua` | `{code}`: runs Luau with the `wpe` API (undoable; a failing chunk changes nothing) |
 | `list_assets` | `{prefix?}` → asset paths |
 | `export` | `{output, runtime?}` → `{files, bytes}`: exports the game (runtime/export, [runtime.md](runtime.md)) |
 | `log` | `{count = 50}` → recent log lines |
-| `quit` | `{}`: closes the editor window |
+| `quit` | `{discard?}`: closes the editor window (refused while the scene has unsaved changes, unless `"discard": true`) |
 
 Any command may carry `"coalesce": key`. Consecutive edits with the same key form one undo step; the window uses this so that dragging a slider is one step.
 

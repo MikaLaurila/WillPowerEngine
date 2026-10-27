@@ -61,7 +61,15 @@ WPE_Result wpe_editor_ui_frame(WPE_EditorUi* ui, WPE_Renderer* renderer, float d
  */
 WPE_Result wpe_editor_ui_capture(WPE_EditorUi* ui, WPE_Image* out_image);
 
-/** @return Whether the user chose File > Quit. */
+/**
+ * Asks to quit (the window's close button): quits at once without unsaved changes, otherwise asks
+ * the user to save them first (wpe_editor_ui_quit_requested() turns true once they decide).
+ *
+ * @thread_safety Main thread only
+ */
+void wpe_editor_ui_request_quit(WPE_EditorUi* ui);
+
+/** @return Whether the user decided to quit (File > Quit or wpe_editor_ui_request_quit()). */
 bool wpe_editor_ui_quit_requested(const WPE_EditorUi* ui);
 
 /** @return Whether the game in play mode asks for a captured mouse (the window applies it). */

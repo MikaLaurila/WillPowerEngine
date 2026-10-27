@@ -68,6 +68,14 @@ void wpe_window_destroy(WPE_Window* window);
  */
 bool wpe_window_poll_events(WPE_Window* window);
 
+/**
+ * Withdraws the user's request to close the window, so wpe_window_poll_events() returns true again
+ * (for hosts that ask first, such as an editor with unsaved changes).
+ *
+ * @thread_safety Main thread only
+ */
+void wpe_window_cancel_close(WPE_Window* window);
+
 /** Sets the function receiving the events read by wpe_window_poll_events() (NULL removes it). @thread_safety
  * Main thread only */
 void wpe_window_set_event_handler(WPE_Window* window, WPE_PlatformEventFn fn, void* user_data);
