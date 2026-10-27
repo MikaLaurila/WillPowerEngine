@@ -88,7 +88,7 @@ Build these tools first; add further ones as they prove useful for game developm
 - Luau hot reload
 - Transform gizmo (move/rotate/scale, local/world space)
 - Viewport entity picking
-- Blender-style viewport navigation (MMB orbit around soft focus pivot, Shift+MMB pan, wheel dolly, `F` to focus/frame an entity)
+- Fly-camera viewport navigation (hold RMB to look, WASD/QE to move, Shift faster, wheel dolly or speed). This replaces the originally planned Blender-style orbit navigation; the user chose it after trying both.
 - Entity hierarchy (add/delete entities, add child entities)
 - Entity inspector (add/remove/edit components)
 - Debug physics drawing

@@ -26,7 +26,19 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   functions, edit mode, editor commands (undo/redo, coalescing, scenes, play mode, screenshots),
   and a command-line test that drives the editor like an agent.
 
+### Fixed (editor, after hands-on testing)
+- The rotate gizmo draws one colored ring per axis instead of handles that looked like the move
+  gizmo's; dragging follows the ring's direction where it was grabbed, and the angle is shown.
+- Dragging a field flickered every field below it: the inspector and environment panels stopped
+  drawing after the changed field. They now draw everything and apply the change afterwards.
+- Field IDs could collide with their component header (the `mesh` field of the `mesh` component);
+  every field has its own ID scope.
+
 ### Changed
+- Editor look: rounded widgets, more spacing, a dark palette with an amber accent, and a fixed
+  column for field names in the inspector and environment.
+- Spec: the viewport keeps its fly camera rather than Blender-style orbit navigation (user's
+  decision after testing).
 - `format` and `lint` also cover `editor/`, `runtime/` and `tools/` (two unchecked `atoi` calls in
   the tools were replaced).
 - Enumeration errors in scene and project files name the rejected value.

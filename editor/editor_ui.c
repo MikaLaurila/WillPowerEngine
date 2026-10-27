@@ -23,6 +23,8 @@
 #define WPE__UI_PATH 256
 #define WPE__ASSET_PAYLOAD "WPE_ASSET"
 #define WPE__ENTITY_PAYLOAD "WPE_ENTITY"
+#define WPE__RING_SEGMENTS 48
+#define WPE__LABEL_WIDTH 130.0f /* Inspector and environment: room for field names right of the fields. */
 
 /* ImGui colors are 0xAABBGGRR. */
 #define WPE__COL(r, g, b, a)                                                                                 \
@@ -61,6 +63,7 @@ struct WPE_EditorUi {
     uint32_t gizmo_drag;
     WPE_Transform gizmo_start;
     float gizmo_mouse_x, gizmo_mouse_y;
+    float gizmo_tangent_x, gizmo_tangent_y; /* Rotate: screen direction of a positive rotation. */
 
     /* Inspector edits. */
     uint32_t edit_serial; /* Bumped when a widget becomes active: one undo step per edit gesture. */
@@ -221,7 +224,21 @@ static void wpe__note_activation(WPE_EditorUi* ui) {
     if (igIsItemActivated()) ++ui->edit_serial;
 }
 
-/* Draws an editable view of `v`; returns true (filling `edit`) when the user changed a leaf. */
+static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char* key, const WPE_JsonValue* v,
+                            wpe__Edit* edit);
+
+/* Draws one member of a container. Every member is drawn even after an earlier one changed (skipping the
+ * rest would make them flicker); only the first change of a frame is kept. */
+static bool wpe__draw_member(WPE_EditorUi* ui, const char* component, const char* key, const WPE_JsonValue* v,
+                             wpe__Edit* edit, bool already_changed) {
+    wpe__Edit member_edit;
+    if (!wpe__draw_value(ui, component, key, v, &member_edit)) return false;
+    if (!already_changed) *edit = member_edit;
+    return true;
+}
+
+/* Draws an editable view of `v`; returns true (filling `edit`) when the user changed a leaf. Labels are
+ * the keys, so callers give each member its own ID scope (a "mesh" field inside the "mesh" header). */
 static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char* key, const WPE_JsonValue* v,
                             wpe__Edit* edit) {
     bool changed = false;
@@ -287,11 +304,11 @@ static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char*
             }
         } else if (igTreeNodeEx_Str(key, 0)) {
             /* Lists (joints, post effects): elements are edited in place. */
-            for (uint32_t i = 0; i < count && !changed; ++i) {
+            for (uint32_t i = 0; i < count; ++i) {
                 char label[16];
                 snprintf(label, sizeof label, "[%u]", i);
                 igPushID_Int((int)i);
-                changed = wpe__draw_value(ui, component, label, wpe_json_at(v, i), edit);
+                changed |= wpe__draw_member(ui, component, label, wpe_json_at(v, i), edit, changed);
                 igPopID();
             }
             igTreePop();
@@ -300,10 +317,12 @@ static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char*
     }
     case WPE_JSON_OBJECT:
         if (igTreeNodeEx_Str(key, ImGuiTreeNodeFlags_DefaultOpen)) {
-            for (uint32_t i = 0; i < wpe_json_count(v) && !changed; ++i) {
+            for (uint32_t i = 0; i < wpe_json_count(v); ++i) {
                 const char* member_key = NULL;
                 const WPE_JsonValue* member = wpe_json_member(v, i, &member_key);
-                changed = wpe__draw_value(ui, component, member_key, member, edit);
+                igPushID_Int((int)i);
+                changed |= wpe__draw_member(ui, component, member_key, member, edit, changed);
+                igPopID();
             }
             igTreePop();
         }
@@ -493,7 +512,29 @@ static void wpe__send_transform(WPE_EditorUi* ui, WPE_Entity entity, const WPE_T
     wpe__ui_send(ui, w);
 }
 
-/* Draws the gizmo of the selection and handles dragging; returns true while it uses the mouse. */
+/* Distance from `p` to the screen segment a..b; `out_s` receives the closest point's parameter (0..1). */
+static float wpe__segment_distance(ImVec2_c a, ImVec2_c b, ImVec2_c p, float* out_s) {
+    const float dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    float s = len2 > 0 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2 : 0;
+    s = s < 0 ? 0 : s > 1 ? 1 : s;
+    const float px = a.x + dx * s - p.x, py = a.y + dy * s - p.y;
+    if (out_s) *out_s = s;
+    return sqrtf(px * px + py * py);
+}
+
+/* Point `i` of the rotation ring around `axis` (unit length, world space). */
+static WPE_Vec3 wpe__ring_point(WPE_Vec3 center, WPE_Vec3 axis, float radius, int i) {
+    /* Any vector not parallel to the axis gives the ring's plane basis. */
+    const WPE_Vec3 seed = fabsf(axis.x) < 0.9f ? wpe_vec3(1, 0, 0) : wpe_vec3(0, 1, 0);
+    const WPE_Vec3 u = wpe_vec3_normalize(wpe_vec3_cross(axis, seed));
+    const WPE_Vec3 v = wpe_vec3_cross(axis, u);
+    const float theta = 6.28318531f * (float)i / (float)WPE__RING_SEGMENTS;
+    return wpe_vec3_add(center, wpe_vec3_add(wpe_vec3_scale(u, radius * cosf(theta)),
+                                             wpe_vec3_scale(v, radius * sinf(theta))));
+}
+
+/* Draws the gizmo of the selection and handles dragging; returns true while it uses the mouse. Move and
+ * scale have a handle per axis; rotate has a ring per axis, dragged along the ring where it was grabbed. */
 static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
     const WPE_Entity entity = wpe_editor_selection(ui->editor);
     WPE_Ecs* ecs = wpe__ui_ecs(ui);
@@ -519,22 +560,38 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
     const float length = distance * 0.18f;
     static const uint32_t colors[3] = {WPE__COL(230, 70, 70, 255), WPE__COL(70, 210, 70, 255),
                                        WPE__COL(70, 110, 240, 255)};
+    const bool rotate = ui->gizmo_mode == WPE__GIZMO_ROTATE;
+    WPE_Vec3 axes[3];
     ImVec2_c ends[3];
     bool visible[3];
+    ImVec2_c ring[3][WPE__RING_SEGMENTS];
+    bool ring_visible[3][WPE__RING_SEGMENTS];
     const ImVec2_c mouse = igGetMousePos();
-    int hover = -1;
+    int hover = -1, hover_segment = 0;
     float hover_distance = 8.0f;
     for (int a = 0; a < 3; ++a) {
-        const WPE_Vec3 axis = wpe_vec3_normalize(wpe_mat4_transform_dir(&parent_world, wpe__unit(a)));
-        visible[a] = wpe__to_screen(ui, &view_projection, wpe_vec3_add(center, wpe_vec3_scale(axis, length)),
-                                    &ends[a]);
+        axes[a] = wpe_vec3_normalize(wpe_mat4_transform_dir(&parent_world, wpe__unit(a)));
+        if (rotate) {
+            for (int i = 0; i < WPE__RING_SEGMENTS; ++i)
+                ring_visible[a][i] = wpe__to_screen(ui, &view_projection,
+                                                    wpe__ring_point(center, axes[a], length, i), &ring[a][i]);
+            for (int i = 0; i < WPE__RING_SEGMENTS; ++i) {
+                const int j = (i + 1) % WPE__RING_SEGMENTS;
+                if (!ring_visible[a][i] || !ring_visible[a][j]) continue;
+                const float d = wpe__segment_distance(ring[a][i], ring[a][j], mouse, NULL);
+                if (d < hover_distance) {
+                    hover_distance = d;
+                    hover = a;
+                    hover_segment = i;
+                }
+            }
+            continue;
+        }
+        visible[a] = wpe__to_screen(ui, &view_projection,
+                                    wpe_vec3_add(center, wpe_vec3_scale(axes[a], length)), &ends[a]);
         if (!visible[a]) continue;
-        /* Distance from the mouse to the handle segment. */
-        const float dx = ends[a].x - c.x, dy = ends[a].y - c.y, len2 = dx * dx + dy * dy;
-        float s = len2 > 0 ? ((mouse.x - c.x) * dx + (mouse.y - c.y) * dy) / len2 : 0;
-        s = s < 0 ? 0 : s > 1 ? 1 : s;
-        const float px = c.x + dx * s - mouse.x, py = c.y + dy * s - mouse.y;
-        const float d = sqrtf(px * px + py * py);
+        float s = 0.0f;
+        const float d = wpe__segment_distance(c, ends[a], mouse, &s);
         if (d < hover_distance && s > 0.15f) {
             hover_distance = d;
             hover = a;
@@ -542,16 +599,23 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
     }
     if (ui->gizmo_axis < 0) ui->gizmo_hover = ui->view_hovered ? hover : -1;
     for (int a = 0; a < 3; ++a) {
-        if (!visible[a]) continue;
         const bool hot = a == ui->gizmo_axis || (ui->gizmo_axis < 0 && a == ui->gizmo_hover);
         const uint32_t color = hot ? WPE__COL(250, 220, 60, 255) : colors[a];
+        if (rotate) {
+            for (int i = 0; i < WPE__RING_SEGMENTS; ++i) {
+                const int j = (i + 1) % WPE__RING_SEGMENTS;
+                if (ring_visible[a][i] && ring_visible[a][j])
+                    ImDrawList_AddLine(draw, ring[a][i], ring[a][j], color, hot ? 3.5f : 2.5f);
+            }
+            continue;
+        }
+        if (!visible[a]) continue;
         ImDrawList_AddLine(draw, c, ends[a], color, 3.0f);
         if (ui->gizmo_mode == WPE__GIZMO_SCALE) {
             ImDrawList_AddRectFilled(draw, (ImVec2_c){ends[a].x - 4, ends[a].y - 4},
                                      (ImVec2_c){ends[a].x + 4, ends[a].y + 4}, color, 0.0f, 0);
         } else {
-            ImDrawList_AddCircleFilled(draw, ends[a], ui->gizmo_mode == WPE__GIZMO_ROTATE ? 6.0f : 4.0f,
-                                       color, 12);
+            ImDrawList_AddCircleFilled(draw, ends[a], 4.0f, color, 12);
         }
     }
     ImDrawList_AddCircleFilled(draw, c, 3.0f, WPE__COL(255, 255, 255, 255), 8);
@@ -562,6 +626,23 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
         ui->gizmo_mouse_x = mouse.x;
         ui->gizmo_mouse_y = mouse.y;
         ++ui->gizmo_drag;
+        if (rotate) {
+            /* The screen direction in which the grabbed ring point moves under a positive rotation. */
+            const int a = ui->gizmo_axis;
+            const WPE_Vec3 grabbed = wpe__ring_point(center, axes[a], length, hover_segment);
+            const WPE_Vec3 tangent = wpe_vec3_cross(axes[a], wpe_vec3_sub(grabbed, center));
+            ImVec2_c p0, p1;
+            float tx = 0.0f, ty = 0.0f;
+            if (wpe__to_screen(ui, &view_projection, grabbed, &p0) &&
+                wpe__to_screen(ui, &view_projection, wpe_vec3_add(grabbed, wpe_vec3_scale(tangent, 0.1f)),
+                               &p1)) {
+                tx = p1.x - p0.x;
+                ty = p1.y - p0.y;
+            }
+            const float tl = sqrtf(tx * tx + ty * ty);
+            ui->gizmo_tangent_x = tl > 1e-3f ? tx / tl : 0.0f;
+            ui->gizmo_tangent_y = tl > 1e-3f ? ty / tl : 0.0f;
+        }
     }
     if (ui->gizmo_axis < 0) return false;
     if (!igIsMouseDown_Nil(ImGuiMouseButton_Left)) {
@@ -569,32 +650,34 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
         return true;
     }
     const int a = ui->gizmo_axis;
-    const float dx = ends[a].x - c.x, dy = ends[a].y - c.y;
-    const float screen_length = sqrtf(dx * dx + dy * dy);
-    if (screen_length < 1e-3f) return true;
-    /* Mouse movement along the handle's screen direction, in pixels. */
-    const float along =
-        ((mouse.x - ui->gizmo_mouse_x) * dx + (mouse.y - ui->gizmo_mouse_y) * dy) / screen_length;
+    const float mx = mouse.x - ui->gizmo_mouse_x, my = mouse.y - ui->gizmo_mouse_y;
     WPE_Transform moved = ui->gizmo_start;
     const WPE_Vec3 unit = wpe__unit(a);
-    switch (ui->gizmo_mode) {
-    case WPE__GIZMO_MOVE: {
+    if (rotate) {
+        /* Mouse movement along the grabbed point's tangent: 0.6 degrees per pixel. */
+        const float angle = (mx * ui->gizmo_tangent_x + my * ui->gizmo_tangent_y) * 0.01f;
+        moved.rotation =
+            wpe_quat_normalize(wpe_quat_mul(wpe_quat_from_axis_angle(unit, angle), moved.rotation));
+        char label[32];
+        snprintf(label, sizeof label, "%.1f deg", (double)(angle * 57.2957795f));
+        ImDrawList_AddText_Vec2(draw, (ImVec2_c){c.x + 12.0f, c.y - 22.0f}, WPE__COL(255, 255, 255, 230),
+                                label, NULL);
+        wpe__send_transform(ui, entity, &moved);
+        return true;
+    }
+    const float dx = ends[a].x - c.x, dy = ends[a].y - c.y;
+    const float screen_length = sqrtf(dx * dx + dy * dy);
+    if (!visible[a] || screen_length < 1e-3f) return true;
+    /* Mouse movement along the handle's screen direction, in pixels. */
+    const float along = (mx * dx + my * dy) / screen_length;
+    if (ui->gizmo_mode == WPE__GIZMO_MOVE) {
         /* Parent-space units per pixel along the handle (the handle spans `length` world units). */
         const WPE_Vec3 parent_axis = wpe_mat4_transform_dir(&parent_world, unit);
         const float parent_scale = wpe_vec3_length(parent_axis) > 1e-9f ? wpe_vec3_length(parent_axis) : 1.0f;
         moved.position =
             wpe_vec3_add(moved.position, wpe_vec3_scale(unit, along * length / screen_length / parent_scale));
-        break;
-    }
-    case WPE__GIZMO_ROTATE:
-        moved.rotation =
-            wpe_quat_normalize(wpe_quat_mul(wpe_quat_from_axis_angle(unit, along * 0.02f), moved.rotation));
-        break;
-    case WPE__GIZMO_SCALE: {
-        const float factor = expf(along * 0.01f);
-        moved.scale.v[a] *= factor;
-        break;
-    }
+    } else {
+        moved.scale.v[a] *= expf(along * 0.01f);
     }
     wpe__send_transform(ui, entity, &moved);
     return true;
@@ -803,43 +886,54 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
     wpe_json_writer_destroy(writer);
     const WPE_JsonValue* root = wpe_json_root(doc);
     igText("Entity %u", entity);
-    bool done = false;
-    for (uint32_t i = 0; doc && i < wpe_json_count(root) && !done; ++i) {
+    igPushItemWidth(-WPE__LABEL_WIDTH);
+    /* The whole panel is drawn first and the frame's change (at most one) applied afterwards, since a
+     * command changes the entity the document describes. */
+    wpe__Edit edit;
+    const char* edited_key = NULL;
+    const WPE_JsonValue* edited_value = NULL;
+    const char* removed_key = NULL;
+    for (uint32_t i = 0; doc && i < wpe_json_count(root); ++i) {
         const char* key = NULL;
         const WPE_JsonValue* value = wpe_json_member(root, i, &key);
         if (strcmp(key, "id") == 0 || strcmp(key, "parent") == 0) continue;
-        wpe__Edit edit;
         igPushID_Str(key);
         if (strcmp(key, "name") == 0) {
-            if (wpe__draw_value(ui, key, "name", value, &edit)) {
-                wpe__ui_apply_edit(ui, entity, key, value, &edit);
-                done = true;
+            if (wpe__draw_member(ui, key, "name", value, &edit, edited_key != NULL) && !edited_key) {
+                edited_key = key;
+                edited_value = value;
             }
         } else if (wpe_json_type(value) == WPE_JSON_OBJECT) {
             bool keep = true;
             if (igCollapsingHeader_BoolPtr(key, &keep, ImGuiTreeNodeFlags_DefaultOpen)) {
-                for (uint32_t m = 0; m < wpe_json_count(value) && !done; ++m) {
+                for (uint32_t m = 0; m < wpe_json_count(value); ++m) {
                     const char* member_key = NULL;
                     const WPE_JsonValue* member = wpe_json_member(value, m, &member_key);
-                    if (wpe__draw_value(ui, key, member_key, member, &edit)) {
-                        wpe__ui_apply_edit(ui, entity, key, value, &edit);
-                        done = true;
+                    igPushID_Int((int)m);
+                    if (wpe__draw_member(ui, key, member_key, member, &edit, edited_key != NULL) &&
+                        !edited_key) {
+                        edited_key = key;
+                        edited_value = value;
                     }
+                    igPopID();
                 }
             }
-            if (!keep && !done) {
-                WPE_JsonWriter* w = wpe__ui_begin("remove_component");
-                if (w) {
-                    wpe_json_write_key(w, "id");
-                    wpe_json_write_integer(w, entity);
-                    wpe_json_write_key(w, "component");
-                    wpe_json_write_string(w, key);
-                    wpe__ui_send(ui, w);
-                }
-                done = true;
-            }
+            if (!keep && !removed_key) removed_key = key;
         }
         igPopID();
+    }
+    igPopItemWidth();
+    if (removed_key) {
+        WPE_JsonWriter* w = wpe__ui_begin("remove_component");
+        if (w) {
+            wpe_json_write_key(w, "id");
+            wpe_json_write_integer(w, entity);
+            wpe_json_write_key(w, "component");
+            wpe_json_write_string(w, removed_key);
+            wpe__ui_send(ui, w);
+        }
+    } else if (edited_key) {
+        wpe__ui_apply_edit(ui, entity, edited_key, edited_value, &edit);
     }
     wpe_json_free(doc);
 
@@ -893,15 +987,18 @@ static void wpe__ui_environment(WPE_EditorUi* ui) {
         (void)wpe_json_parse(text, size, &doc, NULL);
     wpe_json_writer_destroy(writer);
     const WPE_JsonValue* root = wpe_json_root(doc);
+    wpe__Edit edit;
+    bool changed = false;
+    igPushItemWidth(-WPE__LABEL_WIDTH);
     for (uint32_t i = 0; doc && i < wpe_json_count(root); ++i) {
         const char* key = NULL;
         const WPE_JsonValue* value = wpe_json_member(root, i, &key);
-        wpe__Edit edit;
-        if (wpe__draw_value(ui, "environment", key, value, &edit)) {
-            wpe__ui_apply_edit(ui, WPE_ENTITY_NULL, "environment", root, &edit);
-            break;
-        }
+        igPushID_Int((int)i);
+        changed |= wpe__draw_member(ui, "environment", key, value, &edit, changed);
+        igPopID();
     }
+    igPopItemWidth();
+    if (changed) wpe__ui_apply_edit(ui, WPE_ENTITY_NULL, "environment", root, &edit);
     wpe_json_free(doc);
     igEnd();
 }
@@ -1116,9 +1213,8 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
     if (igMenuItem_Bool("Move", "W", ui->gizmo_mode == WPE__GIZMO_MOVE, true))
         ui->gizmo_mode = WPE__GIZMO_MOVE;
     if (igMenuItem_Bool("Rotate", "E", ui->gizmo_mode == WPE__GIZMO_ROTATE, true))
-        ui->gizmo_mode = WPE__GIZMO_ROTATE;
-    if (igMenuItem_Bool("Scale", "R", ui->gizmo_mode == WPE__GIZMO_SCALE, true))
-        ui->gizmo_mode = WPE__GIZMO_SCALE;
+        if (igMenuItem_Bool("Scale", "R", ui->gizmo_mode == WPE__GIZMO_SCALE, true))
+            ui->gizmo_mode = WPE__GIZMO_SCALE;
     igSeparator();
     const char* path = wpe_editor_scene_path(ui->editor);
     igTextDisabled("%s%s", path[0] ? path : "(unsaved scene)", wpe_editor_dirty(ui->editor) ? " *" : "");
@@ -1199,6 +1295,78 @@ static void wpe__ui_layout(WPE_EditorUi* ui, ImGuiID dockspace, const ImGuiViewp
     ui->layout_built = true;
 }
 
+/* The editor's look: rounded, dark, with an amber accent. */
+static void wpe__ui_style(void) {
+    ImGuiStyle* style = igGetStyle();
+    style->WindowRounding = 8.0f;
+    style->ChildRounding = 6.0f;
+    style->FrameRounding = 5.0f;
+    style->PopupRounding = 7.0f;
+    style->ScrollbarRounding = 8.0f;
+    style->GrabRounding = 5.0f;
+    style->WindowPadding = (ImVec2_c){12.0f, 12.0f};
+    style->FramePadding = (ImVec2_c){10.0f, 6.0f};
+    style->ItemSpacing = (ImVec2_c){8.0f, 8.0f};
+    style->ItemInnerSpacing = (ImVec2_c){6.0f, 6.0f};
+    style->ScrollbarSize = 12.0f;
+    style->WindowBorderSize = 0.0f;
+    style->FrameBorderSize = 0.0f;
+
+    const ImVec4_c accent = {0.93f, 0.60f, 0.22f, 1.0f};
+    const ImVec4_c accent_hover = {1.0f, 0.69f, 0.32f, 1.0f};
+    const ImVec4_c accent_dim = {0.55f, 0.35f, 0.13f, 1.0f};
+    ImVec4_c* colors = style->Colors;
+    colors[ImGuiCol_Text] = (ImVec4_c){0.88f, 0.89f, 0.92f, 1.0f};
+    colors[ImGuiCol_TextDisabled] = (ImVec4_c){0.46f, 0.48f, 0.53f, 1.0f};
+    colors[ImGuiCol_WindowBg] = (ImVec4_c){0.075f, 0.08f, 0.095f, 1.0f};
+    colors[ImGuiCol_ChildBg] = (ImVec4_c){0.075f, 0.08f, 0.095f, 1.0f};
+    colors[ImGuiCol_PopupBg] = (ImVec4_c){0.10f, 0.11f, 0.13f, 0.98f};
+    colors[ImGuiCol_Border] = (ImVec4_c){0.18f, 0.19f, 0.22f, 1.0f};
+    colors[ImGuiCol_BorderShadow] = (ImVec4_c){0.0f, 0.0f, 0.0f, 0.0f};
+    colors[ImGuiCol_FrameBg] = (ImVec4_c){0.14f, 0.15f, 0.18f, 1.0f};
+    colors[ImGuiCol_FrameBgHovered] = (ImVec4_c){0.20f, 0.21f, 0.25f, 1.0f};
+    colors[ImGuiCol_FrameBgActive] = (ImVec4_c){0.24f, 0.25f, 0.30f, 1.0f};
+    colors[ImGuiCol_TitleBg] = (ImVec4_c){0.075f, 0.08f, 0.095f, 1.0f};
+    colors[ImGuiCol_TitleBgActive] = (ImVec4_c){0.10f, 0.11f, 0.13f, 1.0f};
+    colors[ImGuiCol_MenuBarBg] = (ImVec4_c){0.065f, 0.07f, 0.085f, 1.0f};
+    colors[ImGuiCol_ScrollbarBg] = (ImVec4_c){0.075f, 0.08f, 0.095f, 1.0f};
+    colors[ImGuiCol_ScrollbarGrab] = (ImVec4_c){0.25f, 0.27f, 0.32f, 1.0f};
+    colors[ImGuiCol_ScrollbarGrabHovered] = (ImVec4_c){0.33f, 0.35f, 0.41f, 1.0f};
+    colors[ImGuiCol_ScrollbarGrabActive] = accent_dim;
+    colors[ImGuiCol_CheckMark] = accent;
+    colors[ImGuiCol_SliderGrab] = accent;
+    colors[ImGuiCol_SliderGrabActive] = accent_hover;
+    colors[ImGuiCol_Button] = (ImVec4_c){0.16f, 0.17f, 0.20f, 1.0f};
+    colors[ImGuiCol_ButtonHovered] = (ImVec4_c){0.23f, 0.24f, 0.29f, 1.0f};
+    colors[ImGuiCol_ButtonActive] = (ImVec4_c){0.30f, 0.31f, 0.37f, 1.0f};
+    colors[ImGuiCol_Header] = (ImVec4_c){0.22f, 0.20f, 0.16f, 1.0f};
+    colors[ImGuiCol_HeaderHovered] = (ImVec4_c){0.31f, 0.27f, 0.18f, 1.0f};
+    colors[ImGuiCol_HeaderActive] = accent_dim;
+    colors[ImGuiCol_Separator] = (ImVec4_c){0.17f, 0.18f, 0.21f, 1.0f};
+    colors[ImGuiCol_SeparatorHovered] = accent_dim;
+    colors[ImGuiCol_SeparatorActive] = accent;
+    colors[ImGuiCol_ResizeGrip] = (ImVec4_c){0.0f, 0.0f, 0.0f, 0.0f};
+    colors[ImGuiCol_Tab] = (ImVec4_c){0.12f, 0.13f, 0.15f, 1.0f};
+    colors[ImGuiCol_TabHovered] = (ImVec4_c){0.24f, 0.22f, 0.18f, 1.0f};
+    colors[ImGuiCol_TabSelected] = (ImVec4_c){0.22f, 0.20f, 0.16f, 1.0f};
+    colors[ImGuiCol_PlotLines] = accent;
+    colors[ImGuiCol_PlotHistogram] = accent;
+    colors[ImGuiCol_ModalWindowDimBg] = (ImVec4_c){0.0f, 0.0f, 0.0f, 0.64f};
+    /* Colors the dark style would otherwise leave blue. */
+    colors[ImGuiCol_CheckboxSelectedBg] = colors[ImGuiCol_FrameBg];
+    colors[ImGuiCol_ResizeGripHovered] = accent_dim;
+    colors[ImGuiCol_ResizeGripActive] = accent;
+    colors[ImGuiCol_TabSelectedOverline] = accent;
+    colors[ImGuiCol_TabDimmed] = colors[ImGuiCol_Tab];
+    colors[ImGuiCol_TabDimmedSelected] = colors[ImGuiCol_TabSelected];
+    colors[ImGuiCol_TabDimmedSelectedOverline] = accent_dim;
+    colors[ImGuiCol_DockingPreview] = (ImVec4_c){accent.x, accent.y, accent.z, 0.5f};
+    colors[ImGuiCol_TextLink] = accent;
+    colors[ImGuiCol_TextSelectedBg] = (ImVec4_c){accent.x, accent.y, accent.z, 0.35f};
+    colors[ImGuiCol_DragDropTarget] = accent;
+    colors[ImGuiCol_NavCursor] = accent;
+}
+
 /* ---- Public ----------------------------------------------------------------------------------------- */
 
 WPE_Result wpe_editor_ui_create(WPE_Editor* editor, WPE_EditorUi** out_ui) {
@@ -1217,6 +1385,7 @@ WPE_Result wpe_editor_ui_create(WPE_Editor* editor, WPE_EditorUi** out_ui) {
         wpe_free(ui);
         return result;
     }
+    wpe__ui_style();
     *out_ui = ui;
     return WPE_RESULT_OK;
 }
