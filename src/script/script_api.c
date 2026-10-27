@@ -137,6 +137,23 @@ static int wpe__api_set_name(lua_State* L) {
     return 0;
 }
 
+/* Name lookup scans every name: meant for on_start (keep the handle), not for every frame. */
+static int wpe__api_find(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    WPE_EcsPoolView view;
+    if (wpe_ecs_pool_view(wpe__script_host_from(L)->ecs, WPE_COMP_NAME, &view) == WPE_RESULT_OK) {
+        for (uint32_t i = 0; i < view.count; ++i) {
+            const WPE_Name* n = (const WPE_Name*)((const unsigned char*)view.data + (size_t)i * view.stride);
+            if (strcmp(n->value, name) == 0) {
+                lua_pushnumber(L, (double)view.entities[i]);
+                return 1;
+            }
+        }
+    }
+    lua_pushnil(L);
+    return 1;
+}
+
 static int wpe__api_get_parent(lua_State* L) {
     const WPE_Entity entity = wpe__check_entity(L, 1);
     const WPE_Entity parent = wpe_scene_get_parent(wpe__script_host_from(L)->ecs, entity);
@@ -489,6 +506,9 @@ static int wpe__api_add_rigidbody(lua_State* L) {
         body.gravity_scale = wpe__field_number(L, 2, "gravity_scale", body.gravity_scale);
         body.lock_rotation = wpe__field_bool(L, 2, "lock_rotation", body.lock_rotation);
         body.continuous = wpe__field_bool(L, 2, "continuous", body.continuous);
+        lua_getfield(L, 2, "velocity");
+        if (!lua_isnil(L, -1)) body.initial_velocity = wpe__check_vec3(L, -1);
+        lua_pop(L, 1);
     }
     /* Re-fetch after raising calls; private fields of an existing body are carried over unchanged. */
     WPE_RigidBody* stored = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_PHYSICS_RIGIDBODY);
@@ -788,6 +808,350 @@ static int wpe__api_get_volume(lua_State* L) {
     return 1;
 }
 
+/* ---- Input ----------------------------------------------------------------------------------------- */
+
+static WPE_Input* wpe__input(lua_State* L) {
+    WPE_Input* input = wpe__script_host_from(L)->input;
+    if (!input) luaL_errorL(L, "input is not enabled for this game");
+    return input;
+}
+
+/* Players are numbered 1..WPE_INPUT_MAX_PLAYERS in Luau. */
+static uint32_t wpe__check_player(lua_State* L, int index) {
+    const double player = luaL_checknumber(L, index);
+    if (!(player >= 1.0 && player <= (double)WPE_INPUT_MAX_PLAYERS && player == floor(player)))
+        luaL_errorL(L, "argument #%d: player must be a whole number from 1 to %u", index,
+                    WPE_INPUT_MAX_PLAYERS);
+    return (uint32_t)player - 1u;
+}
+
+/* Optional player argument: nil means any player (every device). */
+static uint32_t wpe__opt_player(lua_State* L, int index) {
+    return lua_isnoneornil(L, index) ? WPE_INPUT_ANY_PLAYER : wpe__check_player(L, index);
+}
+
+static WPE_InputAction wpe__check_action(lua_State* L, WPE_Input* input, int index) {
+    const char* name = luaL_checkstring(L, index);
+    const WPE_InputAction action = wpe_input_find_action(input, name);
+    if (action == WPE_INPUT_ACTION_NONE) luaL_errorL(L, "unknown input action '%s'", name);
+    return action;
+}
+
+static WPE_Key wpe__check_key(lua_State* L, int index) {
+    const char* name = luaL_checkstring(L, index);
+    WPE_Key key = WPE_KEY_UNKNOWN;
+    if (!wpe_input_key_from_name(name, &key)) luaL_errorL(L, "unknown key name '%s'", name);
+    return key;
+}
+
+static WPE_MouseButton wpe__check_mouse_button(lua_State* L, int index) {
+    const char* name = luaL_checkstring(L, index);
+    WPE_MouseButton button = WPE_MOUSE_LEFT;
+    if (!wpe_input_mouse_button_from_name(name, &button)) luaL_errorL(L, "unknown mouse button '%s'", name);
+    return button;
+}
+
+static WPE_GamepadButton wpe__check_pad_button(lua_State* L, int index) {
+    const char* name = luaL_checkstring(L, index);
+    WPE_GamepadButton button = WPE_PAD_SOUTH;
+    if (!wpe_input_pad_button_from_name(name, &button)) luaL_errorL(L, "unknown gamepad button '%s'", name);
+    return button;
+}
+
+static WPE_GamepadAxis wpe__check_pad_axis(lua_State* L, int index) {
+    const char* name = luaL_checkstring(L, index);
+    WPE_GamepadAxis axis = WPE_PAD_LEFT_X;
+    if (!wpe_input_pad_axis_from_name(name, &axis)) luaL_errorL(L, "unknown gamepad axis '%s'", name);
+    return axis;
+}
+
+static int wpe__api_action_down(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_InputAction action = wpe__check_action(L, input, 1);
+    lua_pushboolean(L, wpe_input_action_down(input, action, wpe__opt_player(L, 2)));
+    return 1;
+}
+
+static int wpe__api_action_pressed(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_InputAction action = wpe__check_action(L, input, 1);
+    lua_pushboolean(L, wpe_input_action_pressed(input, action, wpe__opt_player(L, 2)));
+    return 1;
+}
+
+static int wpe__api_action_released(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_InputAction action = wpe__check_action(L, input, 1);
+    lua_pushboolean(L, wpe_input_action_released(input, action, wpe__opt_player(L, 2)));
+    return 1;
+}
+
+static int wpe__api_action_value(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_InputAction action = wpe__check_action(L, input, 1);
+    lua_pushnumber(L, wpe_input_action_value(input, action, wpe__opt_player(L, 2)));
+    return 1;
+}
+
+static int wpe__api_key_down(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    lua_pushboolean(L, wpe_input_key_down(input, wpe__check_key(L, 1)));
+    return 1;
+}
+
+static int wpe__api_key_pressed(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    lua_pushboolean(L, wpe_input_key_pressed(input, wpe__check_key(L, 1)));
+    return 1;
+}
+
+static int wpe__api_key_released(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    lua_pushboolean(L, wpe_input_key_released(input, wpe__check_key(L, 1)));
+    return 1;
+}
+
+static int wpe__api_mouse_down(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    lua_pushboolean(L, wpe_input_mouse_down(input, wpe__check_mouse_button(L, 1)));
+    return 1;
+}
+
+static int wpe__api_mouse_pressed(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    lua_pushboolean(L, wpe_input_mouse_pressed(input, wpe__check_mouse_button(L, 1)));
+    return 1;
+}
+
+static int wpe__api_mouse_released(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    lua_pushboolean(L, wpe_input_mouse_released(input, wpe__check_mouse_button(L, 1)));
+    return 1;
+}
+
+static int wpe__api_mouse_position(lua_State* L) {
+    float x = 0.0f, y = 0.0f;
+    wpe_input_mouse_position(wpe__input(L), &x, &y);
+    lua_pushnumber(L, x);
+    lua_pushnumber(L, y);
+    return 2;
+}
+
+static int wpe__api_mouse_delta(lua_State* L) {
+    float x = 0.0f, y = 0.0f;
+    wpe_input_mouse_delta(wpe__input(L), &x, &y);
+    lua_pushnumber(L, x);
+    lua_pushnumber(L, y);
+    return 2;
+}
+
+static int wpe__api_mouse_wheel(lua_State* L) {
+    float x = 0.0f, y = 0.0f;
+    wpe_input_mouse_wheel(wpe__input(L), &x, &y);
+    lua_pushnumber(L, y);
+    return 1;
+}
+
+static int wpe__api_set_mouse_captured(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    wpe_input_set_mouse_captured(input, luaL_checkboolean(L, 1));
+    return 0;
+}
+
+static int wpe__api_is_mouse_captured(lua_State* L) {
+    lua_pushboolean(L, wpe_input_mouse_captured(wpe__input(L)));
+    return 1;
+}
+
+static int wpe__api_gamepad_count(lua_State* L) {
+    lua_pushnumber(L, wpe_input_gamepad_count(wpe__input(L)));
+    return 1;
+}
+
+static int wpe__api_gamepad_connected(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    lua_pushboolean(L, wpe_input_gamepad_connected(input, wpe__check_player(L, 1)));
+    return 1;
+}
+
+static int wpe__api_gamepad_name(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const char* name = wpe_input_gamepad_name(input, wpe__check_player(L, 1));
+    if (name) {
+        lua_pushstring(L, name);
+    } else {
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+static int wpe__api_gamepad_down(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_GamepadButton button = wpe__check_pad_button(L, 1);
+    lua_pushboolean(L, wpe_input_gamepad_down(input, wpe__opt_player(L, 2), button));
+    return 1;
+}
+
+static int wpe__api_gamepad_pressed(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_GamepadButton button = wpe__check_pad_button(L, 1);
+    lua_pushboolean(L, wpe_input_gamepad_pressed(input, wpe__opt_player(L, 2), button));
+    return 1;
+}
+
+static int wpe__api_gamepad_released(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_GamepadButton button = wpe__check_pad_button(L, 1);
+    lua_pushboolean(L, wpe_input_gamepad_released(input, wpe__opt_player(L, 2), button));
+    return 1;
+}
+
+static int wpe__api_gamepad_axis(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_GamepadAxis axis = wpe__check_pad_axis(L, 1);
+    lua_pushnumber(L, wpe_input_gamepad_axis(input, wpe__opt_player(L, 2), axis));
+    return 1;
+}
+
+static int wpe__api_rumble(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const float low = (float)luaL_checknumber(L, 1);
+    const float high = (float)luaL_checknumber(L, 2);
+    const float seconds = (float)luaL_checknumber(L, 3);
+    const uint32_t player = wpe__opt_player(L, 4);
+    bool any = false;
+    for (uint32_t p = 0; p < WPE_INPUT_MAX_PLAYERS; ++p) {
+        if (player == WPE_INPUT_ANY_PLAYER || player == p)
+            any |= wpe_input_rumble(input, p, low, high, seconds) == WPE_RESULT_OK;
+    }
+    lua_pushboolean(L, any);
+    return 1;
+}
+
+/* ---- Application: scenes, camera, exit ------------------------------------------------------------- */
+
+static const WPE_ScriptApp* wpe__app(lua_State* L, bool available, const char* function) {
+    if (!available) luaL_errorL(L, "wpe.%s is not available in this application", function);
+    return &wpe__script_host_from(L)->app;
+}
+
+static int wpe__api_load_scene(lua_State* L) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_ScriptApp* app = wpe__app(L, host->app.load_scene != NULL, "load_scene");
+    const char* path = luaL_checkstring(L, 1);
+    if (!wpe_vfs_path_is_valid(path) || !wpe_vfs_exists(wpe_asset_manager_vfs(host->assets), path))
+        luaL_errorL(L, "wpe.load_scene: scene '%s' not found", path);
+    app->load_scene(app->user_data, path);
+    return 0;
+}
+
+static int wpe__api_quit(lua_State* L) {
+    const WPE_ScriptApp* app = wpe__app(L, wpe__script_host_from(L)->app.quit != NULL, "quit");
+    app->quit(app->user_data);
+    return 0;
+}
+
+static int wpe__api_set_camera(lua_State* L) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_ScriptApp* app = wpe__app(L, host->app.set_camera != NULL, "set_camera");
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    if (!wpe_ecs_has_component(host->ecs, entity, WPE_COMP_CAMERA))
+        luaL_errorL(L, "entity 0x%08x has no camera", entity);
+    app->set_camera(app->user_data, entity);
+    return 0;
+}
+
+static int wpe__api_get_camera(lua_State* L) {
+    const WPE_ScriptApp* app = wpe__app(L, wpe__script_host_from(L)->app.get_camera != NULL, "get_camera");
+    const WPE_Entity camera = app->get_camera(app->user_data);
+    if (camera != WPE_ENTITY_NULL) {
+        lua_pushnumber(L, (double)camera);
+    } else {
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+static int wpe__api_screen_size(lua_State* L) {
+    const WPE_ScriptApp* app = wpe__app(L, wpe__script_host_from(L)->app.screen_size != NULL, "screen_size");
+    uint32_t width = 0, height = 0;
+    app->screen_size(app->user_data, &width, &height);
+    lua_pushnumber(L, width);
+    lua_pushnumber(L, height);
+    return 2;
+}
+
+/* ---- 2D drawing ------------------------------------------------------------------------------------ */
+
+static WPE_Draw2D* wpe__draw2d(lua_State* L) {
+    WPE_Draw2D* draw2d = wpe__script_host_from(L)->draw2d;
+    if (!draw2d) luaL_errorL(L, "2D drawing is not enabled for this game");
+    return draw2d;
+}
+
+static const WPE_BitmapFont* wpe__font(lua_State* L) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_BitmapFont* font = wpe_asset_font(host->assets, host->font);
+    if (!font) luaL_errorL(L, "text drawing needs a font (none configured for this game)");
+    return font;
+}
+
+/* Colors are numbers 0xAARRGGBB (see wpe.color); nil = opaque white. */
+static WPE_Color wpe__opt_color(lua_State* L, int index) {
+    if (lua_isnoneornil(L, index)) return 0xFFFFFFFFu;
+    const double value = luaL_checknumber(L, index);
+    if (!(value >= 0.0 && value <= (double)UINT32_MAX && value == floor(value)))
+        luaL_errorL(L, "argument #%d is not a color (use wpe.color(r, g, b, a))", index);
+    return (WPE_Color)value;
+}
+
+static float wpe__opt_scale(lua_State* L, int index) {
+    const float scale = (float)luaL_optnumber(L, index, 1.0);
+    if (!(scale > 0.0f && scale <= 64.0f)) luaL_errorL(L, "argument #%d: scale must be in (0, 64]", index);
+    return scale;
+}
+
+static int wpe__api_color(lua_State* L) {
+    double channels[4] = {luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3),
+                          luaL_optnumber(L, 4, 1.0)};
+    uint32_t bytes[4];
+    for (int i = 0; i < 4; ++i) {
+        const double c = channels[i] < 0.0 ? 0.0 : channels[i] > 1.0 ? 1.0 : channels[i];
+        bytes[i] = (uint32_t)(c * 255.0 + 0.5);
+    }
+    lua_pushnumber(L, (double)((bytes[3] << 24) | (bytes[0] << 16) | (bytes[1] << 8) | bytes[2]));
+    return 1;
+}
+
+static int wpe__api_draw_text(lua_State* L) {
+    WPE_Draw2D* draw2d = wpe__draw2d(L);
+    const float x = (float)luaL_checknumber(L, 1);
+    const float y = (float)luaL_checknumber(L, 2);
+    const char* text = luaL_checkstring(L, 3);
+    const WPE_Color color = wpe__opt_color(L, 4);
+    const float scale = wpe__opt_scale(L, 5);
+    wpe_draw2d_text(draw2d, wpe__font(L), x, y, text, color, scale);
+    return 0;
+}
+
+static int wpe__api_draw_rect(lua_State* L) {
+    WPE_Draw2D* draw2d = wpe__draw2d(L);
+    const WPE_Rect rect = {(float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2),
+                           (float)luaL_checknumber(L, 3), (float)luaL_checknumber(L, 4)};
+    wpe_draw2d_rect(draw2d, rect, wpe__opt_color(L, 5));
+    return 0;
+}
+
+static int wpe__api_text_size(lua_State* L) {
+    const char* text = luaL_checkstring(L, 1);
+    const float scale = wpe__opt_scale(L, 2);
+    uint32_t width = 0, height = 0;
+    wpe_font_measure(wpe__font(L), text, &width, &height);
+    lua_pushnumber(L, (double)width * scale);
+    lua_pushnumber(L, (double)height * scale);
+    return 2;
+}
+
 /* ---- Time ------------------------------------------------------------------------------------------ */
 
 static int wpe__api_time(lua_State* L) {
@@ -809,6 +1173,7 @@ static const luaL_Reg wpe__api[] = {
     {"is_alive", wpe__api_is_alive},
     {"get_name", wpe__api_get_name},
     {"set_name", wpe__api_set_name},
+    {"find", wpe__api_find},
     {"get_parent", wpe__api_get_parent},
     {"set_parent", wpe__api_set_parent},
     {"children", wpe__api_children},
@@ -852,6 +1217,38 @@ static const luaL_Reg wpe__api[] = {
     {"stop_music", wpe__api_stop_music},
     {"set_volume", wpe__api_set_volume},
     {"get_volume", wpe__api_get_volume},
+    {"action_down", wpe__api_action_down},
+    {"action_pressed", wpe__api_action_pressed},
+    {"action_released", wpe__api_action_released},
+    {"action_value", wpe__api_action_value},
+    {"key_down", wpe__api_key_down},
+    {"key_pressed", wpe__api_key_pressed},
+    {"key_released", wpe__api_key_released},
+    {"mouse_down", wpe__api_mouse_down},
+    {"mouse_pressed", wpe__api_mouse_pressed},
+    {"mouse_released", wpe__api_mouse_released},
+    {"mouse_position", wpe__api_mouse_position},
+    {"mouse_delta", wpe__api_mouse_delta},
+    {"mouse_wheel", wpe__api_mouse_wheel},
+    {"set_mouse_captured", wpe__api_set_mouse_captured},
+    {"is_mouse_captured", wpe__api_is_mouse_captured},
+    {"gamepad_count", wpe__api_gamepad_count},
+    {"gamepad_connected", wpe__api_gamepad_connected},
+    {"gamepad_name", wpe__api_gamepad_name},
+    {"gamepad_down", wpe__api_gamepad_down},
+    {"gamepad_pressed", wpe__api_gamepad_pressed},
+    {"gamepad_released", wpe__api_gamepad_released},
+    {"gamepad_axis", wpe__api_gamepad_axis},
+    {"rumble", wpe__api_rumble},
+    {"load_scene", wpe__api_load_scene},
+    {"quit", wpe__api_quit},
+    {"set_camera", wpe__api_set_camera},
+    {"get_camera", wpe__api_get_camera},
+    {"screen_size", wpe__api_screen_size},
+    {"color", wpe__api_color},
+    {"draw_text", wpe__api_draw_text},
+    {"draw_rect", wpe__api_draw_rect},
+    {"text_size", wpe__api_text_size},
     {"time", wpe__api_time},
     {"frame", wpe__api_frame},
     {NULL, NULL},

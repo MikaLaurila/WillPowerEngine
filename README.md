@@ -15,17 +15,28 @@ agents can drive fully, and it exports standalone game executables.
 > - Box3D rigid body physics with colliders, triggers, raycasts and script collision callbacks
 > - 3D audio (miniaudio) with streamed music, and a virtual file system with zstd `.pak` archives
 >   and reference-counted assets (see [docs/assets.md](docs/assets.md))
+> - Keyboard, mouse and gamepad input with named actions; JSON scene and project files; a game
+>   runtime and export to a single standalone executable (see [docs/runtime.md](docs/runtime.md)
+>   and [docs/scenes.md](docs/scenes.md))
 >
 > See [CHANGELOG.md](CHANGELOG.md) for progress.
 
-Try the demos after building:
+Play the demo game (keyboard and mouse or a gamepad) and export it:
+
+```bash
+./build/bin/wpe_runtime --project assets                         # the game in assets/ (--watch: hot reload)
+./build/bin/wpe_runtime --project assets --scene scenes/test_full.scene   # the master test scene
+./build/bin/wpe_export assets demo_game.exe                      # one self-contained executable
+```
+
+The engine samples:
 
 ```bash
 ./build/samples/spinning_cubes                                   # --width 640 --height 480 --scale 2 --workers N
 ./build/samples/model_viewer assets/meshes/damaged_helmet.glb    # any .glb/.gltf; --dither, --max-texture N
 ./build/samples/lighting_demo --ssao --fog                       # also --ps1 --chroma --vignette --dither --no-shadows
 ./build/samples/script_demo --watch                              # edit assets/scripts/*.luau while it runs; --debug-physics --mute
-./build/tools/wpe_pak create assets.pak assets && ./build/samples/script_demo --pak assets.pak   # run from an archive
+./build/bin/wpe_pak create assets.pak assets && ./build/samples/script_demo --pak assets.pak     # run from an archive
 ```
 
 ## Documents

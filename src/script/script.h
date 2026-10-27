@@ -48,7 +48,7 @@
  *
  * The Luau-side API (the read-only global `wpe`) is documented in docs/scripting.md.
  *
- * - Dependencies: core, math, ecs, scene, graphics, assets (asset manager, VFS), physics, audio, Luau
+ * - Dependencies: core, math, ecs, scene, graphics, assets (asset manager, VFS), physics, audio, input, Luau
  *   (private)
  * - Thread affinity: main thread only (one VM per host)
  *
@@ -64,25 +64,71 @@
 #include "audio/audio.h"
 #include "core/result.h"
 #include "ecs/ecs.h"
+#include "graphics/draw2d.h"
+#include "input/input.h"
 #include "physics/physics.h"
 
 /** Script component data. Managed by the host; do not modify. */
 typedef struct WPE_Script {
     uint32_t script;  /* Index of the loaded script file in the host. */
     int instance_ref; /* Registry reference of the instance table. */
+    int property_ref; /* Registry reference of the list of property names set from C (or LUA_NOREF). */
     uint8_t state;    /* Private lifecycle state. */
 } WPE_Script;
 
 typedef struct WPE_ScriptHost WPE_ScriptHost;
+
+/**
+ * Services of the application running the scripts (the engine runtime or the editor). Every
+ * function is optional; the matching Luau functions raise an error when it is missing.
+ */
+typedef struct WPE_ScriptApp {
+    void* user_data;
+    /* Requests a scene switch; the application performs it after the current frame. */
+    void (*load_scene)(void* user_data, const char* path);
+    /* Requests the application to exit after the current frame. */
+    void (*quit)(void* user_data);
+    /* Makes an entity the camera the scene is rendered from (and heard from). */
+    void (*set_camera)(void* user_data, WPE_Entity camera);
+    WPE_Entity (*get_camera)(void* user_data);
+    /* Size of the 2D canvas (framebuffer) in pixels. */
+    void (*screen_size)(void* user_data, uint32_t* out_width, uint32_t* out_height);
+} WPE_ScriptApp;
 
 typedef struct WPE_ScriptHostDesc {
     WPE_Ecs* ecs;             /* Borrowed. Scene and graphics components must be registered. */
     WPE_AssetManager* assets; /* Borrowed: scripts and prefabs are asset paths in its VFS. */
     WPE_Physics* physics;     /* Optional, borrowed: enables the physics API and collision callbacks. */
     WPE_Audio* audio;         /* Optional, borrowed: enables the audio API. */
+    WPE_Input* input;         /* Optional, borrowed: enables the input API. */
+    /* Optional, borrowed: enables 2D drawing (the application begins and submits the batch each
+     * frame). Text needs `font` too, a WPE_ASSET_FONT handle the host keeps a reference to. */
+    WPE_Draw2D* draw2d;
+    WPE_AssetHandle font;
+    const WPE_ScriptApp* app; /* Optional; copied. */
     size_t memory_limit;      /* VM heap limit in bytes (0 = 64 MiB). */
     double time_limit_ms;     /* Budget per callback invocation (0 = 250 ms). */
 } WPE_ScriptHostDesc;
+
+typedef enum WPE_ScriptValueType {
+    WPE_SCRIPT_VALUE_NIL = 0,
+    WPE_SCRIPT_VALUE_NUMBER,
+    WPE_SCRIPT_VALUE_BOOL,
+    WPE_SCRIPT_VALUE_STRING,
+    WPE_SCRIPT_VALUE_VECTOR,
+} WPE_ScriptValueType;
+
+/** A plain value stored in a script instance field (the field matching `type` is used). */
+typedef struct WPE_ScriptValue {
+    WPE_ScriptValueType type;
+    double number;
+    bool boolean;
+    const char* string; /* Borrowed. */
+    WPE_Vec3 vector;
+} WPE_ScriptValue;
+
+/** Receives one property; `name` and `value->string` are valid only during the call. */
+typedef void (*WPE_ScriptPropertyFn)(const char* name, const WPE_ScriptValue* value, void* user_data);
 
 typedef struct WPE_ScriptStats {
     uint32_t scripts;   /* Loaded script files. */
@@ -183,6 +229,38 @@ WPE_Result wpe_script_host_register_prefab(WPE_ScriptHost* host, const char* nam
 
 /** @return Current statistics. @thread_safety Main thread */
 WPE_ScriptStats wpe_script_host_stats(const WPE_ScriptHost* host);
+
+/** @return The asset path of the entity's script (borrowed from the host), or NULL if it has none.
+ * @thread_safety Main thread */
+const char* wpe_script_path(const WPE_ScriptHost* host, WPE_Entity entity);
+
+/**
+ * Sets a property of an entity's script instance: the field `self[name]`, assigned before on_start
+ * when set right after wpe_script_attach() (scene files use this to configure scripts). Properties
+ * set this way are remembered so wpe_script_visit_properties() can save their current values.
+ *
+ * @param name An identifier ([A-Za-z_][A-Za-z0-9_]*, at most 63 bytes) other than "entity".
+ * @param value Number, boolean, string or vector (NIL removes the field and the property).
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_NOT_FOUND (no script on the
+ *         entity); WPE_RESULT_ERROR_INVALID_ARG (bad name or value type; logged);
+ *         WPE_RESULT_ERROR_OUT_OF_MEMORY.
+ *
+ * @thread_safety Main thread
+ */
+WPE_Result wpe_script_set_property(WPE_ScriptHost* host, WPE_Entity entity, const char* name,
+                                   const WPE_ScriptValue* value);
+
+/**
+ * Calls `fn` for each property set with wpe_script_set_property(), in the order they were first
+ * set, with the field's current value (scripts may have changed it). Fields that now hold another
+ * kind of value (a table, a function, nil) are skipped.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_NOT_FOUND (no script).
+ *
+ * @thread_safety Main thread; `fn` must not call into the host
+ */
+WPE_Result wpe_script_visit_properties(const WPE_ScriptHost* host, WPE_Entity entity, WPE_ScriptPropertyFn fn,
+                                       void* user_data);
 
 /**
  * Compiles and runs a chunk of Luau code in a fresh sandboxed environment (tools, consoles,

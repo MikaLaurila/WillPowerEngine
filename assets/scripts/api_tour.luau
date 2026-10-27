@@ -1,5 +1,7 @@
--- Exercises every function of the `wpe` scripting API. Used by the scripting integration test
--- (which runs it for 60 simulated seconds) and as a living reference. Fails loudly via assert.
+-- Exercises every function of the `wpe` scripting API. Part of the master test scene
+-- (scenes/test_full.scene), which the scene test runs for 60 simulated seconds, and a living
+-- reference. Fails loudly via assert. wpe.load_scene and wpe.quit end the scene, so the engine tests
+-- cover them instead.
 local Tour = {}
 
 local function near(a, b, eps)
@@ -18,6 +20,8 @@ function Tour:on_start()
 	wpe.set_name(e, "tour")
 	assert(wpe.get_name(e) == "tour")
 	assert(wpe.is_alive(e))
+	assert(wpe.find("tour") == e) -- look entities up by name once, then keep the handle
+	assert(wpe.find("no such entity") == nil)
 
 	-- Transforms.
 	wpe.set_position(e, vector.create(1, 2, 3))
@@ -74,6 +78,7 @@ function Tour:on_start()
 		gravity_scale = 1,
 		lock_rotation = false,
 		continuous = true,
+		velocity = vector.create(0, 0.5, 0), -- initial velocity
 	})
 	wpe.add_collider(self.ball, { shape = wpe.COLLIDER_SPHERE, radius = 0.5, density = 2, friction = 0.5, restitution = 0.1 })
 	wpe.set_velocity(self.ball, vector.create(0, 1, 0))
@@ -127,6 +132,42 @@ function Tour:on_start()
 	wpe.set_volume(wpe.BUS_EFFECTS, 0.8)
 	assert(near(wpe.get_volume(wpe.BUS_EFFECTS), 0.8))
 
+	-- Input. The scene test runs headless (no keyboard or mouse); gamepads are optional, so their
+	-- results are only checked for type. Player 4 has neither the keyboard nor (normally) a pad.
+	assert(wpe.action_value("move_x", 4) == 0 and not wpe.action_down("jump", 4))
+	assert(not wpe.action_pressed("release_mouse") and not wpe.action_released("release_mouse"))
+	assert(not pcall(wpe.action_value, "no_such_action"))
+	assert(not wpe.key_down("space") and not wpe.key_pressed("w") and not wpe.key_released("escape"))
+	assert(not pcall(wpe.key_down, "not a key"))
+	assert(not wpe.mouse_down("left") and not wpe.mouse_pressed("right") and not wpe.mouse_released("middle"))
+	local mx, my = wpe.mouse_position()
+	local dx, dy = wpe.mouse_delta()
+	assert(type(mx) == "number" and type(my) == "number" and dx == 0 and dy == 0 and wpe.mouse_wheel() == 0)
+	wpe.set_mouse_captured(false)
+	assert(not wpe.is_mouse_captured())
+	assert(wpe.gamepad_count() >= 0)
+	assert(type(wpe.gamepad_connected(1)) == "boolean")
+	assert(wpe.gamepad_connected(1) or wpe.gamepad_name(1) == nil)
+	assert(type(wpe.gamepad_down("south")) == "boolean" and type(wpe.gamepad_pressed("start", 2)) == "boolean")
+	assert(type(wpe.gamepad_released("dpad_up", 1)) == "boolean")
+	assert(math.abs(wpe.gamepad_axis("left_x")) <= 1 and wpe.gamepad_axis("right_trigger", 3) >= 0)
+	assert(type(wpe.rumble(0, 0, 0)) == "boolean") -- whether a pad accepted it
+	assert(not pcall(wpe.gamepad_axis, "left_z"))
+
+	-- Application services: canvas size and the camera rendered from.
+	local width, height = wpe.screen_size()
+	assert(width > 0 and height > 0)
+	local camera = wpe.get_camera()
+	assert(camera ~= nil)
+	wpe.set_camera(camera)
+	assert(not pcall(wpe.set_camera, e)) -- the tour has no camera component
+	assert(not pcall(wpe.load_scene, "scenes/missing.scene"))
+
+	-- 2D drawing (also every frame in on_update).
+	local tw, th = wpe.text_size("tour", 2)
+	assert(tw > 0 and th > 0)
+	assert(wpe.color(1, 0, 0) == 0xFFFF0000)
+
 	self.updates = 0
 	self.fixed = 0
 end
@@ -148,6 +189,8 @@ function Tour:on_update(dt)
 		assert(wpe.get_position(self.ball).y < 0.55, "the ball should rest on the ground")
 	end
 	assert(wpe.time() >= 0 and wpe.frame() >= 0)
+	wpe.draw_rect(256, 0, 64, 10, wpe.color(0.1, 0.2, 0.4, 0.7))
+	wpe.draw_text(258, 2, "tour " .. self.updates, wpe.color(1, 1, 1), 1)
 end
 
 function Tour:on_fixed_update(dt)

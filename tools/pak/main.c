@@ -30,83 +30,17 @@ static int usage(void) {
     return EXIT_FAILURE;
 }
 
-typedef struct PathList {
-    char** paths;
-    uint32_t count, capacity;
-    uint32_t skipped;
-    bool out_of_memory;
-} PathList;
-
-static bool collect(const char* path, void* user_data) {
-    PathList* list = user_data;
-    if (!wpe_vfs_path_is_valid(path)) {
-        fprintf(stderr, "skipping '%s': not a valid asset path\n", path);
-        ++list->skipped;
-        return true;
-    }
-    if (list->count == list->capacity) {
-        const uint32_t capacity = list->capacity ? list->capacity * 2 : 256;
-        char** paths = wpe_realloc(list->paths, (size_t)capacity * sizeof *paths);
-        if (!paths) {
-            list->out_of_memory = true;
-            return false;
-        }
-        list->paths = paths;
-        list->capacity = capacity;
-    }
-    const size_t length = strlen(path);
-    char* copy = wpe_alloc(length + 1);
-    if (!copy) {
-        list->out_of_memory = true;
-        return false;
-    }
-    memcpy(copy, path, length + 1);
-    list->paths[list->count++] = copy;
-    return true;
-}
-
-static int compare_paths(const void* a, const void* b) {
-    return strcmp(*(char* const*)a, *(char* const*)b);
-}
-
 static int command_create(const char* archive, const char* directory, int level) {
-    PathList list = {0};
-    WPE_Result result = wpe_directory_walk(directory, collect, &list);
-    if (result == WPE_RESULT_ERROR_NOT_FOUND) fprintf(stderr, "'%s' is not a directory\n", directory);
-    if (list.out_of_memory) result = WPE_RESULT_ERROR_OUT_OF_MEMORY;
-    if (list.count > 1) qsort(list.paths, list.count, sizeof *list.paths, compare_paths);
-
-    WPE_PakWriter* writer = NULL;
-    if (result == WPE_RESULT_OK) result = wpe_pak_writer_create(archive, level, &writer);
-    uint64_t total = 0;
-    for (uint32_t i = 0; i < list.count && result == WPE_RESULT_OK; ++i) {
-        char full[OS_PATH_MAX];
-        if (snprintf(full, sizeof full, "%s/%s", directory, list.paths[i]) >= (int)sizeof full) {
-            fprintf(stderr, "path too long: %s\n", list.paths[i]);
-            result = WPE_RESULT_ERROR_CAPACITY;
-            break;
-        }
-        void* data = NULL;
-        size_t size = 0;
-        result = wpe_file_read_all(full, &data, &size);
-        if (result == WPE_RESULT_OK) result = wpe_pak_writer_add(writer, list.paths[i], data, size, WPE_PAK_COMPRESS_AUTO);
-        total += size;
-        wpe_free(data);
-    }
-    if (result == WPE_RESULT_OK) result = wpe_pak_writer_finish(writer);
-    wpe_pak_writer_destroy(writer);
-    for (uint32_t i = 0; i < list.count; ++i)
-        wpe_free(list.paths[i]);
-    wpe_free(list.paths);
+    WPE_PakPackStats stats;
+    const WPE_Result result = wpe_pak_create_from_directory(archive, directory, level, &stats);
     if (result != WPE_RESULT_OK) {
         fprintf(stderr, "create failed: %s\n", wpe_result_to_string(result));
         return EXIT_FAILURE;
     }
-    printf("packed %u files (%llu bytes, %u skipped) into %s\n", list.count, (unsigned long long)total, list.skipped,
-           archive);
+    printf("packed %u files (%llu bytes, %u skipped) into %s\n", stats.files, (unsigned long long)stats.bytes,
+           stats.skipped, archive);
     return EXIT_SUCCESS;
 }
-
 static int command_list(const WPE_Pak* pak) {
     uint64_t size = 0, stored = 0;
     for (uint32_t i = 0; i < wpe_pak_entry_count(pak); ++i) {

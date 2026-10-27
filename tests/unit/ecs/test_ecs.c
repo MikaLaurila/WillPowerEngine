@@ -107,6 +107,20 @@ static void test_ecs_register_validates_descriptors(void) {
     wpe_log_set_stderr_enabled(true);
     WPE_TEST_ASSERT_EQ_STR("Position", wpe_ecs_component_name(ecs, COMP_POSITION));
     WPE_TEST_ASSERT(wpe_ecs_component_name(ecs, 40) == NULL);
+    WPE_TEST_ASSERT_EQ_UINT(sizeof(Position), wpe_ecs_component_size(ecs, COMP_POSITION));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_ecs_component_size(ecs, 40));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_ecs_component_size(NULL, COMP_POSITION));
+
+    /* Spawn serials order entities by creation, even when a later entity reuses an older slot. */
+    const WPE_Entity first = wpe_ecs_spawn(ecs);
+    const WPE_Entity second = wpe_ecs_spawn(ecs);
+    WPE_TEST_ASSERT(wpe_ecs_spawn_serial(ecs, first) < wpe_ecs_spawn_serial(ecs, second));
+    WPE_TEST_ASSERT_OK(wpe_ecs_despawn(ecs, first));
+    const WPE_Entity third = wpe_ecs_spawn(ecs); /* Takes the first one's slot. */
+    WPE_TEST_ASSERT(wpe_ecs_spawn_serial(ecs, second) < wpe_ecs_spawn_serial(ecs, third));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_ecs_spawn_serial(ecs, first));
+    WPE_TEST_ASSERT_OK(wpe_ecs_despawn(ecs, second));
+    WPE_TEST_ASSERT_OK(wpe_ecs_despawn(ecs, third));
     wpe_ecs_destroy(ecs);
 }
 

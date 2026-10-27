@@ -19,7 +19,7 @@ Development runs in milestones; the user reviews each one before the next starts
 6. Luau scripting (done)
 7. Box3D physics (done)
 8. Audio, `.pak` archives, VFS and the asset manager (done)
-9. Runtime/export
+9. Runtime/export, scene files and input (done)
 10. Editor
 
 Do not look outside the working directory. Third-party libraries come in through CMake FetchContent, pinned to release tags or commits. Only use the approved list in AGENTS.md §7 (SDL3, cglm, cgltf, stb_image, miniaudio, Luau, cimgui, Box3D, zstd); anything else needs the user's approval. Add each one in the milestone that needs it, wrapped so its API is not exposed in public headers, and compiled *without* `wpe_configure_target` so its warnings don't break the build.
@@ -43,8 +43,11 @@ WPE_UPDATE_GOLDEN=1 ctest --test-dir build -R golden    # regenerate golden PNGs
 ./build/samples/lighting_demo --frames 2 --time 3 --screenshot out.png --shadow-map shadow.png   # + --ssao --fog --ps1 ...
 ./build/samples/script_demo --watch                               # edit assets/scripts/*.luau while it runs
 ./build/samples/script_demo --frames 150 --debug-physics --screenshot out.png   # collider wireframes (headless: no audio device)
-./build/tools/wpe_pak create out.pak assets && ./build/samples/script_demo --pak out.pak   # run from an archive (also list/verify/extract)
-ctest --test-dir build -L integration                             # 60 s simulated run of every scripting API
+./build/bin/wpe_pak create out.pak assets && ./build/samples/script_demo --pak out.pak     # run from an archive (also list/verify/extract)
+./build/bin/wpe_runtime --project assets                          # play the demo game (assets/ is a project; --watch hot-reloads)
+./build/bin/wpe_runtime --project assets --scene scenes/test_full.scene --headless --frames 300 --fixed-dt 0.0333 --screenshot out.png
+./build/bin/wpe_export assets out/demo.exe                        # standalone game: the runtime with the project appended as a .pak
+ctest --test-dir build -L integration                             # the master test scene for 60 simulated seconds (every scripting API)
 ```
 
 miniaudio is compiled from its `miniaudio.c` in `src/audio` (`-O2 -w`) with `MA_NO_RESOURCE_MANAGER MA_NO_ENCODING MA_NO_GENERATION` as *interface* definitions on `wpe_dep_miniaudio`: they change struct layouts, so every includer must see them.
@@ -95,7 +98,7 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - Shaders are C functions called concurrently from worker threads; varyings are capped at 32 (`WPE_MAX_VARYINGS`).
   - Output is deterministic across thread counts, and steady-state frames don't allocate; tests enforce both.
   - The rasterizer files are always compiled with `-O2`, even in Debug.
-- **platform** (`platform/platform.h`): the SDL3 window, presenting (nearest-neighbour, letterboxed), time, PNG load/save, and UTF-8-safe `wpe_file_read_all`. Only `jobs` and `platform` may include SDL.
+- **platform** (`platform/platform.h`): the SDL3 window, presenting (nearest-neighbour, letterboxed), event pumping, time, PNG load/save, file streams and UTF-8-safe `wpe_file_read_all`. Only `jobs`, `platform` and `input` may include SDL.
 - **renderer textures** (`renderer/texture.h`):
   - Textures are mipmapped, with sRGB-correct mip generation, and have an optional `max_dimension` downscale.
   - For LOD selection, a program sets `uv_derivatives`/`uv_varying`, and the rasterizer then provides exact per-pixel `uv_dx`/`uv_dy`.
@@ -124,7 +127,7 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - Luau is built with `LUA_USE_LONGJMP=1`, so script errors unwind with `longjmp` rather than C++ exceptions. API bindings in `script_api.c` must therefore validate all arguments (which may raise) *before* touching engine state, and must never hold engine allocations across calls that can raise.
   - Host-side Luau operations run inside `lua_cpcall`.
   - Never call `lua_settop` in host code that may run nested inside a binding.
-  - The `wpe` table is read-only once sandboxed. To add an API function, add it to `wpe__api[]`, `docs/scripting.md` and `assets/scripts/api_tour.luau`, which the 60-second integration test runs.
+  - The `wpe` table is read-only once sandboxed. To add an API function, add it to `wpe__api[]`, `docs/scripting.md` and `assets/scripts/api_tour.luau`, which runs inside the master test scene (`assets/scenes/test_full.scene`, 60-second `integration_full_scene` test). Functions that end the scene (`wpe.load_scene`, `wpe.quit`) are covered by the engine tests instead.
 - **physics** (`physics/physics.h`, Box3D private): one `WPE_Physics` per world registers `WPE_COMP_PHYSICS_RIGIDBODY`/`COLLIDER`; destroy it before the world.
   - Bodies and shapes are created lazily in `wpe_physics_step` (or immediately by `wpe_physics_refresh`). Component settings and world scale are read only at creation, so call refresh after changing them.
   - A body is matched to its entity through `body_entities[b3BodyId.index1]`, not Box3D `userData` (clang-tidy rejects integer-to-pointer casts, and the codebase uses no NOLINT).
@@ -134,15 +137,22 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
 - **vfs** (`vfs/vfs.h`, `vfs/pak.h`; format and tool in `docs/assets.md`): asset paths over mounted directories and `.pak` archives; later mounts win. Reads are thread-safe (each read opens its own stream), mounting is not. Validate or normalize user paths with `wpe_vfs_path_is_valid`/`wpe_vfs_path_normalize`. zstd allocates through `wpe_alloc` via `ZSTD_customMem`.
 - **asset manager** (`assets/asset_manager.h`): generational, ref-counted `WPE_AssetHandle`s cached by (type, normalized path). Every component that references an asset holds its own reference from its add hook to its remove hook (colliders take it in `on_add` and swap it only if `model` changes before a rebuild). Code-made assets go in with `wpe_asset_add`. A reference left at shutdown is reported as a leak warning.
 - **audio** (`audio/audio.h`, miniaudio): sounds are `WPE_ASSET_SOUND` assets decoded to native-rate float PCM; voices (max 64) read them through `ma_audio_buffer` and resample on playback. Music streams through a custom `ma_vfs` over the engine VFS on the mixing thread. Voices hold sound references; finished voices are recycled (and release them) in `wpe_audio_update`. Without a device, `wpe_audio_render` drives the mixer, which is how tests and headless runs work. The bus count is a `#define` because a `_COUNT` enumerator next to a vector union trips clang-tidy's tagged-union check.
+- **input** (`input/input.h`, SDL private): keys are physical (HID codes), mouse coordinates are framebuffer pixels, gamepads take player slots 0..3 (hot-plug, dead zones, rumble), and named actions bind across devices. Per frame: `wpe_input_begin_frame` → `wpe_input_handle_event` (fed with opaque `WPE_PlatformEvent`s by `wpe_window_set_event_handler` or `wpe_platform_poll_events`) → `wpe_input_update`. Tests use real SDL events and SDL virtual joysticks (link `wpe_dep_sdl3`). Luau players are 1-based, C slots 0-based.
+- **engine** (`engine/engine.h`; docs in `docs/scenes.md`, `docs/runtime.md`): `WPE_Engine` owns every subsystem and runs the frame. Its script services (`WPE_ScriptApp`: load_scene, quit, camera, screen size) and the 2D drawing it gives scripts are optional in `WPE_ScriptHostDesc`, so plain hosts raise on those functions.
+  - Scene and project files are strict JSON (`core/json.h`), read through the private helpers in `engine/json_read.h`. Unknown keys are errors.
+  - Scene loads are atomic. Saving is lossless and stable: roots are ordered by `wpe_ecs_spawn_serial`, rotations are kept as written, and degrees are written rounded to 6 digits. The scene round-trip test asserts that a load-save cycle reproduces the text exactly.
+  - `assets/` is the sample project (`project.json`, `scenes/`).
+  - Export embeds a `.pak` in a copy of `wpe_runtime` (trailer magic `WPE_EMBD`). `wpe_runtime` is a GUI program on Windows that links statically.
+  - Executables of `runtime/` and `tools/` build into `build/bin`.
 - **ECS hook order:** on despawn, `on_remove` hooks run in descending type-id order: AudioSource (11), Collider (10) and RigidBody (9) before Script (8), which runs before Hierarchy (2). So the physics body is already gone when `on_destroy` runs.
 - **renderer extras:**
   - `WPE_RenderState.depth_only` writes depth only; the fragment shader may be NULL in that mode. This is used for shadow passes.
   - `WPE_DrawDesc.subdivision_levels/edge_pixels` require `program->vertex_lerp`.
   - `wpe_renderer_framebuffer_for_write` returns NULL while a frame is recording.
-- **Tests:** `tests/framework/wpe_test.h` is a custom runner. Every case automatically fails if it changes the live `wpe_alloc` count (a leak) or triggers an engine `wpe_assert`; use `WPE_TEST_EXPECT_ASSERT` when an assert is expected. Register test executables with `wpe_add_test(...)` in `tests/<category>/CMakeLists.txt`. `tests/framework/wpe_test_assets.h` creates a VFS plus asset manager, adds/loads models with assertions and synthesizes WAV files; tests that write scratch files set `WORKING_DIRECTORY` to the build tree. Categories are `unit/`, `stress/` (label `stress`) and `golden/` (reference PNGs in `tests/golden/references/`, compared with a small tolerance).
+- **Tests:** `tests/framework/wpe_test.h` is a custom runner. Every case automatically fails if it changes the live `wpe_alloc` count (a leak) or triggers an engine `wpe_assert`; use `WPE_TEST_EXPECT_ASSERT` when an assert is expected. Register test executables with `wpe_add_test(...)` in `tests/<category>/CMakeLists.txt`. `tests/framework/wpe_test_assets.h` creates a VFS plus asset manager, adds/loads models with assertions and synthesizes WAV files; tests that write scratch files set `WORKING_DIRECTORY` to the build tree. Categories are `unit/`, `scene/` (the master scene, label `integration`), `stress/` (label `stress`), `tools/` (CMake scripts that drive the executables) and `golden/` (reference PNGs in `tests/golden/references/`, compared with a small tolerance).
 - **graphics debug lines** (`graphics/debug_lines.h`): world-space segments become screen-width quads, depth-tested with a small bias, drawn with sort key `UINT64_MAX - 1` (after the scene, before draw2d). Feed it from `wpe_physics_debug_draw`.
 - **Planned (see AGENTS.md §4–5 and §9):**
-  - Separate `editor/` and `runtime/` executables. The editor must be fully drivable by AI agents.
+  - The `editor/` executable (Milestone 10), built on `WPE_Engine`. It must be fully drivable by AI agents.
 
 ## Conventions that are easy to get wrong
 

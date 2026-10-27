@@ -18,6 +18,7 @@
 #include "core/crc32.h"
 #include "core/debug.h"
 #include "core/fixed_step.h"
+#include "core/json.h"
 #include "core/log.h"
 #include "core/result.h"
 #include "core/version.h"

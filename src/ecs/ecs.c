@@ -280,6 +280,17 @@ const char* wpe_ecs_component_name(const WPE_Ecs* ecs, WPE_ComponentType type) {
     return pool ? pool->name : NULL;
 }
 
+uint64_t wpe_ecs_spawn_serial(const WPE_Ecs* ecs, WPE_Entity entity) {
+    if (!wpe_ecs_is_alive(ecs, entity)) return 0;
+    return ecs->slots[wpe__ecs_index(entity)].spawn_serial;
+}
+
+uint32_t wpe_ecs_component_size(const WPE_Ecs* ecs, WPE_ComponentType type) {
+    if (!ecs) return 0;
+    const wpe__EcsPool* pool = wpe__ecs_registered_pool(ecs, type);
+    return pool ? pool->size : 0;
+}
+
 /* ---- Entities ------------------------------------------------------------------------------------ */
 
 WPE_Entity wpe_ecs_spawn(WPE_Ecs* ecs) {

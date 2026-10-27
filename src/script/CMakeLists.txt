@@ -4,6 +4,6 @@ add_library(wpe_script STATIC
 add_library(wpe::script ALIAS wpe_script)
 
 target_link_libraries(wpe_script
-    PUBLIC wpe::core wpe::ecs wpe::scene wpe::graphics wpe::assets wpe::platform wpe::physics wpe::audio
+    PUBLIC wpe::core wpe::ecs wpe::scene wpe::graphics wpe::assets wpe::platform wpe::physics wpe::audio wpe::input
     PRIVATE wpe_dep_luau)
 wpe_configure_target(wpe_script)

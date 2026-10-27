@@ -19,7 +19,7 @@ function(wpe_add_test name)
 endfunction()
 
 add_subdirectory(unit)
-add_subdirectory(integration)
+add_subdirectory(scene)
 add_subdirectory(stress)
 add_subdirectory(golden)
 
@@ -29,6 +29,14 @@ add_test(NAME tools_pak_roundtrip
             -DWORK=${CMAKE_CURRENT_BINARY_DIR}/pak_roundtrip -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/pak_roundtrip.cmake)
 set_tests_properties(tools_pak_roundtrip PROPERTIES LABELS "tools;vfs" TIMEOUT 300)
 add_dependencies(wpe_tests wpe_pak)
+
+# Export round trip: export the sample project and play the exported executable headless.
+add_test(NAME tools_export_roundtrip
+    COMMAND "${CMAKE_COMMAND}" -DWPE_EXPORT=$<TARGET_FILE:wpe_export> -DWPE_RUNTIME=$<TARGET_FILE:wpe_runtime>
+            -DPROJECT=${PROJECT_SOURCE_DIR}/assets -DWORK=${CMAKE_CURRENT_BINARY_DIR}/export_roundtrip
+            -DSUFFIX=${CMAKE_EXECUTABLE_SUFFIX} -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/export_roundtrip.cmake)
+set_tests_properties(tools_export_roundtrip PROPERTIES LABELS "tools;engine" TIMEOUT 600)
+add_dependencies(wpe_tests wpe_export wpe_runtime)
 
 # Builds every test executable, then runs the whole suite.
 add_custom_target(test_all

@@ -1,0 +1,204 @@
+{
+  "format": "wpe.scene",
+  "version": 1,
+  "environment": {
+    "clear_color": [0.11, 0.125, 0.17],
+    "ambient": [0.16, 0.17, 0.21],
+    "fog": {"mode": "exponential", "color": [0.11, 0.125, 0.17], "density": 0.012},
+    "shadows": {"enabled": true, "map_size": 1024, "distance": 30, "caster_extension": 20, "bias": 0.002},
+    "dither_transparency": false,
+    "frustum_culling": true,
+    "subdivision": {"levels": 3, "edge_pixels": 24},
+    "default_sun": {"enabled": true, "direction": [-0.4, -1, -0.3], "color": [1, 1, 1]},
+    "gravity": [0, -9.81, 0],
+    "postfx": [
+      {"effect": "ssao", "radius_pixels": 6, "strength": 0.6, "depth_range": 1.5, "bias": 0.02},
+      {"effect": "chromatic_aberration", "strength_pixels": 0.75},
+      {"effect": "ps1", "levels": 32, "dither_strength": 0.5},
+      {"effect": "vignette", "strength": 0.3, "radius": 0.8},
+      {"effect": "color_adjust", "enabled": false, "brightness": 0.05, "contrast": 1.1, "saturation": 1.2}
+    ],
+    "music": {"path": "music/ambient.wav", "fade": 1}
+  },
+  "camera": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "main camera",
+      "transform": {"position": [0, 7, 15], "euler": [-22, 0, 0]},
+      "camera": {"fov": 60, "near": 0.1, "far": 500}
+    },
+    {
+      "id": 2,
+      "name": "top camera",
+      "transform": {"position": [0, 30, 0], "euler": [-90, 0, 0]},
+      "camera": {"orthographic": true, "ortho_height": 34, "near": 0.5, "far": 100}
+    },
+    {
+      "id": 3,
+      "name": "sun",
+      "transform": {"euler": [-50, 30, 0]},
+      "light": {"type": "directional", "color": [1, 0.97, 0.9], "intensity": 0.8, "cast_shadows": true}
+    },
+    {
+      "id": 4,
+      "name": "point light",
+      "transform": {"position": [3, 2, 3]},
+      "light": {"type": "point", "color": [1, 0.6, 0.3], "intensity": 2, "range": 7}
+    },
+    {
+      "id": 5,
+      "name": "spot light",
+      "transform": {"position": [0, 6, 0], "euler": [-90, 0, 0]},
+      "light": {"type": "spot", "color": [0.6, 0.8, 1], "intensity": 2, "range": 10, "inner_cone": 15, "outer_cone": 25}
+    },
+    {
+      "id": 6,
+      "name": "ground",
+      "transform": {"position": [0, 0, 0]},
+      "mesh": {"model": "meshes/ground.prim"},
+      "collider": {"shape": "box", "size": [60, 1, 60], "offset": [0, -0.5, 0], "friction": 0.7}
+    },
+    {
+      "id": 7,
+      "name": "tour",
+      "transform": {"position": [0, 0, 0]},
+      "script": {"path": "scripts/api_tour.luau"}
+    },
+    {
+      "id": 8,
+      "name": "spawner",
+      "transform": {"position": [0, 0, 0]},
+      "script": {"path": "scripts/spawner.luau"}
+    },
+    {
+      "id": 9,
+      "name": "orbit light 1",
+      "transform": {"position": [0, 1, 0]},
+      "script": {"path": "scripts/orbit_light.luau"}
+    },
+    {
+      "id": 10,
+      "name": "orbit light 2",
+      "transform": {"position": [0, 1, 0]},
+      "script": {"path": "scripts/orbit_light.luau", "properties": {"radius": 5, "speed": -0.5}}
+    },
+    {
+      "id": 11,
+      "name": "orbit light 3",
+      "transform": {"position": [0, 1, 0]},
+      "script": {"path": "scripts/orbit_light.luau", "properties": {"radius": 7, "height": 2.5}}
+    },
+    {
+      "id": 12,
+      "name": "helmet",
+      "transform": {"position": [0, 1.5, 2]},
+      "instance": {"model": "meshes/damaged_helmet.glb"},
+      "rigidbody": {"type": "kinematic"},
+      "collider": {"shape": "sphere", "size": [0.85, 0.85, 0.85]},
+      "script": {"path": "scripts/spinner.luau", "properties": {"speed": 1.2}}
+    },
+    {
+      "id": 13,
+      "name": "figure",
+      "transform": {"position": [-4, 0, 2], "euler": [0, 30, 0]},
+      "instance": {"model": "meshes/RiggedFigure.glb", "animation": 0, "play": true}
+    },
+    {
+      "id": 14,
+      "name": "convex crate",
+      "transform": {"position": [-3, 3, -3], "euler": [20, 30, 10]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "rigidbody": {"type": "dynamic", "angular_damping": 0.2},
+      "collider": {"shape": "convex", "model": "meshes/crate.prim", "mesh": 0, "density": 0.8}
+    },
+    {
+      "id": 15,
+      "name": "ramp",
+      "transform": {"position": [10, 0.6, -10], "euler": [-10, 0, 0]},
+      "mesh": {"model": "meshes/ramp.prim"},
+      "collider": {"shape": "mesh", "model": "meshes/ramp.prim", "mesh": 0}
+    },
+    {
+      "id": 16,
+      "name": "capsule pillar",
+      "transform": {"position": [-10, 1.5, 0]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "rigidbody": {"type": "kinematic"},
+      "collider": {"shape": "capsule", "size": [0.5, 3, 0]}
+    },
+    {
+      "id": 17,
+      "name": "zone",
+      "transform": {"position": [0, 0.02, -8]},
+      "mesh": {"model": "meshes/zone.prim"},
+      "collider": {"shape": "box", "size": [4, 2, 4], "offset": [0, 1, 0], "trigger": true},
+      "script": {"path": "scripts/trigger_zone.luau"}
+    },
+    {
+      "id": 18,
+      "name": "speaker",
+      "transform": {"position": [5, 1, -5]},
+      "audio_source": {"sound": "sounds/chime.wav", "volume": 0.15, "pitch": 0.5, "min_distance": 1,
+                       "max_distance": 25, "bus": "effects", "loop": true, "spatial": true, "playing": true}
+    },
+    {
+      "id": 19,
+      "name": "group",
+      "transform": {"position": [6, 0.5, 4], "euler": [0, 45, 0]}
+    },
+    {
+      "id": 20,
+      "name": "group child a",
+      "parent": 19,
+      "transform": {"position": [-0.8, 0, 0], "scale": [0.6, 0.6, 0.6]},
+      "mesh": {"model": "meshes/box.prim"}
+    },
+    {
+      "id": 21,
+      "name": "group child b",
+      "parent": 19,
+      "transform": {"position": [0.8, 0, 0], "scale": [0.6, 0.6, 0.6]},
+      "mesh": {"model": "meshes/box.prim", "visible": true}
+    },
+    {
+      "id": 22
+    },
+    {
+      "id": 23,
+      "name": "far",
+      "transform": {"position": [100000, 0, -100000]},
+      "mesh": {"model": "meshes/marker.prim"}
+    },
+    {
+      "id": 24,
+      "name": "tiny",
+      "transform": {"position": [1, 0.5, 6], "scale": [0.0001, 0.0001, 0.0001]},
+      "mesh": {"model": "meshes/box.prim"}
+    },
+    {
+      "id": 25,
+      "name": "huge",
+      "transform": {"position": [0, 0, -3000], "scale": [1000, 1000, 1000]},
+      "mesh": {"model": "meshes/box.prim"}
+    },
+    {
+      "id": 26,
+      "name": "suite",
+      "script": {"path": "scripts/test_suite.luau", "properties": {"spawn_count": 2000}}
+    },
+    {
+      "id": 27,
+      "name": "bouncy ball",
+      "transform": {"position": [2, 4, 0]},
+      "mesh": {"model": "meshes/ball.prim"},
+      "rigidbody": {"type": "dynamic"},
+      "collider": {"shape": "sphere", "size": [0.5, 0.5, 0.5], "restitution": 0.6}
+    },
+    {
+      "id": 28,
+      "name": "game",
+      "script": {"path": "scripts/game.luau", "properties": {"next_scene": "scenes/demo.scene", "title": "Test scene"}}
+    }
+  ]
+}

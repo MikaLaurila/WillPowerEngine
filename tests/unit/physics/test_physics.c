@@ -525,6 +525,35 @@ static void test_physics_velocity_force_and_impulse(void) {
     destroy_world(&f);
 }
 
+static void test_physics_create_bodies_and_initial_velocity(void) {
+    Fixture f = make_world(GRAVITY);
+    const WPE_Entity ground = spawn_ground(f.ecs);
+    WPE_RigidBody body = wpe_rigidbody_default(WPE_BODY_DYNAMIC);
+    body.initial_velocity = wpe_vec3(3.0f, 0.0f, 0.0f);
+    const WPE_Entity ball = spawn_at(f.ecs, wpe_vec3(0.0f, 5.0f, 0.0f));
+    add_body(f.ecs, ball, body);
+    add_collider(f.ecs, ball, wpe_collider_default(WPE_COLLIDER_SPHERE));
+
+    /* Before any step there are no bodies yet... */
+    WPE_Vec3 velocity;
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_physics_get_velocity(f.physics, ball, &velocity));
+    WPE_RaycastHit hit;
+    WPE_TEST_ASSERT(!wpe_physics_raycast(f.physics, wpe_vec3(0, 2, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    /* ...creating them makes the body usable immediately, already moving at its initial velocity. */
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    WPE_TEST_ASSERT_OK(wpe_physics_get_velocity(f.physics, ball, &velocity));
+    WPE_TEST_ASSERT_NEAR(3.0, velocity.x, 1e-6);
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(0, 2, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    WPE_TEST_ASSERT_EQ_UINT(ground, hit.entity);
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_physics_stats(f.physics).bodies);
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics)); /* Nothing left to create. */
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_physics_stats(f.physics).bodies);
+    run(&f, 0.5f);
+    WPE_TEST_ASSERT(transform_of(f.ecs, ball)->position.x > 1.0f);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_physics_create_bodies(NULL));
+    destroy_world(&f);
+}
+
 static void test_physics_refresh_rebuilds_shapes(void) {
     Fixture f = make_world(GRAVITY);
     spawn_ground(f.ecs);
@@ -602,6 +631,7 @@ static void test_physics_debug_draw(void) {
 }
 
 WPE_TEST_MAIN(WPE_TEST_CASE(test_physics_create_validates_world),
+              WPE_TEST_CASE(test_physics_create_bodies_and_initial_velocity),
               WPE_TEST_CASE(test_physics_box_falls_and_comes_to_rest),
               WPE_TEST_CASE(test_physics_restitution_bounces), WPE_TEST_CASE(test_physics_contact_events),
               WPE_TEST_CASE(test_physics_trigger_enter_and_exit), WPE_TEST_CASE(test_physics_raycast),

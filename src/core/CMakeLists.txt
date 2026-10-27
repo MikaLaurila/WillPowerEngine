@@ -6,6 +6,7 @@ add_library(wpe_core STATIC
     crc32.c
     debug.c
     fixed_step.c
+    json.c
     log.c
     result.c)
 add_library(wpe::core ALIAS wpe_core)

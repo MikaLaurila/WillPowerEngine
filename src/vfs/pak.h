@@ -11,6 +11,10 @@
  * Every file carries the CRC-32 of its uncompressed contents, verified by wpe_pak_read(). Paths
  * use the VFS path rules (see wpe_vfs_path_is_valid()).
  *
+ * Embedding: an archive can be appended to another file (an exported game executable) followed
+ * by a 24-byte trailer (archive offset, archive size, magic "WPE_EMBD"); wpe_pak_open() finds it
+ * either way, so a game can read its assets from its own executable.
+ *
  * - Dependencies: core, platform (file I/O), zstd (private)
  * - Thread affinity: a WPE_Pak may be read from any number of threads at once (each read opens its
  *   own file stream); a WPE_PakWriter belongs to one thread
@@ -36,7 +40,7 @@ typedef struct WPE_PakEntryInfo {
     const char* path;     /* Borrowed from the archive (valid until wpe_pak_close()). */
     uint64_t size;        /* Uncompressed size. */
     uint64_t stored_size; /* Bytes in the archive. */
-    uint64_t offset;      /* Archive byte offset of the stored data. */
+    uint64_t offset;      /* Byte offset of the stored data in the file (includes the embedding offset). */
     uint32_t crc32;       /* Of the uncompressed contents. */
     bool compressed;
 } WPE_PakEntryInfo;
@@ -48,7 +52,8 @@ typedef enum WPE_PakCompression {
 } WPE_PakCompression;
 
 /**
- * Opens an archive and loads its index (file contents are read on demand).
+ * Opens an archive and loads its index (file contents are read on demand). `os_path` may be an
+ * archive or a file carrying an embedded archive (see wpe_pak_embed()).
  *
  * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_NOT_FOUND; WPE_RESULT_ERROR_IO;
  *         WPE_RESULT_ERROR_PARSE (not a pak, corrupt or inconsistent index; logged);
@@ -57,6 +62,28 @@ typedef enum WPE_PakCompression {
  * @thread_safety Any thread
  */
 [[nodiscard]] WPE_Result wpe_pak_open(const char* os_path, WPE_Pak** out_pak);
+
+/**
+ * Checks quietly whether a file is an archive or carries an embedded one (header magic or embed
+ * trailer present; the index is not validated).
+ *
+ * @thread_safety Any thread
+ */
+bool wpe_pak_probe(const char* os_path);
+
+/**
+ * Writes `out_path` as a copy of `host_path` with the archive `pak_path` appended (plus the embed
+ * trailer). Executables still run: the operating system ignores data after the program image.
+ *
+ * @param out_path A new file, different from both inputs (replaced if it exists).
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_INVALID_ARG (the host already
+ *         carries an archive, `pak_path` is embedded itself, or out_path names an input; logged);
+ *         wpe_pak_open() errors for `pak_path`; WPE_RESULT_ERROR_NOT_FOUND; WPE_RESULT_ERROR_IO;
+ *         WPE_RESULT_ERROR_OUT_OF_MEMORY. On failure no output file is left behind.
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_pak_embed(const char* host_path, const char* pak_path, const char* out_path);
 
 /** Closes an archive (ownership consumed); NULL is a no-op. @thread_safety No reads may be in progress */
 void wpe_pak_close(WPE_Pak* pak);
@@ -126,5 +153,24 @@ WPE_Result wpe_pak_writer_finish(WPE_PakWriter* writer);
 /** Frees a writer (ownership consumed; closes the file if not finished); NULL is a no-op. @thread_safety
  * Owning thread */
 void wpe_pak_writer_destroy(WPE_PakWriter* writer);
+
+typedef struct WPE_PakPackStats {
+    uint32_t files;   /* Files packed. */
+    uint32_t skipped; /* Files skipped because their names are not valid asset paths (warned). */
+    uint64_t bytes;   /* Uncompressed bytes packed. */
+} WPE_PakPackStats;
+
+/**
+ * Packs every file below an OS directory into a new archive (paths relative to the directory, in
+ * sorted order, so the same input always produces the same archive; automatic compression).
+ *
+ * @param out_stats Optional.
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_NOT_FOUND (not a directory;
+ *         logged); WPE_RESULT_ERROR_CAPACITY; WPE_RESULT_ERROR_IO; WPE_RESULT_ERROR_OUT_OF_MEMORY.
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_pak_create_from_directory(const char* os_path, const char* directory, int compression_level,
+                                         WPE_PakPackStats* out_stats);
 
 #endif /* WPE_VFS_PAK_H */

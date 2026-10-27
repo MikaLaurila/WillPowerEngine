@@ -117,9 +117,10 @@ Every public function must have tests. Minimum coverage targets:
 ```
 tests/
 ├── unit/           # Isolated component tests
-├── integration/    # Multi-component tests
-├── scene/          # Full scene playback tests
-└── stress/         # Long-running, memory leak detection
+├── scene/          # Full scene playback tests (label `integration`)
+├── golden/         # Reference-image comparisons
+├── stress/         # Long-running, memory leak detection
+└── tools/          # CMake scripts driving the command-line tools (pak and export round trips)
 ```
 
 ### 3.3 Test Patterns
@@ -144,9 +145,9 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_ecs_entity_creation))
 Register each test file in `tests/<category>/CMakeLists.txt` with `wpe_add_test(<module>_<area> SOURCES ... LIBS ... LABELS ...)`.
 
 #### Integration Tests
-- Use the master test scene from `scenes/test_full.scene`.
+- Use the master test scene `assets/scenes/test_full.scene` (run by `tests/scene/test_full_scene.c` through the engine, headless).
 - Run through scripted sequences that exercise all systems.
-- Validate state at checkpoints with assertions.
+- Validate state at checkpoints with assertions (scripts report progress through entity names; any script error fails the test).
 
 #### Golden Tests
 - Save renderer output frames as reference images.
@@ -170,7 +171,7 @@ Leak checking runs in every test through the `wpe_alloc` tracker. Use `-DSANITIZ
 
 ### 3.5 Test Scene Requirements
 
-The master test scene (`scenes/test_full.scene`) must:
+The master test scene (`assets/scenes/test_full.scene`; scenes live with the other assets of the sample project) must:
 - Include at least one entity per component type.
 - Exercise all scripting APIs within 60 seconds of simulated time.
 - Trigger edge cases: zero components, max entities, extreme transforms.
@@ -321,10 +322,13 @@ wpe_asset_release(assets, model);                                   // the last 
 - **Archives:** `.pak` v1 stores each file as-is or as one zstd frame (when that saves at least 5%), with per-file CRC-32 and a validated, sorted index. Archives are built reproducibly by `tools/wpe_pak`. Compression uses **zstd** (the documented choice over LZ4: better ratios at comparable decode speed).
 - **Model conversion (glTF):** metallic-roughness inputs are kept and converted per pixel to diffuse/specular/gloss. Color factors are stored sRGB-encoded. Required extensions outside the supported list are rejected.
 
+- **Primitive models:** `.prim` JSON files describe planes, boxes and spheres with a material; the model loader builds them, so scenes need no code for simple geometry.
+- **Embedded archives:** an archive appended to another file (the exported game executable) is found through a 24-byte trailer; offsets inside stay archive-relative.
+
 **Rules:**
 - Assets are loaded through the VFS (`.pak` archives in shipped games).
 - Shared assets are reference-counted.
-- Lazy loading for large scenes is planned with scene serialization (runtime milestone).
+- NOTE(limitation): scenes load their assets synchronously when the scene loads; streaming in large scenes is not implemented (scenes at the target scale load quickly).
 - Texture streaming is not required, because target resolutions are low.
 
 ### 4.5 Audio
@@ -335,6 +339,34 @@ Implemented in `src/audio/` (miniaudio, private).
 - One-shots use a pool of 64 voices (the oldest one-shot is stolen when full). Music streams from the VFS with crossfades.
 - There are master, effects and music buses.
 - Without an output device, mixing runs on demand (`wpe_audio_render`), which is what tests and headless runs use.
+
+### 4.6 Input
+
+Implemented in `src/input/` (public API in `input/input.h`; SDL3 private).
+- Devices: physical keys (USB HID codes, layout-independent), the mouse (framebuffer coordinates, because the window converts event coordinates; per-frame deltas and wheel; capture for mouse look), and gamepads with the SDL standard layout.
+- Gamepads occupy player slots 0..3: a new pad takes the lowest free slot and a disconnected one frees it (hot-plug). Sticks get a rescaled radial dead zone, triggers a linear one, and rumble is supported.
+- Actions are named and bound to keys, mouse buttons, pad buttons and pad axes at once. Their value is the clamped sum of the bindings, and an action is "down" past a press threshold. Queries name a player slot or `WPE_INPUT_ANY_PLAYER`; the keyboard and mouse belong to one configurable player.
+- The protocol each frame is `begin_frame` → `handle_event` for every OS event → `update` → queries. Edges belong to frames, and taps shorter than a frame still report both edges.
+- Events reach the module as opaque `WPE_PlatformEvent`s from the platform's pump. Tests push real SDL events and use SDL virtual joysticks, so no hardware is needed.
+
+### 4.7 Engine runtime, scenes and export
+
+Implemented in `src/engine/`. Docs: `docs/scenes.md` and `docs/runtime.md`.
+- `WPE_Engine` is the integration layer, used by the runtime and later the editor. It owns every subsystem, reads `project.json`, loads scenes and runs the frame:
+  1. Input.
+  2. Fixed steps (scripts, physics, collision callbacks).
+  3. Scripts' update, animation, transforms and audio.
+  4. Scene rendering, then the scene's post-processing, then the scripts' 2D drawing on top.
+  5. Present.
+  6. Scene switches and quits requested by scripts are applied.
+- Scenes are JSON documents:
+  - Entities are referenced by file-local ids; assets by path; angles are in degrees.
+  - Loading is strict (unknown keys are errors with line numbers) and atomic (a failed load removes everything it created).
+  - Saving writes roots in creation order (`wpe_ecs_spawn_serial`), so load-save cycles reproduce the text.
+  - Game components plug in through `WPE_ComponentSerializer`.
+  - The `"instance"` shorthand places a whole model; saving writes it out expanded. TODO(agent): keep prefab instances as references once the editor needs it.
+- Script components save their path and properties: fields set through `wpe_script_set_property()`, saved with their current values.
+- Export appends a `.pak` of the project to `wpe_runtime`, producing one self-contained executable. The runtime links its compiler runtimes statically and, on Windows, is a GUI program that attaches to a parent console.
 
 ---
 ## 5. File Organization
@@ -355,20 +387,20 @@ willpower_engine/
 │   ├── audio/          # miniaudio wrapper: sounds, sources, music, buses
 │   ├── vfs/            # Virtual file system and .pak archives (zstd)
 │   ├── script/         # Luau VM and bindings
-│   ├── assets/         # Asset loading and management
-│   └── input/          # SDL3 input handling
+│   ├── input/          # SDL3 keyboard, mouse and gamepad input with actions
+│   └── engine/         # Game runtime: project and scene files, frame loop, export
 ├── editor/             # Standalone editor application
 │   ├── ui/             # cimgui-based UI
 │   ├── tools/          # Editor-specific tools
 │   └── main.c
-├── runtime/            # Standalone game runtime
+├── runtime/            # Standalone game runtime (wpe_runtime; exported games are this executable)
 │   └── main.c
 ├── samples/            # Small demo programs (e.g. spinning_cubes) with --frames/--screenshot for automated checks
 ├── tests/              # Test suites
-├── tools/              # Command-line tools (wpe_pak: build/inspect .pak archives)
-├── docs/               # Guides and specifications (scripting API, assets and .pak format)
-├── scenes/             # Test and demo scenes
-├── assets/             # Test assets (glTF, fonts, etc.)
+├── tools/              # Command-line tools (wpe_pak: .pak archives; wpe_export: game export)
+├── docs/               # Guides and specifications (scripting, assets and .pak, scenes, runtime and export)
+├── assets/             # The sample game project: project.json, scenes/ (demo and master test scene),
+│                       # scripts/, meshes/ (glTF and .prim), sounds/, music/, fonts/
 ├── CMakeLists.txt
 ├── AGENTS.md           # This file
 └── README.md
@@ -388,8 +420,10 @@ willpower_engine/
   - `graphics` depends on `ecs`, `scene`, `renderer` and `assets`.
   - `physics` depends on `ecs`, `scene` and `assets`, and uses Box3D privately.
   - `audio` depends on `ecs`, `scene` and `assets`, and uses miniaudio privately.
-  - `script` depends on `graphics`, `assets`, `physics`, `audio` and `platform`, and uses Luau privately.
-- Only `jobs` and `platform` may include SDL headers; the renderer stays pure CPU so it can be tested headless.
+  - `input` depends on `core` and `platform`, and uses SDL3 privately.
+  - `script` depends on `graphics`, `assets`, `physics`, `audio`, `input` and `platform`, and uses Luau privately.
+  - `engine` depends on all of the above.
+- Only `jobs`, `platform` and `input` may include SDL headers; the renderer stays pure CPU so it can be tested headless.
 
 ---
 
@@ -626,7 +660,7 @@ cmake --build build --target lint
 
 ---
 
-**Version:** 1.1  
-**Last Updated:** 26 Oct 2026  
+**Version:** 1.2  
+**Last Updated:** 27 Oct 2026  
 **Maintainer:** WillPowerEngine Development Team  
-**Changes from v1.0:** Updated private symbol naming convention to `wpe__` prefix
+**Changes from v1.1:** Input, engine runtime, scene files and export (§4.6, §4.7); scenes live in `assets/scenes`; test layout.

@@ -19,12 +19,22 @@
 
 typedef struct WPE_Window WPE_Window;
 
+/**
+ * An OS event as read by the event pump. Opaque to the engine: only modules allowed to use SDL
+ * (input, and later the editor) interpret it, as a `const SDL_Event*`.
+ */
+typedef struct WPE_PlatformEvent WPE_PlatformEvent;
+
+/** Receives each event read by the pump; `event` is valid only during the call. */
+typedef void (*WPE_PlatformEventFn)(const WPE_PlatformEvent* event, void* user_data);
+
 typedef struct WPE_WindowDesc {
     const char* title; /* Required; copied by SDL. */
     uint32_t width;    /* Initial client size in pixels. */
     uint32_t height;
     bool resizable;
     bool vsync;
+    bool fullscreen; /* Fullscreen on the current display (the framebuffer is letterboxed). */
 } WPE_WindowDesc;
 
 /**
@@ -43,13 +53,42 @@ typedef struct WPE_WindowDesc {
 void wpe_window_destroy(WPE_Window* window);
 
 /**
- * Processes pending OS events.
+ * Processes pending OS events, passing each to the window's event handler (if set). Mouse
+ * coordinates in the events are converted to framebuffer pixels of the last presented frame.
  *
  * @return false once the user has requested to close the window (it stays false afterwards).
  *
  * @thread_safety Main thread only
  */
 bool wpe_window_poll_events(WPE_Window* window);
+
+/** Sets the function receiving the events read by wpe_window_poll_events() (NULL removes it). @thread_safety
+ * Main thread only */
+void wpe_window_set_event_handler(WPE_Window* window, WPE_PlatformEventFn fn, void* user_data);
+
+/**
+ * Event pump for programs without a window (headless runs, tools, tests): reads every pending event
+ * and passes it to `fn` (may be NULL to discard them). Only subsystems that were initialized
+ * produce events (for example the input module's gamepad support).
+ *
+ * @return false if an application quit request was among the events.
+ *
+ * @thread_safety Main thread only
+ */
+bool wpe_platform_poll_events(WPE_PlatformEventFn fn, void* user_data);
+
+/**
+ * Captures the mouse: the cursor is hidden and confined, and motion arrives as relative deltas
+ * (for mouse look).
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR (SDL failure; logged).
+ *
+ * @thread_safety Main thread only
+ */
+WPE_Result wpe_window_set_relative_mouse(WPE_Window* window, bool enabled);
+
+/** Changes the window title (copied). @thread_safety Main thread only */
+void wpe_window_set_title(WPE_Window* window, const char* title);
 
 /**
  * Displays a framebuffer's color target.
@@ -202,5 +241,52 @@ WPE_Result wpe_directory_create(const char* path);
  * @thread_safety Any thread
  */
 WPE_Result wpe_path_remove(const char* path);
+
+/**
+ * Renames (moves) a file or directory, replacing an existing file at `to`.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_IO (logged).
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_path_rename(const char* from, const char* to);
+
+/**
+ * Gets the absolute path of the running executable (UTF-8).
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_CAPACITY (buffer too small),
+ *         WPE_RESULT_ERROR_OUT_OF_MEMORY or WPE_RESULT_ERROR_IO (logged).
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_platform_executable_path(char* out_path, size_t capacity);
+
+/**
+ * Programs built as GUI applications (the game runtime on Windows) have no console; when started
+ * from a terminal, this attaches stdout/stderr to it so logs stay visible. Does nothing elsewhere
+ * or when output is already redirected.
+ *
+ * @thread_safety Main thread, at startup
+ */
+void wpe_platform_attach_console(void);
+
+/**
+ * Shows a modal error message box (blocking until dismissed); logs instead when no display is
+ * available. For fatal errors of interactive programs only (never in headless runs).
+ *
+ * @thread_safety Main thread only
+ */
+void wpe_platform_show_error(const char* title, const char* message);
+
+/**
+ * Marks a file as executable (POSIX: adds execute permission wherever read permission is granted;
+ * Windows: nothing to do, executability follows the extension).
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_NOT_FOUND or WPE_RESULT_ERROR_IO
+ *         (logged).
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_file_set_executable(const char* path);
 
 #endif /* WPE_PLATFORM_PLATFORM_H */

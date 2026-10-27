@@ -50,6 +50,10 @@ struct WPE_ScriptHost {
     WPE_AssetManager* assets;
     WPE_Physics* physics; /* Optional. */
     WPE_Audio* audio;     /* Optional. */
+    WPE_Input* input;     /* Optional. */
+    WPE_Draw2D* draw2d;   /* Optional. */
+    WPE_AssetHandle font; /* Optional; the host holds a reference. */
+    WPE_ScriptApp app;    /* Zeroed when the application provides no services. */
     lua_State* L;
 
     size_t memory_limit;

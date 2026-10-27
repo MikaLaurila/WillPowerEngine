@@ -34,6 +34,24 @@ return Spinner
 
 `self.entity` holds the entity handle. All callbacks are optional.
 
+## Script properties
+
+A scene file can configure each script instance through `properties` (see [scenes.md](scenes.md)):
+
+```json
+"script": {"path": "scripts/spinner.luau", "properties": {"speed": 0.8, "label": "slow", "axis": [0, 1, 0]}}
+```
+
+Properties are plain fields of `self`, set before `on_start`. Numbers, booleans, strings and `[x, y, z]` vectors are allowed. Read them with a default so the script also works without them:
+
+```lua
+function Spinner:on_start()
+	self.speed = self.speed or 1.2
+end
+```
+
+When a scene is saved, each property is written with its current value, so a script that changes `self.speed` saves the new value. A property that now holds something else (a table, a function, nil) is left out. From C, `wpe_script_set_property()` and `wpe_script_visit_properties()` do the same.
+
 ## Lifecycle and rules
 
 - **Callback order:**
@@ -66,10 +84,11 @@ Entity handles are numbers. Passing a handle that isn't alive raises an error. V
 | `wpe.destroy(entity)` | Destroy an entity and its children at the end of the current update. Dead handles are ignored. |
 | `wpe.is_alive(entity) -> bool` | Whether the handle refers to a live entity. |
 | `wpe.get_name(entity) -> string?` / `wpe.set_name(entity, name)` | Display name. |
+| `wpe.find(name) -> entity?` | An entity with this name, or nil. It scans every name, so look entities up once (in `on_start`) and keep the handle. |
 | `wpe.get_parent(entity) -> entity?` | Parent, or nil. |
 | `wpe.set_parent(entity, parent?, keep_world = true)` | Reparent (nil detaches). With `keep_world`, the world placement is preserved. |
 | `wpe.children(entity) -> {entity}` | Direct children in order. |
-| `wpe.instantiate(prefab, [position]) -> entity` | Instantiate a registered prefab, or a glTF asset path (loaded once and cached). Returns the root entity. An animated model starts playing its first animation. |
+| `wpe.instantiate(prefab, [position]) -> entity` | Instantiate a named prefab (from the project's `prefabs`, or registered in C), or a model asset path (glTF or `.prim`, loaded once and cached). Returns the root entity. An animated model starts playing its first animation. |
 | `wpe.attach_script(entity, path) -> bool` | Attach (or replace) a script. |
 | `wpe.get_position(entity)` / `wpe.set_position(entity, v)` | Local position. |
 | `wpe.get_rotation(entity)` / `wpe.set_rotation(entity, euler)` | Local rotation as XYZ Euler angles in radians (applied X, then Y, then Z). |
@@ -94,7 +113,7 @@ Available when the host was created with a physics world (otherwise these raise 
 
 | Function | Description |
 |---|---|
-| `wpe.add_rigidbody(entity, [{type, linear_damping, angular_damping, gravity_scale, lock_rotation, continuous}])` | Add or update a rigid body (default: dynamic). The body is created immediately from the entity's current world transform. `lock_rotation` keeps it upright (characters); `continuous` prevents fast bodies tunneling through other moving bodies. |
+| `wpe.add_rigidbody(entity, [{type, linear_damping, angular_damping, gravity_scale, lock_rotation, continuous, velocity}])` | Add or update a rigid body (default: dynamic). The body is created immediately from the entity's current world transform, moving at `velocity` (e.g. a projectile). `lock_rotation` keeps it upright (characters); `continuous` prevents fast bodies tunneling through other moving bodies. |
 | `wpe.BODY_STATIC`, `wpe.BODY_KINEMATIC`, `wpe.BODY_DYNAMIC` | Body types. Dynamic bodies are simulated and write their pose back into the Transform. Kinematic bodies follow their Transform (moving it pushes dynamic bodies) or a velocity set with `wpe.set_velocity`. |
 | `wpe.add_collider(entity, [{shape, size, radius, height, offset, density, friction, restitution, trigger, model, mesh}])` | Add or update the entity's collider (one per entity; default: a 1×1×1 box). The entity's world scale is applied when the shape is built. Without a rigid body it is static level geometry. `trigger = true` reports overlaps instead of colliding. |
 | `wpe.COLLIDER_BOX` (`size`), `wpe.COLLIDER_SPHERE` (`radius`), `wpe.COLLIDER_CAPSULE` (`radius`, `height` along local Y) | Primitive shapes. |
@@ -123,9 +142,58 @@ Available when the host was created with audio (otherwise these raise errors). S
 | `wpe.stop_music([fade_seconds = 0])` | Fade out and stop the music. |
 | `wpe.set_volume(bus, volume)` / `wpe.get_volume(bus)` | Linear volume (1 = unchanged) of `wpe.BUS_MASTER`, `wpe.BUS_EFFECTS` (sounds and sources) or `wpe.BUS_MUSIC`. |
 
-`assets/scripts/api_tour.luau` exercises every function above. The integration test runs it for 60 simulated seconds.
+### Input
+
+Available when the host has input (the engine runtime always has). Players are numbered 1 to 4. In functions with an optional `player`, nil means any device. The keyboard and mouse belong to the project's `keyboard_player` (player 1 by default); each gamepad belongs to the player slot it was assigned when it connected.
+
+Prefer **actions** to raw devices. They are named in the project file and bound to keys, mouse buttons and gamepad buttons or axes at once, so one script supports every device (see [runtime.md](runtime.md#input-actions)).
+
+| Function | Description |
+|---|---|
+| `wpe.action_value(name, [player]) -> number` | The action's value in [-1, 1]: the sum of its bindings (a held key gives its `scale`, a stick its dead-zoned deflection). |
+| `wpe.action_down(name, [player]) -> bool` | Whether \|value\| reaches the project's press threshold. |
+| `wpe.action_pressed(name, [player])` / `wpe.action_released(name, [player])` | Whether the action went down / up during this frame. A tap shorter than a frame reports both. |
+| `wpe.key_down(key)`, `wpe.key_pressed(key)`, `wpe.key_released(key)` | A physical key by name: `"a"`–`"z"`, `"0"`–`"9"`, `"f1"`–`"f12"`, `"space"`, `"return"`, `"escape"`, `"tab"`, `"backspace"`, `"up"`, `"down"`, `"left"`, `"right"`, `"lshift"`, `"rshift"`, `"lctrl"`, `"rctrl"`, `"lalt"`, `"ralt"`, `"kp_0"`–`"kp_9"`, ... (positions on a US layout). |
+| `wpe.mouse_down(button)`, `wpe.mouse_pressed(button)`, `wpe.mouse_released(button)` | `"left"`, `"middle"`, `"right"`, `"x1"`, `"x2"`. |
+| `wpe.mouse_position() -> x, y` | Cursor position in screen (framebuffer) pixels. |
+| `wpe.mouse_delta() -> dx, dy` | Mouse movement during this frame, in screen pixels. |
+| `wpe.mouse_wheel() -> number` | Vertical wheel movement during this frame (up is positive). |
+| `wpe.set_mouse_captured(bool)` / `wpe.is_mouse_captured()` | Capture hides the cursor and keeps reporting `mouse_delta` at the window edge (mouse look). |
+| `wpe.gamepad_count() -> number` | Connected gamepads (up to 4). |
+| `wpe.gamepad_connected(player) -> bool` / `wpe.gamepad_name(player) -> string?` | Whether the player has a pad, and its product name. |
+| `wpe.gamepad_down(button, [player])`, `wpe.gamepad_pressed(...)`, `wpe.gamepad_released(...)` | Buttons by position: `"south"`, `"east"`, `"west"`, `"north"` (aliases `"a"`, `"b"`, `"x"`, `"y"`: A/B/X/Y on Xbox, Cross/Circle/Square/Triangle on PlayStation), `"back"`, `"guide"`, `"start"`, `"left_stick"`, `"right_stick"`, `"left_shoulder"`, `"right_shoulder"`, `"dpad_up"`, `"dpad_down"`, `"dpad_left"`, `"dpad_right"`, `"misc1"`, `"touchpad"`, paddles. |
+| `wpe.gamepad_axis(axis, [player]) -> number` | `"left_x"`, `"left_y"`, `"right_x"`, `"right_y"` (-1..1, Y positive **down**, radial dead zone applied) and `"left_trigger"`, `"right_trigger"` (0..1). With no player: the most deflected pad. |
+| `wpe.rumble(low, high, seconds, [player]) -> bool` | Rumble the low- and high-frequency motors (0..1) for up to 10 s (0 stops). Returns whether any pad accepted it. |
+
+Edges (`pressed`, `released`) belong to frames, so read them in `on_update`. A fixed step may run zero or several times per frame. To act on a press in `on_fixed_update`, remember it in `on_update` (see `scripts/player.luau`).
+
+### Game: scenes, camera, screen
+
+Provided by the application running the scripts (the engine runtime). Elsewhere they raise errors.
+
+| Function | Description |
+|---|---|
+| `wpe.load_scene(path)` | Switch to another scene after the current frame: every entity is destroyed (scripts get `on_destroy`) and the new scene's entities and environment are loaded. Raises if the file doesn't exist. |
+| `wpe.quit()` | Exit the game after the current frame. |
+| `wpe.set_camera(entity)` / `wpe.get_camera() -> entity?` | The camera the scene is rendered from and heard from. Without one, the scene file's `camera`, then the first camera found, is used. |
+| `wpe.screen_size() -> width, height` | The framebuffer (canvas) size in pixels. |
+
+### 2D drawing
+
+Drawn on top of the 3D scene after post-processing (HUDs, menus), in call order, during the frame in which it is called. Coordinates are screen pixels with the origin at the top left. Colors are numbers `0xAARRGGBB`, conveniently built with `wpe.color`.
+
+| Function | Description |
+|---|---|
+| `wpe.color(r, g, b, [a = 1]) -> color` | Pack components in 0..1. |
+| `wpe.draw_rect(x, y, width, height, [color = white])` | A filled rectangle (alpha-blended). |
+| `wpe.draw_text(x, y, text, [color = white], [scale = 1])` | Bitmap text in the project's font (`"\n"` starts a line). |
+| `wpe.text_size(text, [scale = 1]) -> width, height` | The size `draw_text` would cover. |
+
+`assets/scripts/api_tour.luau` exercises every function above, as part of the master test scene that the scene test runs for 60 simulated seconds. `wpe.load_scene` and `wpe.quit` end a scene, so the engine tests cover those two instead.
 
 ## Hosting from C
+
+Games normally run inside the engine runtime (`engine/engine.h`, see [runtime.md](runtime.md)), which creates every subsystem, loads scenes and drives the loop. Hosting the script module directly is for tools and tests:
 
 ```c
 // Assets come through a VFS (directories and/or .pak archives) and a shared asset manager.
@@ -139,7 +207,11 @@ WPE_Audio* audio;                                           // optional
 wpe_audio_create(&(WPE_AudioDesc){.ecs = ecs, .assets = assets}, &audio);
 wpe_audio_set_listener(audio, camera);
 WPE_ScriptHost* host;
-wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .assets = assets, .physics = physics, .audio = audio}, &host);
+wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .assets = assets, .physics = physics, .audio = audio,
+                                             .input = input,            // optional: input API
+                                             .draw2d = draw2d, .font = font, // optional: 2D drawing
+                                             .app = &app},              // optional: load_scene, quit, camera
+                       &host);
 wpe_script_host_register_prefab(host, "box", box_handle);  // optional named prefabs (asset handles)
 wpe_script_attach(host, entity, "scripts/spinner.luau");
 

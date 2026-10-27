@@ -54,6 +54,10 @@ typedef struct WPE_RigidBody {
     float gravity_scale;
     bool lock_rotation; /* Dynamic bodies only rotate when false (e.g. character capsules lock it). */
     bool continuous;    /* Continuous collision for fast-moving dynamic bodies. */
+    /* Linear velocity (m/s, world space) the body starts with when it is created (dynamic and
+     * kinematic bodies), e.g. a projectile spawned this frame. Later changes need
+     * wpe_physics_set_velocity(). */
+    WPE_Vec3 initial_velocity;
 
     /* Private (managed by the physics world). */
     uint64_t wpe__body;
@@ -158,6 +162,18 @@ void wpe_physics_destroy(WPE_Physics* physics);
  * @thread_safety Owning thread
  */
 WPE_Result wpe_physics_step(WPE_Physics* physics, float dt);
+
+/**
+ * Creates the bodies and shapes of components added since the last step now, instead of at the
+ * next wpe_physics_step(), so velocities, forces and raycasts work on them immediately (for
+ * example right after loading a scene). Components that fail to build are logged and skipped, as
+ * in a step.
+ *
+ * @return WPE_RESULT_OK or WPE_RESULT_ERROR_NULL_ARG.
+ *
+ * @thread_safety Owning thread
+ */
+WPE_Result wpe_physics_create_bodies(WPE_Physics* physics);
 
 /**
  * Rebuilds the body and shape of an entity from its current components and transform (after

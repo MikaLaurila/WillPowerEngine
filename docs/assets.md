@@ -28,9 +28,31 @@ The asset manager loads assets through a VFS, caches them by `(type, path)` and 
 
   The usual pattern is: load, set the handle in the component, add the component, and release your own reference whenever it suits you.
 - Assets created in code, such as procedural meshes, are handed over with `wpe_asset_add(assets, type, "procedural/box", model, &handle)`. From then on they behave like loaded ones.
-- **Built-in types:** models (glTF/GLB) and fonts. The audio module registers sounds (WAV, FLAC, MP3). Games can register their own types from `WPE_ASSET_USER_FIRST` with a load/destroy pair.
+- **Built-in types:** models (glTF/GLB and `.prim` primitives) and fonts. The audio module registers sounds (WAV, FLAC, MP3). Games can register their own types from `WPE_ASSET_USER_FIRST` with a load/destroy pair.
 
 **Destroy order:** destroy everything that holds handles first (script host, audio, physics, the ECS world), then the asset manager, then the VFS. If anything still holds a reference at shutdown, a warning names the asset.
+
+## Primitive models (`.prim`)
+
+Simple shapes don't need a 3D package. A `.prim` file is a small JSON description that the model loader turns into a one-mesh model, usable anywhere a glTF model is (meshes, colliders, prefabs, instances):
+
+```json
+{"shape": "box", "size": [1, 2, 1], "color": [0.9, 0.55, 0.15], "roughness": 0.4}
+{"shape": "sphere", "radius": 0.5, "rings": 12, "segments": 24, "color": [0.2, 0.45, 0.9], "metallic": 0.2}
+{"shape": "plane", "size": 60, "segments": 30, "color": [0.3, 0.9, 0.5, 0.35], "double_sided": true}
+```
+
+| Key | Description |
+|---|---|
+| `shape` | `"plane"` (XZ, facing +Y), `"box"` or `"sphere"`. Required. |
+| `size` | Plane: edge length (1). Box: `[x, y, z]` full extents (`[1, 1, 1]`). |
+| `radius`, `rings`, `segments` | Sphere: radius (0.5), latitude rings (12, 2..512) and longitude segments (24, 3..1024). Plane: `segments` per side (1). |
+| `color` | `[r, g, b]` or `[r, g, b, a]` (sRGB, 0..1; alpha below 1 renders blended). |
+| `metallic`, `roughness` | Material (0 and 0.6 by default). |
+| `emissive` | `[r, g, b]` glow. |
+| `double_sided` | Render back faces too. |
+
+Unknown keys and out-of-range values are errors. `assets/meshes/*.prim` has examples.
 
 ## The `wpe_pak` tool
 
@@ -45,7 +67,7 @@ wpe_pak extract game.pak out_dir                  # unpack
 - Files whose names aren't valid asset paths are reported and skipped.
 - Each file is compressed with zstd only when that saves at least 5%. Already-compressed formats (PNG, JPEG, MP3, FLAC) are therefore stored as they are and can be streamed straight from the archive.
 
-Try it with the script demo: `wpe_pak create assets.pak assets`, then `script_demo --pak assets.pak`.
+Try it with the runtime: `build/bin/wpe_pak create assets.pak assets`, then `build/bin/wpe_runtime --pak assets.pak`. To ship a game as a single executable, use `wpe_export` instead (see [runtime.md](runtime.md#exporting-a-game)).
 
 ## `.pak` format, version 1
 
@@ -89,3 +111,15 @@ Readers reject an archive if any of these hold:
 - reserved fields aren't zero.
 
 Each file's CRC-32 is checked whenever the whole file is read. Files streamed straight from an archive (stored music) are not checked.
+
+## Embedded archives
+
+An archive can be appended to another file, typically the game runtime, which turns it into a standalone game. The file then ends with a 24-byte trailer:
+
+| Offset from the trailer | Size | Field |
+|---|---|---|
+| 0 | 8 | File offset of the archive |
+| 8 | 8 | Archive size in bytes (the archive ends where the trailer begins) |
+| 16 | 8 | Magic `WPE_EMBD` |
+
+`wpe_pak_open()` (and so `wpe_vfs_mount_pak()`) accepts either a plain archive or a file carrying one. Inside, all offsets stay relative to the start of the archive. `wpe_pak_probe()` checks quietly whether a file has either. `wpe_pak_embed(host, archive, out)` writes the combined file; it refuses a host that already carries an archive. Operating systems ignore data appended to an executable, so the program still runs.

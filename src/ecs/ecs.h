@@ -186,6 +186,10 @@ bool wpe_ecs_is_registered(const WPE_Ecs* ecs, WPE_ComponentType type);
 /** @return The registered name of `type`, or NULL if unregistered. @thread_safety Thread owning the world */
 const char* wpe_ecs_component_name(const WPE_Ecs* ecs, WPE_ComponentType type);
 
+/** @return The registered size in bytes of `type`, or 0 if unregistered. @thread_safety Thread owning the
+ * world */
+uint32_t wpe_ecs_component_size(const WPE_Ecs* ecs, WPE_ComponentType type);
+
 /**
  * Creates an entity with no components.
  *
@@ -229,6 +233,15 @@ uint32_t wpe_ecs_flush_deferred(WPE_Ecs* ecs);
 
 /** @return Whether `entity` refers to a currently alive entity. @thread_safety See file comment */
 bool wpe_ecs_is_alive(const WPE_Ecs* ecs, WPE_Entity entity);
+
+/**
+ * @return A number that orders alive entities by creation (later spawns have larger values; never
+ *         reused within a world), or 0 for dead handles. Slot indices do not give that order, since
+ *         freed slots are reused.
+ *
+ * @thread_safety See file comment
+ */
+uint64_t wpe_ecs_spawn_serial(const WPE_Ecs* ecs, WPE_Entity entity);
 
 /** @return Number of alive entities. @thread_safety See file comment */
 uint32_t wpe_ecs_entity_count(const WPE_Ecs* ecs);

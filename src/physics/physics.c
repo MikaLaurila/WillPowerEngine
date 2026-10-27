@@ -384,6 +384,7 @@ static b3BodyId wpe__create_b3_body(WPE_Physics* physics, WPE_Entity entity, con
         def.gravityScale = rb->gravity_scale;
         def.isBullet = rb->continuous && rb->type == WPE_BODY_DYNAMIC;
         def.motionLocks.angularX = def.motionLocks.angularY = def.motionLocks.angularZ = rb->lock_rotation;
+        if (rb->type != WPE_BODY_STATIC) def.linearVelocity = wpe__b3_vec(rb->initial_velocity);
     }
     const b3BodyId body = b3CreateBody(physics->world, &def);
     if (B3_IS_NULL(body)) return body;
@@ -459,8 +460,10 @@ static void wpe__ensure_created(WPE_Physics* physics, WPE_Entity entity) {
         if (needs_body) {
             if (!isfinite(rb->linear_damping) || rb->linear_damping < 0.0f ||
                 !isfinite(rb->angular_damping) || rb->angular_damping < 0.0f ||
-                !isfinite(rb->gravity_scale)) {
-                wpe_log_error("rigid body of entity 0x%08x has invalid damping or gravity scale", entity);
+                !isfinite(rb->gravity_scale) || !wpe__finite3(rb->initial_velocity)) {
+                wpe_log_error(
+                    "rigid body of entity 0x%08x has invalid damping, gravity scale or initial velocity",
+                    entity);
                 rb->wpe__state = WPE__STATE_FAILED;
                 return;
             }
@@ -733,6 +736,19 @@ WPE_Result wpe_physics_step(WPE_Physics* physics, float dt) {
             wpe__write_back(physics, entity, move->transform);
     }
     return wpe__collect_events(physics) ? WPE_RESULT_OK : WPE_RESULT_ERROR_OUT_OF_MEMORY;
+}
+
+WPE_Result wpe_physics_create_bodies(WPE_Physics* physics) {
+    if (!physics) return WPE_RESULT_ERROR_NULL_ARG;
+    WPE_EcsIter it =
+        wpe_ecs_query(physics->ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_PHYSICS_RIGIDBODY)});
+    while (wpe_ecs_iter_next(&it))
+        wpe__ensure_created(physics, it.entity);
+    it = wpe_ecs_query(physics->ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_PHYSICS_COLLIDER),
+                                                    .none = WPE_ECS_MASK(WPE_COMP_PHYSICS_RIGIDBODY)});
+    while (wpe_ecs_iter_next(&it))
+        wpe__ensure_created(physics, it.entity);
+    return WPE_RESULT_OK;
 }
 
 WPE_Result wpe_physics_refresh(WPE_Physics* physics, WPE_Entity entity) {

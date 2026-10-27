@@ -233,6 +233,64 @@ static void test_vfs_pak_rejects_corruption(void) {
     quiet(false);
 }
 
+static void check_stream(const WPE_Vfs* vfs, const char* path);
+
+static void test_vfs_embedded_archive(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT));
+    write_test_pak(ROOT "/game.pak");
+    /* A stand-in "executable": arbitrary bytes that do not start with the archive magic. */
+    write_os_file(ROOT "/host.bin", g_noise, 12345);
+    WPE_TEST_ASSERT(!wpe_pak_probe(ROOT "/host.bin"));
+    WPE_TEST_ASSERT(wpe_pak_probe(ROOT "/game.pak"));
+    WPE_TEST_ASSERT(!wpe_pak_probe(ROOT "/missing.bin"));
+    WPE_TEST_ASSERT_OK(wpe_pak_embed(ROOT "/host.bin", ROOT "/game.pak", ROOT "/bundle.bin"));
+    WPE_TEST_ASSERT(wpe_pak_probe(ROOT "/bundle.bin"));
+
+    /* The host bytes are intact at the front. */
+    void* bytes = NULL;
+    size_t size = 0;
+    WPE_TEST_ASSERT_OK(wpe_file_read_all(ROOT "/bundle.bin", &bytes, &size));
+    WPE_TEST_ASSERT(size > 12345 && memcmp(bytes, g_noise, 12345) == 0);
+    wpe_free(bytes);
+
+    /* Entries read and stream from inside the bundle (offsets include the embedding offset). */
+    WPE_Pak* pak = NULL;
+    WPE_TEST_ASSERT_OK(wpe_pak_open(ROOT "/bundle.bin", &pak));
+    WPE_TEST_ASSERT_EQ_UINT(5, wpe_pak_entry_count(pak));
+    WPE_TEST_ASSERT(wpe_pak_entry(pak, 0).offset >= 12345);
+    wpe_pak_close(pak);
+    WPE_Vfs* vfs = NULL;
+    WPE_TEST_ASSERT_OK(wpe_vfs_create(&vfs));
+    WPE_TEST_ASSERT_OK(wpe_vfs_mount_pak(vfs, ROOT "/bundle.bin"));
+    assert_read(vfs, "alpha/text.txt", g_text, strlen(g_text));
+    assert_read(vfs, "zeta/noise.bin", g_noise, sizeof g_noise);
+    check_stream(vfs, "zeta/noise.bin");
+    check_stream(vfs, "stored.txt");
+    wpe_vfs_destroy(vfs);
+
+    quiet(true);
+    /* No nesting, no overwriting an input, and no output left behind on failure. */
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_pak_embed(ROOT "/bundle.bin", ROOT "/game.pak", ROOT "/nested.bin"));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_pak_embed(ROOT "/host.bin", ROOT "/bundle.bin", ROOT "/nested.bin"));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_pak_embed(ROOT "/host.bin", ROOT "/game.pak", ROOT "/host.bin"));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND,
+                           wpe_pak_embed(ROOT "/missing.bin", ROOT "/game.pak", ROOT "/failed.bin"));
+    WPE_TEST_ASSERT(!wpe_pak_probe(ROOT "/failed.bin"));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_PARSE, wpe_pak_open(ROOT "/host.bin", &pak));
+
+    /* A damaged trailer is not mistaken for an archive. */
+    WPE_TEST_ASSERT_OK(wpe_file_read_all(ROOT "/bundle.bin", &bytes, &size));
+    ((unsigned char*)bytes)[size - 20] ^= 0x01; /* Archive size field. */
+    write_os_file(ROOT "/damaged_bundle.bin", bytes, size);
+    wpe_free(bytes);
+    WPE_TEST_ASSERT(!wpe_pak_probe(ROOT "/damaged_bundle.bin"));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_PARSE, wpe_pak_open(ROOT "/damaged_bundle.bin", &pak));
+    quiet(false);
+}
+
 static void test_vfs_mounts_and_priority(void) {
     WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/dir/sub"));
     write_text(ROOT "/dir/only_dir.txt", "from dir");
@@ -374,5 +432,6 @@ static void test_vfs_list_and_directory_walk(void) {
 
 WPE_TEST_MAIN(WPE_TEST_CASE(test_vfs_crc32_known_values), WPE_TEST_CASE(test_vfs_path_rules),
               WPE_TEST_CASE(test_vfs_pak_roundtrip), WPE_TEST_CASE(test_vfs_pak_writer_errors),
-              WPE_TEST_CASE(test_vfs_pak_rejects_corruption), WPE_TEST_CASE(test_vfs_mounts_and_priority),
-              WPE_TEST_CASE(test_vfs_streaming), WPE_TEST_CASE(test_vfs_list_and_directory_walk))
+              WPE_TEST_CASE(test_vfs_pak_rejects_corruption), WPE_TEST_CASE(test_vfs_embedded_archive),
+              WPE_TEST_CASE(test_vfs_mounts_and_priority), WPE_TEST_CASE(test_vfs_streaming),
+              WPE_TEST_CASE(test_vfs_list_and_directory_walk))

@@ -1,7 +1,9 @@
 #include "wpe_test.h"
 #include "wpe_test_assets.h"
 
+#include <SDL3/SDL.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "assets/procedural.h"
 #include "graphics/graphics.h"
@@ -641,6 +643,249 @@ static void test_script_audio_api(void) {
     quiet(false);
 }
 
+/* ---- Properties ------------------------------------------------------------------------------------ */
+
+typedef struct PropertyLog {
+    char text[512];
+} PropertyLog;
+
+static void log_property(const char* name, const WPE_ScriptValue* value, void* user_data) {
+    PropertyLog* log = user_data;
+    char item[96];
+    switch (value->type) {
+    case WPE_SCRIPT_VALUE_NUMBER:
+        snprintf(item, sizeof item, "%s=%g;", name, value->number);
+        break;
+    case WPE_SCRIPT_VALUE_BOOL:
+        snprintf(item, sizeof item, "%s=%s;", name, value->boolean ? "true" : "false");
+        break;
+    case WPE_SCRIPT_VALUE_STRING:
+        snprintf(item, sizeof item, "%s='%s';", name, value->string);
+        break;
+    case WPE_SCRIPT_VALUE_VECTOR:
+        snprintf(item, sizeof item, "%s=(%g,%g,%g);", name, value->vector.x, value->vector.y,
+                 value->vector.z);
+        break;
+    default:
+        snprintf(item, sizeof item, "%s=?;", name);
+        break;
+    }
+    strncat(log->text, item, sizeof log->text - strlen(log->text) - 1);
+}
+
+static void test_script_properties(void) {
+    write_script("props.luau", "local S = {}\n"
+                               "function S:on_start()\n"
+                               "  assert(self.speed == 2.5 and self.enabled == true and self.label == 'hi')\n"
+                               "  assert(self.offset == vector.create(1, 2, 3))\n"
+                               "  self.speed = self.speed * 2\n"
+                               "  self.label = {} -- no longer a plain value: skipped when saved\n"
+                               "end\n"
+                               "return S\n");
+    Fixture f = make_fixture(0, 0);
+    const WPE_Entity e = spawn(&f, NULL);
+    WPE_TEST_ASSERT(wpe_script_path(f.host, e) == NULL);
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, e, "props.luau"));
+    WPE_TEST_ASSERT_EQ_STR("props.luau", wpe_script_path(f.host, e));
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(
+        f.host, e, "speed", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_NUMBER, .number = 2.5}));
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(
+        f.host, e, "enabled", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_BOOL, .boolean = true}));
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(
+        f.host, e, "label", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_STRING, .string = "hi"}));
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(
+        f.host, e, "offset", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_VECTOR, .vector = {{1, 2, 3}}}));
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(
+        f.host, e, "temp", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_BOOL, .boolean = false}));
+    /* Setting nil removes a property; setting again keeps its original position. */
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(f.host, e, "temp", &(WPE_ScriptValue){0}));
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(
+        f.host, e, "enabled", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_BOOL, .boolean = true}));
+
+    PropertyLog log = {{0}};
+    WPE_TEST_ASSERT_OK(wpe_script_visit_properties(f.host, e, log_property, &log));
+    WPE_TEST_ASSERT_EQ_STR("speed=2.5;enabled=true;label='hi';offset=(1,2,3);", log.text);
+
+    /* Scripts change the values; visiting reports the current ones. */
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.016f));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(f.host).errors);
+    log.text[0] = '\0';
+    WPE_TEST_ASSERT_OK(wpe_script_visit_properties(f.host, e, log_property, &log));
+    WPE_TEST_ASSERT_EQ_STR("speed=5;enabled=true;offset=(1,2,3);", log.text);
+
+    quiet(true);
+    const WPE_ScriptValue one = {.type = WPE_SCRIPT_VALUE_NUMBER, .number = 1};
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_script_set_property(f.host, e, "entity", &one));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_script_set_property(f.host, e, "2fast", &one));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_script_set_property(f.host, e, "a b", &one));
+    WPE_TEST_ASSERT_EQ_INT(
+        WPE_RESULT_ERROR_INVALID_ARG,
+        wpe_script_set_property(f.host, e, "s", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_STRING}));
+    quiet(false);
+    const WPE_Entity bare = spawn(&f, NULL);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_script_set_property(f.host, bare, "x", &one));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND,
+                           wpe_script_visit_properties(f.host, bare, log_property, &log));
+    free_fixture(&f);
+}
+
+/* ---- Input, application services and 2D drawing ----------------------------------------------------- */
+
+typedef struct AppLog {
+    char scene[64];
+    int quits;
+    WPE_Entity camera;
+} AppLog;
+
+static void app_load_scene(void* user_data, const char* path) {
+    snprintf(((AppLog*)user_data)->scene, sizeof((AppLog*)user_data)->scene, "%s", path);
+}
+static void app_quit(void* user_data) {
+    ++((AppLog*)user_data)->quits;
+}
+static void app_set_camera(void* user_data, WPE_Entity camera) {
+    ((AppLog*)user_data)->camera = camera;
+}
+static WPE_Entity app_get_camera(void* user_data) {
+    return ((AppLog*)user_data)->camera;
+}
+static void app_screen_size(void* user_data, uint32_t* out_width, uint32_t* out_height) {
+    (void)user_data;
+    *out_width = 64;
+    *out_height = 32;
+}
+
+static void on_input_event(const WPE_PlatformEvent* event, void* user_data) {
+    wpe_input_handle_event(user_data, event);
+}
+
+static void test_script_input_app_and_draw(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/scenes"));
+    write_script("scenes/next.scene", "{}");
+    write_script(
+        "app.luau",
+        "local S = {}\n"
+        "function S:on_update(dt)\n"
+        "  assert(wpe.key_down('space') and wpe.key_pressed('space') and not wpe.key_released('space'))\n"
+        "  assert(wpe.action_down('jump') and wpe.action_pressed('jump', 1) and not wpe.action_down('jump', "
+        "2))\n"
+        "  assert(wpe.action_value('jump') == 1 and not wpe.action_released('jump'))\n"
+        "  assert(not wpe.mouse_down('left') and not wpe.mouse_pressed('right') and not "
+        "wpe.mouse_released('x1'))\n"
+        "  local mx, my = wpe.mouse_position(); local dx, dy = wpe.mouse_delta()\n"
+        "  assert(mx == 0 and my == 0 and dx == 0 and dy == 0 and wpe.mouse_wheel() == 0)\n"
+        "  wpe.set_mouse_captured(true); assert(wpe.is_mouse_captured())\n"
+        "  assert(wpe.gamepad_count() == 0 and not wpe.gamepad_connected(1) and wpe.gamepad_name(4) == nil)\n"
+        "  assert(not wpe.gamepad_down('a') and not wpe.gamepad_pressed('start', 2))\n"
+        "  assert(not wpe.gamepad_released('dpad_up') and wpe.gamepad_axis('left_x') == 0)\n"
+        "  assert(wpe.rumble(1, 1, 0.1) == false)\n"
+        "  assert(not pcall(wpe.action_down, 'fly'))\n"
+        "  assert(not pcall(wpe.key_down, 'SPACE'))\n"
+        "  assert(not pcall(wpe.gamepad_down, 'a', 5))\n"
+        "  assert(not pcall(wpe.gamepad_axis, 'left_z'))\n"
+        "  -- application services\n"
+        "  local w, h = wpe.screen_size(); assert(w == 64 and h == 32)\n"
+        "  local cam = wpe.spawn('cam'); assert(not pcall(wpe.set_camera, cam)) -- no camera component\n"
+        "  assert(wpe.get_camera() == nil)\n"
+        "  assert(not pcall(wpe.load_scene, 'scenes/missing.scene'))\n"
+        "  wpe.load_scene('scenes/next.scene'); wpe.quit()\n"
+        "  -- 2D drawing (top-left 4x4 pixels red, then text)\n"
+        "  local red = wpe.color(1, 0, 0)\n"
+        "  assert(red == 0xFFFF0000 and wpe.color(0, 0, 1, 0) == 0x000000FF)\n"
+        "  wpe.draw_rect(0, 0, 4, 4, red)\n"
+        "  wpe.draw_text(8, 8, 'Hi', wpe.color(1, 1, 1), 2)\n"
+        "  local tw, th = wpe.text_size('Hi', 2); assert(tw > 0 and th > 0)\n"
+        "  assert(not pcall(wpe.draw_rect, 0, 0, 1, 1, -5))\n"
+        "  wpe.set_name(self.entity, 'app ok')\n"
+        "end\n"
+        "return S\n");
+    WPE_TestAssets assets = wpe_test_assets_create(ROOT, 0);
+    WPE_TEST_ASSERT_OK(wpe_vfs_mount_directory(assets.vfs, WPE_TEST_ASSETS_DIR));
+    WPE_AssetHandle font = WPE_ASSET_NONE;
+    WPE_TEST_ASSERT_OK(wpe_asset_load(assets.assets, WPE_ASSET_FONT, "fonts/small.png", &font));
+    WPE_Ecs* ecs = NULL;
+    WPE_TEST_ASSERT_OK(wpe_ecs_create(&ecs));
+    WPE_TEST_ASSERT_OK(wpe_scene_register_components(ecs));
+    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(ecs, assets.assets));
+    WPE_Input* input = NULL;
+    WPE_TEST_ASSERT_OK(wpe_input_create(NULL, &input));
+    WPE_InputActionDesc jump = {.name = "jump", .binding_count = 1};
+    jump.bindings[0] = (WPE_InputBinding){.source = WPE_INPUT_SOURCE_KEY, .code = WPE_KEY_SPACE};
+    WPE_TEST_ASSERT_OK(wpe_input_set_actions(input, &jump, 1));
+    WPE_Draw2D* draw2d = NULL;
+    WPE_TEST_ASSERT_OK(wpe_draw2d_create(&draw2d));
+    AppLog log = {0};
+    const WPE_ScriptApp app = {.user_data = &log,
+                               .load_scene = app_load_scene,
+                               .quit = app_quit,
+                               .set_camera = app_set_camera,
+                               .get_camera = app_get_camera,
+                               .screen_size = app_screen_size};
+    WPE_ScriptHost* host = NULL;
+    WPE_TEST_ASSERT_OK(wpe_script_host_create(
+        &(WPE_ScriptHostDesc){
+            .ecs = ecs, .assets = assets.assets, .input = input, .draw2d = draw2d, .font = font, .app = &app},
+        &host));
+    wpe_asset_release(assets.assets, font); /* The host keeps its own reference. */
+
+    /* A real SDL key event drives the key and action queries. */
+    wpe_platform_poll_events(NULL, NULL);
+    wpe_input_begin_frame(input);
+    SDL_Event key = {.type = SDL_EVENT_KEY_DOWN};
+    key.key.scancode = SDL_SCANCODE_SPACE;
+    key.key.down = true;
+    WPE_TEST_ASSERT(SDL_PushEvent(&key));
+    wpe_platform_poll_events(on_input_event, input);
+    wpe_input_update(input);
+
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 32}, &renderer));
+    wpe_draw2d_begin(draw2d, 64, 32);
+    const WPE_Entity e = spawn(&(Fixture){.ecs = ecs}, NULL);
+    WPE_TEST_ASSERT_OK(wpe_script_attach(host, e, "app.luau"));
+    quiet(true); /* The failing pcall checks log errors. */
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(host, 0.016f));
+    quiet(false);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(host).errors);
+    WPE_TEST_ASSERT_EQ_STR("app ok", wpe_scene_get_name(ecs, e));
+    WPE_TEST_ASSERT_EQ_STR("scenes/next.scene", log.scene);
+    WPE_TEST_ASSERT_EQ_INT(1, log.quits);
+    WPE_TEST_ASSERT(wpe_input_mouse_captured(input));
+
+    WPE_TEST_ASSERT_OK(wpe_renderer_begin_frame(
+        renderer,
+        &(WPE_ClearDesc){.clear_color = true, .color = 0xFF000000u, .clear_depth = true, .depth = 1}));
+    WPE_TEST_ASSERT_OK(wpe_draw2d_submit(draw2d, renderer));
+    WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(renderer);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFF0000u, fb->color[1 * 64 + 1]);
+    WPE_TEST_ASSERT_EQ_UINT(0xFF000000u, fb->color[1 * 64 + 5]);
+
+    wpe_script_host_destroy(host);
+    wpe_renderer_destroy(renderer);
+    wpe_draw2d_destroy(draw2d);
+    wpe_input_destroy(input);
+    wpe_ecs_destroy(ecs);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_stats(assets.assets).assets);
+    wpe_test_assets_destroy(&assets);
+
+    /* Without the services, the functions raise. */
+    write_script("no_app.luau",
+                 "local S = {}\nfunction S:on_start()\n"
+                 "  assert(not pcall(wpe.key_down, 'a') and not pcall(wpe.quit))\n"
+                 "  assert(not pcall(wpe.draw_rect, 0, 0, 1, 1) and not pcall(wpe.screen_size))\n"
+                 "  wpe.set_name(self.entity, 'raised')\n"
+                 "end\nreturn S\n");
+    quiet(true);
+    Fixture plain = make_fixture(0, 0);
+    const WPE_Entity p = spawn(&plain, NULL);
+    WPE_TEST_ASSERT_OK(wpe_script_attach(plain.host, p, "no_app.luau"));
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(plain.host, 0.016f));
+    quiet(false);
+    WPE_TEST_ASSERT_EQ_STR("raised", wpe_scene_get_name(plain.ecs, p));
+    free_fixture(&plain);
+}
+
 static void test_script_ecs_unregister_component(void) {
     WPE_Ecs* ecs = NULL;
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&ecs));
@@ -670,4 +915,6 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_script_lifecycle_order), WPE_TEST_CASE(test_scr
               WPE_TEST_CASE(test_script_host_destroy_and_recreate),
               WPE_TEST_CASE(test_script_fixed_step_clock), WPE_TEST_CASE(test_script_quat_euler_roundtrip),
               WPE_TEST_CASE(test_script_physics_api_and_callbacks), WPE_TEST_CASE(test_script_physics_errors),
-              WPE_TEST_CASE(test_script_audio_api), WPE_TEST_CASE(test_script_ecs_unregister_component))
+              WPE_TEST_CASE(test_script_audio_api), WPE_TEST_CASE(test_script_properties),
+              WPE_TEST_CASE(test_script_input_app_and_draw),
+              WPE_TEST_CASE(test_script_ecs_unregister_component))

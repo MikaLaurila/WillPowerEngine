@@ -304,6 +304,7 @@ static void wpe__script_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* compone
         --host->restricted_depth;
     }
     lua_unref(host->L, s.instance_ref);
+    if (s.property_ref != LUA_NOREF) lua_unref(host->L, s.property_ref);
     if (s.script < host->file_count && host->files[s.script].instances > 0) --host->files[s.script].instances;
 }
 
@@ -369,6 +370,18 @@ WPE_Result wpe_script_host_create(const WPE_ScriptHostDesc* desc, WPE_ScriptHost
     host->assets = desc->assets;
     host->physics = desc->physics;
     host->audio = desc->audio;
+    host->input = desc->input;
+    host->draw2d = desc->draw2d;
+    if (desc->app) host->app = *desc->app;
+    if (desc->font != WPE_ASSET_NONE) {
+        if (!wpe_asset_font(desc->assets, desc->font)) {
+            wpe_log_error("the script host's font handle is not a font");
+            wpe_free(host);
+            return WPE_RESULT_ERROR_INVALID_ARG;
+        }
+        wpe_asset_retain(desc->assets, desc->font);
+        host->font = desc->font;
+    }
     host->memory_limit = desc->memory_limit ? desc->memory_limit : WPE__DEFAULT_MEMORY_LIMIT;
     host->time_limit_seconds =
         (desc->time_limit_ms > 0.0 ? desc->time_limit_ms : WPE__DEFAULT_TIME_LIMIT_MS) / 1000.0;
@@ -426,6 +439,7 @@ void wpe_script_host_destroy(WPE_ScriptHost* host) {
     for (uint32_t i = 0; i < host->sound_count; ++i)
         wpe_asset_release(host->assets, host->sounds[i].sound);
     wpe_free(host->sounds);
+    wpe_asset_release(host->assets, host->font);
     wpe_free(host->files);
     wpe_free(host->pending_destroy);
     wpe_free(host->snapshot);
@@ -459,7 +473,8 @@ WPE_Result wpe_script_attach(WPE_ScriptHost* host, WPE_Entity entity, const char
         lua_pop(host->L, 1);
         return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     }
-    const WPE_Script component = {.script = index, .instance_ref = op.instance_ref};
+    const WPE_Script component = {
+        .script = index, .instance_ref = op.instance_ref, .property_ref = LUA_NOREF};
     result = wpe_ecs_add_component(host->ecs, entity, WPE_COMP_SCRIPT, &component, NULL);
     if (result != WPE_RESULT_OK) {
         lua_unref(host->L, op.instance_ref);
@@ -710,6 +725,177 @@ WPE_Result wpe_script_host_run(WPE_ScriptHost* host, const char* chunk_name, con
         lua_pop(host->L, 1);
         ++host->errors;
         return WPE_RESULT_ERROR;
+    }
+    return WPE_RESULT_OK;
+}
+
+/* ---- Script properties ------------------------------------------------------------------------------ */
+
+const char* wpe_script_path(const WPE_ScriptHost* host, WPE_Entity entity) {
+    if (!host) return NULL;
+    const WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
+    return s && s->script < host->file_count ? host->files[s->script].path : NULL;
+}
+
+static bool wpe__property_name_valid(const char* name) {
+    const size_t length = strlen(name);
+    if (length == 0 || length > 63 || strcmp(name, "entity") == 0) return false;
+    for (size_t i = 0; i < length; ++i) {
+        const char c = name[i];
+        const bool letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+        if (!letter && !(i > 0 && c >= '0' && c <= '9')) return false;
+    }
+    return true;
+}
+
+typedef struct wpe__PropertyOp {
+    int instance_ref;
+    int property_ref; /* in/out: created on first use */
+    const char* name;
+    const WPE_ScriptValue* value;
+} wpe__PropertyOp;
+
+/* Protected: sets instance[name] (raw) and records the name in the property list. */
+static int wpe__op_set_property(lua_State* L) {
+    wpe__PropertyOp* op = lua_touserdata(L, 1);
+    lua_getref(L, op->instance_ref);
+    const int instance = lua_gettop(L);
+    lua_pushstring(L, op->name);
+    switch (op->value->type) {
+    case WPE_SCRIPT_VALUE_NUMBER:
+        lua_pushnumber(L, op->value->number);
+        break;
+    case WPE_SCRIPT_VALUE_BOOL:
+        lua_pushboolean(L, op->value->boolean);
+        break;
+    case WPE_SCRIPT_VALUE_STRING:
+        lua_pushstring(L, op->value->string);
+        break;
+    case WPE_SCRIPT_VALUE_VECTOR:
+        lua_pushvector(L, op->value->vector.x, op->value->vector.y, op->value->vector.z);
+        break;
+    case WPE_SCRIPT_VALUE_NIL:
+        lua_pushnil(L);
+        break;
+    }
+    lua_rawset(L, instance);
+
+    if (op->property_ref == LUA_NOREF) {
+        if (op->value->type == WPE_SCRIPT_VALUE_NIL) return 0;
+        lua_createtable(L, 4, 0);
+        op->property_ref = lua_ref(L, -1);
+    } else {
+        lua_getref(L, op->property_ref);
+    }
+    const int list = lua_gettop(L);
+    const int count = lua_objlen(L, list);
+    int found = 0;
+    for (int i = 1; i <= count && !found; ++i) {
+        lua_rawgeti(L, list, i);
+        if (strcmp(lua_tostring(L, -1), op->name) == 0) found = i;
+        lua_pop(L, 1);
+    }
+    if (op->value->type == WPE_SCRIPT_VALUE_NIL) {
+        /* Remove the name, keeping the order of the others. */
+        for (int i = found; found && i < count; ++i) {
+            lua_rawgeti(L, list, i + 1);
+            lua_rawseti(L, list, i);
+        }
+        if (found) {
+            lua_pushnil(L);
+            lua_rawseti(L, list, count);
+        }
+    } else if (!found) {
+        lua_pushstring(L, op->name);
+        lua_rawseti(L, list, count + 1);
+    }
+    return 0;
+}
+
+WPE_Result wpe_script_set_property(WPE_ScriptHost* host, WPE_Entity entity, const char* name,
+                                   const WPE_ScriptValue* value) {
+    if (!host || !name || !value) return WPE_RESULT_ERROR_NULL_ARG;
+    WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
+    if (!s) return WPE_RESULT_ERROR_NOT_FOUND;
+    if (!wpe__property_name_valid(name)) {
+        wpe_log_error("'%s' is not a valid script property name", name);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    const bool known_type = value->type == WPE_SCRIPT_VALUE_NIL || value->type == WPE_SCRIPT_VALUE_NUMBER ||
+                            value->type == WPE_SCRIPT_VALUE_BOOL || value->type == WPE_SCRIPT_VALUE_VECTOR ||
+                            (value->type == WPE_SCRIPT_VALUE_STRING && value->string);
+    if (!known_type) {
+        wpe_log_error("script property '%s' has an invalid value", name);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    wpe__PropertyOp op = {
+        .instance_ref = s->instance_ref, .property_ref = s->property_ref, .name = name, .value = value};
+    if (lua_cpcall(host->L, wpe__op_set_property, &op) != 0) {
+        lua_pop(host->L, 1);
+        /* A list created before the failure is not referenced by the component; release it. */
+        if (s->property_ref == LUA_NOREF && op.property_ref != LUA_NOREF) lua_unref(host->L, op.property_ref);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    s->property_ref = op.property_ref; /* The ECS was not touched, so `s` is still valid. */
+    return WPE_RESULT_OK;
+}
+
+typedef struct wpe__VisitOp {
+    int instance_ref;
+    int property_ref;
+    WPE_ScriptPropertyFn fn;
+    void* user_data;
+} wpe__VisitOp;
+
+static int wpe__op_visit_properties(lua_State* L) {
+    const wpe__VisitOp* op = lua_touserdata(L, 1);
+    lua_getref(L, op->property_ref);
+    const int list = lua_gettop(L);
+    lua_getref(L, op->instance_ref);
+    const int instance = lua_gettop(L);
+    const int count = lua_objlen(L, list);
+    for (int i = 1; i <= count; ++i) {
+        lua_rawgeti(L, list, i);
+        const char* name = lua_tostring(L, -1);
+        lua_pushvalue(L, -1);
+        lua_rawget(L, instance);
+        WPE_ScriptValue value = {.type = WPE_SCRIPT_VALUE_NIL};
+        switch (lua_type(L, -1)) {
+        case LUA_TNUMBER:
+            value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_NUMBER, .number = lua_tonumber(L, -1)};
+            break;
+        case LUA_TBOOLEAN:
+            value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_BOOL, .boolean = lua_toboolean(L, -1) != 0};
+            break;
+        case LUA_TSTRING:
+            value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_STRING, .string = lua_tostring(L, -1)};
+            break;
+        case LUA_TVECTOR: {
+            const float* v = lua_tovector(L, -1);
+            value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_VECTOR, .vector = wpe_vec3(v[0], v[1], v[2])};
+            break;
+        }
+        default:
+            break;
+        }
+        if (value.type != WPE_SCRIPT_VALUE_NIL) op->fn(name, &value, op->user_data);
+        lua_pop(L, 2);
+    }
+    return 0;
+}
+
+WPE_Result wpe_script_visit_properties(const WPE_ScriptHost* host, WPE_Entity entity, WPE_ScriptPropertyFn fn,
+                                       void* user_data) {
+    if (!host || !fn) return WPE_RESULT_ERROR_NULL_ARG;
+    const WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
+    if (!s) return WPE_RESULT_ERROR_NOT_FOUND;
+    if (s->property_ref == LUA_NOREF) return WPE_RESULT_OK;
+    wpe__VisitOp op = {
+        .instance_ref = s->instance_ref, .property_ref = s->property_ref, .fn = fn, .user_data = user_data};
+    if (lua_cpcall(host->L, wpe__op_visit_properties, &op) != 0) {
+        wpe_log_error("reading script properties failed: %s", lua_tostring(host->L, -1));
+        lua_pop(host->L, 1);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     }
     return WPE_RESULT_OK;
 }

@@ -5,6 +5,13 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Changed
+- Command-line programs (`wpe_pak`, the new `wpe_export` and `wpe_runtime`) build into `build/bin/`.
+- `WPE_PakEntryInfo.offset` is the byte offset in the file, which includes the embedding offset for
+  archives appended to another file.
+- The scripting integration test is replaced by the master scene test (`integration_full_scene`):
+  the API tour now runs inside `scenes/test_full.scene` under the engine runtime.
+- Example scripts read their settings from script properties (`spinner.luau`: speed;
+  `orbit_light.luau`: radius, speed, height).
 - **BREAKING** Assets are shared through a reference-counted asset manager instead of borrowed
   pointers: `WPE_MeshRenderer`/`WPE_Animator` hold a `model_asset` handle (the `model` pointer is
   resolved by the component's add hook), `WPE_Collider.model` is a handle,
@@ -15,6 +22,53 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   as `WPE_RESULT_ERROR_NOT_FOUND`. `WPE_PhysicsDesc` gains `assets` (for convex/mesh colliders).
 
 ### Added
+- Engine runtime (`src/engine`): `WPE_Engine` owns every subsystem of a running game, reads
+  `project.json`, loads scenes, runs the frame loop (input, fixed-step simulation, scripts,
+  animation, audio, rendering with the scene's post-processing and the scripts' 2D drawing on top)
+  and performs scene switches and quits requested by scripts. Headless mode renders without a
+  window and mixes audio without a device.
+- Scene files (`engine/scene_file.h`, format in `docs/scenes.md`): JSON scenes with every built-in
+  component, file-local entity references, model instances (`"instance"`), script properties, the
+  environment (render settings, fog, shadows, up to 8 post effects, gravity, music) and game
+  components through serializers. Loading is strict (errors name the line) and atomic; saving is
+  lossless and stable (load-save cycles reproduce the text).
+- Project files (`engine/project.h`, `docs/runtime.md`): name, display, start scene, fixed rate,
+  audio levels, script limits, named prefabs and input actions.
+- Input (`src/input`): keyboard (physical keys), mouse (framebuffer coordinates, deltas, wheel,
+  capture) and gamepads (standard layout, up to 4 player slots, hot-plug, radial stick and trigger
+  dead zones, rumble) with named actions bound across devices, per player or for any player.
+- `wpe_runtime`: plays a project directory, an archive, or the game embedded in its own executable;
+  `--headless`, `--frames`, `--fixed-dt` and `--screenshot` for automated runs, `--watch` for hot
+  reload. A windowed program on Windows that still logs to a parent terminal; statically linked
+  compiler runtimes.
+- Game export: `wpe_export` (and `wpe_export_game()`) validates a project, packs it and appends the
+  archive to the runtime, producing one self-contained game executable.
+- `.pak` embedding: archives appended to another file are found through a trailer
+  (`wpe_pak_probe`, `wpe_pak_embed`); `wpe_pak_create_from_directory` packs a directory (used by the
+  tool and export).
+- Scripting: input (`wpe.action_*`, `wpe.key_*`, `wpe.mouse_*`, `wpe.set_mouse_captured`,
+  `wpe.gamepad_*`, `wpe.rumble`), game services (`wpe.load_scene`, `wpe.quit`, `wpe.set_camera`,
+  `wpe.get_camera`, `wpe.screen_size`), 2D drawing (`wpe.draw_text`, `wpe.draw_rect`,
+  `wpe.text_size`, `wpe.color`), `wpe.find`, `velocity` in `wpe.add_rigidbody`, and script
+  properties (`wpe_script_set_property`, `wpe_script_visit_properties`, `wpe_script_path`).
+- Primitive model files (`.prim`): planes, boxes and spheres with a material, described in JSON and
+  loaded as models; `wpe_model_create_sphere`.
+- Core: strict JSON reader and pretty-printing writer (`core/json.h`). ECS:
+  `wpe_ecs_component_size`, `wpe_ecs_spawn_serial`. Physics: `WPE_RigidBody.initial_velocity`, and
+  `wpe_physics_create_bodies` (bodies exist right after a scene loads, before the first step).
+  Platform: window event handlers, a window-less event pump, relative mouse mode, window titles,
+  fullscreen windows, the executable's path, file renaming and executable permissions, console
+  attachment and error message boxes.
+- The demo game (`assets/`): `project.json`, a playable third-person scene (`scenes/demo.scene`:
+  a rolling ball with camera-relative movement, jumping, throwing crates, rumble on hard landings,
+  a trigger zone, and a HUD that shows every connected gamepad's live state) and the master test
+  scene (`scenes/test_full.scene`) with every component type, edge cases (an entity without
+  components, extreme transforms, a 2000-entity spawn, prefab cycles) and four post effects.
+- Tests: JSON, input (real SDL events and SDL virtual gamepads: edges, actions, dead zones,
+  triggers, slots, hot-plug, rumble), embedded archives, primitive models, script properties and
+  services, project and scene files (round trips, 40+ rejected mistakes with rollback, game
+  components), the engine (scene switching, quitting, saving, headless rendering) and export, the
+  60-second master scene test, and an export round trip that plays the exported executable.
 - Virtual file system (`src/vfs`): asset paths over mounted directories and `.pak` archives
   (later mounts override earlier ones), whole-file reads, streaming, listing, change times and path
   validation/normalization. glTF models load through it, including `..` references.

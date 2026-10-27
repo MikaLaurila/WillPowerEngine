@@ -1,8 +1,19 @@
+#if !defined(_WIN32)
+#define _POSIX_C_SOURCE 200809L /* readlink, chmod */
+#endif
 #define WPE_LOG_MODULE "platform"
 #include "platform/platform.h"
 
 #include <SDL3/SDL.h>
+#include <stdio.h>
 #include <string.h>
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include "core/alloc.h"
 #include "core/debug.h"
@@ -15,6 +26,8 @@ struct WPE_Window {
     uint32_t texture_width;
     uint32_t texture_height;
     bool quit_requested;
+    WPE_PlatformEventFn event_fn;
+    void* event_user_data;
 };
 
 static_assert(sizeof(WPE_Color) == 4, "presenting assumes 32-bit packed pixels");
@@ -41,7 +54,8 @@ WPE_Result wpe_window_create(const WPE_WindowDesc* desc, WPE_Window** out_window
         return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     }
 
-    const SDL_WindowFlags flags = desc->resizable ? SDL_WINDOW_RESIZABLE : 0;
+    const SDL_WindowFlags flags =
+        (desc->resizable ? SDL_WINDOW_RESIZABLE : 0) | (desc->fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
     if (!SDL_CreateWindowAndRenderer(desc->title, (int)desc->width, (int)desc->height, flags, &window->window,
                                      &window->renderer)) {
         wpe_log_error("window creation failed: %s", SDL_GetError());
@@ -73,8 +87,40 @@ bool wpe_window_poll_events(WPE_Window* window) {
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
             window->quit_requested = true;
         }
+        /* Mouse coordinates in framebuffer pixels (undoing the letterboxed scaling). */
+        SDL_ConvertEventToRenderCoordinates(window->renderer, &event);
+        if (window->event_fn) window->event_fn((const WPE_PlatformEvent*)&event, window->event_user_data);
     }
     return !window->quit_requested;
+}
+
+void wpe_window_set_event_handler(WPE_Window* window, WPE_PlatformEventFn fn, void* user_data) {
+    if (!wpe_check(window != NULL)) return;
+    window->event_fn = fn;
+    window->event_user_data = user_data;
+}
+
+bool wpe_platform_poll_events(WPE_PlatformEventFn fn, void* user_data) {
+    bool quit = false;
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_EVENT_QUIT) quit = true;
+        if (fn) fn((const WPE_PlatformEvent*)&event, user_data);
+    }
+    return !quit;
+}
+
+WPE_Result wpe_window_set_relative_mouse(WPE_Window* window, bool enabled) {
+    if (!window) return WPE_RESULT_ERROR_NULL_ARG;
+    if (SDL_SetWindowRelativeMouseMode(window->window, enabled)) return WPE_RESULT_OK;
+    wpe_log_error("cannot %s relative mouse mode: %s", enabled ? "enable" : "disable", SDL_GetError());
+    return WPE_RESULT_ERROR;
+}
+
+void wpe_window_set_title(WPE_Window* window, const char* title) {
+    if (!wpe_check(window != NULL && title != NULL)) return;
+    if (!SDL_SetWindowTitle(window->window, title))
+        wpe_log_warn("cannot set the window title: %s", SDL_GetError());
 }
 
 WPE_Result wpe_window_present(WPE_Window* window, const WPE_Framebuffer* framebuffer) {
@@ -382,8 +428,91 @@ WPE_Result wpe_path_remove(const char* path) {
     return WPE_RESULT_ERROR_IO;
 }
 
+WPE_Result wpe_path_rename(const char* from, const char* to) {
+    if (!from || !to) return WPE_RESULT_ERROR_NULL_ARG;
+    if (SDL_RenamePath(from, to)) return WPE_RESULT_OK; /* Replaces an existing `to`. */
+    wpe_log_error("cannot rename '%s' to '%s': %s", from, to, SDL_GetError());
+    return WPE_RESULT_ERROR_IO;
+}
+
 void wpe_image_free(WPE_Image* image) {
     if (!image) return;
     wpe_free(image->pixels);
     *image = (WPE_Image){0};
+}
+
+/* ---- Process ------------------------------------------------------------------------------------- */
+
+WPE_Result wpe_platform_executable_path(char* out_path, size_t capacity) {
+    if (!out_path) return WPE_RESULT_ERROR_NULL_ARG;
+    if (capacity == 0) return WPE_RESULT_ERROR_CAPACITY;
+    out_path[0] = '\0';
+#if defined(_WIN32)
+    enum { WIDE_MAX = 32768 }; /* The longest path Windows supports. */
+    wchar_t* wide = wpe_alloc(WIDE_MAX * sizeof *wide);
+    if (!wide) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    const DWORD length = GetModuleFileNameW(NULL, wide, WIDE_MAX);
+    WPE_Result result = WPE_RESULT_OK;
+    if (length == 0 || length >= WIDE_MAX) {
+        wpe_log_error("cannot determine the executable path (error %lu)", (unsigned long)GetLastError());
+        result = WPE_RESULT_ERROR_IO;
+    }
+    const int needed =
+        result == WPE_RESULT_OK ? WideCharToMultiByte(CP_UTF8, 0, wide, (int)length, NULL, 0, NULL, NULL) : 0;
+    if (result == WPE_RESULT_OK && needed <= 0) result = WPE_RESULT_ERROR_IO;
+    if (result == WPE_RESULT_OK && (size_t)needed >= capacity) result = WPE_RESULT_ERROR_CAPACITY;
+    if (result == WPE_RESULT_OK) {
+        WideCharToMultiByte(CP_UTF8, 0, wide, (int)length, out_path, needed, NULL, NULL);
+        out_path[needed] = '\0';
+    }
+    wpe_free(wide);
+    if (result != WPE_RESULT_OK) return result;
+#else
+    const ssize_t length = readlink("/proc/self/exe", out_path, capacity);
+    if (length < 0) {
+        wpe_log_error("cannot determine the executable path");
+        return WPE_RESULT_ERROR_IO;
+    }
+    if ((size_t)length >= capacity) {
+        out_path[0] = '\0';
+        return WPE_RESULT_ERROR_CAPACITY;
+    }
+    out_path[length] = '\0';
+#endif
+    return WPE_RESULT_OK;
+}
+
+void wpe_platform_attach_console(void) {
+#if defined(_WIN32)
+    /* Output redirected by the parent (pipes, files) already works; only an interactive parent
+     * console needs attaching. */
+    const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out != NULL && out != INVALID_HANDLE_VALUE && GetFileType(out) != FILE_TYPE_UNKNOWN) return;
+    if (!AttachConsole(ATTACH_PARENT_PROCESS)) return; /* Started without a console (e.g. double-clicked). */
+    if (!freopen("CONOUT$", "w", stdout) || !freopen("CONOUT$", "w", stderr)) return;
+#endif
+}
+
+void wpe_platform_show_error(const char* title, const char* message) {
+    if (!title || !message) return;
+    if (!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, message, NULL))
+        wpe_log_error("%s: %s", title, message); /* No display available: the log has to do. */
+}
+
+WPE_Result wpe_file_set_executable(const char* path) {
+    if (!path) return WPE_RESULT_ERROR_NULL_ARG;
+#if defined(_WIN32)
+    /* Windows decides executability by extension. */
+    SDL_PathInfo info;
+    return SDL_GetPathInfo(path, &info) && info.type == SDL_PATHTYPE_FILE ? WPE_RESULT_OK
+                                                                          : WPE_RESULT_ERROR_NOT_FOUND;
+#else
+    struct stat status;
+    if (stat(path, &status) != 0) return WPE_RESULT_ERROR_NOT_FOUND;
+    /* Executable for everyone who may read it. */
+    const mode_t mode = status.st_mode | ((status.st_mode & (S_IRUSR | S_IRGRP | S_IROTH)) >> 2);
+    if (chmod(path, mode) == 0) return WPE_RESULT_OK;
+    wpe_log_error("cannot make '%s' executable", path);
+    return WPE_RESULT_ERROR_IO;
+#endif
 }

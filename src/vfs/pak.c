@@ -2,6 +2,7 @@
 #include "vfs/pak.h"
 
 #define ZSTD_STATIC_LINKING_ONLY /* ZSTD_customMem: route allocations through wpe_alloc. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zstd.h>
@@ -20,6 +21,10 @@
 
 static const unsigned char wpe__pak_magic[8] = {'W', 'P', 'E', '_', 'P', 'A', 'K', '\0'};
 
+/* Trailer of a file carrying an embedded archive: archive offset and size, then this magic. */
+#define WPE__EMBED_TRAILER_SIZE 24u
+static const unsigned char wpe__embed_magic[8] = {'W', 'P', 'E', '_', 'E', 'M', 'B', 'D'};
+
 typedef struct wpe__PakEntry {
     uint64_t offset;
     uint64_t stored_size;
@@ -31,6 +36,7 @@ typedef struct wpe__PakEntry {
 
 struct WPE_Pak {
     char* os_path;
+    uint64_t base; /* File offset of the archive (non-zero when embedded in another file). */
     wpe__PakEntry* entries;
     uint32_t entry_count;
     char* paths; /* NUL-terminated paths, back to back. */
@@ -153,6 +159,46 @@ corrupt:
     return WPE_RESULT_ERROR_PARSE;
 }
 
+/*
+ * Finds the archive inside an open file: the whole file when it starts with the archive magic,
+ * otherwise the range named by an embed trailer at its end. Returns false if neither is present.
+ */
+static bool wpe__locate_archive(WPE_File* file, uint64_t file_size, uint64_t* out_base, uint64_t* out_size) {
+    unsigned char magic[sizeof wpe__pak_magic];
+    if (file_size < WPE__PAK_HEADER_SIZE || wpe_file_seek(file, 0) != WPE_RESULT_OK ||
+        !wpe__read_exact(file, magic, sizeof magic))
+        return false;
+    if (memcmp(magic, wpe__pak_magic, sizeof magic) == 0) {
+        *out_base = 0;
+        *out_size = file_size;
+        return true;
+    }
+    unsigned char trailer[WPE__EMBED_TRAILER_SIZE];
+    if (file_size < WPE__PAK_HEADER_SIZE + WPE__EMBED_TRAILER_SIZE ||
+        wpe_file_seek(file, file_size - WPE__EMBED_TRAILER_SIZE) != WPE_RESULT_OK ||
+        !wpe__read_exact(file, trailer, sizeof trailer) ||
+        memcmp(trailer + 16, wpe__embed_magic, sizeof wpe__embed_magic) != 0)
+        return false;
+    const uint64_t base = wpe__get_u64(trailer);
+    const uint64_t size = wpe__get_u64(trailer + 8);
+    const uint64_t available = file_size - WPE__EMBED_TRAILER_SIZE;
+    if (base > available || size != available - base || size < WPE__PAK_HEADER_SIZE) return false;
+    *out_base = base;
+    *out_size = size;
+    return true;
+}
+
+bool wpe_pak_probe(const char* os_path) {
+    if (!os_path) return false;
+    WPE_File* file = NULL;
+    if (wpe_file_open(os_path, false, &file) != WPE_RESULT_OK) return false;
+    uint64_t base = 0, size = 0;
+    const uint64_t file_size = wpe_file_size(file);
+    const bool found = file_size != UINT64_MAX && wpe__locate_archive(file, file_size, &base, &size);
+    wpe_file_close(file);
+    return found;
+}
+
 WPE_Result wpe_pak_open(const char* os_path, WPE_Pak** out_pak) {
     if (!os_path || !out_pak) return WPE_RESULT_ERROR_NULL_ARG;
     *out_pak = NULL;
@@ -172,9 +218,11 @@ WPE_Result wpe_pak_open(const char* os_path, WPE_Pak** out_pak) {
         result = WPE_RESULT_ERROR_IO;
         goto done;
     }
-    if (file_size < WPE__PAK_HEADER_SIZE || !wpe__read_exact(file, header, sizeof header) ||
+    uint64_t pak_size = 0;
+    if (!wpe__locate_archive(file, file_size, &pak->base, &pak_size) ||
+        wpe_file_seek(file, pak->base) != WPE_RESULT_OK || !wpe__read_exact(file, header, sizeof header) ||
         memcmp(header, wpe__pak_magic, sizeof wpe__pak_magic) != 0) {
-        wpe_log_error("'%s' is not a .pak archive (or was not finished)", os_path);
+        wpe_log_error("'%s' is not a .pak archive and carries none (or it was not finished)", os_path);
         result = WPE_RESULT_ERROR_PARSE;
         goto done;
     }
@@ -191,8 +239,8 @@ WPE_Result wpe_pak_open(const char* os_path, WPE_Pak** out_pak) {
     const uint32_t index_crc = wpe__get_u32(header + 32);
     /* The index is the last thing in the file. */
     if (pak->entry_count > WPE_PAK_MAX_ENTRIES || index_size > WPE__PAK_MAX_INDEX_SIZE ||
-        index_offset < WPE__PAK_HEADER_SIZE || index_offset > file_size ||
-        file_size - index_offset != index_size || wpe__get_u32(header + 36) != 0) {
+        index_offset < WPE__PAK_HEADER_SIZE || index_offset > pak_size ||
+        pak_size - index_offset != index_size || wpe__get_u32(header + 36) != 0) {
         wpe_log_error("'%s': corrupt .pak header", os_path);
         result = WPE_RESULT_ERROR_PARSE;
         goto done;
@@ -202,7 +250,7 @@ WPE_Result wpe_pak_open(const char* os_path, WPE_Pak** out_pak) {
         result = WPE_RESULT_ERROR_OUT_OF_MEMORY;
         goto done;
     }
-    if (wpe_file_seek(file, index_offset) != WPE_RESULT_OK ||
+    if (wpe_file_seek(file, pak->base + index_offset) != WPE_RESULT_OK ||
         !wpe__read_exact(file, index, (size_t)index_size)) {
         wpe_log_error("'%s': cannot read the .pak index", os_path);
         result = WPE_RESULT_ERROR_IO;
@@ -265,7 +313,7 @@ WPE_PakEntryInfo wpe_pak_entry(const WPE_Pak* pak, uint32_t index) {
     return (WPE_PakEntryInfo){.path = pak->paths + e->path,
                               .size = e->size,
                               .stored_size = e->stored_size,
-                              .offset = e->offset,
+                              .offset = pak->base + e->offset,
                               .crc32 = e->crc32,
                               .compressed = e->compressed};
 }
@@ -298,7 +346,7 @@ WPE_Result wpe_pak_read(const WPE_Pak* pak, uint32_t index, void** out_data, siz
     WPE_File* file = NULL;
     WPE_Result result =
         (!data || !stored) ? WPE_RESULT_ERROR_OUT_OF_MEMORY : wpe_file_open(pak->os_path, false, &file);
-    if (result == WPE_RESULT_OK && (wpe_file_seek(file, e->offset) != WPE_RESULT_OK ||
+    if (result == WPE_RESULT_OK && (wpe_file_seek(file, pak->base + e->offset) != WPE_RESULT_OK ||
                                     !wpe__read_exact(file, stored, (size_t)e->stored_size))) {
         wpe_log_error("'%s': cannot read '%s'", pak->os_path, path);
         result = WPE_RESULT_ERROR_IO;
@@ -489,4 +537,152 @@ void wpe_pak_writer_destroy(WPE_PakWriter* writer) {
     wpe_free(writer->records);
     ZSTD_freeCCtx(writer->zstd);
     wpe_free(writer);
+}
+
+/* ---- Embedding ----------------------------------------------------------------------------------- */
+
+/* Appends the whole of `path` to `out`; returns the number of bytes copied via out_size. */
+static WPE_Result wpe__append_file(WPE_File* out, const char* path, unsigned char* buffer, size_t buffer_size,
+                                   uint64_t* out_size) {
+    WPE_File* in = NULL;
+    WPE_Result result = wpe_file_open(path, false, &in);
+    if (result == WPE_RESULT_ERROR_NOT_FOUND) wpe_log_error("'%s' not found", path);
+    if (result != WPE_RESULT_OK) return result;
+    const uint64_t size = wpe_file_size(in);
+    if (size == UINT64_MAX) result = WPE_RESULT_ERROR_IO;
+    uint64_t copied = 0;
+    while (result == WPE_RESULT_OK && copied < size) {
+        const size_t chunk = size - copied < buffer_size ? (size_t)(size - copied) : buffer_size;
+        if (wpe_file_read(in, buffer, chunk) != chunk) {
+            wpe_log_error("cannot read '%s'", path);
+            result = WPE_RESULT_ERROR_IO;
+            break;
+        }
+        result = wpe_file_write(out, buffer, chunk);
+        copied += chunk;
+    }
+    wpe_file_close(in);
+    *out_size = copied;
+    return result;
+}
+
+WPE_Result wpe_pak_embed(const char* host_path, const char* pak_path, const char* out_path) {
+    if (!host_path || !pak_path || !out_path) return WPE_RESULT_ERROR_NULL_ARG;
+    if (strcmp(out_path, host_path) == 0 || strcmp(out_path, pak_path) == 0) {
+        wpe_log_error("the embedded output must be a new file");
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    if (wpe_pak_probe(host_path)) {
+        wpe_log_error("'%s' already carries an archive; embed into the original executable", host_path);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    /* Only a valid, stand-alone archive may be embedded (opening it verifies the header and index). */
+    WPE_Pak* pak = NULL;
+    WPE_Result result = wpe_pak_open(pak_path, &pak);
+    if (result != WPE_RESULT_OK) return result;
+    const bool standalone = pak->base == 0;
+    wpe_pak_close(pak);
+    if (!standalone) {
+        wpe_log_error("'%s' is itself embedded in another file", pak_path);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+
+    enum { BUFFER_SIZE = 1 << 16 };
+    unsigned char* buffer = wpe_alloc(BUFFER_SIZE);
+    if (!buffer) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    WPE_File* out = NULL;
+    result = wpe_file_open(out_path, true, &out);
+    uint64_t host_size = 0, pak_size = 0;
+    if (result == WPE_RESULT_OK) result = wpe__append_file(out, host_path, buffer, BUFFER_SIZE, &host_size);
+    if (result == WPE_RESULT_OK) result = wpe__append_file(out, pak_path, buffer, BUFFER_SIZE, &pak_size);
+    if (result == WPE_RESULT_OK) {
+        unsigned char trailer[WPE__EMBED_TRAILER_SIZE];
+        wpe__put_u64(trailer, host_size);
+        wpe__put_u64(trailer + 8, pak_size);
+        memcpy(trailer + 16, wpe__embed_magic, sizeof wpe__embed_magic);
+        result = wpe_file_write(out, trailer, sizeof trailer);
+    }
+    const WPE_Result closed = out ? wpe_file_close(out) : WPE_RESULT_OK;
+    if (result == WPE_RESULT_OK) result = closed;
+    wpe_free(buffer);
+    if (result != WPE_RESULT_OK && out) wpe_path_remove(out_path);
+    return result;
+}
+
+/* ---- Packing a directory -------------------------------------------------------------------------- */
+
+typedef struct wpe__PathList {
+    char** paths;
+    uint32_t count, capacity;
+    uint32_t skipped;
+    bool out_of_memory;
+} wpe__PathList;
+
+static bool wpe__collect_path(const char* path, void* user_data) {
+    wpe__PathList* list = user_data;
+    if (!wpe_vfs_path_is_valid(path)) {
+        wpe_log_warn("skipping '%s': not a valid asset path", path);
+        ++list->skipped;
+        return true;
+    }
+    if (list->count == list->capacity) {
+        const uint32_t capacity = list->capacity ? list->capacity * 2 : 256;
+        char** paths = wpe_realloc(list->paths, (size_t)capacity * sizeof *paths);
+        if (!paths) {
+            list->out_of_memory = true;
+            return false;
+        }
+        list->paths = paths;
+        list->capacity = capacity;
+    }
+    char* copy = wpe__strdup(path);
+    if (!copy) {
+        list->out_of_memory = true;
+        return false;
+    }
+    list->paths[list->count++] = copy;
+    return true;
+}
+
+static int wpe__compare_paths(const void* a, const void* b) {
+    return strcmp(*(char* const*)a, *(char* const*)b);
+}
+
+WPE_Result wpe_pak_create_from_directory(const char* os_path, const char* directory, int compression_level,
+                                         WPE_PakPackStats* out_stats) {
+    if (!os_path || !directory) return WPE_RESULT_ERROR_NULL_ARG;
+    if (out_stats) *out_stats = (WPE_PakPackStats){0};
+    wpe__PathList list = {0};
+    WPE_Result result = wpe_directory_walk(directory, wpe__collect_path, &list);
+    if (result == WPE_RESULT_ERROR_NOT_FOUND) wpe_log_error("'%s' is not a directory", directory);
+    if (list.out_of_memory) result = WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    /* Sorted input makes the archive reproducible. */
+    if (list.count > 1) qsort(list.paths, list.count, sizeof *list.paths, wpe__compare_paths);
+
+    WPE_PakWriter* writer = NULL;
+    if (result == WPE_RESULT_OK) result = wpe_pak_writer_create(os_path, compression_level, &writer);
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < list.count && result == WPE_RESULT_OK; ++i) {
+        char full[1024];
+        if (snprintf(full, sizeof full, "%s/%s", directory, list.paths[i]) >= (int)sizeof full) {
+            wpe_log_error("path too long: %s", list.paths[i]);
+            result = WPE_RESULT_ERROR_CAPACITY;
+            break;
+        }
+        void* data = NULL;
+        size_t size = 0;
+        result = wpe_file_read_all(full, &data, &size);
+        if (result == WPE_RESULT_OK)
+            result = wpe_pak_writer_add(writer, list.paths[i], data, size, WPE_PAK_COMPRESS_AUTO);
+        total += size;
+        wpe_free(data);
+    }
+    if (result == WPE_RESULT_OK) result = wpe_pak_writer_finish(writer);
+    wpe_pak_writer_destroy(writer);
+    if (out_stats)
+        *out_stats = (WPE_PakPackStats){.files = list.count, .skipped = list.skipped, .bytes = total};
+    for (uint32_t i = 0; i < list.count; ++i)
+        wpe_free(list.paths[i]);
+    wpe_free(list.paths);
+    return result;
 }

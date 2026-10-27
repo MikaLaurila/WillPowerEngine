@@ -1,10 +1,12 @@
 #define WPE_LOG_MODULE "assets"
 #include "assets/procedural.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "core/alloc.h"
+#include "core/json.h"
 #include "core/log.h"
 
 static bool wpe__material_has_textures(const WPE_Material* m) {
@@ -188,4 +190,180 @@ WPE_Result wpe_model_create_box(WPE_Vec3 size, const WPE_Material* material, WPE
         memcpy(&indices[(size_t)f * 6], face_indices, sizeof face_indices);
     }
     return wpe_model_create_mesh(vertices, 24, indices, 36, material, "box", out_model);
+}
+
+WPE_Result wpe_model_create_sphere(float radius, uint32_t rings, uint32_t segments,
+                                   const WPE_Material* material, WPE_Model** out_model) {
+    if (!out_model) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!(radius > 0.0f) || rings < 2 || rings > 512 || segments < 3 || segments > 1024)
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    /* Latitude-longitude grid; the seam column is duplicated so UVs wrap cleanly. */
+    const uint32_t row = segments + 1;
+    const uint32_t vertex_count = (rings + 1) * row;
+    const uint32_t index_count = (rings - 1) * segments * 6; /* Pole rows have one triangle per quad. */
+    WPE_MeshVertex* vertices = wpe_alloc((size_t)vertex_count * sizeof *vertices);
+    uint32_t* indices = wpe_alloc((size_t)index_count * sizeof *indices);
+    if (!vertices || !indices) {
+        wpe_free(vertices);
+        wpe_free(indices);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    const float pi = 3.14159265358979f;
+    for (uint32_t r = 0; r <= rings; ++r) {
+        const float v = (float)r / (float)rings, theta = v * pi; /* 0 at the top pole. */
+        for (uint32_t s = 0; s <= segments; ++s) {
+            const float u = (float)s / (float)segments, phi = u * 2.0f * pi;
+            const WPE_Vec3 n = wpe_vec3(sinf(theta) * cosf(phi), cosf(theta), -sinf(theta) * sinf(phi));
+            /* Tangent along increasing u (constant latitude). */
+            vertices[r * row + s] =
+                wpe__vertex(wpe_vec3_scale(n, radius), n, wpe_vec3(-sinf(phi), 0.0f, -cosf(phi)), u, v);
+        }
+    }
+    uint32_t n = 0;
+    for (uint32_t r = 0; r < rings; ++r) {
+        for (uint32_t s = 0; s < segments; ++s) {
+            const uint32_t a = r * row + s, b = a + row, c = a + 1, d = b + 1;
+            /* Counter-clockwise seen from outside; skip the degenerate triangle at each pole. */
+            if (r > 0) {
+                indices[n++] = a;
+                indices[n++] = b;
+                indices[n++] = c;
+            }
+            if (r + 1 < rings) {
+                indices[n++] = c;
+                indices[n++] = b;
+                indices[n++] = d;
+            }
+        }
+    }
+    const WPE_Result result =
+        wpe_model_create_mesh(vertices, vertex_count, indices, n, material, "sphere", out_model);
+    wpe_free(vertices);
+    wpe_free(indices);
+    return result;
+}
+
+/* ---- Primitive description files -------------------------------------------------------------------- */
+
+/* Reads an optional array of `count` numbers; false (logged) if present but malformed. */
+static bool wpe__prim_numbers(const WPE_JsonValue* value, uint32_t min_count, uint32_t max_count, float* out,
+                              const char* name, const char* key) {
+    if (!value) return true;
+    const uint32_t count = wpe_json_count(value);
+    if (wpe_json_type(value) != WPE_JSON_ARRAY || count < min_count || count > max_count) {
+        wpe_log_error("'%s': \"%s\" must be an array of %u..%u numbers", name, key, min_count, max_count);
+        return false;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        const WPE_JsonValue* item = wpe_json_at(value, i);
+        if (wpe_json_type(item) != WPE_JSON_NUMBER) {
+            wpe_log_error("'%s': \"%s\" must contain only numbers", name, key);
+            return false;
+        }
+        out[i] = (float)wpe_json_number(item, 0.0);
+    }
+    return true;
+}
+
+static bool wpe__prim_number(const WPE_JsonValue* root, const char* key, float* io_value, const char* name) {
+    const WPE_JsonValue* value = wpe_json_get(root, key);
+    if (!value) return true;
+    if (wpe_json_type(value) != WPE_JSON_NUMBER) {
+        wpe_log_error("'%s': \"%s\" must be a number", name, key);
+        return false;
+    }
+    *io_value = (float)wpe_json_number(value, 0.0);
+    return true;
+}
+
+WPE_Result wpe_model_parse_primitive(const char* text, size_t size, const char* name, WPE_Model** out_model) {
+    if (!text || !out_model) return WPE_RESULT_ERROR_NULL_ARG;
+    *out_model = NULL;
+    if (!name) name = "primitive";
+    WPE_JsonDocument* doc = NULL;
+    WPE_JsonError error;
+    WPE_Result result = wpe_json_parse(text, size, &doc, &error);
+    if (result == WPE_RESULT_ERROR_PARSE)
+        wpe_log_error("'%s':%u:%u: %s", name, error.line, error.column, error.message);
+    if (result != WPE_RESULT_OK) return result;
+
+    const WPE_JsonValue* root = wpe_json_root(doc);
+    static const char* const known[] = {"shape", "size",     "segments",  "rings",    "radius",
+                                        "color", "metallic", "roughness", "emissive", "double_sided"};
+    result = wpe_json_type(root) == WPE_JSON_OBJECT ? WPE_RESULT_OK : WPE_RESULT_ERROR_PARSE;
+    if (result != WPE_RESULT_OK) wpe_log_error("'%s': a primitive description must be a JSON object", name);
+    for (uint32_t i = 0; result == WPE_RESULT_OK && i < wpe_json_count(root); ++i) {
+        const char* key = NULL;
+        wpe_json_member(root, i, &key);
+        bool found = false;
+        for (size_t k = 0; k < sizeof known / sizeof known[0] && !found; ++k)
+            found = strcmp(key, known[k]) == 0;
+        if (!found) {
+            wpe_log_error("'%s': unknown key \"%s\"", name, key);
+            result = WPE_RESULT_ERROR_PARSE;
+        }
+    }
+
+    float color[4] = {1, 1, 1, 1}, emissive[3] = {0, 0, 0}, size3[3] = {1, 1, 1};
+    float metallic = 0.0f, roughness = 0.6f, radius = 0.5f, segments = 0.0f, rings = 0.0f;
+    const char* shape = wpe_json_string(wpe_json_get(root, "shape"));
+    if (result == WPE_RESULT_OK &&
+        (!wpe__prim_numbers(wpe_json_get(root, "color"), 3, 4, color, name, "color") ||
+         !wpe__prim_numbers(wpe_json_get(root, "emissive"), 3, 3, emissive, name, "emissive") ||
+         !wpe__prim_number(root, "metallic", &metallic, name) ||
+         !wpe__prim_number(root, "roughness", &roughness, name) ||
+         !wpe__prim_number(root, "radius", &radius, name) ||
+         !wpe__prim_number(root, "segments", &segments, name) ||
+         !wpe__prim_number(root, "rings", &rings, name)))
+        result = WPE_RESULT_ERROR_PARSE;
+    /* Counts must be whole numbers in range before they are converted. */
+    if (result == WPE_RESULT_OK &&
+        (!(segments >= 0.0f && segments <= 4096.0f) || segments != floorf(segments) ||
+         !(rings >= 0.0f && rings <= 4096.0f) || rings != floorf(rings))) {
+        wpe_log_error("'%s': \"segments\" and \"rings\" must be whole numbers from 1 to 4096", name);
+        result = WPE_RESULT_ERROR_PARSE;
+    }
+    const WPE_JsonValue* size_value = wpe_json_get(root, "size");
+    const WPE_JsonValue* double_sided = wpe_json_get(root, "double_sided");
+    if (result == WPE_RESULT_OK && double_sided && wpe_json_type(double_sided) != WPE_JSON_BOOL) {
+        wpe_log_error("'%s': \"double_sided\" must be true or false", name);
+        result = WPE_RESULT_ERROR_PARSE;
+    }
+
+    WPE_Material material =
+        wpe_material_solid(wpe_vec4(color[0], color[1], color[2], color[3]), metallic, roughness);
+    material.emissive_factor = wpe_vec3(emissive[0], emissive[1], emissive[2]);
+    material.double_sided = wpe_json_bool(double_sided, false);
+    if (result != WPE_RESULT_OK) {
+        /* Reported above. */
+    } else if (!shape) {
+        wpe_log_error("'%s': \"shape\" (\"plane\", \"box\" or \"sphere\") is required", name);
+        result = WPE_RESULT_ERROR_PARSE;
+    } else if (strcmp(shape, "plane") == 0) {
+        float plane_size = 1.0f;
+        if (size_value && wpe_json_type(size_value) != WPE_JSON_NUMBER) {
+            wpe_log_error("'%s': a plane's \"size\" is one number", name);
+            result = WPE_RESULT_ERROR_PARSE;
+        }
+        plane_size = (float)wpe_json_number(size_value, 1.0);
+        if (result == WPE_RESULT_OK)
+            result = wpe_model_create_plane(plane_size, segments > 0.0f ? (uint32_t)segments : 1u, &material,
+                                            out_model);
+    } else if (strcmp(shape, "box") == 0) {
+        if (!wpe__prim_numbers(size_value, 3, 3, size3, name, "size")) result = WPE_RESULT_ERROR_PARSE;
+        if (result == WPE_RESULT_OK)
+            result = wpe_model_create_box(wpe_vec3(size3[0], size3[1], size3[2]), &material, out_model);
+    } else if (strcmp(shape, "sphere") == 0) {
+        result = wpe_model_create_sphere(radius, rings > 0.0f ? (uint32_t)rings : 12u,
+                                         segments > 0.0f ? (uint32_t)segments : 24u, &material, out_model);
+    } else {
+        wpe_log_error("'%s': unknown shape \"%s\" (use \"plane\", \"box\" or \"sphere\")", name, shape);
+        result = WPE_RESULT_ERROR_PARSE;
+    }
+    if (result == WPE_RESULT_ERROR_INVALID_ARG) {
+        wpe_log_error("'%s': %s parameters out of range", name, shape);
+        result = WPE_RESULT_ERROR_PARSE;
+    }
+    wpe_json_free(doc);
+    return result;
 }

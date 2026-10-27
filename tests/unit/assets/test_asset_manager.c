@@ -108,6 +108,81 @@ static void test_assets_load_errors(void) {
     wpe_test_assets_destroy(&t);
 }
 
+static void write_prim(const char* name, const char* text) {
+    char path[256];
+    snprintf(path, sizeof path, ROOT "/prims/%s", name);
+    write_os_file(path, text, strlen(text));
+}
+
+static void test_assets_primitive_models(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/prims"));
+    write_prim("box.prim", "{\"shape\": \"box\", \"size\": [2, 4, 6], \"color\": [1, 0.5, 0.25],\n"
+                           " \"metallic\": 0.5, \"roughness\": 0.25, \"emissive\": [0.1, 0, 0]}");
+    write_prim("ball.prim", "{\"shape\": \"sphere\", \"radius\": 1.5, \"rings\": 8, \"segments\": 12}");
+    write_prim("floor.prim", "{\"shape\": \"plane\", \"size\": 10, \"segments\": 4, \"double_sided\": true}");
+    write_prim("typo.prim", "{\"shape\": \"box\", \"colour\": [1, 1, 1]}");
+    write_prim("shape.prim", "{\"shape\": \"torus\"}");
+    write_prim("noshape.prim", "{\"size\": [1, 1, 1]}");
+    write_prim("badsize.prim", "{\"shape\": \"box\", \"size\": [1, 1]}");
+    write_prim("range.prim", "{\"shape\": \"sphere\", \"rings\": 1}");
+    write_prim("fraction.prim", "{\"shape\": \"plane\", \"segments\": 2.5}");
+    write_prim("syntax.prim", "{\"shape\": \"box\",}");
+    WPE_TestAssets t = wpe_test_assets_create(ROOT "/prims", 0);
+
+    WPE_AssetHandle box = WPE_ASSET_NONE, ball = WPE_ASSET_NONE, floor_model = WPE_ASSET_NONE;
+    WPE_TEST_ASSERT_OK(wpe_asset_load(t.assets, WPE_ASSET_MODEL, "box.prim", &box));
+    const WPE_Model* m = wpe_asset_model(t.assets, box);
+    WPE_TEST_ASSERT(m && m->mesh_count == 1 && m->node_count == 1);
+    WPE_TEST_ASSERT_NEAR(-1.0, m->meshes[0].bounds.min.x, 1e-6);
+    WPE_TEST_ASSERT_NEAR(3.0, m->meshes[0].bounds.max.z, 1e-6);
+    WPE_TEST_ASSERT_NEAR(0.5, m->materials[0].diffuse_factor.y, 1e-6);
+    WPE_TEST_ASSERT_NEAR(1.0, m->materials[0].diffuse_factor.w, 1e-6); /* RGB colors are opaque. */
+    WPE_TEST_ASSERT_NEAR(0.25, m->materials[0].roughness_factor, 1e-6);
+    WPE_TEST_ASSERT_NEAR(0.1, m->materials[0].emissive_factor.x, 1e-6);
+
+    /* Sphere: every vertex on the surface, every triangle facing outwards (counter-clockwise). */
+    WPE_TEST_ASSERT_OK(wpe_asset_load(t.assets, WPE_ASSET_MODEL, "ball.prim", &ball));
+    m = wpe_asset_model(t.assets, ball);
+    WPE_TEST_ASSERT(m != NULL);
+    WPE_TEST_ASSERT_EQ_UINT(9 * 13, m->vertex_count);
+    WPE_TEST_ASSERT_EQ_UINT((8 - 1) * 12 * 6, m->index_count);
+    for (uint32_t v = 0; v < m->vertex_count; ++v) {
+        WPE_TEST_ASSERT_NEAR(1.5, wpe_vec3_length(m->vertices[v].position), 1e-5);
+        WPE_TEST_ASSERT_NEAR(1.0, wpe_vec3_length(m->vertices[v].normal), 1e-5);
+    }
+    for (uint32_t i = 0; i < m->index_count; i += 3) {
+        const WPE_Vec3 a = m->vertices[m->indices[i]].position, b = m->vertices[m->indices[i + 1]].position,
+                       c = m->vertices[m->indices[i + 2]].position;
+        const WPE_Vec3 normal = wpe_vec3_cross(wpe_vec3_sub(b, a), wpe_vec3_sub(c, a));
+        WPE_TEST_ASSERT_MSG(wpe_vec3_length(normal) > 1e-6f, "degenerate triangle %u", i / 3);
+        WPE_TEST_ASSERT_MSG(wpe_vec3_dot(normal, wpe_vec3_add(a, wpe_vec3_add(b, c))) > 0.0f,
+                            "triangle %u faces inwards", i / 3);
+    }
+
+    WPE_TEST_ASSERT_OK(wpe_asset_load(t.assets, WPE_ASSET_MODEL, "floor.prim", &floor_model));
+    m = wpe_asset_model(t.assets, floor_model);
+    WPE_TEST_ASSERT(m && m->vertex_count == 25 && m->materials[0].double_sided);
+    WPE_TEST_ASSERT_NEAR(5.0, m->meshes[0].bounds.max.x, 1e-6);
+
+    /* Mistakes are reported, not ignored. */
+    quiet(true);
+    const char* bad[] = {"typo.prim",  "shape.prim",    "noshape.prim", "badsize.prim",
+                         "range.prim", "fraction.prim", "syntax.prim"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; ++i) {
+        WPE_AssetHandle h = WPE_ASSET_NONE;
+        WPE_TEST_ASSERT_MSG(wpe_asset_load(t.assets, WPE_ASSET_MODEL, bad[i], &h) == WPE_RESULT_ERROR_PARSE,
+                            "%s was accepted", bad[i]);
+    }
+    WPE_AssetHandle missing = WPE_ASSET_NONE;
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND,
+                           wpe_asset_load(t.assets, WPE_ASSET_MODEL, "missing.prim", &missing));
+    quiet(false);
+    wpe_asset_release(t.assets, box);
+    wpe_asset_release(t.assets, ball);
+    wpe_asset_release(t.assets, floor_model);
+    wpe_test_assets_destroy(&t);
+}
+
 static void test_assets_add_takes_ownership(void) {
     WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
     WPE_Model* box = NULL;
@@ -249,6 +324,7 @@ static void test_assets_gltf_with_relative_buffer_from_directory_and_pak(void) {
 }
 
 WPE_TEST_MAIN(WPE_TEST_CASE(test_assets_load_caches_and_counts_references),
-              WPE_TEST_CASE(test_assets_load_errors), WPE_TEST_CASE(test_assets_add_takes_ownership),
-              WPE_TEST_CASE(test_assets_fonts), WPE_TEST_CASE(test_assets_custom_type_from_pak),
+              WPE_TEST_CASE(test_assets_primitive_models), WPE_TEST_CASE(test_assets_load_errors),
+              WPE_TEST_CASE(test_assets_add_takes_ownership), WPE_TEST_CASE(test_assets_fonts),
+              WPE_TEST_CASE(test_assets_custom_type_from_pak),
               WPE_TEST_CASE(test_assets_gltf_with_relative_buffer_from_directory_and_pak))
