@@ -358,6 +358,7 @@ static WPE_Result wpe__create_shape(WPE_Physics* physics, WPE_Entity entity, WPE
         return WPE_RESULT_ERROR_INVALID_ARG;
     }
     collider->wpe__shape = b3StoreShapeId(shape);
+    collider->wpe__scale = scale;
     return WPE_RESULT_OK;
 }
 
@@ -763,6 +764,52 @@ WPE_Result wpe_physics_refresh(WPE_Physics* physics, WPE_Entity entity) {
     if ((rb && rb->wpe__state != WPE__STATE_CREATED) ||
         (collider && collider->wpe__state != WPE__STATE_CREATED))
         return WPE_RESULT_ERROR_INVALID_ARG;
+    return WPE_RESULT_OK;
+}
+
+static bool wpe__scale_differs(WPE_Vec3 a, WPE_Vec3 b) {
+    for (int i = 0; i < 3; ++i) {
+        const float magnitude = fabsf(a.v[i]) > 1.0f ? fabsf(a.v[i]) : 1.0f;
+        if (fabsf(a.v[i] - b.v[i]) > 1e-5f * magnitude) return true;
+    }
+    return false;
+}
+
+/* Moves a body to its entity's world pose, as an edit (no velocity, no kinematic move). */
+static void wpe__place_body(WPE_Physics* physics, WPE_Entity entity, uint64_t stored) {
+    wpe__Pose pose;
+    if (!wpe__world_pose(physics->ecs, entity, &pose)) return;
+    const b3BodyId body = b3LoadBodyId(stored);
+    if (wpe__pose_differs(&pose, b3Body_GetTransform(body)))
+        b3Body_SetTransform(body, wpe__b3_vec(pose.position), wpe__b3_quat(pose.rotation));
+}
+
+WPE_Result wpe_physics_sync(WPE_Physics* physics) {
+    if (!physics) return WPE_RESULT_ERROR_NULL_ARG;
+    WPE_Ecs* ecs = physics->ecs;
+    wpe_physics_create_bodies(physics);
+    /* Shapes are built for one world scale: rebuild those whose entity was rescaled. Rebuilding
+     * changes no ECS structure, so iterating the pool stays valid. */
+    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_PHYSICS_COLLIDER)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_Collider* collider = wpe_ecs_iter_get(&it, WPE_COMP_PHYSICS_COLLIDER);
+        wpe__Pose pose;
+        if (collider->wpe__state == WPE__STATE_CREATED && wpe__world_pose(ecs, it.entity, &pose) &&
+            wpe__scale_differs(pose.scale, collider->wpe__scale))
+            wpe_physics_refresh(physics, it.entity);
+    }
+    it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_PHYSICS_RIGIDBODY)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_RigidBody* rb = wpe_ecs_iter_get(&it, WPE_COMP_PHYSICS_RIGIDBODY);
+        if (rb->wpe__state == WPE__STATE_CREATED) wpe__place_body(physics, it.entity, rb->wpe__body);
+    }
+    it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_PHYSICS_COLLIDER),
+                                           .none = WPE_ECS_MASK(WPE_COMP_PHYSICS_RIGIDBODY)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_Collider* collider = wpe_ecs_iter_get(&it, WPE_COMP_PHYSICS_COLLIDER);
+        if (collider->wpe__state == WPE__STATE_CREATED)
+            wpe__place_body(physics, it.entity, collider->wpe__static_body);
+    }
     return WPE_RESULT_OK;
 }
 

@@ -1,6 +1,7 @@
 #define WPE_LOG_MODULE "engine"
 #include "engine/engine.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -9,6 +10,7 @@
 #include "core/fixed_step.h"
 #include "core/log.h"
 #include "graphics/animation.h"
+#include "graphics/debug_lines.h"
 #include "graphics/draw2d.h"
 #include "graphics/graphics.h"
 #include "graphics/postfx.h"
@@ -18,6 +20,8 @@
 #include "scene/scene.h"
 
 #define WPE__MAX_FRAME_SECONDS 0.25
+#define WPE__GRID_HALF_LINES 50 /* Grid lines on each side of the center. */
+#define WPE__GRID_PIECE 5.0f    /* Grid line pieces, in spacings (each fades on its own). */
 #define WPE__AUDIO_CHUNK_FRAMES 1024u
 
 struct WPE_Engine {
@@ -28,6 +32,8 @@ struct WPE_Engine {
     WPE_SceneRenderer* scene_renderer;
     WPE_PostChain* postfx;
     WPE_Draw2D* draw2d;
+    WPE_DebugLines* debug_lines;
+    WPE_EngineDebugDraw debug_draw;
     WPE_Vfs* vfs;
     WPE_AssetManager* assets;
     WPE_AssetHandle font;
@@ -112,6 +118,7 @@ static WPE_Result wpe__create_graphics(WPE_Engine* engine, const WPE_EngineDesc*
     if (result == WPE_RESULT_OK) result = wpe_scene_renderer_create(&engine->scene_renderer);
     if (result == WPE_RESULT_OK) result = wpe_postfx_create(&engine->postfx);
     if (result == WPE_RESULT_OK) result = wpe_draw2d_create(&engine->draw2d);
+    if (result == WPE_RESULT_OK) result = wpe_debug_lines_create(&engine->debug_lines);
     return result;
 }
 
@@ -224,6 +231,7 @@ void wpe_engine_destroy(WPE_Engine* engine) {
     wpe_vfs_destroy(engine->vfs);
     wpe_input_destroy(engine->input);
     wpe_draw2d_destroy(engine->draw2d);
+    wpe_debug_lines_destroy(engine->debug_lines);
     wpe_postfx_destroy(engine->postfx);
     wpe_scene_renderer_destroy(engine->scene_renderer);
     wpe_window_destroy(engine->window);
@@ -355,6 +363,68 @@ static WPE_Result wpe__mix_audio(WPE_Engine* engine, WPE_Entity camera, double d
     return result;
 }
 
+static void wpe__physics_line(WPE_Vec3 a, WPE_Vec3 b, uint32_t color, void* user_data) {
+    wpe_debug_lines_add(user_data, a, b, 0xFF000000u | color);
+}
+
+/* The ground grid around `eye`: lines every `spacing`, split into pieces that fade with distance. */
+static void wpe__draw_grid(WPE_DebugLines* lines, WPE_Vec3 eye, float spacing) {
+    const float major = spacing * 10.0f;
+    /* Centered on a major line under the camera, so lines stay put while the camera moves. */
+    const float cx = floorf(eye.x / major + 0.5f) * major, cz = floorf(eye.z / major + 0.5f) * major;
+    const float radius = (float)WPE__GRID_HALF_LINES * spacing;
+    const float piece = spacing * WPE__GRID_PIECE;
+    for (int i = -WPE__GRID_HALF_LINES; i <= WPE__GRID_HALF_LINES; ++i) {
+        for (int axis = 0; axis < 2; ++axis) {
+            /* axis 0: a line along X at z = c; axis 1: a line along Z at x = c. */
+            const float c = (axis == 0 ? cz : cx) + (float)i * spacing;
+            const long index = lroundf(c / spacing);
+            uint32_t rgb = 0xA0A0A0u, alpha = 70;
+            if (index == 0) {
+                rgb =
+                    axis == 0 ? 0xE64646u : 0x466EF0u; /* The X axis (z = 0) red, the Z axis (x = 0) blue. */
+                alpha = 220;
+            } else if (index % 10 == 0) {
+                alpha = 140;
+            }
+            for (int p = 0; p < (int)(2.0f * WPE__GRID_HALF_LINES / WPE__GRID_PIECE); ++p) {
+                const float s = -radius + (float)p * piece;
+                const float mid = s + piece * 0.5f;
+                const float dx = axis == 0 ? (cx + mid) - eye.x : c - eye.x;
+                const float dz = axis == 0 ? c - eye.z : (cz + mid) - eye.z;
+                const float fade = 1.0f - sqrtf(dx * dx + dz * dz) / radius;
+                if (fade <= 0.0f) continue;
+                const uint32_t a = (uint32_t)((float)alpha * fade * fade);
+                const WPE_Vec3 p0 = axis == 0 ? wpe_vec3(cx + s, 0, c) : wpe_vec3(c, 0, cz + s);
+                const WPE_Vec3 p1 =
+                    axis == 0 ? wpe_vec3(cx + s + piece, 0, c) : wpe_vec3(c, 0, cz + s + piece);
+                wpe_debug_lines_add(lines, p0, p1, (a << 24) | rgb);
+            }
+        }
+    }
+}
+
+/* The debug overlays, into a recording frame (after post-processing, depth tested against the scene). */
+static WPE_Result wpe__draw_debug(WPE_Engine* engine, WPE_Entity camera) {
+    const WPE_EngineDebugDraw* debug = &engine->debug_draw;
+    if (!debug->physics && !debug->grid) return WPE_RESULT_OK;
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(engine->renderer);
+    WPE_Mat4 view, projection;
+    if (!wpe_scene_camera_matrices(engine->ecs, camera, (float)fb->width / (float)fb->height, &view,
+                                   &projection))
+        return WPE_RESULT_OK;
+    const WPE_Mat4 view_projection = wpe_mat4_mul(&projection, &view);
+    wpe_debug_lines_begin(engine->debug_lines, &view_projection, fb->width, fb->height, 1.0f);
+    if (debug->grid) {
+        WPE_Mat4 world;
+        if (wpe_scene_compute_world_matrix(engine->ecs, camera, &world))
+            wpe__draw_grid(engine->debug_lines, wpe_mat4_transform_point(&world, wpe_vec3(0, 0, 0)),
+                           debug->grid_spacing > 0.0f ? debug->grid_spacing : 1.0f);
+    }
+    if (debug->physics) wpe_physics_debug_draw(engine->physics, wpe__physics_line, engine->debug_lines);
+    return wpe_debug_lines_submit(engine->debug_lines, engine->renderer, true);
+}
+
 static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
     const WPE_SceneEnvironment* env = &engine->environment;
     const WPE_Color clear =
@@ -378,10 +448,11 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
             .near_z = cam->near_z, .far_z = cam->far_z, .orthographic = cam->orthographic};
         result = wpe_postfx_apply(engine->postfx, engine->renderer, effects, count, &post);
     }
-    /* Script 2D drawing goes on top, untouched by post-processing. */
+    /* Debug overlays and script 2D drawing go on top, untouched by post-processing. */
     if (result == WPE_RESULT_OK) result = wpe_renderer_begin_frame(engine->renderer, &(WPE_ClearDesc){0});
     if (result == WPE_RESULT_OK) {
-        result = wpe_draw2d_submit(engine->draw2d, engine->renderer);
+        if (camera != WPE_ENTITY_NULL) result = wpe__draw_debug(engine, camera);
+        if (result == WPE_RESULT_OK) result = wpe_draw2d_submit(engine->draw2d, engine->renderer);
         const WPE_Result end = wpe_renderer_end_frame(engine->renderer);
         if (result == WPE_RESULT_OK) result = end;
     }
@@ -534,6 +605,14 @@ const WPE_ProjectSettings* wpe_engine_project(const WPE_Engine* engine) {
 
 WPE_SceneEnvironment* wpe_engine_environment(WPE_Engine* engine) {
     return engine ? &engine->environment : NULL;
+}
+
+void wpe_engine_set_debug_draw(WPE_Engine* engine, const WPE_EngineDebugDraw* debug_draw) {
+    if (wpe_check(engine != NULL && debug_draw != NULL)) engine->debug_draw = *debug_draw;
+}
+
+WPE_EngineDebugDraw wpe_engine_debug_draw(const WPE_Engine* engine) {
+    return engine ? engine->debug_draw : (WPE_EngineDebugDraw){0};
 }
 
 WPE_EngineStats wpe_engine_stats(const WPE_Engine* engine) {

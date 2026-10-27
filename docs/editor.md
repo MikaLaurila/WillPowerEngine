@@ -15,15 +15,21 @@
 
 | Area | What it does |
 |---|---|
-| Menu and toolbar | **File:** new, open, save, save as, export, quit. **Edit:** undo, redo, duplicate, delete. **Window:** reset the layout. **Play controls:** play, pause, stop. **Gizmo modes:** move, rotate, scale. The open scene is shown with `*` when it has unsaved changes. |
-| Viewport | The game's framebuffer, rendered by the engine. In edit mode it uses the editor's camera:<br>• **Fly:** hold the right mouse button and use WASD (Q/E down/up, Shift faster; the wheel changes the speed).<br>• **Dolly:** the wheel without the right button moves forward and back.<br>• **Select:** click an object; clicking a model selects the entity that placed it.<br>• **Gizmo:** drag a handle of the selection, in the mode W (move), E (rotate) or R (scale). Move and scale have a handle per axis (X red, Y green, Z blue); rotate has a ring per axis. Drag a ring along its edge, and the angle is shown while you drag. Axes are those of the parent's space.<br>• **Add a model:** drop one from Assets. |
+| Menu and toolbar | **File:** new, open, save, save as, export, quit.<br>**Edit:** undo, redo, duplicate, delete.<br>**View:** the grid and its spacing, physics shapes, reloading changed scripts.<br>**Window:** reset the layout.<br>**Play controls:** play, pause, stop.<br>**Gizmo:** move, rotate or scale, and **World**/**Local** axes.<br>The open scene is shown with `*` when it has unsaved changes. |
+| Viewport | The game's framebuffer, rendered by the engine. In edit mode it uses the editor's camera:<br>• **Fly:** hold the right mouse button and use WASD (Q/E down/up, Shift faster; the wheel changes the speed).<br>• **Dolly:** the wheel without the right button moves forward and back.<br>• **Select:** click an object; clicking a model selects the entity that placed it.<br>• **Gizmo:** drag a handle of the selection, in the mode W (move), E (rotate) or R (scale). Move and scale have a handle per axis (X red, Y green, Z blue); rotate has a ring per axis. Drag a ring along its edge, and the angle is shown while you drag. X switches between the world's axes and the entity's own; scaling always uses the entity's own.<br>• **Add a model:** drop one from Assets.<br>• **Grid:** lines on the ground plane (y = 0) around the camera, X axis red and Z axis blue, shown in edit mode.<br>• **Physics shapes:** collider wireframes:<br>&nbsp;&nbsp;– static: green<br>&nbsp;&nbsp;– kinematic: blue<br>&nbsp;&nbsp;– dynamic: orange, or grey while asleep<br>&nbsp;&nbsp;– triggers: yellow<br>They're shown in edit mode, where they follow every move and rescale, and while playing. |
 | Hierarchy | Every entity, as a tree. Click to select. Drag onto another entity to reparent, or onto the empty area below to make it a root. The right-click menu duplicates, deletes or detaches. |
 | Inspector | The selected entity in the scene-file schema: every field of every component, editable. Each component's × removes it. "Add component" adds one; a mesh, sound or script takes the asset path typed in the box above it. |
 | Environment | The scene's render settings, fog, shadows, post-processing, gravity and music. |
 | Assets | The project's files. Double-click a scene to open it, or a model (`.glb`, `.gltf`, `.prim`) to place it. Drag models into the viewport. |
 | Console | Log messages, and a command line that runs JSON commands exactly as an agent would. |
 
-Shortcuts: Ctrl+Z / Ctrl+Y undo and redo, Ctrl+S save, Ctrl+D duplicate, Del delete, F5 play (Shift+F5 or F5 while playing stops), F6 pause.
+Shortcuts:
+- **Editing:** Ctrl+Z / Ctrl+Y undo and redo, Ctrl+S save, Ctrl+D duplicate, Del delete.
+- **Playing:** F5 play (Shift+F5, or F5 while playing, stops), F6 pause.
+- **Gizmo:** W / E / R choose move, rotate or scale; X switches world/local axes.
+- **View:** G toggles the grid, P the physics shapes.
+
+**Script hot reload:** while it's on (the default), changed scripts are reloaded twice a second, in edit mode and while playing. Running instances switch to the new code and keep their state (`on_reload` is called). A script that fails to compile is reported in the console, and the previous version keeps running.
 
 **Play mode** runs the game from the current scene: scripts, physics, audio and input work as in the runtime, with the game's own camera. Keyboard and mouse reach the game while the viewport is focused; gamepads always do. **Stop** returns the scene to exactly how it was when play started, and the scene can't be edited while it plays. A game that calls `wpe.quit()` simply stops.
 
@@ -56,6 +62,7 @@ Entities and components use the **scene-file schema** ([scenes.md](scenes.md)), 
 | `select` | `{id or null}` |
 | `get_environment` / `set_environment` | `{}` / `{value: {...}}` (merged: keys left out keep their values) → the environment |
 | `new_scene`, `load_scene`, `save_scene` | `{}`, `{path}`, `{path?}`: asset paths inside the project; `save_scene` without a path saves the open scene |
+| `get_view` / `set_view` | `{}` / `{value: {grid, grid_spacing, physics, gizmo: "move"\|"rotate"\|"scale", gizmo_space: "world"\|"local", hot_reload}}` (merged; all or nothing) → the view. View settings aren't part of the scene: they are never saved or undone. |
 | `undo`, `redo` | `{}` |
 | `play`, `pause`, `stop` | `{}` (play also resumes) |
 | `frames` | `{count = 1, dt = 1/60}`: runs frames (simulated in play mode) |

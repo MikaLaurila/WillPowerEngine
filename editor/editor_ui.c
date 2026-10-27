@@ -31,8 +31,6 @@
 #define WPE__COL(r, g, b, a)                                                                                 \
     (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(r))
 
-typedef enum wpe__GizmoMode { WPE__GIZMO_MOVE = 0, WPE__GIZMO_ROTATE, WPE__GIZMO_SCALE } wpe__GizmoMode;
-
 typedef struct wpe__Edit {
     const WPE_JsonValue* target; /* The leaf being replaced. */
     WPE_JsonType type;
@@ -57,8 +55,7 @@ struct WPE_EditorUi {
     float yaw, pitch, speed;
     bool flying, camera_initialized;
 
-    /* Gizmo. */
-    wpe__GizmoMode gizmo_mode;
+    /* Gizmo (its mode and space are view settings of the editor). */
     int gizmo_axis; /* -1: none, 0..2: dragged axis. */
     int gizmo_hover;
     uint32_t gizmo_drag;
@@ -124,6 +121,24 @@ static WPE_Result wpe__ui_send(WPE_EditorUi* ui, WPE_JsonWriter* w) {
 
 static void wpe__ui_simple(WPE_EditorUi* ui, const char* name) {
     wpe__ui_send(ui, wpe__ui_begin(name));
+}
+
+/* set_view with one setting: a bool, a number, or (when `text` is set) a string. */
+static void wpe__ui_set_view(WPE_EditorUi* ui, const char* key, const char* text, double number, bool flag) {
+    WPE_JsonWriter* w = wpe__ui_begin("set_view");
+    if (!w) return;
+    wpe_json_write_key(w, "value");
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, key);
+    if (text) {
+        wpe_json_write_string(w, text);
+    } else if (strcmp(key, "grid_spacing") == 0) {
+        wpe_json_write_double(w, number);
+    } else {
+        wpe_json_write_bool(w, flag);
+    }
+    wpe_json_write_object_end(w);
+    wpe__ui_send(ui, w);
 }
 
 static void wpe__ui_entity_command(WPE_EditorUi* ui, const char* name, WPE_Entity entity) {
@@ -513,6 +528,11 @@ static void wpe__send_transform(WPE_EditorUi* ui, WPE_Entity entity, const WPE_T
     wpe__ui_send(ui, w);
 }
 
+/* The inverse of a unit quaternion. */
+static WPE_Quat wpe__quat_conjugate(WPE_Quat q) {
+    return (WPE_Quat){.x = -q.x, .y = -q.y, .z = -q.z, .w = q.w};
+}
+
 /* Distance from `p` to the screen segment a..b; `out_s` receives the closest point's parameter (0..1). */
 static float wpe__segment_distance(ImVec2_c a, ImVec2_c b, ImVec2_c p, float* out_s) {
     const float dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
@@ -545,12 +565,16 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
         ui->gizmo_axis = -1;
         return false;
     }
-    /* Axes of the parent's space, in which the local transform is expressed. */
+    /* The transform is expressed in the parent's space; drags are converted into it. */
     WPE_Mat4 parent_world = wpe_mat4_identity();
     const WPE_Entity parent = wpe_scene_get_parent(ecs, entity);
     if (parent) wpe_scene_compute_world_matrix(ecs, parent, &parent_world);
     WPE_Mat4 world;
     wpe_scene_compute_world_matrix(ecs, entity, &world);
+    const WPE_EditorView view = wpe_editor_view(ui->editor);
+    /* Handle axes in world space: the entity's own (local space, and always for scaling, which acts
+     * along them) or the world's. */
+    const bool own_axes = view.gizmo_local || view.gizmo == WPE_EDITOR_GIZMO_SCALE;
     const WPE_Vec3 center = wpe_mat4_transform_point(&world, wpe_vec3(0, 0, 0));
     ImVec2_c c;
     if (!wpe__to_screen(ui, &view_projection, center, &c)) return false;
@@ -561,17 +585,18 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
     const float length = distance * 0.18f;
     static const uint32_t colors[3] = {WPE__COL(230, 70, 70, 255), WPE__COL(70, 210, 70, 255),
                                        WPE__COL(70, 110, 240, 255)};
-    const bool rotate = ui->gizmo_mode == WPE__GIZMO_ROTATE;
+    const bool rotate = view.gizmo == WPE_EDITOR_GIZMO_ROTATE;
     WPE_Vec3 axes[3];
-    ImVec2_c ends[3];
-    bool visible[3];
-    ImVec2_c ring[3][WPE__RING_SEGMENTS];
-    bool ring_visible[3][WPE__RING_SEGMENTS];
+    ImVec2_c ends[3] = {0};
+    bool visible[3] = {false, false, false};
+    ImVec2_c ring[3][WPE__RING_SEGMENTS] = {0};
+    bool ring_visible[3][WPE__RING_SEGMENTS] = {0};
     const ImVec2_c mouse = igGetMousePos();
     int hover = -1, hover_segment = 0;
     float hover_distance = 8.0f;
     for (int a = 0; a < 3; ++a) {
-        axes[a] = wpe_vec3_normalize(wpe_mat4_transform_dir(&parent_world, wpe__unit(a)));
+        const WPE_Vec3 own = wpe_mat4_transform_dir(&world, wpe__unit(a));
+        axes[a] = own_axes && wpe_vec3_length(own) > 1e-9f ? wpe_vec3_normalize(own) : wpe__unit(a);
         if (rotate) {
             for (int i = 0; i < WPE__RING_SEGMENTS; ++i)
                 ring_visible[a][i] = wpe__to_screen(ui, &view_projection,
@@ -612,7 +637,7 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
         }
         if (!visible[a]) continue;
         ImDrawList_AddLine(draw, c, ends[a], color, 3.0f);
-        if (ui->gizmo_mode == WPE__GIZMO_SCALE) {
+        if (view.gizmo == WPE_EDITOR_GIZMO_SCALE) {
             ImDrawList_AddRectFilled(draw, (ImVec2_c){ends[a].x - 4, ends[a].y - 4},
                                      (ImVec2_c){ends[a].x + 4, ends[a].y + 4}, color, 0.0f, 0);
         } else {
@@ -651,14 +676,22 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
         return true;
     }
     const int a = ui->gizmo_axis;
+    if (a > 2) return true;
     const float mx = mouse.x - ui->gizmo_mouse_x, my = mouse.y - ui->gizmo_mouse_y;
     WPE_Transform moved = ui->gizmo_start;
-    const WPE_Vec3 unit = wpe__unit(a);
     if (rotate) {
-        /* Mouse movement along the grabbed point's tangent: 0.6 degrees per pixel. */
+        /* Mouse movement along the grabbed point's tangent: 0.6 degrees per pixel. A world-space turn
+         * about the axis, expressed in the parent's space: parent^-1 * turn * parent * rotation. */
         const float angle = (mx * ui->gizmo_tangent_x + my * ui->gizmo_tangent_y) * 0.01f;
-        moved.rotation =
-            wpe_quat_normalize(wpe_quat_mul(wpe_quat_from_axis_angle(unit, angle), moved.rotation));
+        WPE_Vec3 parent_position, parent_scale;
+        WPE_Quat parent_rotation = wpe_quat_identity();
+        if (!wpe_mat4_decompose(&parent_world, &parent_position, &parent_rotation, &parent_scale))
+            parent_rotation = wpe_quat_identity();
+        parent_rotation = wpe_quat_normalize(parent_rotation);
+        const WPE_Quat turn = wpe_quat_from_axis_angle(axes[a], angle);
+        const WPE_Quat in_parent =
+            wpe_quat_mul(wpe__quat_conjugate(parent_rotation), wpe_quat_mul(turn, parent_rotation));
+        moved.rotation = wpe_quat_normalize(wpe_quat_mul(in_parent, moved.rotation));
         char label[32];
         snprintf(label, sizeof label, "%.1f deg", (double)(angle * 57.2957795f));
         ImDrawList_AddText_Vec2(draw, (ImVec2_c){c.x + 12.0f, c.y - 22.0f}, WPE__COL(255, 255, 255, 230),
@@ -666,17 +699,18 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
         wpe__send_transform(ui, entity, &moved);
         return true;
     }
+    if (!visible[a]) return true;
     const float dx = ends[a].x - c.x, dy = ends[a].y - c.y;
     const float screen_length = sqrtf(dx * dx + dy * dy);
-    if (!visible[a] || screen_length < 1e-3f) return true;
+    if (screen_length < 1e-3f) return true;
     /* Mouse movement along the handle's screen direction, in pixels. */
     const float along = (mx * dx + my * dy) / screen_length;
-    if (ui->gizmo_mode == WPE__GIZMO_MOVE) {
-        /* Parent-space units per pixel along the handle (the handle spans `length` world units). */
-        const WPE_Vec3 parent_axis = wpe_mat4_transform_dir(&parent_world, unit);
-        const float parent_scale = wpe_vec3_length(parent_axis) > 1e-9f ? wpe_vec3_length(parent_axis) : 1.0f;
-        moved.position =
-            wpe_vec3_add(moved.position, wpe_vec3_scale(unit, along * length / screen_length / parent_scale));
+    if (view.gizmo == WPE_EDITOR_GIZMO_MOVE) {
+        /* World units along the handle (it spans `length` of them), then into the parent's space. */
+        const WPE_Vec3 delta = wpe_vec3_scale(axes[a], along * length / screen_length);
+        WPE_Mat4 to_parent;
+        if (!wpe_mat4_inverse(&parent_world, &to_parent)) return true;
+        moved.position = wpe_vec3_add(moved.position, wpe_mat4_transform_dir(&to_parent, delta));
     } else {
         moved.scale.v[a] *= expf(along * 0.01f);
     }
@@ -1197,6 +1231,20 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
             wpe__ui_entity_command(ui, "delete_entity", selection);
         igEndMenu();
     }
+    if (igBeginMenu("View", true)) {
+        const WPE_EditorView view = wpe_editor_view(ui->editor);
+        if (igMenuItem_Bool("Grid", "G", view.grid, true)) wpe__ui_set_view(ui, "grid", NULL, 0, !view.grid);
+        float spacing = view.grid_spacing;
+        igSetNextItemWidth(120.0f);
+        if (igDragFloat("Grid spacing", &spacing, 0.05f, 0.01f, 1000.0f, "%.2f",
+                        ImGuiSliderFlags_AlwaysClamp))
+            wpe__ui_set_view(ui, "grid_spacing", NULL, spacing, false);
+        if (igMenuItem_Bool("Physics shapes", "P", view.physics, true))
+            wpe__ui_set_view(ui, "physics", NULL, 0, !view.physics);
+        if (igMenuItem_Bool("Reload changed scripts", NULL, view.hot_reload, true))
+            wpe__ui_set_view(ui, "hot_reload", NULL, 0, !view.hot_reload);
+        igEndMenu();
+    }
     if (igBeginMenu("Window", true)) {
         if (igMenuItem_Bool("Reset layout", NULL, false, true)) ui->layout_built = false;
         igEndMenu();
@@ -1210,12 +1258,18 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
     }
     if (igMenuItem_Bool("Stop", "Shift+F5", false, mode != WPE_EDITOR_EDIT)) wpe__ui_simple(ui, "stop");
     igSeparator();
-    if (igMenuItem_Bool("Move", "W", ui->gizmo_mode == WPE__GIZMO_MOVE, true))
-        ui->gizmo_mode = WPE__GIZMO_MOVE;
-    if (igMenuItem_Bool("Rotate", "E", ui->gizmo_mode == WPE__GIZMO_ROTATE, true))
-        ui->gizmo_mode = WPE__GIZMO_ROTATE;
-    if (igMenuItem_Bool("Scale", "R", ui->gizmo_mode == WPE__GIZMO_SCALE, true))
-        ui->gizmo_mode = WPE__GIZMO_SCALE;
+    const WPE_EditorView view = wpe_editor_view(ui->editor);
+    if (igMenuItem_Bool("Move", "W", view.gizmo == WPE_EDITOR_GIZMO_MOVE, true))
+        wpe__ui_set_view(ui, "gizmo", "move", 0, false);
+    if (igMenuItem_Bool("Rotate", "E", view.gizmo == WPE_EDITOR_GIZMO_ROTATE, true))
+        wpe__ui_set_view(ui, "gizmo", "rotate", 0, false);
+    if (igMenuItem_Bool("Scale", "R", view.gizmo == WPE_EDITOR_GIZMO_SCALE, true))
+        wpe__ui_set_view(ui, "gizmo", "scale", 0, false);
+    /* One item showing the current space; clicking switches it. */
+    if (igMenuItem_Bool(view.gizmo_local ? "Local" : "World", "X", false, true))
+        wpe__ui_set_view(ui, "gizmo_space", view.gizmo_local ? "world" : "local", 0, false);
+    if (igIsItemHovered(0))
+        igSetTooltip("Gizmo axes: the world's or the entity's own (scaling always uses its own)");
     igSeparator();
     const char* path = wpe_editor_scene_path(ui->editor);
     igTextDisabled("%s%s", path[0] ? path : "(unsaved scene)", wpe_editor_dirty(ui->editor) ? " *" : "");
@@ -1272,9 +1326,14 @@ static void wpe__ui_shortcuts(WPE_EditorUi* ui) {
     if (igIsKeyPressed_Bool(ImGuiKey_Delete, false) && selection)
         wpe__ui_entity_command(ui, "delete_entity", selection);
     if (!ui->flying && !io->KeyCtrl) {
-        if (igIsKeyPressed_Bool(ImGuiKey_W, false)) ui->gizmo_mode = WPE__GIZMO_MOVE;
-        if (igIsKeyPressed_Bool(ImGuiKey_E, false)) ui->gizmo_mode = WPE__GIZMO_ROTATE;
-        if (igIsKeyPressed_Bool(ImGuiKey_R, false)) ui->gizmo_mode = WPE__GIZMO_SCALE;
+        const WPE_EditorView view = wpe_editor_view(ui->editor);
+        if (igIsKeyPressed_Bool(ImGuiKey_W, false)) wpe__ui_set_view(ui, "gizmo", "move", 0, false);
+        if (igIsKeyPressed_Bool(ImGuiKey_E, false)) wpe__ui_set_view(ui, "gizmo", "rotate", 0, false);
+        if (igIsKeyPressed_Bool(ImGuiKey_R, false)) wpe__ui_set_view(ui, "gizmo", "scale", 0, false);
+        if (igIsKeyPressed_Bool(ImGuiKey_X, false))
+            wpe__ui_set_view(ui, "gizmo_space", view.gizmo_local ? "world" : "local", 0, false);
+        if (igIsKeyPressed_Bool(ImGuiKey_G, false)) wpe__ui_set_view(ui, "grid", NULL, 0, !view.grid);
+        if (igIsKeyPressed_Bool(ImGuiKey_P, false)) wpe__ui_set_view(ui, "physics", NULL, 0, !view.physics);
     }
 }
 

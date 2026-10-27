@@ -40,6 +40,23 @@ typedef enum WPE_EditorMode {
     WPE_EDITOR_PAUSED,
 } WPE_EditorMode;
 
+typedef enum WPE_EditorGizmo {
+    WPE_EDITOR_GIZMO_MOVE = 0,
+    WPE_EDITOR_GIZMO_ROTATE,
+    WPE_EDITOR_GIZMO_SCALE,
+} WPE_EditorGizmo;
+
+/** How the editor shows the scene: not part of the scene, never saved with it or undone. */
+typedef struct WPE_EditorView {
+    bool grid;             /* A ground grid in edit mode (default on). */
+    float grid_spacing;    /* World units between grid lines (default 1). */
+    bool physics;          /* Collider wireframes, in edit and play mode (default off). */
+    WPE_EditorGizmo gizmo; /* The viewport gizmo's mode (default move). */
+    bool gizmo_local;      /* Gizmo axes: the entity's own (true) or the world's (false, default). Scaling
+                              always uses the entity's own axes. */
+    bool hot_reload;       /* Reload changed scripts twice a second (default on). */
+} WPE_EditorView;
+
 /**
  * Opens a project in an embedded engine, in edit mode.
  *
@@ -81,6 +98,9 @@ WPE_Entity wpe_editor_selection(const WPE_Editor* editor);
 /** @return The editor's camera entity (never saved), and whether it is an editing helper. */
 WPE_Entity wpe_editor_camera(const WPE_Editor* editor);
 bool wpe_editor_is_helper(const WPE_Editor* editor, WPE_Entity entity);
+
+/** @return The view settings (changed with the "set_view" command). @thread_safety Main thread only */
+WPE_EditorView wpe_editor_view(const WPE_Editor* editor);
 
 /** @return The asset path of the scene being edited ("" for a new, unsaved scene). */
 const char* wpe_editor_scene_path(const WPE_Editor* editor);

@@ -90,6 +90,7 @@ typedef struct WPE_Collider {
     uint64_t wpe__static_body;      /* Implicit static body when the entity has no rigid body. */
     void* wpe__mesh;                /* Owned collision mesh data (WPE_COLLIDER_MESH). */
     WPE_AssetHandle wpe__model_ref; /* Model reference held by the component. */
+    WPE_Vec3 wpe__scale;            /* World scale the shape was built with (wpe_physics_sync). */
     uint8_t wpe__state; /* Pending, created or failed (not retried until wpe_physics_refresh()). */
 } WPE_Collider;
 
@@ -182,6 +183,22 @@ WPE_Result wpe_physics_create_bodies(WPE_Physics* physics);
  * @thread_safety Owning thread
  */
 WPE_Result wpe_physics_refresh(WPE_Physics* physics, WPE_Entity entity);
+
+/**
+ * Brings the simulation in line with an edited world without simulating, for hosts that change the
+ * world while the simulation is stopped (the editor's edit mode):
+ * - Bodies of components added since the last step are created.
+ * - Bodies are placed at their entities' world poses (kinematic bodies too, without a move).
+ * - Shapes whose entity's world scale changed are rebuilt.
+ *
+ * Debug drawing, raycasts and the next step then see the world as edited. Don't call it between
+ * steps of a running simulation: placing kinematic bodies would cancel their moves.
+ *
+ * @return WPE_RESULT_OK or WPE_RESULT_ERROR_NULL_ARG.
+ *
+ * @thread_safety Owning thread
+ */
+WPE_Result wpe_physics_sync(WPE_Physics* physics);
 
 /** @return Events of the most recent step (borrowed until the next step). @thread_safety Owning thread */
 const WPE_PhysicsEvent* wpe_physics_events(const WPE_Physics* physics, uint32_t* out_count);

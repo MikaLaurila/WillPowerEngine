@@ -280,6 +280,88 @@ static WPE_Result wpe__cmd_set_environment(wpe__Call* call) {
     return wpe_scene_write_environment(&environment, call->w);
 }
 
+static const char* const wpe__gizmo_names[] = {"move", "rotate", "scale"};
+
+static WPE_Result wpe__write_view(WPE_JsonWriter* w, const WPE_EditorView* view) {
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "grid");
+    wpe_json_write_bool(w, view->grid);
+    wpe_json_write_key(w, "grid_spacing");
+    wpe_json_write_number(w, view->grid_spacing);
+    wpe_json_write_key(w, "physics");
+    wpe_json_write_bool(w, view->physics);
+    wpe_json_write_key(w, "gizmo");
+    wpe_json_write_string(w, wpe__gizmo_names[view->gizmo]);
+    wpe_json_write_key(w, "gizmo_space");
+    wpe_json_write_string(w, view->gizmo_local ? "local" : "world");
+    wpe_json_write_key(w, "hot_reload");
+    wpe_json_write_bool(w, view->hot_reload);
+    wpe_json_write_object_end(w);
+    return WPE_RESULT_OK;
+}
+
+static WPE_Result wpe__cmd_get_view(wpe__Call* call) {
+    return wpe__write_view(call->w, &call->editor->view);
+}
+
+/* Reads one set_view key into `view`. */
+static WPE_Result wpe__read_view_key(wpe__Call* call, const char* key, const WPE_JsonValue* v,
+                                     WPE_EditorView* view) {
+    bool* flag = strcmp(key, "grid") == 0         ? &view->grid
+                 : strcmp(key, "physics") == 0    ? &view->physics
+                 : strcmp(key, "hot_reload") == 0 ? &view->hot_reload
+                                                  : NULL;
+    if (flag) {
+        if (wpe_json_type(v) != WPE_JSON_BOOL)
+            return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"%s\" must be true or false", key);
+        *flag = wpe_json_bool(v, false);
+        return WPE_RESULT_OK;
+    }
+    if (strcmp(key, "grid_spacing") == 0) {
+        const double spacing = wpe_json_number(v, 0.0);
+        if (wpe_json_type(v) != WPE_JSON_NUMBER || !(spacing >= 0.01 && spacing <= 1000.0))
+            return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"grid_spacing\" must be 0.01..1000");
+        view->grid_spacing = (float)spacing;
+        return WPE_RESULT_OK;
+    }
+    const char* text = wpe_json_string(v);
+    if (strcmp(key, "gizmo") == 0) {
+        for (int i = 0; text && i < 3; ++i) {
+            if (strcmp(text, wpe__gizmo_names[i]) != 0) continue;
+            view->gizmo = (WPE_EditorGizmo)i;
+            return WPE_RESULT_OK;
+        }
+        return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                         "\"gizmo\" is \"move\", \"rotate\" or \"scale\"");
+    }
+    if (strcmp(key, "gizmo_space") == 0) {
+        if (text && (strcmp(text, "world") == 0 || strcmp(text, "local") == 0)) {
+            view->gizmo_local = strcmp(text, "local") == 0;
+            return WPE_RESULT_OK;
+        }
+        return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"gizmo_space\" is \"world\" or \"local\"");
+    }
+    return wpe__fail(
+        call, WPE_RESULT_ERROR_INVALID_ARG,
+        "unknown view setting \"%s\" (grid, grid_spacing, physics, gizmo, gizmo_space, hot_reload)", key);
+}
+
+static WPE_Result wpe__cmd_set_view(wpe__Call* call) {
+    const WPE_JsonValue* value = wpe_json_get(call->args, "value");
+    if (wpe_json_type(value) != WPE_JSON_OBJECT)
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"value\" must be an object"));
+    /* All or nothing: a bad key leaves the view unchanged. */
+    WPE_EditorView view = call->editor->view;
+    for (uint32_t i = 0; i < wpe_json_count(value); ++i) {
+        const char* key = NULL;
+        const WPE_JsonValue* member = wpe_json_member(value, i, &key);
+        const WPE_Result result = wpe__read_view_key(call, key, member, &view);
+        if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    }
+    call->editor->view = view;
+    return wpe__write_view(call->w, &view);
+}
+
 static WPE_Result wpe__cmd_select(wpe__Call* call) {
     const WPE_JsonValue* id = wpe_json_get(call->args, "id");
     WPE_Entity e = WPE_ENTITY_NULL;
@@ -493,6 +575,8 @@ static const struct {
     {"select", wpe__cmd_select, "{id|null}"},
     {"get_environment", wpe__cmd_get_environment, "{} -> the scene environment"},
     {"set_environment", wpe__cmd_set_environment, "{value: {...}} (merged) -> the environment"},
+    {"get_view", wpe__cmd_get_view, "{} -> {grid, grid_spacing, physics, gizmo, gizmo_space, hot_reload}"},
+    {"set_view", wpe__cmd_set_view, "{value: {...}} (merged; not saved or undone) -> the view"},
     {"new_scene", wpe__cmd_new_scene, "{}"},
     {"load_scene", wpe__cmd_load_scene, "{path}"},
     {"save_scene", wpe__cmd_save_scene, "{path?} (asset path; default: the open scene)"},

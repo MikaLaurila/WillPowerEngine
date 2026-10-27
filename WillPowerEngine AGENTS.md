@@ -376,6 +376,8 @@ Implemented in `editor/` (docs: `docs/editor.md`).
   - Replies include the warnings and errors logged while a command ran.
 - **Undo** keeps whole-scene snapshots, so any command is undoable with one mechanism. Failed commands leave no step, and a `coalesce` key merges continuous edits.
 - **Play mode** snapshots the scene and restores it on stop. Edit mode renders from an editor camera that is never saved (the scene context's include filter).
+- **Edit mode keeps physics current without simulating** (`wpe_physics_sync` each frame): moved, rescaled and new colliders are right in the debug drawing, in raycasts, and when play starts from the edited world.
+- **View settings** (`WPE_EditorView`: grid, physics shapes, gizmo mode and space, script hot reload) belong to the editor, not the scene. Commands (`get_view`/`set_view`) reach them like everything else, but they are never saved or undone.
 - **The UI is Dear ImGui (cimgui) with two renderers** in `ui_backend.c`:
   - **The window draws it on the GPU** through its SDL renderer (`wpe_window_renderer`), in C after Dear ImGui's `imgui_impl_sdlrenderer3`. Rasterizing the UI in software took about 13 ms per frame at 1600x900; only the game view stays software.
   - **Headless runs draw it with the software rasterizer** (scissor rectangles), so agents can capture the whole editor without a window.

@@ -285,7 +285,145 @@ static void test_editor_coalesces_continuous_edits(void) {
     wpe_editor_destroy(editor);
 }
 
+/* Renders a frame and returns how many pixels differ from `previous` (then holds the new frame). */
+static uint32_t frame_changes(WPE_Editor* editor, WPE_Color* previous) {
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 60.0));
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(wpe_editor_engine(editor)));
+    uint32_t changed = 0;
+    for (uint32_t i = 0; i < fb->width * fb->height; ++i) {
+        changed += fb->color[i] != previous[i];
+        previous[i] = fb->color[i];
+    }
+    return changed;
+}
+
+static void test_editor_view_settings_and_overlays(void) {
+    WPE_Editor* editor = open_editor();
+    const WPE_EditorView defaults = wpe_editor_view(editor);
+    WPE_TEST_ASSERT(defaults.grid && !defaults.physics && defaults.hot_reload && !defaults.gizmo_local);
+    WPE_TEST_ASSERT_EQ_INT(WPE_EDITOR_GIZMO_MOVE, defaults.gizmo);
+    /* Merged: keys left out keep their values. */
+    WPE_JsonDocument* view =
+        run(editor, "{\"cmd\": \"set_view\", \"value\": {\"gizmo\": \"rotate\", \"gizmo_space\": \"local\"}}",
+            true);
+    WPE_TEST_ASSERT_EQ_STR("local", wpe_json_string(wpe_json_get(result_of(view), "gizmo_space")));
+    wpe_json_free(view);
+    WPE_TEST_ASSERT(wpe_editor_view(editor).grid && wpe_editor_view(editor).gizmo_local);
+    WPE_TEST_ASSERT_EQ_INT(WPE_EDITOR_GIZMO_ROTATE, wpe_editor_view(editor).gizmo);
+    /* All or nothing, and never an undo step or unsaved change. */
+    wpe_json_free(
+        run(editor, "{\"cmd\": \"set_view\", \"value\": {\"physics\": true, \"grid_spacing\": 0}}", false));
+    wpe_json_free(run(editor, "{\"cmd\": \"set_view\", \"value\": {\"gizmo\": \"spin\"}}", false));
+    wpe_json_free(run(editor, "{\"cmd\": \"set_view\", \"value\": {\"grid\": 1}}", false));
+    wpe_json_free(run(editor, "{\"cmd\": \"set_view\", \"value\": {\"colour\": true}}", false));
+    WPE_TEST_ASSERT(!wpe_editor_view(editor).physics);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_editor_undo_count(editor));
+    WPE_TEST_ASSERT(!wpe_editor_dirty(editor));
+
+    /* The grid and physics shapes draw over the view; switching them off removes them. */
+    run_ok(editor, "{\"cmd\": \"camera\", \"position\": [3, 6, 9], \"target\": [0, 0, 0]}");
+    run_ok(editor,
+           "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"wall\", \"transform\": {\"position\": "
+           "[2, 1, 0]}, \"collider\": {\"shape\": \"box\"}}}");
+    static WPE_Color frame[64 * 48];
+    frame_changes(editor, frame);
+    WPE_TEST_ASSERT_EQ_UINT(0, frame_changes(editor, frame)); /* A still view renders the same. */
+    run_ok(editor, "{\"cmd\": \"set_view\", \"value\": {\"grid\": false}}");
+    WPE_TEST_ASSERT(frame_changes(editor, frame) > 20);
+    run_ok(editor, "{\"cmd\": \"set_view\", \"value\": {\"physics\": true}}");
+    WPE_TEST_ASSERT(frame_changes(editor, frame) > 10);
+    wpe_editor_destroy(editor);
+}
+
+static bool raycast_down(WPE_Editor* editor, float x, WPE_RaycastHit* hit) {
+    return wpe_physics_raycast(wpe_engine_physics(wpe_editor_engine(editor)), wpe_vec3(x, 10, 0),
+                               wpe_vec3(0, -1, 0), 20.0f, hit);
+}
+
+/* Edit mode doesn't simulate, but physics follows edits: moves, rescales and new colliders. */
+static void test_editor_physics_follows_edits(void) {
+    WPE_Editor* editor = open_editor();
+    WPE_JsonDocument* created =
+        run(editor,
+            "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"wall\", \"transform\": "
+            "{\"position\": [5, 0, 0]}, \"collider\": {\"shape\": \"box\"}}}",
+            true);
+    const WPE_Entity wall = (WPE_Entity)wpe_json_number(result_of(created), 0);
+    wpe_json_free(created);
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 60.0));
+    WPE_RaycastHit hit;
+    WPE_TEST_ASSERT(raycast_down(editor, 5.0f, &hit));
+    WPE_TEST_ASSERT_NEAR(0.5, hit.point.y, 1e-3);
+
+    char command[256];
+    snprintf(
+        command, sizeof command,
+        "{\"cmd\": \"set_component\", \"id\": %u, \"component\": \"transform\", \"value\": {\"position\": "
+        "[-5, 0, 0], \"scale\": [1, 4, 1]}}",
+        wall);
+    run_ok(editor, command);
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 60.0));
+    WPE_TEST_ASSERT(!raycast_down(editor, 5.0f, &hit));
+    WPE_TEST_ASSERT(raycast_down(editor, -5.0f, &hit));
+    WPE_TEST_ASSERT_NEAR(2.0, hit.point.y, 1e-3); /* The shape was rebuilt for the new scale. */
+    wpe_editor_destroy(editor);
+}
+
+static float box_height(WPE_Editor* editor) {
+    WPE_Ecs* ecs = wpe_engine_ecs(wpe_editor_engine(editor));
+    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_SCRIPT)});
+    WPE_TEST_ASSERT(wpe_ecs_iter_next(&it));
+    return ((const WPE_Transform*)wpe_ecs_get_component(ecs, it.entity, WPE_COMP_TRANSFORM))->position.y;
+}
+
+/* Rewrites a file until its modification time changes (coarse file system clocks). */
+static void rewrite(const char* path, const char* text) {
+    int64_t before = 0;
+    WPE_TEST_ASSERT_OK(wpe_file_modified_time(path, &before));
+    int64_t after = before;
+    for (int attempt = 0; attempt < 400 && after == before; ++attempt) {
+        const double start = wpe_platform_time_seconds();
+        while (attempt > 0 && wpe_platform_time_seconds() - start < 0.01)
+            continue; /* Let the file system clock advance before writing again. */
+        write_text(path, text);
+        WPE_TEST_ASSERT_OK(wpe_file_modified_time(path, &after));
+    }
+    WPE_TEST_ASSERT(after != before);
+}
+
+static void test_editor_hot_reloads_scripts(void) {
+    WPE_Editor* editor = open_editor();
+    run_ok(editor, "{\"cmd\": \"play\"}");
+    run_ok(editor, "{\"cmd\": \"frames\", \"count\": 2}");
+    const float start = box_height(editor);
+    run_ok(editor, "{\"cmd\": \"frames\"}");
+    WPE_TEST_ASSERT_NEAR(1.0, box_height(editor) - start, 1e-4); /* mover.luau: +1 per frame. */
+
+    /* Edited while playing: picked up within half a second, and the game keeps running. */
+    rewrite(ROOT "/project/scripts/mover.luau",
+            "local M = {}\nfunction M:on_update(dt) wpe.set_position(self.entity, "
+            "wpe.get_position(self.entity) + vector.create(0, 100, 0)) end\n"
+            "return M\n");
+    run_ok(editor, "{\"cmd\": \"frames\", \"count\": 31}");
+    const float before = box_height(editor);
+    run_ok(editor, "{\"cmd\": \"frames\"}");
+    WPE_TEST_ASSERT_NEAR(100.0, box_height(editor) - before, 1e-3);
+
+    /* Switched off, edits wait. */
+    run_ok(editor, "{\"cmd\": \"set_view\", \"value\": {\"hot_reload\": false}}");
+    rewrite(ROOT "/project/scripts/mover.luau", "local M = {}\nfunction M:on_update(dt) end\nreturn M\n");
+    run_ok(editor, "{\"cmd\": \"frames\", \"count\": 40}");
+    const float still_moving = box_height(editor);
+    run_ok(editor, "{\"cmd\": \"frames\"}");
+    WPE_TEST_ASSERT_NEAR(100.0, box_height(editor) - still_moving, 1e-3);
+    run_ok(editor, "{\"cmd\": \"stop\"}");
+    wpe_editor_destroy(editor);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_editor_coalesces_continuous_edits),
+              WPE_TEST_CASE(test_editor_view_settings_and_overlays),
+              WPE_TEST_CASE(test_editor_physics_follows_edits),
+              WPE_TEST_CASE(test_editor_hot_reloads_scripts),
               WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
               WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
               WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),

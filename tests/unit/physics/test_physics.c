@@ -578,6 +578,41 @@ static void test_physics_refresh_rebuilds_shapes(void) {
     destroy_world(&f);
 }
 
+/* Edits without simulating (the editor's edit mode): sync follows moves, rescales and new colliders. */
+static void test_physics_sync_follows_edits(void) {
+    Fixture f = make_world(GRAVITY);
+    const WPE_Entity wall = spawn_at(f.ecs, wpe_vec3(0, 0, 0));
+    add_collider(f.ecs, wall, wpe_collider_default(WPE_COLLIDER_BOX)); /* 1 x 1 x 1. */
+    WPE_TEST_ASSERT_OK(wpe_physics_sync(f.physics));
+    WPE_RaycastHit hit;
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(0, 5, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    WPE_TEST_ASSERT_NEAR(0.5, hit.point.y, 1e-4);
+
+    /* Moved and scaled: the body follows and the shape is rebuilt for the new size. */
+    transform_of(f.ecs, wall)->position = wpe_vec3(4, 0, 0);
+    transform_of(f.ecs, wall)->scale = wpe_vec3(1, 3, 1);
+    WPE_TEST_ASSERT_OK(wpe_physics_sync(f.physics));
+    WPE_TEST_ASSERT(!wpe_physics_raycast(f.physics, wpe_vec3(0, 5, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(4, 5, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    WPE_TEST_ASSERT_NEAR(1.5, hit.point.y, 1e-4);
+
+    /* Kinematic bodies are placed too (an edit, not a move with velocity), and new colliders appear. */
+    WPE_Entity platform = spawn_at(f.ecs, wpe_vec3(-4, 0, 0));
+    add_body(f.ecs, platform, wpe_rigidbody_default(WPE_BODY_KINEMATIC));
+    add_collider(f.ecs, platform, wpe_collider_default(WPE_COLLIDER_BOX));
+    WPE_TEST_ASSERT_OK(wpe_physics_sync(f.physics));
+    transform_of(f.ecs, platform)->position = wpe_vec3(-4, 2, 0);
+    WPE_TEST_ASSERT_OK(wpe_physics_sync(f.physics));
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(-4, 5, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    WPE_TEST_ASSERT_EQ_UINT(platform, hit.entity);
+    WPE_TEST_ASSERT_NEAR(2.5, hit.point.y, 1e-4);
+    WPE_Vec3 velocity;
+    WPE_TEST_ASSERT_OK(wpe_physics_get_velocity(f.physics, platform, &velocity));
+    WPE_TEST_ASSERT_NEAR(0.0, wpe_vec3_length(velocity), 1e-6);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_physics_sync(NULL));
+    destroy_world(&f);
+}
+
 static void test_physics_degenerate_transform_is_reported_once(void) {
     Fixture f = make_world(GRAVITY);
     const WPE_Entity flat = spawn_dynamic(f.ecs, wpe_vec3(0, 1, 0), wpe_collider_default(WPE_COLLIDER_BOX));
@@ -646,5 +681,6 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_physics_create_validates_world),
               WPE_TEST_CASE(test_physics_kinematic_body_follows_transform),
               WPE_TEST_CASE(test_physics_velocity_force_and_impulse),
               WPE_TEST_CASE(test_physics_refresh_rebuilds_shapes),
+              WPE_TEST_CASE(test_physics_sync_follows_edits),
               WPE_TEST_CASE(test_physics_degenerate_transform_is_reported_once),
               WPE_TEST_CASE(test_physics_debug_draw))

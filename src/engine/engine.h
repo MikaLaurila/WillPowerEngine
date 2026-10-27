@@ -167,6 +167,19 @@ const WPE_ProjectSettings* wpe_engine_project(const WPE_Engine* engine);
 /** The current scene's environment; changes apply from the next frame. */
 WPE_SceneEnvironment* wpe_engine_environment(WPE_Engine* engine);
 
+/** Debug overlays drawn over the scene (depth tested, not post-processed, under the scripts' 2D). */
+typedef struct WPE_EngineDebugDraw {
+    bool physics;       /* Collider wireframes, colored by body type (see wpe_physics_debug_draw()). */
+    bool grid;          /* A grid on the ground plane (y = 0) around the camera, X axis red, Z axis blue. */
+    float grid_spacing; /* World units between grid lines (0 = 1); every 10th line is brighter. */
+} WPE_EngineDebugDraw;
+
+/** Sets the debug overlays (all off by default). @thread_safety Main thread only */
+void wpe_engine_set_debug_draw(WPE_Engine* engine, const WPE_EngineDebugDraw* debug_draw);
+
+/** @return The debug overlays. @thread_safety Main thread only */
+WPE_EngineDebugDraw wpe_engine_debug_draw(const WPE_Engine* engine);
+
 /** Per-frame statistics of the last frame. */
 typedef struct WPE_EngineStats {
     uint64_t frames;

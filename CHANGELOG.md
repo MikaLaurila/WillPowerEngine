@@ -26,6 +26,23 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   functions, edit mode, editor commands (undo/redo, coalescing, scenes, play mode, screenshots),
   and a command-line test that drives the editor like an agent.
 
+### Added (editor: the rest of the spec's tool list)
+- Ground grid in the viewport: fades with distance, X axis red and Z axis blue, adjustable spacing.
+- Physics debug drawing: collider wireframes colored by body type, in edit and play mode.
+- Gizmo axes in world or local space (toolbar, X key). Moves and rotations are converted into the
+  parent's space, and scaling uses the entity's own axes.
+- Script hot reload in the editor, in edit and play mode (on by default).
+- View settings for all of the above through the `get_view`/`set_view` commands; they are never
+  saved or undone. View menu, plus shortcuts G (grid) and P (physics).
+- Engine: `wpe_engine_set_debug_draw` (grid, physics wireframes), drawn after post-processing and
+  depth tested.
+- Physics: `wpe_physics_sync` updates bodies for an edited world without stepping.
+- Tests: view settings and overlays, edit-mode physics, hot reload in the editor, `wpe_physics_sync`.
+
+### Fixed
+- A collider rescaled in the editor kept its old size in play mode, because shapes are built for
+  the world scale they were created with. Edit mode now rebuilds them.
+
 ### Changed (editor performance)
 - The editor window draws its interface on the GPU through SDL's renderer (a C backend after Dear
   ImGui's `imgui_impl_sdlrenderer3`) instead of the software rasterizer. Measured at 1600x900:

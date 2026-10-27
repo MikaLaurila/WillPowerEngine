@@ -334,6 +334,7 @@ WPE_Result wpe_editor_create(const WPE_EditorDesc* desc, WPE_Editor** out_editor
     WPE_Editor* editor = wpe_alloc_zeroed(1, sizeof *editor);
     if (!editor) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     snprintf(editor->project_dir, sizeof editor->project_dir, "%s", desc->project_dir);
+    editor->view = (WPE_EditorView){.grid = true, .grid_spacing = 1.0f, .hot_reload = true};
     editor->log_mutex = SDL_CreateMutex();
     WPE_Result result = editor->log_mutex ? WPE_RESULT_OK : WPE_RESULT_ERROR_OUT_OF_MEMORY;
     if (result == WPE_RESULT_OK) result = wpe_log_add_sink(wpe__editor_log_sink, editor, &editor->log_sink);
@@ -372,7 +373,23 @@ void wpe_editor_destroy(WPE_Editor* editor) {
 
 WPE_Result wpe_editor_frame(WPE_Editor* editor, double dt) {
     if (!editor) return WPE_RESULT_ERROR_NULL_ARG;
-    WPE_Result result = wpe_engine_frame(editor->engine, dt);
+    const bool editing = editor->mode == WPE_EDITOR_EDIT;
+    if (editor->view.hot_reload) {
+        editor->since_reload += dt;
+        if (editor->since_reload >= WPE__EDITOR_RELOAD_SECONDS) {
+            wpe_script_host_reload_changed(wpe_engine_scripts(editor->engine));
+            editor->since_reload = 0.0;
+        }
+    }
+    /* Edits don't step physics: bring bodies to the edited poses and scales (debug drawing shows them,
+     * and play starts from them). */
+    WPE_Result result = editing ? wpe_physics_sync(wpe_engine_physics(editor->engine)) : WPE_RESULT_OK;
+    wpe_engine_set_debug_draw(editor->engine,
+                              &(WPE_EngineDebugDraw){.physics = editor->view.physics,
+                                                     .grid = editor->view.grid && editing,
+                                                     .grid_spacing = editor->view.grid_spacing});
+    const WPE_Result frame = wpe_engine_frame(editor->engine, dt);
+    if (result == WPE_RESULT_OK) result = frame;
     /* A game that quits (wpe.quit) in play mode returns the editor to edit mode. */
     if (!wpe_engine_running(editor->engine)) {
         wpe_engine_cancel_quit(editor->engine);
@@ -406,6 +423,10 @@ WPE_Entity wpe_editor_camera(const WPE_Editor* editor) {
 
 bool wpe_editor_is_helper(const WPE_Editor* editor, WPE_Entity entity) {
     return editor && entity != WPE_ENTITY_NULL && entity == editor->camera;
+}
+
+WPE_EditorView wpe_editor_view(const WPE_Editor* editor) {
+    return editor ? editor->view : (WPE_EditorView){0};
 }
 
 const char* wpe_editor_scene_path(const WPE_Editor* editor) {

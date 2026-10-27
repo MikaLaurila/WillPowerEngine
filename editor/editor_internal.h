@@ -14,6 +14,7 @@
 #define WPE__EDITOR_UNDO_MAX 64u
 #define WPE__EDITOR_LOG_LINES 256u
 #define WPE__EDITOR_LOG_TEXT 512u
+#define WPE__EDITOR_RELOAD_SECONDS 0.5 /* Hot reload: how often scripts are checked for changes. */
 
 typedef struct wpe__Snapshot {
     char* text; /* A scene document (owned). */
@@ -43,6 +44,8 @@ struct WPE_Editor {
     char last_coalesce[128];
     bool coalesced;      /* The current change joined the previous step. */
     bool quit_requested; /* The "quit" command (the window closes after the current frame). */
+    WPE_EditorView view;
+    double since_reload; /* Seconds since scripts were last checked for changes. */
 
     wpe__Snapshot undo[WPE__EDITOR_UNDO_MAX];
     uint32_t undo_count;

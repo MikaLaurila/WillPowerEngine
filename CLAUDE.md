@@ -138,6 +138,7 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - Teleport detection compares the entity's world pose with the body using a distance-scaled tolerance, so the float error of the parent-relative write-back never registers as a move.
   - Box3D's allocator and assert hooks are process-global and are installed once. Its triangle meshes are referenced, not copied, so each mesh collider owns its `b3MeshData` (hulls are copied by Box3D).
   - The solver is single-threaded (Box3D's task callbacks need asynchronous tasks, which `wpe_jobs` lacks).
+  - `wpe_physics_sync` brings bodies in line with an edited world without stepping: it creates pending bodies, places them at their entities' poses and rebuilds shapes whose world scale changed (`WPE_Collider.wpe__scale`). The editor calls it every edit-mode frame. Never call it between steps of a running simulation.
 - **vfs** (`vfs/vfs.h`, `vfs/pak.h`; format and tool in `docs/assets.md`): asset paths over mounted directories and `.pak` archives; later mounts win. Reads are thread-safe (each read opens its own stream), mounting is not. Validate or normalize user paths with `wpe_vfs_path_is_valid`/`wpe_vfs_path_normalize`. zstd allocates through `wpe_alloc` via `ZSTD_customMem`.
 - **asset manager** (`assets/asset_manager.h`): generational, ref-counted `WPE_AssetHandle`s cached by (type, normalized path). Every component that references an asset holds its own reference from its add hook to its remove hook (colliders take it in `on_add` and swap it only if `model` changes before a rebuild). Code-made assets go in with `wpe_asset_add`. A reference left at shutdown is reported as a leak warning.
 - **audio** (`audio/audio.h`, miniaudio): sounds are `WPE_ASSET_SOUND` assets decoded to native-rate float PCM; voices (max 64) read them through `ma_audio_buffer` and resample on playback. Music streams through a custom `ma_vfs` over the engine VFS on the mixing thread. Voices hold sound references; finished voices are recycled (and release them) in `wpe_audio_update`. Without a device, `wpe_audio_render` drives the mixer, which is how tests and headless runs work. The bus count is a `#define` because a `_COUNT` enumerator next to a vector union trips clang-tidy's tagged-union check.
@@ -148,6 +149,7 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - `assets/` is the sample project (`project.json`, `scenes/`).
   - Export embeds a `.pak` in a copy of `wpe_runtime` (trailer magic `WPE_EMBD`). `wpe_runtime` is a GUI program on Windows that links statically.
   - Executables of `runtime/` and `tools/` build into `build/bin`.
+  - `wpe_engine_set_debug_draw` turns on the ground grid and physics wireframes. They're drawn in the overlay pass after post-processing, depth tested, under the scripts' 2D drawing.
 - **ECS hook order:** on despawn, `on_remove` hooks run in descending type-id order: AudioSource (11), Collider (10) and RigidBody (9) before Script (8), which runs before Hierarchy (2). So the physics body is already gone when `on_destroy` runs.
 - **renderer extras:**
   - `WPE_RenderState.depth_only` writes depth only; the fragment shader may be NULL in that mode. This is used for shadow passes.
@@ -159,6 +161,8 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - The model (`editor.c`) holds an embedded `WPE_Engine` with the simulation off in edit mode, plus a never-saved editor camera.
   - Undo/redo and play/stop use whole-scene snapshots. Failed commands drop their undo step; a `coalesce` key merges drags.
   - Every change, the UI's included, is a JSON command (`editor_commands.c`, scene-file schema with live ids), so a new UI feature needs a command.
+  - View settings (`WPE_EditorView`: grid, physics shapes, gizmo mode and world/local space, hot reload) live in the model behind `get_view`/`set_view`. They are not part of the scene, so they are never saved or undone; the UI reads them and changes them by command.
+  - Each edit-mode frame of `wpe_editor_frame` syncs physics and applies the debug drawing. With hot reload on, it also checks scripts for changes.
   - The UI is cimgui with two renderers in `ui_backend.c`:
     - The window draws it on the GPU through `wpe_window_renderer` (SDL_Renderer, in C after `imgui_impl_sdlrenderer3`), and the live `screenshot` command reads back the shown frame.
     - Headless runs rasterize it in software (scissor), so `screenshot` with target `"editor"` works without a window.
