@@ -214,6 +214,174 @@ WPE_Result wpe_file_modified_time(const char* path, int64_t* out_time) {
     return WPE_RESULT_OK;
 }
 
+struct WPE_File {
+    SDL_IOStream* io;
+};
+
+WPE_Result wpe_file_open(const char* path, bool write, WPE_File** out_file) {
+    if (!path || !out_file) return WPE_RESULT_ERROR_NULL_ARG;
+    *out_file = NULL;
+    if (!write) {
+        SDL_PathInfo info;
+        if (!SDL_GetPathInfo(path, &info) || info.type != SDL_PATHTYPE_FILE)
+            return WPE_RESULT_ERROR_NOT_FOUND;
+    }
+    WPE_File* file = wpe_alloc(sizeof *file);
+    if (!file) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    file->io = SDL_IOFromFile(path, write ? "wb" : "rb");
+    if (!file->io) {
+        wpe_log_error("cannot open '%s' for %s: %s", path, write ? "writing" : "reading", SDL_GetError());
+        wpe_free(file);
+        return WPE_RESULT_ERROR_IO;
+    }
+    *out_file = file;
+    return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_file_close(WPE_File* file) {
+    if (!file) return WPE_RESULT_OK;
+    const bool closed = SDL_CloseIO(file->io);
+    wpe_free(file);
+    if (closed) return WPE_RESULT_OK;
+    wpe_log_error("failed to close a file: %s", SDL_GetError());
+    return WPE_RESULT_ERROR_IO;
+}
+
+size_t wpe_file_read(WPE_File* file, void* buffer, size_t size) {
+    if (!file || !buffer || size == 0) return 0;
+    return SDL_ReadIO(file->io, buffer, size);
+}
+
+WPE_Result wpe_file_write(WPE_File* file, const void* data, size_t size) {
+    if (!file || (!data && size > 0)) return WPE_RESULT_ERROR_NULL_ARG;
+    if (size == 0) return WPE_RESULT_OK;
+    if (SDL_WriteIO(file->io, data, size) == size) return WPE_RESULT_OK;
+    wpe_log_error("failed to write %zu bytes: %s", size, SDL_GetError());
+    return WPE_RESULT_ERROR_IO;
+}
+
+WPE_Result wpe_file_seek(WPE_File* file, uint64_t offset) {
+    if (!file) return WPE_RESULT_ERROR_NULL_ARG;
+    if (offset > (uint64_t)INT64_MAX) return WPE_RESULT_ERROR_IO;
+    return SDL_SeekIO(file->io, (Sint64)offset, SDL_IO_SEEK_SET) >= 0 ? WPE_RESULT_OK : WPE_RESULT_ERROR_IO;
+}
+
+uint64_t wpe_file_tell(WPE_File* file) {
+    const Sint64 offset = file ? SDL_TellIO(file->io) : -1;
+    return offset < 0 ? UINT64_MAX : (uint64_t)offset;
+}
+
+uint64_t wpe_file_size(WPE_File* file) {
+    const Sint64 size = file ? SDL_GetIOSize(file->io) : -1;
+    return size < 0 ? UINT64_MAX : (uint64_t)size;
+}
+
+/* ---- Directories ---------------------------------------------------------------------------------- */
+
+#define WPE__WALK_PATH_MAX 1024u
+#define WPE__WALK_DEPTH_MAX 32u
+
+typedef struct wpe__Walk {
+    WPE_DirectoryWalkFn fn;
+    void* user_data;
+    char relative[WPE__WALK_PATH_MAX]; /* Path of the directory being enumerated, relative to the root. */
+    size_t relative_length;
+    uint32_t depth;
+    WPE_Result result;
+    bool stopped;
+} wpe__Walk;
+
+static SDL_EnumerationResult wpe__walk_entry(void* user_data, const char* dirname, const char* fname) {
+    wpe__Walk* walk = user_data;
+    if (strcmp(fname, ".") == 0 || strcmp(fname, "..") == 0) return SDL_ENUM_CONTINUE;
+
+    /* SDL passes `dirname` with a trailing separator. */
+    char full[WPE__WALK_PATH_MAX];
+    const size_t name_length = strlen(fname);
+    const int written = SDL_snprintf(full, sizeof full, "%s%s", dirname, fname);
+    if (written < 0 || (size_t)written >= sizeof full ||
+        walk->relative_length + name_length + 2 > sizeof walk->relative) {
+        wpe_log_error("path too long while walking '%s'", dirname);
+        walk->result = WPE_RESULT_ERROR_CAPACITY;
+        return SDL_ENUM_FAILURE;
+    }
+    SDL_PathInfo info;
+    if (!SDL_GetPathInfo(full, &info)) return SDL_ENUM_CONTINUE; /* Vanished meanwhile. */
+
+    const size_t saved = walk->relative_length;
+    memcpy(walk->relative + saved, fname, name_length + 1);
+    walk->relative_length = saved + name_length;
+    SDL_EnumerationResult next = SDL_ENUM_CONTINUE;
+    if (info.type == SDL_PATHTYPE_FILE) {
+        if (!walk->fn(walk->relative, walk->user_data)) {
+            walk->stopped = true;
+            next = SDL_ENUM_SUCCESS;
+        }
+    } else if (info.type == SDL_PATHTYPE_DIRECTORY) {
+        if (walk->depth + 1 > WPE__WALK_DEPTH_MAX) {
+            wpe_log_error("directory nesting deeper than %u levels at '%s'", WPE__WALK_DEPTH_MAX, full);
+            walk->result = WPE_RESULT_ERROR_CAPACITY;
+            next = SDL_ENUM_FAILURE;
+        } else {
+            walk->relative[walk->relative_length++] = '/';
+            walk->relative[walk->relative_length] = '\0';
+            ++walk->depth;
+            const bool ok = SDL_EnumerateDirectory(full, wpe__walk_entry, walk);
+            --walk->depth;
+            if (walk->stopped) {
+                next = SDL_ENUM_SUCCESS;
+            } else if (!ok) {
+                if (walk->result == WPE_RESULT_OK) {
+                    wpe_log_error("cannot list '%s': %s", full, SDL_GetError());
+                    walk->result = WPE_RESULT_ERROR_IO;
+                }
+                next = SDL_ENUM_FAILURE;
+            }
+        }
+    }
+    walk->relative_length = saved;
+    walk->relative[saved] = '\0';
+    return next;
+}
+
+WPE_Result wpe_directory_walk(const char* directory, WPE_DirectoryWalkFn fn, void* user_data) {
+    if (!directory || !fn) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!wpe_directory_exists(directory)) return WPE_RESULT_ERROR_NOT_FOUND;
+    wpe__Walk* walk = wpe_alloc_zeroed(1, sizeof *walk); /* Large; keep it off the stack. */
+    if (!walk) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    walk->fn = fn;
+    walk->user_data = user_data;
+    const bool ok = SDL_EnumerateDirectory(directory, wpe__walk_entry, walk);
+    WPE_Result result = walk->result;
+    if (!ok && !walk->stopped && result == WPE_RESULT_OK) {
+        wpe_log_error("cannot list '%s': %s", directory, SDL_GetError());
+        result = WPE_RESULT_ERROR_IO;
+    }
+    wpe_free(walk);
+    return result;
+}
+
+bool wpe_directory_exists(const char* path) {
+    SDL_PathInfo info;
+    return path && SDL_GetPathInfo(path, &info) && info.type == SDL_PATHTYPE_DIRECTORY;
+}
+
+WPE_Result wpe_directory_create(const char* path) {
+    if (!path) return WPE_RESULT_ERROR_NULL_ARG;
+    if (SDL_CreateDirectory(path)) return WPE_RESULT_OK; /* Creates parents; true if it exists. */
+    wpe_log_error("cannot create directory '%s': %s", path, SDL_GetError());
+    return WPE_RESULT_ERROR_IO;
+}
+
+WPE_Result wpe_path_remove(const char* path) {
+    if (!path) return WPE_RESULT_ERROR_NULL_ARG;
+    SDL_PathInfo info;
+    if (!SDL_GetPathInfo(path, &info)) return WPE_RESULT_OK;
+    if (SDL_RemovePath(path)) return WPE_RESULT_OK;
+    wpe_log_error("cannot remove '%s': %s", path, SDL_GetError());
+    return WPE_RESULT_ERROR_IO;
+}
+
 void wpe_image_free(WPE_Image* image) {
     if (!image) return;
     wpe_free(image->pixels);

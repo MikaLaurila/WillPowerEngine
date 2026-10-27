@@ -1,4 +1,7 @@
 #include "wpe_test.h"
+#include "wpe_test_assets.h"
+
+#include <stdio.h>
 
 #include "assets/procedural.h"
 #include "graphics/graphics.h"
@@ -16,24 +19,25 @@ typedef struct TestScene {
     WPE_Ecs* ecs;
     WPE_Renderer* renderer;
     WPE_SceneRenderer* scene_renderer;
-    WPE_Model* models[4];
+    WPE_TestAssets assets;
     uint32_t model_count;
     WPE_Entity camera;
 } TestScene;
 
 static void scene_init(TestScene* s) {
     *s = (TestScene){0};
+    s->assets = wpe_test_assets_create(NULL, 0);
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&s->ecs));
     WPE_TEST_ASSERT_OK(wpe_scene_register_components(s->ecs));
-    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(s->ecs));
+    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(s->ecs, s->assets.assets));
     WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = S, .height = S}, &s->renderer));
     WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&s->scene_renderer));
 }
 
 static void scene_free(TestScene* s) {
-    wpe_ecs_destroy(s->ecs);
-    for (uint32_t i = 0; i < s->model_count; ++i)
-        wpe_model_destroy(s->models[i]);
+    wpe_ecs_destroy(s->ecs); /* Releases the models (the entities hold the only references). */
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_stats(s->assets.assets).assets);
+    wpe_test_assets_destroy(&s->assets);
     wpe_scene_renderer_destroy(s->scene_renderer);
     wpe_renderer_destroy(s->renderer);
 }
@@ -47,10 +51,14 @@ static WPE_Entity spawn(TestScene* s, WPE_Vec3 position, WPE_Quat rotation) {
     return e;
 }
 
+/* Hands a procedural model to the asset manager and instantiates it; the entities own it. */
 static void add_model(TestScene* s, WPE_Model* model, WPE_Vec3 position) {
-    s->models[s->model_count++] = model;
+    char name[32];
+    snprintf(name, sizeof name, "test/model%u", s->model_count++);
+    const WPE_AssetHandle handle = wpe_test_add_model(s->assets.assets, name, model);
     WPE_Entity root;
-    WPE_TEST_ASSERT_OK(wpe_model_instantiate(s->ecs, model, NULL, &root));
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(s->ecs, s->assets.assets, handle, NULL, &root));
+    wpe_asset_release(s->assets.assets, handle);
     ((WPE_Transform*)wpe_ecs_get_component(s->ecs, root, WPE_COMP_TRANSFORM))->position = position;
 }
 

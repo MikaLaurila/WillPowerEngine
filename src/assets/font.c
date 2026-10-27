@@ -111,14 +111,20 @@ WPE_Result wpe_font_load(const char* path, WPE_BitmapFont** out_font) {
     size_t size = 0;
     WPE_Result result = wpe_file_read_all(path, &data, &size);
     if (result != WPE_RESULT_OK) return result;
-    WPE_Image image = {0};
-    result = wpe_image_decode(data, size, path, &image);
+    result = wpe_font_load_memory(data, size, path, out_font);
     wpe_free(data);
-    if (result != WPE_RESULT_OK) return result;
+    return result;
+}
 
+WPE_Result wpe_font_load_memory(const void* data, size_t size, const char* label, WPE_BitmapFont** out_font) {
+    if (!data || !label || !out_font) return WPE_RESULT_ERROR_NULL_ARG;
+    *out_font = NULL;
+    WPE_Image image = {0};
+    WPE_Result result = wpe_image_decode(data, size, label, &image);
+    if (result != WPE_RESULT_OK) return result;
     result = wpe_font_create(image.width, image.height, image.pixels, out_font);
     wpe_image_free(&image);
-    if (result == WPE_RESULT_ERROR_PARSE) wpe_log_error("'%s' is not a valid font sheet", path);
+    if (result == WPE_RESULT_ERROR_PARSE) wpe_log_error("'%s' is not a valid font sheet", label);
     return result;
 }
 

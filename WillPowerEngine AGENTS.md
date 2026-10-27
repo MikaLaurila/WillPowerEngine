@@ -300,41 +300,43 @@ return MyEntity
 
 ### 4.4 Asset Management
 
+Implemented in `src/vfs/` (virtual file system and `.pak` archives) and `assets/asset_manager.h`. The format, the tool and the usage rules are in `docs/assets.md`.
+
 ```c
-// Asset handle system
-typedef uint32_t WPE_AssetHandle;
-
-#define WPE_HANDLE_INVALID ((WPE_AssetHandle)~0u)
-
-WPE_AssetHandle wpe_asset_load(const char* path);
-WPE_Mesh* wpe_asset_get_mesh(WPE_AssetHandle handle);
-void wpe_asset_unload(WPE_AssetHandle handle);
-
-// Internal asset cache (private)
-typedef struct {
-    WPE_AssetHandle* handles;
-    char** paths;
-    uint32_t count;
-} wpe__AssetCache;
-
-static wpe__AssetCache wpe__g_asset_cache;
+// Assets are shared, reference-counted and addressed by generational handles (0 = none).
+WPE_AssetHandle model = WPE_ASSET_NONE;
+wpe_asset_load(assets, WPE_ASSET_MODEL, "meshes/helmet.glb", &model);  // cached by (type, path)
+const WPE_Model* data = wpe_asset_model(assets, model);              // borrowed while referenced
+wpe_asset_release(assets, model);                                   // the last reference destroys it
 ```
 
-**Current state (glTF milestone):** `wpe_model_load()` turns a .gltf/.glb into an immutable `WPE_Model`. Material conversion:
-- glTF metallic-roughness inputs are kept and converted per pixel in the material shader to diffuse/specular/gloss.
-- Color factors are stored sRGB-encoded so they combine with sRGB texels in gamma-space shading.
-- Required extensions outside the supported list are rejected.
+- **Asset paths:** relative and `/`-separated, resolved through a `WPE_Vfs` of mounted directories and `.pak` archives. Later mounts win, which supports patch archives and dev overrides.
+- **Ownership:** every component that references an asset holds one reference from its add hook to its remove hook:
+  - mesh renderer and animator (model)
+  - collider (convex/mesh model)
+  - audio source (sound)
 
-ECS components currently hold borrowed `WPE_Model*` pointers. Handles and ref counting (below) replace them in the pak milestone.
+  The script host keeps prefab models and the sounds it has used referenced.
+- **Asset types:** models and fonts are built in, and the audio module registers sounds. Game-defined types start at `WPE_ASSET_USER_FIRST`. Assets created in code enter through `wpe_asset_add`.
+- **Archives:** `.pak` v1 stores each file as-is or as one zstd frame (when that saves at least 5%), with per-file CRC-32 and a validated, sorted index. Archives are built reproducibly by `tools/wpe_pak`. Compression uses **zstd** (the documented choice over LZ4: better ratios at comparable decode speed).
+- **Model conversion (glTF):** metallic-roughness inputs are kept and converted per pixel to diffuse/specular/gloss. Color factors are stored sRGB-encoded. Required extensions outside the supported list are rejected.
 
 **Rules:**
-- Assets loaded from `.pak` archives (zstd/LZ4 compressed).
-- Reference counting for shared assets.
-- Lazy loading for large scenes.
-- Texture streaming not required (target resolutions low).
+- Assets are loaded through the VFS (`.pak` archives in shipped games).
+- Shared assets are reference-counted.
+- Lazy loading for large scenes is planned with scene serialization (runtime milestone).
+- Texture streaming is not required, because target resolutions are low.
+
+### 4.5 Audio
+
+Implemented in `src/audio/` (miniaudio, private).
+- Sounds (WAV/FLAC/MP3) are assets decoded once to float PCM and shared by voices; voices resample to the mixer rate on playback.
+- `WPE_AudioSource` components play at their entity's position, with inverse-distance attenuation and panning; the listener follows one entity (usually the camera).
+- One-shots use a pool of 64 voices (the oldest one-shot is stolen when full). Music streams from the VFS with crossfades.
+- There are master, effects and music buses.
+- Without an output device, mixing runs on demand (`wpe_audio_render`), which is what tests and headless runs use.
 
 ---
-
 ## 5. File Organization
 
 ```
@@ -350,7 +352,8 @@ willpower_engine/
 │   ├── assets/         # glTF models (cgltf), image decoding (stb_image), bitmap fonts
 │   ├── graphics/       # Mesh/camera/animator components, material shader, scene render, 2D
 │   ├── physics/        # Box3D wrapper
-│   ├── audio/          # miniaudio wrapper
+│   ├── audio/          # miniaudio wrapper: sounds, sources, music, buses
+│   ├── vfs/            # Virtual file system and .pak archives (zstd)
 │   ├── script/         # Luau VM and bindings
 │   ├── assets/         # Asset loading and management
 │   └── input/          # SDL3 input handling
@@ -362,6 +365,8 @@ willpower_engine/
 │   └── main.c
 ├── samples/            # Small demo programs (e.g. spinning_cubes) with --frames/--screenshot for automated checks
 ├── tests/              # Test suites
+├── tools/              # Command-line tools (wpe_pak: build/inspect .pak archives)
+├── docs/               # Guides and specifications (scripting API, assets and .pak format)
 ├── scenes/             # Test and demo scenes
 ├── assets/             # Test assets (glTF, fonts, etc.)
 ├── CMakeLists.txt
@@ -378,9 +383,12 @@ willpower_engine/
   - `scene` depends on `core`, `math` and `ecs`.
   - `renderer` depends on `core`, `math` and `jobs`.
   - `platform` depends on `core` and `renderer`, and uses SDL3 privately.
-  - `assets` depends on `core`, `math`, `renderer`, `jobs` and `platform`, and uses cgltf and stb_image privately.
+  - `vfs` depends on `core` and `platform`, and uses zstd privately.
+  - `assets` depends on `core`, `math`, `renderer`, `jobs`, `platform` and `vfs`, and uses cgltf and stb_image privately.
   - `graphics` depends on `ecs`, `scene`, `renderer` and `assets`.
-  - `script` depends on `graphics`, `assets` and `platform`, and uses Luau privately.
+  - `physics` depends on `ecs`, `scene` and `assets`, and uses Box3D privately.
+  - `audio` depends on `ecs`, `scene` and `assets`, and uses miniaudio privately.
+  - `script` depends on `graphics`, `assets`, `physics`, `audio` and `platform`, and uses Luau privately.
 - Only `jobs` and `platform` may include SDL headers; the renderer stays pure CPU so it can be tested headless.
 
 ---

@@ -30,13 +30,14 @@
  *   wpe_script_host_dispatch_physics(), for both entities of each event of the last physics step.
  *
  * Fixed-step order per step: wpe_script_host_fixed_update(), wpe_physics_step(),
- * wpe_script_host_dispatch_physics(). Destroy order: script host, physics, ECS world.
+ * wpe_script_host_dispatch_physics(). Destroy order: script host, audio, physics, ECS world,
+ * asset manager.
  *
  * Isolation:
  * - Sandbox: only safe standard libraries (no io, no loadstring, no getfenv/setfenv; os has
  *   time/clock/date only); globals and libraries are read-only; each script file gets its own
- *   global environment. Prefab and script paths are relative to the asset root and may not
- *   escape it.
+ *   global environment. Prefab and script paths are asset paths in the asset manager's VFS, so
+ *   scripts can only read what the game ships.
  * - Errors in a callback are logged with a traceback and disable that instance until the script
  *   is reloaded; other scripts and the engine keep running.
  * - Every callback has a time budget (infinite loops are interrupted) and the VM a memory limit.
@@ -47,7 +48,8 @@
  *
  * The Luau-side API (the read-only global `wpe`) is documented in docs/scripting.md.
  *
- * - Dependencies: core, math, ecs, scene, graphics, assets, platform, physics, Luau (private)
+ * - Dependencies: core, math, ecs, scene, graphics, assets (asset manager, VFS), physics, audio, Luau
+ *   (private)
  * - Thread affinity: main thread only (one VM per host)
  *
  * @author WillPowerEngine Team
@@ -58,10 +60,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "assets/model.h"
+#include "assets/asset_manager.h"
+#include "audio/audio.h"
 #include "core/result.h"
 #include "ecs/ecs.h"
-#include "jobs/jobs.h"
 #include "physics/physics.h"
 
 /** Script component data. Managed by the host; do not modify. */
@@ -74,13 +76,12 @@ typedef struct WPE_Script {
 typedef struct WPE_ScriptHost WPE_ScriptHost;
 
 typedef struct WPE_ScriptHostDesc {
-    WPE_Ecs* ecs;              /* Borrowed. Scene and graphics components must be registered. */
-    WPE_Physics* physics;      /* Optional, borrowed: enables the physics API and collision callbacks. */
-    const char* asset_root;    /* Directory that script and prefab paths are relative to (copied). */
-    size_t memory_limit;       /* VM heap limit in bytes (0 = 64 MiB). */
-    double time_limit_ms;      /* Budget per callback invocation (0 = 250 ms). */
-    WPE_JobSystem* jobs;       /* Optional: parallel texture decoding for prefabs loaded by scripts. */
-    uint32_t max_texture_size; /* Texture size cap for prefabs loaded by scripts (0 = 512). */
+    WPE_Ecs* ecs;             /* Borrowed. Scene and graphics components must be registered. */
+    WPE_AssetManager* assets; /* Borrowed: scripts and prefabs are asset paths in its VFS. */
+    WPE_Physics* physics;     /* Optional, borrowed: enables the physics API and collision callbacks. */
+    WPE_Audio* audio;         /* Optional, borrowed: enables the audio API. */
+    size_t memory_limit;      /* VM heap limit in bytes (0 = 64 MiB). */
+    double time_limit_ms;     /* Budget per callback invocation (0 = 250 ms). */
 } WPE_ScriptHostDesc;
 
 typedef struct WPE_ScriptStats {
@@ -110,9 +111,10 @@ void wpe_script_host_destroy(WPE_ScriptHost* host);
  * Attaches a script to an entity (replacing any existing one). The file is loaded and compiled
  * on first use and cached; on_start runs at the next wpe_script_host_update().
  *
- * @param path Path relative to the asset root (forward slashes, no "..").
- * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_NOT_FOUND (dead entity);
- *         WPE_RESULT_ERROR_INVALID_ARG (path outside the asset root); WPE_RESULT_ERROR_IO;
+ * @param path Asset path of the script (see wpe_vfs_path_is_valid()).
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_NOT_FOUND (dead entity or no
+ *         such script file);
+ *         WPE_RESULT_ERROR_INVALID_ARG (invalid asset path); WPE_RESULT_ERROR_IO;
  *         WPE_RESULT_ERROR_PARSE (compile error or the chunk did not return a table; logged);
  *         WPE_RESULT_ERROR_INVALID_STATE (called from inside on_destroy).
  *
@@ -166,15 +168,18 @@ uint32_t wpe_script_host_reload_changed(WPE_ScriptHost* host);
 WPE_Result wpe_script_host_reload(WPE_ScriptHost* host, const char* path);
 
 /**
- * Registers a named prefab that scripts can instantiate with wpe.instantiate(name). The model is
- * borrowed and must outlive the host. Names are case-sensitive; re-registering replaces.
+ * Registers a named prefab that scripts can instantiate with wpe.instantiate(name). The host takes
+ * its own reference to the model (released when replaced or when the host is destroyed). Names are
+ * case-sensitive; re-registering replaces. Model asset paths work as prefab names without
+ * registration (loaded on first use).
  *
- * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_INVALID_ARG (empty name) or
- *         WPE_RESULT_ERROR_OUT_OF_MEMORY.
+ * @param model A WPE_ASSET_MODEL handle.
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_INVALID_ARG (empty or too long
+ *         name, or not a model handle) or WPE_RESULT_ERROR_OUT_OF_MEMORY.
  *
  * @thread_safety Main thread
  */
-WPE_Result wpe_script_host_register_prefab(WPE_ScriptHost* host, const char* name, const WPE_Model* model);
+WPE_Result wpe_script_host_register_prefab(WPE_ScriptHost* host, const char* name, WPE_AssetHandle model);
 
 /** @return Current statistics. @thread_safety Main thread */
 WPE_ScriptStats wpe_script_host_stats(const WPE_ScriptHost* host);

@@ -1,4 +1,5 @@
 #include "wpe_test.h"
+#include "wpe_test_assets.h"
 
 #include <stdio.h>
 
@@ -20,25 +21,29 @@ static void write_script(const char* name, const char* source) {
 }
 
 typedef struct Fixture {
+    WPE_TestAssets assets; /* VFS mounting ROOT. */
     WPE_Ecs* ecs;
     WPE_ScriptHost* host;
 } Fixture;
 
 static Fixture make_fixture(double time_limit_ms, size_t memory_limit) {
-    Fixture f = {0};
+    Fixture f = {.assets = wpe_test_assets_create(ROOT, 0)};
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&f.ecs));
     WPE_TEST_ASSERT_OK(wpe_scene_register_components(f.ecs));
-    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(f.ecs));
-    WPE_TEST_ASSERT_OK(wpe_script_host_create(
-        &(WPE_ScriptHostDesc){
-            .ecs = f.ecs, .asset_root = ROOT, .time_limit_ms = time_limit_ms, .memory_limit = memory_limit},
-        &f.host));
+    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(f.ecs, f.assets.assets));
+    WPE_TEST_ASSERT_OK(wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = f.ecs,
+                                                                    .assets = f.assets.assets,
+                                                                    .time_limit_ms = time_limit_ms,
+                                                                    .memory_limit = memory_limit},
+                                              &f.host));
     return f;
 }
 
 static void free_fixture(Fixture* f) {
     wpe_script_host_destroy(f->host);
     wpe_ecs_destroy(f->ecs);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_stats(f->assets.assets).assets); /* Everything released. */
+    wpe_test_assets_destroy(&f->assets);
 }
 
 static WPE_Entity spawn(Fixture* f, const char* name) {
@@ -204,7 +209,7 @@ static void test_script_attach_validation(void) {
         WPE_TEST_ASSERT_MSG(wpe_script_attach(f.host, e, unsafe[i]) == WPE_RESULT_ERROR_INVALID_ARG,
                             "accepted '%s'", unsafe[i]);
     }
-    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_IO, wpe_script_attach(f.host, e, "missing.luau"));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_script_attach(f.host, e, "missing.luau"));
     WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_PARSE, wpe_script_attach(f.host, e, "not_a_table.luau"));
     WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_PARSE, wpe_script_attach(f.host, e, "syntax.luau"));
     quiet(false);
@@ -317,9 +322,11 @@ static void test_script_api_transforms_lights_prefabs(void) {
         "end\n"
         "return S\n");
     Fixture f = make_fixture(0, 0);
-    WPE_Model* box = NULL;
-    WPE_TEST_ASSERT_OK(wpe_model_create_box(wpe_vec3(1, 1, 1), NULL, &box));
+    WPE_Model* box_model = NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_create_box(wpe_vec3(1, 1, 1), NULL, &box_model));
+    const WPE_AssetHandle box = wpe_test_add_model(f.assets.assets, "test/box", box_model);
     WPE_TEST_ASSERT_OK(wpe_script_host_register_prefab(f.host, "box", box));
+    wpe_asset_release(f.assets.assets, box); /* The prefab table keeps it. */
     const WPE_Entity e = spawn(&f, NULL);
     WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, e, "api.luau"));
     quiet(true);
@@ -329,24 +336,25 @@ static void test_script_api_transforms_lights_prefabs(void) {
     WPE_TEST_ASSERT_EQ_STR("ok", wpe_scene_get_name(f.ecs, e));
     WPE_TEST_ASSERT(wpe_ecs_has_component(f.ecs, e, WPE_COMP_LIGHT));
     free_fixture(&f);
-    wpe_model_destroy(box);
 }
 
 static void test_script_host_destroy_and_recreate(void) {
     write_script("bye.luau", "local S = {}\nfunction S:on_start() end\nfunction S:on_destroy() "
                              "wpe.set_name(self.entity, 'bye') end\nreturn S\n");
+    WPE_TestAssets assets = wpe_test_assets_create(ROOT, 0);
     WPE_Ecs* ecs = NULL;
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&ecs));
     WPE_TEST_ASSERT_OK(wpe_scene_register_components(ecs));
-    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(ecs));
+    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(ecs, assets.assets));
+    const WPE_ScriptHostDesc desc = {.ecs = ecs, .assets = assets.assets};
     WPE_ScriptHost* host = NULL;
-    WPE_TEST_ASSERT_OK(wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .asset_root = ROOT}, &host));
+    WPE_TEST_ASSERT_OK(wpe_script_host_create(&desc, &host));
     WPE_ScriptHost* second = NULL;
     wpe_log_set_stderr_enabled(false);
-    WPE_TEST_ASSERT_EQ_INT(
-        WPE_RESULT_ERROR_ALREADY_EXISTS,
-        wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .asset_root = ROOT}, &second));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_ALREADY_EXISTS, wpe_script_host_create(&desc, &second));
     wpe_log_set_stderr_enabled(true);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG,
+                           wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs}, &second));
 
     const WPE_Entity e = wpe_ecs_spawn(ecs);
     WPE_TEST_ASSERT_OK(wpe_scene_set_name(ecs, e, "hello"));
@@ -356,9 +364,10 @@ static void test_script_host_destroy_and_recreate(void) {
     WPE_TEST_ASSERT_EQ_STR("bye", wpe_scene_get_name(ecs, e));
     WPE_TEST_ASSERT(!wpe_ecs_is_registered(ecs, WPE_COMP_SCRIPT));
 
-    WPE_TEST_ASSERT_OK(wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .asset_root = ROOT}, &host));
+    WPE_TEST_ASSERT_OK(wpe_script_host_create(&desc, &host));
     wpe_script_host_destroy(host);
     wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&assets);
 }
 
 /* ---- Fixed step ------------------------------------------------------------------------------------ */
@@ -400,20 +409,22 @@ static void test_script_quat_euler_roundtrip(void) {
 /* ---- Physics --------------------------------------------------------------------------------------- */
 
 typedef struct PhysicsFixture {
+    WPE_TestAssets assets;
     WPE_Ecs* ecs;
     WPE_Physics* physics;
     WPE_ScriptHost* host;
 } PhysicsFixture;
 
 static PhysicsFixture make_physics_fixture(void) {
-    PhysicsFixture f = {0};
+    PhysicsFixture f = {.assets = wpe_test_assets_create(ROOT, 0)};
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&f.ecs));
     WPE_TEST_ASSERT_OK(wpe_scene_register_components(f.ecs));
-    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(f.ecs));
+    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(f.ecs, f.assets.assets));
     WPE_TEST_ASSERT_OK(wpe_physics_create(
-        &(WPE_PhysicsDesc){.ecs = f.ecs, .gravity = wpe_vec3(0.0f, -9.81f, 0.0f)}, &f.physics));
+        &(WPE_PhysicsDesc){.ecs = f.ecs, .assets = f.assets.assets, .gravity = wpe_vec3(0.0f, -9.81f, 0.0f)},
+        &f.physics));
     WPE_TEST_ASSERT_OK(wpe_script_host_create(
-        &(WPE_ScriptHostDesc){.ecs = f.ecs, .physics = f.physics, .asset_root = ROOT}, &f.host));
+        &(WPE_ScriptHostDesc){.ecs = f.ecs, .assets = f.assets.assets, .physics = f.physics}, &f.host));
     return f;
 }
 
@@ -421,6 +432,7 @@ static void free_physics_fixture(PhysicsFixture* f) {
     wpe_script_host_destroy(f->host);
     wpe_physics_destroy(f->physics);
     wpe_ecs_destroy(f->ecs);
+    wpe_test_assets_destroy(&f->assets);
 }
 
 /* One frame in the documented order: update, fixed update, physics step, collision callbacks. */
@@ -545,6 +557,90 @@ static void test_script_physics_errors(void) {
     free_physics_fixture(&f);
 }
 
+/* ---- Audio ----------------------------------------------------------------------------------------- */
+
+static void test_script_audio_api(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/sounds"));
+    wpe_test_write_wav(ROOT "/sounds/beep.wav", 1, 22050, 22050 / 4, 440.0f);
+    wpe_test_write_wav(ROOT "/sounds/music.wav", 2, 48000, 48000, 220.0f);
+    write_script("audio.luau",
+                 "local S = {}\n"
+                 "function S:on_start()\n"
+                 "  local v = wpe.play_sound('sounds/beep.wav', {volume = 0.5, pitch = 1.5, position = "
+                 "vector.create(1, 0, 0), bus = wpe.BUS_EFFECTS})\n"
+                 "  assert(v > 0)\n"
+                 "  wpe.stop_sound(v)\n"
+                 "  wpe.stop_sound(v) -- stale ids are ignored\n"
+                 "  wpe.add_audio_source(self.entity, {sound = 'sounds/beep.wav', loop = true, volume = 0.8, "
+                 "spatial = false})\n"
+                 "  assert(wpe.is_audio_playing(self.entity))\n"
+                 "  wpe.set_audio_playing(self.entity, false)\n"
+                 "  assert(not wpe.is_audio_playing(self.entity))\n"
+                 "  wpe.set_audio_playing(self.entity, true)\n"
+                 "  wpe.play_music('sounds/music.wav', 0.25, true)\n"
+                 "  wpe.set_volume(wpe.BUS_MUSIC, 0.5)\n"
+                 "  assert(wpe.get_volume(wpe.BUS_MUSIC) == 0.5 and wpe.get_volume(wpe.BUS_MASTER) == 1)\n"
+                 "  assert(not pcall(wpe.set_volume, 7, 1))\n"
+                 "  assert(not pcall(wpe.play_sound, 'sounds/missing.wav'))\n"
+                 "  assert(not pcall(wpe.play_music, 'sounds/missing.wav'))\n"
+                 "  assert(not pcall(wpe.add_audio_source, self.entity, {volume = 1}))\n"
+                 "  wpe.set_name(self.entity, 'audio ok')\n"
+                 "end\n"
+                 "function S:on_update(dt)\n"
+                 "  if wpe.frame() == 3 then wpe.stop_music(); wpe.remove_audio_source(self.entity) end\n"
+                 "end\n"
+                 "return S\n");
+    WPE_TestAssets assets = wpe_test_assets_create(ROOT, 0);
+    WPE_Ecs* ecs = NULL;
+    WPE_TEST_ASSERT_OK(wpe_ecs_create(&ecs));
+    WPE_TEST_ASSERT_OK(wpe_scene_register_components(ecs));
+    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(ecs, assets.assets));
+    WPE_Audio* audio = NULL;
+    WPE_TEST_ASSERT_OK(
+        wpe_audio_create(&(WPE_AudioDesc){.ecs = ecs, .assets = assets.assets, .no_device = true}, &audio));
+    WPE_ScriptHost* host = NULL;
+    WPE_TEST_ASSERT_OK(wpe_script_host_create(
+        &(WPE_ScriptHostDesc){.ecs = ecs, .assets = assets.assets, .audio = audio}, &host));
+
+    const WPE_Entity e = wpe_ecs_spawn(ecs);
+    const WPE_Transform t = wpe_transform_identity();
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, e, WPE_COMP_TRANSFORM, &t, NULL));
+    WPE_TEST_ASSERT_OK(wpe_script_attach(host, e, "audio.luau"));
+    quiet(true); /* The failing pcall checks log errors. */
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(host, 0.016f));
+    quiet(false);
+    WPE_TEST_ASSERT_OK(wpe_audio_update(audio));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(host).errors);
+    WPE_TEST_ASSERT_EQ_STR("audio ok", wpe_scene_get_name(ecs, e));
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_audio_stats(audio).voices); /* Looping source and music. */
+    WPE_TEST_ASSERT_NEAR(0.5, wpe_audio_volume(audio, WPE_AUDIO_BUS_MUSIC), 0);
+
+    for (int i = 0; i < 3; ++i) {
+        WPE_TEST_ASSERT_OK(wpe_script_host_update(host, 0.016f));
+        WPE_TEST_ASSERT_OK(wpe_audio_update(audio));
+    }
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_audio_stats(audio).voices);
+    WPE_TEST_ASSERT(!wpe_ecs_has_component(ecs, e, WPE_COMP_AUDIO_SOURCE));
+
+    /* The documented destroy order releases every sound before audio shuts down. */
+    wpe_script_host_destroy(host);
+    wpe_audio_destroy(audio);
+    wpe_ecs_destroy(ecs);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_stats(assets.assets).assets);
+    wpe_test_assets_destroy(&assets);
+
+    /* Without audio the API raises. */
+    write_script("no_audio.luau",
+                 "local S = {}\nfunction S:on_start() wpe.play_sound('sounds/beep.wav') end\nreturn S\n");
+    quiet(true);
+    Fixture plain = make_fixture(0, 0);
+    WPE_TEST_ASSERT_OK(wpe_script_attach(plain.host, spawn(&plain, NULL), "no_audio.luau"));
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(plain.host, 0.016f));
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_script_host_stats(plain.host).errors);
+    free_fixture(&plain);
+    quiet(false);
+}
+
 static void test_script_ecs_unregister_component(void) {
     WPE_Ecs* ecs = NULL;
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&ecs));
@@ -574,4 +670,4 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_script_lifecycle_order), WPE_TEST_CASE(test_scr
               WPE_TEST_CASE(test_script_host_destroy_and_recreate),
               WPE_TEST_CASE(test_script_fixed_step_clock), WPE_TEST_CASE(test_script_quat_euler_roundtrip),
               WPE_TEST_CASE(test_script_physics_api_and_callbacks), WPE_TEST_CASE(test_script_physics_errors),
-              WPE_TEST_CASE(test_script_ecs_unregister_component))
+              WPE_TEST_CASE(test_script_audio_api), WPE_TEST_CASE(test_script_ecs_unregister_component))

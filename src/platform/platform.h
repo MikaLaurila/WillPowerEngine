@@ -120,4 +120,87 @@ WPE_Result wpe_file_read_all(const char* path, void** out_data, size_t* out_size
  */
 WPE_Result wpe_file_modified_time(const char* path, int64_t* out_time);
 
+/** An open file stream (binary). */
+typedef struct WPE_File WPE_File;
+
+/**
+ * Opens a file for reading, or for writing (created or truncated).
+ *
+ * @param out_file Receives the stream; close with wpe_file_close().
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_NOT_FOUND (reading a missing
+ *         file; not logged), WPE_RESULT_ERROR_IO (logged) or WPE_RESULT_ERROR_OUT_OF_MEMORY.
+ *
+ * @thread_safety Any thread; one stream must not be used by two threads at once
+ */
+[[nodiscard]] WPE_Result wpe_file_open(const char* path, bool write, WPE_File** out_file);
+
+/**
+ * Closes a stream (ownership consumed); NULL is a no-op.
+ *
+ * @return WPE_RESULT_OK, or WPE_RESULT_ERROR_IO when flushing written data failed (logged).
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_file_close(WPE_File* file);
+
+/** @return Bytes read (less than `size` only at end of file or on error). @thread_safety See wpe_file_open()
+ */
+size_t wpe_file_read(WPE_File* file, void* buffer, size_t size);
+
+/** @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_IO (short write; logged).
+ * @thread_safety See wpe_file_open() */
+WPE_Result wpe_file_write(WPE_File* file, const void* data, size_t size);
+
+/** Seeks to an absolute byte offset. @return WPE_RESULT_OK or WPE_RESULT_ERROR_IO. @thread_safety See
+ * wpe_file_open() */
+WPE_Result wpe_file_seek(WPE_File* file, uint64_t offset);
+
+/** @return The current byte offset, or UINT64_MAX on error. @thread_safety See wpe_file_open() */
+uint64_t wpe_file_tell(WPE_File* file);
+
+/** @return The file size in bytes, or UINT64_MAX on error. @thread_safety See wpe_file_open() */
+uint64_t wpe_file_size(WPE_File* file);
+
+/**
+ * Called for every regular file below a directory by wpe_directory_walk().
+ *
+ * @param relative_path Path relative to the walked directory, with '/' separators (borrowed for
+ *                      the duration of the call).
+ * @return false to stop the walk.
+ */
+typedef bool (*WPE_DirectoryWalkFn)(const char* relative_path, void* user_data);
+
+/**
+ * Recursively lists the regular files below a directory, in no particular order.
+ *
+ * @return WPE_RESULT_OK (also when the callback stopped the walk), WPE_RESULT_ERROR_NULL_ARG,
+ *         WPE_RESULT_ERROR_NOT_FOUND (not a directory), WPE_RESULT_ERROR_CAPACITY (nesting deeper
+ *         than 32 levels or a path longer than 1023 bytes; logged) or WPE_RESULT_ERROR_IO (logged).
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_directory_walk(const char* directory, WPE_DirectoryWalkFn fn, void* user_data);
+
+/** @return Whether `path` names an existing directory. @thread_safety Any thread */
+bool wpe_directory_exists(const char* path);
+
+/**
+ * Creates a directory and any missing parents (succeeds if it already exists).
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_IO (logged).
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_directory_create(const char* path);
+
+/**
+ * Deletes a file or an empty directory.
+ *
+ * @return WPE_RESULT_OK (also if nothing existed), WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_IO
+ *         (for example a non-empty directory; logged).
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_path_remove(const char* path);
+
 #endif /* WPE_PLATFORM_PLATFORM_H */

@@ -4,7 +4,45 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING** Assets are shared through a reference-counted asset manager instead of borrowed
+  pointers: `WPE_MeshRenderer`/`WPE_Animator` hold a `model_asset` handle (the `model` pointer is
+  resolved by the component's add hook), `WPE_Collider.model` is a handle,
+  `wpe_graphics_register_components(ecs, assets)` and `wpe_model_instantiate(ecs, assets, handle,
+  ...)` take the manager, and `wpe_script_host_register_prefab()` takes a handle.
+- **BREAKING** `WPE_ScriptHostDesc` takes `assets` (scripts and prefabs are asset paths in its
+  VFS) instead of `asset_root`, `jobs` and `max_texture_size`; a missing script file is reported
+  as `WPE_RESULT_ERROR_NOT_FOUND`. `WPE_PhysicsDesc` gains `assets` (for convex/mesh colliders).
+
 ### Added
+- Virtual file system (`src/vfs`): asset paths over mounted directories and `.pak` archives
+  (later mounts override earlier ones), whole-file reads, streaming, listing, change times and path
+  validation/normalization. glTF models load through it, including `..` references.
+- `.pak` archives: format version 1 (documented in `docs/assets.md`) with per-file zstd
+  compression where it pays off, CRC-32 integrity checks, a sorted index and strict validation;
+  writer and reader APIs and the `wpe_pak` tool (create/list/verify/extract; reproducible output).
+- Asset manager (`assets/asset_manager.h`): generational, reference-counted handles cached by type
+  and path, built-in model and font loaders, code-created assets (`wpe_asset_add`), user asset
+  types, and leak reports at shutdown.
+- Audio (`src/audio`, miniaudio 0.11.25): WAV/FLAC/MP3 sound assets decoded once and shared, 3D
+  `WPE_AudioSource` components (distance attenuation, panning, looping, pitch), one-shot voices
+  with stealing, streamed music with crossfades (also straight from archives), master/effects/music
+  buses, a listener that follows an entity, and a device-less mode rendered on demand (tests,
+  headless runs, machines without audio hardware).
+- Scripting: `wpe.play_sound`, `wpe.stop_sound`, `wpe.add_audio_source`,
+  `wpe.remove_audio_source`, `wpe.set_audio_playing`, `wpe.is_audio_playing`, `wpe.play_music`,
+  `wpe.stop_music`, `wpe.set_volume`, `wpe.get_volume` and the `wpe.BUS_*` constants.
+- Platform: file streams (`wpe_file_open/read/write/seek/...`), recursive directory walks and
+  directory creation/removal. Core: CRC-32.
+- Samples: `script_demo` plays impact thuds (louder for harder hits) and an ambient music loop
+  (`--mute`), and runs entirely from an archive with `--pak`; all samples load through the VFS.
+  Synthesized demo sounds in `assets/sounds` and `assets/music`.
+- Tests: VFS and archive tests (round trips, corruption, priority, streaming, listing), asset
+  manager tests (caching, references, stale handles, custom types, glTF from archives), audio
+  tests (rendered without a device: playback, pitch, buses, panning, attenuation, sources, voice
+  stealing, streamed and crossfaded music), script audio API tests, a `wpe_pak` round trip, and
+  audio in the 60-second integration test. Golden images are unchanged.
+- Dependencies: zstd v1.5.7 and miniaudio 0.11.25 (both on the approved list).
 - Physics (`src/physics`): Box3D v0.1.0 rigid bodies driven by the `WPE_RigidBody` (static,
   kinematic, dynamic; damping, gravity scale, rotation lock, continuous collision) and
   `WPE_Collider` (box, sphere, capsule, convex hull and triangle mesh from model meshes; offset,

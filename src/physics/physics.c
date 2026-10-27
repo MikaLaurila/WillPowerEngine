@@ -25,6 +25,7 @@ enum {
 
 struct WPE_Physics {
     WPE_Ecs* ecs;
+    WPE_AssetManager* assets; /* Optional: models of convex/mesh colliders. */
     b3WorldId world;
     int substeps;
     uint32_t body_count;       /* Box3D bodies owned by this world (explicit and implicit static). */
@@ -175,8 +176,8 @@ static float wpe__at_least(float value, float minimum) {
 }
 
 /* Collects the vertex positions of a model mesh, scaled and offset into body space. */
-static b3Vec3* wpe__mesh_points(const WPE_Collider* collider, WPE_Vec3 scale, uint32_t* out_count) {
-    const WPE_Model* model = collider->model;
+static b3Vec3* wpe__mesh_points(const WPE_Model* model, const WPE_Collider* collider, WPE_Vec3 scale,
+                                uint32_t* out_count) {
     const WPE_Mesh* mesh = &model->meshes[collider->mesh];
     uint32_t count = 0;
     for (uint32_t p = 0; p < mesh->primitive_count; ++p)
@@ -196,11 +197,10 @@ static b3Vec3* wpe__mesh_points(const WPE_Collider* collider, WPE_Vec3 scale, ui
 }
 
 /* Builds an owned collision mesh (unscaled; the shape applies the entity scale). */
-static b3MeshData* wpe__build_mesh(const WPE_Collider* collider) {
-    const WPE_Model* model = collider->model;
+static b3MeshData* wpe__build_mesh(const WPE_Model* model, const WPE_Collider* collider) {
     const WPE_Mesh* mesh = &model->meshes[collider->mesh];
     uint32_t point_count = 0;
-    b3Vec3* points = wpe__mesh_points(collider, wpe_vec3(1.0f, 1.0f, 1.0f), &point_count);
+    b3Vec3* points = wpe__mesh_points(model, collider, wpe_vec3(1.0f, 1.0f, 1.0f), &point_count);
     uint32_t index_count = 0;
     for (uint32_t p = 0; p < mesh->primitive_count; ++p)
         index_count += model->primitives[mesh->first_primitive + p].index_count / 3 * 3;
@@ -237,7 +237,8 @@ static b3MeshData* wpe__build_mesh(const WPE_Collider* collider) {
     return data;
 }
 
-static WPE_Result wpe__validate_collider(const WPE_Collider* collider, b3BodyType body_type) {
+static WPE_Result wpe__validate_collider(const WPE_Collider* collider, const WPE_Model* model,
+                                         b3BodyType body_type) {
     if (!wpe__finite3(collider->size) || !wpe__finite3(collider->offset) || !isfinite(collider->density) ||
         collider->density < 0.0f || !isfinite(collider->friction) || collider->friction < 0.0f ||
         !isfinite(collider->restitution) || collider->restitution < 0.0f) {
@@ -251,8 +252,8 @@ static WPE_Result wpe__validate_collider(const WPE_Collider* collider, b3BodyTyp
         return WPE_RESULT_OK;
     case WPE_COLLIDER_CONVEX:
     case WPE_COLLIDER_MESH:
-        if (!collider->model || collider->mesh >= collider->model->mesh_count) {
-            wpe_log_error("convex/mesh collider needs a model and a valid mesh index");
+        if (!model || collider->mesh >= model->mesh_count) {
+            wpe_log_error("convex/mesh collider needs a loaded model asset and a valid mesh index");
             return WPE_RESULT_ERROR_INVALID_ARG;
         }
         if (collider->shape == WPE_COLLIDER_MESH && body_type == b3_dynamicBody) {
@@ -266,9 +267,11 @@ static WPE_Result wpe__validate_collider(const WPE_Collider* collider, b3BodyTyp
 }
 
 /* Creates the collider's shape on `body`, using the entity's world scale. */
-static WPE_Result wpe__create_shape(WPE_Entity entity, WPE_Collider* collider, b3BodyId body,
-                                    WPE_Vec3 scale) {
-    const WPE_Result valid = wpe__validate_collider(collider, b3Body_GetType(body));
+static WPE_Result wpe__create_shape(WPE_Physics* physics, WPE_Entity entity, WPE_Collider* collider,
+                                    b3BodyId body, WPE_Vec3 scale) {
+    const bool uses_model = collider->shape == WPE_COLLIDER_CONVEX || collider->shape == WPE_COLLIDER_MESH;
+    const WPE_Model* model = uses_model ? wpe_asset_model(physics->assets, collider->model) : NULL;
+    const WPE_Result valid = wpe__validate_collider(collider, model, b3Body_GetType(body));
     if (valid != WPE_RESULT_OK) return valid;
 
     b3ShapeDef def = b3DefaultShapeDef();
@@ -317,7 +320,7 @@ static WPE_Result wpe__create_shape(WPE_Entity entity, WPE_Collider* collider, b
     }
     case WPE_COLLIDER_CONVEX: {
         uint32_t count = 0;
-        b3Vec3* points = wpe__mesh_points(collider, scale, &count);
+        b3Vec3* points = wpe__mesh_points(model, collider, scale, &count);
         if (!points) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
         b3HullData* hull =
             count <= INT32_MAX ? b3CreateHull(points, (int)count, WPE__MAX_HULL_VERTICES) : NULL;
@@ -332,7 +335,7 @@ static WPE_Result wpe__create_shape(WPE_Entity entity, WPE_Collider* collider, b
         break;
     }
     case WPE_COLLIDER_MESH: {
-        b3MeshData* mesh = wpe__build_mesh(collider);
+        b3MeshData* mesh = wpe__build_mesh(model, collider);
         if (!mesh) {
             wpe_log_error("could not build a collision mesh from mesh %u", collider->mesh);
             return WPE_RESULT_ERROR_OUT_OF_MEMORY;
@@ -356,6 +359,17 @@ static WPE_Result wpe__create_shape(WPE_Entity entity, WPE_Collider* collider, b
     }
     collider->wpe__shape = b3StoreShapeId(shape);
     return WPE_RESULT_OK;
+}
+
+/* Makes the component's held model reference match its `model` field (game code may have changed
+ * it before a refresh). The reference lives as long as the component, so rebuilds can always reach
+ * the model. */
+static void wpe__hold_model(WPE_Physics* physics, WPE_Collider* collider) {
+    if (collider->wpe__model_ref == collider->model) return;
+    if (wpe_asset_model(physics->assets, collider->model)) wpe_asset_retain(physics->assets, collider->model);
+    wpe_asset_release(physics->assets, collider->wpe__model_ref);
+    collider->wpe__model_ref =
+        wpe_asset_model(physics->assets, collider->model) ? collider->model : WPE_ASSET_NONE;
 }
 
 static b3BodyId wpe__create_b3_body(WPE_Physics* physics, WPE_Entity entity, const WPE_RigidBody* rb,
@@ -424,6 +438,7 @@ static void wpe__release_rigidbody(WPE_Physics* physics, WPE_Entity entity, WPE_
 static void wpe__ensure_created(WPE_Physics* physics, WPE_Entity entity) {
     WPE_RigidBody* rb = wpe_ecs_get_component(physics->ecs, entity, WPE_COMP_PHYSICS_RIGIDBODY);
     WPE_Collider* collider = wpe_ecs_get_component(physics->ecs, entity, WPE_COMP_PHYSICS_COLLIDER);
+    if (collider) wpe__hold_model(physics, collider);
     const bool needs_body = rb ? rb->wpe__state == WPE__STATE_PENDING : false;
     const bool needs_shape =
         collider && collider->wpe__state != WPE__STATE_FAILED &&
@@ -463,10 +478,10 @@ static void wpe__ensure_created(WPE_Physics* physics, WPE_Entity entity) {
         if (collider->wpe__state == WPE__STATE_CREATED && collider->wpe__static_body)
             wpe__release_collider(physics, collider, false);
         if (collider->wpe__state != WPE__STATE_PENDING) return;
-        collider->wpe__state =
-            wpe__create_shape(entity, collider, b3LoadBodyId(rb->wpe__body), pose.scale) == WPE_RESULT_OK
-                ? WPE__STATE_CREATED
-                : WPE__STATE_FAILED;
+        collider->wpe__state = wpe__create_shape(physics, entity, collider, b3LoadBodyId(rb->wpe__body),
+                                                 pose.scale) == WPE_RESULT_OK
+                                   ? WPE__STATE_CREATED
+                                   : WPE__STATE_FAILED;
         return;
     }
 
@@ -476,7 +491,7 @@ static void wpe__ensure_created(WPE_Physics* physics, WPE_Entity entity) {
         collider->wpe__state = WPE__STATE_FAILED;
         return;
     }
-    if (wpe__create_shape(entity, collider, body, pose.scale) != WPE_RESULT_OK) {
+    if (wpe__create_shape(physics, entity, collider, body, pose.scale) != WPE_RESULT_OK) {
         wpe__destroy_b3_body(physics, b3StoreBodyId(body));
         collider->wpe__state = WPE__STATE_FAILED;
         return;
@@ -578,10 +593,22 @@ static void wpe__rigidbody_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* comp
     wpe__release_rigidbody(user_data, entity, component);
 }
 
+static void wpe__collider_on_add(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
+    (void)ecs;
+    (void)entity;
+    WPE_Collider* collider = component;
+    collider->wpe__model_ref = WPE_ASSET_NONE; /* Private fields of the initial data are not trusted. */
+    wpe__hold_model(user_data, collider);
+}
+
 static void wpe__collider_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
     (void)ecs;
     (void)entity;
-    wpe__release_collider(user_data, component, false);
+    WPE_Collider* collider = component;
+    wpe__release_collider(user_data, collider, false);
+    WPE_Physics* physics = user_data;
+    wpe_asset_release(physics->assets, collider->wpe__model_ref);
+    collider->wpe__model_ref = WPE_ASSET_NONE;
 }
 
 /* ---- Public API ----------------------------------------------------------------------------------- */
@@ -616,6 +643,7 @@ WPE_Result wpe_physics_create(const WPE_PhysicsDesc* desc, WPE_Physics** out_phy
     WPE_Physics* physics = wpe_alloc_zeroed(1, sizeof *physics);
     if (!physics) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     physics->ecs = desc->ecs;
+    physics->assets = desc->assets;
     physics->substeps = (int)(desc->substeps ? desc->substeps : WPE__DEFAULT_SUBSTEPS);
 
     wpe__install_box3d_hooks();
@@ -638,6 +666,7 @@ WPE_Result wpe_physics_create(const WPE_PhysicsDesc* desc, WPE_Physics** out_phy
                                             &(WPE_ComponentDesc){.name = "Collider",
                                                                  .size = sizeof(WPE_Collider),
                                                                  .alignment = alignof(WPE_Collider),
+                                                                 .on_add = wpe__collider_on_add,
                                                                  .on_remove = wpe__collider_on_remove,
                                                                  .hook_user_data = physics});
         if (result != WPE_RESULT_OK) wpe_ecs_unregister_component(physics->ecs, WPE_COMP_PHYSICS_RIGIDBODY);

@@ -12,12 +12,13 @@
  * - WPE_COMP_ANIMATOR (WPE_Animator): plays one of a model's animations on the entities created by
  *   wpe_model_instantiate().
  *
- * Asset lifetime: components hold borrowed WPE_Model pointers. A model must outlive every entity
- * that references it.
- * NOTE(limitation): pointers are replaced by ref-counted asset handles with the asset system (pak
- * milestone).
+ * Asset lifetime: mesh renderers and animators reference their model by asset handle
+ * (`model_asset`). Their add hook takes a reference and resolves the cached `model` pointer; their
+ * remove hook releases it, so a model lives as long as any entity uses it. Set `model_asset` before
+ * adding the component and treat `model` as read-only; to switch models, remove and re-add the
+ * component. An invalid handle leaves `model` NULL and the component is ignored.
  *
- * - Dependencies: core, math, ecs, scene, renderer, assets
+ * - Dependencies: core, math, ecs, scene, renderer, assets (asset manager)
  * - Thread affinity: same as the owning WPE_Ecs world
  *
  * @author WillPowerEngine Team
@@ -25,15 +26,17 @@
 #ifndef WPE_GRAPHICS_GRAPHICS_H
 #define WPE_GRAPHICS_GRAPHICS_H
 
+#include "assets/asset_manager.h"
 #include "assets/model.h"
 #include "ecs/ecs.h"
 #include "scene/scene.h"
 
 typedef struct WPE_MeshRenderer {
-    const WPE_Model* model; /* Borrowed. */
-    uint32_t mesh;          /* Index into model->meshes. */
-    uint32_t skin;          /* Index into model->skins, or WPE_MODEL_NONE. */
-    WPE_Entity* joints;     /* Owned (freed by the component's remove hook): one entity per skin joint. */
+    WPE_AssetHandle model_asset; /* WPE_ASSET_MODEL; the component holds a reference. */
+    const WPE_Model* model;      /* Resolved from model_asset by the add hook (read-only). */
+    uint32_t mesh;               /* Index into model->meshes. */
+    uint32_t skin;               /* Index into model->skins, or WPE_MODEL_NONE. */
+    WPE_Entity* joints; /* Owned (freed by the component's remove hook): one entity per skin joint. */
     uint32_t joint_count;
     bool visible;
 } WPE_MeshRenderer;
@@ -63,10 +66,11 @@ typedef struct WPE_Light {
 } WPE_Light;
 
 typedef struct WPE_Animator {
-    const WPE_Model* model; /* Borrowed. */
-    uint32_t animation;     /* Index into model->animations. */
-    float time;             /* Current playback position in seconds. */
-    float speed;            /* Playback rate multiplier (negative plays backwards). */
+    WPE_AssetHandle model_asset; /* WPE_ASSET_MODEL; the component holds a reference. */
+    const WPE_Model* model;      /* Resolved from model_asset by the add hook (read-only). */
+    uint32_t animation;          /* Index into model->animations. */
+    float time;                  /* Current playback position in seconds. */
+    float speed;                 /* Playback rate multiplier (negative plays backwards). */
     bool playing;
     bool loop;
     WPE_Entity* node_entities; /* Owned (freed by the remove hook): entity per model node. */
@@ -85,9 +89,12 @@ WPE_Light wpe_light_default(WPE_LightType type);
  * Registers WPE_COMP_MESH, WPE_COMP_CAMERA, WPE_COMP_LIGHT and WPE_COMP_ANIMATOR. Scene components
  * must be registered too (wpe_scene_register_components()).
  *
- * @thread_safety Thread owning the world
+ * @param assets Borrowed; must outlive the world (component hooks release model references).
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or a registration error.
+ *
+ * @thread_safety Thread owning the world (which must also own the asset manager)
  */
-[[nodiscard]] WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs);
+[[nodiscard]] WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs, WPE_AssetManager* assets);
 
 typedef struct WPE_InstantiateOptions {
     uint32_t animation; /* Animation to attach (WPE_MODEL_NONE for none). Attached paused at time 0. */
@@ -99,15 +106,18 @@ typedef struct WPE_InstantiateOptions {
  * node beneath it, carrying Transform, Hierarchy, Name and, for mesh nodes, WPE_MeshRenderer.
  * Skins are bound to the created joint entities.
  *
+ * @param assets The manager given to wpe_graphics_register_components().
+ * @param model A WPE_ASSET_MODEL handle. Every created mesh renderer (and the animator) holds its
+ *              own reference, so the caller may release theirs afterwards.
  * @param options Optional (NULL = no animator).
  * @param out_root Receives the root entity; destroy the instance with wpe_scene_destroy_recursive().
- * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_INVALID_ARG (bad animation
- *         index), WPE_RESULT_ERROR_PARSE (skin references joints outside the model), or an ECS
- *         error. On failure every entity created so far is destroyed.
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_INVALID_ARG (not a model handle,
+ *         or bad animation index), WPE_RESULT_ERROR_PARSE (skin references joints outside the
+ *         model), or an ECS error. On failure every entity created so far is destroyed.
  *
  * @thread_safety Thread owning the world
  */
-[[nodiscard]] WPE_Result wpe_model_instantiate(WPE_Ecs* ecs, const WPE_Model* model,
+[[nodiscard]] WPE_Result wpe_model_instantiate(WPE_Ecs* ecs, WPE_AssetManager* assets, WPE_AssetHandle model,
                                                const WPE_InstantiateOptions* options, WPE_Entity* out_root);
 
 #endif /* WPE_GRAPHICS_GRAPHICS_H */

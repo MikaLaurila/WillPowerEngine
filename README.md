@@ -13,6 +13,8 @@ agents can drive fully, and it exports standalone game executables.
 >   adaptive subdivision and post-processing (SSAO, PS1 dither, chromatic aberration, ...)
 > - Sandboxed Luau scripting with hot reload (see [docs/scripting.md](docs/scripting.md))
 > - Box3D rigid body physics with colliders, triggers, raycasts and script collision callbacks
+> - 3D audio (miniaudio) with streamed music, and a virtual file system with zstd `.pak` archives
+>   and reference-counted assets (see [docs/assets.md](docs/assets.md))
 >
 > See [CHANGELOG.md](CHANGELOG.md) for progress.
 
@@ -22,7 +24,8 @@ Try the demos after building:
 ./build/samples/spinning_cubes                                   # --width 640 --height 480 --scale 2 --workers N
 ./build/samples/model_viewer assets/meshes/damaged_helmet.glb    # any .glb/.gltf; --dither, --max-texture N
 ./build/samples/lighting_demo --ssao --fog                       # also --ps1 --chroma --vignette --dither --no-shadows
-./build/samples/script_demo --watch                              # edit assets/scripts/*.luau while it runs; --debug-physics
+./build/samples/script_demo --watch                              # edit assets/scripts/*.luau while it runs; --debug-physics --mute
+./build/tools/wpe_pak create assets.pak assets && ./build/samples/script_demo --pak assets.pak   # run from an archive
 ```
 
 ## Documents
@@ -49,4 +52,5 @@ SDL3, cglm, cgltf, stb_image, Luau, miniaudio, cimgui, Box3D, zstd.
 ## License
 
 MIT; see [LICENSE](LICENSE). Test assets under `assets/meshes/` are CC BY 4.0; see
-[assets/meshes/ATTRIBUTION.md](assets/meshes/ATTRIBUTION.md).
+[assets/meshes/ATTRIBUTION.md](assets/meshes/ATTRIBUTION.md). The demo sounds were synthesized for this
+repository (MIT); see [assets/sounds/ATTRIBUTION.md](assets/sounds/ATTRIBUTION.md).

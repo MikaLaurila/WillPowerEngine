@@ -7,6 +7,7 @@ target_link_libraries(wpe_assets_third_party
     PRIVATE wpe::core)
 
 add_library(wpe_assets STATIC
+    asset_manager.c
     font.c
     image.c
     model.c
@@ -14,6 +15,6 @@ add_library(wpe_assets STATIC
 add_library(wpe::assets ALIAS wpe_assets)
 
 target_link_libraries(wpe_assets
-    PUBLIC wpe::core wpe::math wpe::renderer wpe::jobs wpe::platform
+    PUBLIC wpe::core wpe::math wpe::renderer wpe::jobs wpe::platform wpe::vfs
     PRIVATE wpe_assets_third_party)
 wpe_configure_target(wpe_assets)

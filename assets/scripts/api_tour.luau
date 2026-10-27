@@ -97,6 +97,36 @@ function Tour:on_start()
 	assert(hit and near(hit.distance, 5, 1e-3) and hit.normal.y > 0.99 and wpe.get_name(hit.entity) == "ground")
 	assert(wpe.raycast(vector.create(20, 5, 20), vector.create(0, 1, 0)) == nil)
 
+	-- Audio.
+	local voice = wpe.play_sound("sounds/chime.wav", {
+		volume = 0.5,
+		pitch = 1.2,
+		bus = wpe.BUS_EFFECTS,
+		position = vector.create(0, 1, 0),
+		min_distance = 1,
+		max_distance = 20,
+		loop = false,
+	})
+	assert(voice > 0)
+	wpe.stop_sound(voice)
+	self.speaker = wpe.spawn("tour_speaker")
+	wpe.add_audio_source(self.speaker, {
+		sound = "sounds/thud.wav",
+		loop = true,
+		volume = 0.2,
+		pitch = 1,
+		spatial = true,
+		min_distance = 1,
+		max_distance = 30,
+		bus = wpe.BUS_EFFECTS,
+		play = false,
+	})
+	assert(not wpe.is_audio_playing(self.speaker))
+	wpe.set_audio_playing(self.speaker, true)
+	assert(wpe.is_audio_playing(self.speaker))
+	wpe.set_volume(wpe.BUS_EFFECTS, 0.8)
+	assert(near(wpe.get_volume(wpe.BUS_EFFECTS), 0.8))
+
 	self.updates = 0
 	self.fixed = 0
 end
@@ -108,6 +138,12 @@ function Tour:on_update(dt)
 		wpe.stop_animation(self.figure)
 	elseif self.updates == 11 then
 		assert(not wpe.is_alive(self.temp), "destroy should have completed at the end of the previous update")
+	elseif self.updates == 20 then
+		wpe.play_music("music/ambient.wav", 0.5, true) -- crossfades from the spawner's track
+	elseif self.updates == 25 then
+		wpe.remove_audio_source(self.speaker)
+		wpe.stop_music(0.25)
+		wpe.play_music("music/ambient.wav", 0, true)
 	elseif self.updates == 120 then
 		assert(wpe.get_position(self.ball).y < 0.55, "the ball should rest on the ground")
 	end
@@ -127,6 +163,7 @@ function Tour:on_destroy()
 	wpe.destroy(self.figure)
 	wpe.destroy(self.ball)
 	wpe.destroy(self.pillar)
+	wpe.destroy(self.speaker)
 end
 
 return Tour

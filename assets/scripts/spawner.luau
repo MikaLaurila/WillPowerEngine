@@ -2,6 +2,7 @@
 local Spawner = {}
 
 function Spawner:on_start()
+	wpe.play_music("music/ambient.wav", 2.0, true)
 	self.interval = 0.6
 	self.timer = 0
 	self.count = 0

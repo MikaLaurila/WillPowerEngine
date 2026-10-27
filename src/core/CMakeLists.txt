@@ -3,6 +3,7 @@ configure_file(version.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/core/version.
 add_library(wpe_core STATIC
     alloc.c
     arena.c
+    crc32.c
     debug.c
     fixed_step.c
     log.c

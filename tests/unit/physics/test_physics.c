@@ -1,4 +1,5 @@
 #include "wpe_test.h"
+#include "wpe_test_assets.h"
 
 #include <string.h>
 
@@ -10,21 +11,25 @@
 #define GRAVITY wpe_vec3(0.0f, -9.81f, 0.0f)
 
 typedef struct Fixture {
+    WPE_TestAssets assets; /* For convex and mesh colliders. */
     WPE_Ecs* ecs;
     WPE_Physics* physics;
 } Fixture;
 
 static Fixture make_world(WPE_Vec3 gravity) {
-    Fixture f = {0};
+    Fixture f = {.assets = wpe_test_assets_create(NULL, 0)};
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&f.ecs));
     WPE_TEST_ASSERT_OK(wpe_scene_register_components(f.ecs));
-    WPE_TEST_ASSERT_OK(wpe_physics_create(&(WPE_PhysicsDesc){.ecs = f.ecs, .gravity = gravity}, &f.physics));
+    WPE_TEST_ASSERT_OK(wpe_physics_create(
+        &(WPE_PhysicsDesc){.ecs = f.ecs, .assets = f.assets.assets, .gravity = gravity}, &f.physics));
     return f;
 }
 
 static void destroy_world(Fixture* f) {
     wpe_physics_destroy(f->physics);
     wpe_ecs_destroy(f->ecs);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_stats(f->assets.assets).assets); /* Colliders released. */
+    wpe_test_assets_destroy(&f->assets);
 }
 
 static WPE_Entity spawn_at(WPE_Ecs* ecs, WPE_Vec3 position) {
@@ -300,6 +305,7 @@ static void test_physics_destroy_with_live_components(void) {
     WPE_TEST_ASSERT_EQ_UINT(entities, wpe_ecs_entity_count(f.ecs));
     WPE_TEST_ASSERT(!wpe_ecs_is_registered(f.ecs, WPE_COMP_PHYSICS_COLLIDER));
     wpe_ecs_destroy(f.ecs);
+    wpe_test_assets_destroy(&f.assets);
 }
 
 /* Builds a small pile and returns the final pose bytes of every box. */
@@ -409,10 +415,12 @@ static void test_physics_capsule_rests_upright_with_locked_rotation(void) {
 
 static void test_physics_mesh_and_convex_colliders(void) {
     Fixture f = make_world(GRAVITY);
-    WPE_Model* plane = NULL;
+    WPE_Model* plane_model = NULL;
     WPE_Model* box_model = NULL;
-    WPE_TEST_ASSERT_OK(wpe_model_create_plane(20.0f, 4, NULL, &plane));
+    WPE_TEST_ASSERT_OK(wpe_model_create_plane(20.0f, 4, NULL, &plane_model));
     WPE_TEST_ASSERT_OK(wpe_model_create_box(wpe_vec3(1.0f, 1.0f, 1.0f), NULL, &box_model));
+    const WPE_AssetHandle plane = wpe_test_add_model(f.assets.assets, "test/plane", plane_model);
+    const WPE_AssetHandle box = wpe_test_add_model(f.assets.assets, "test/box", box_model);
 
     const WPE_Entity ground = spawn_at(f.ecs, wpe_vec3(0, 0, 0));
     WPE_Collider mesh = wpe_collider_default(WPE_COLLIDER_MESH);
@@ -420,15 +428,20 @@ static void test_physics_mesh_and_convex_colliders(void) {
     add_collider(f.ecs, ground, mesh);
 
     WPE_Collider convex = wpe_collider_default(WPE_COLLIDER_CONVEX);
-    convex.model = box_model;
+    convex.model = box;
     const WPE_Entity hull = spawn_dynamic(f.ecs, wpe_vec3(0, 3, 0), convex);
 
     /* Triangle meshes cannot be dynamic. */
     const WPE_Entity bad = spawn_dynamic(f.ecs, wpe_vec3(5, 3, 0), mesh);
     run(&f, 3.0f);
-    /* The models are only read when shapes are built. */
-    wpe_model_destroy(plane);
-    wpe_model_destroy(box_model);
+    /* Every collider component holds its own reference (the rejected mesh collider too). */
+    WPE_TEST_ASSERT_EQ_UINT(3, wpe_asset_ref_count(f.assets.assets, plane));
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_asset_ref_count(f.assets.assets, box));
+    wpe_asset_release(f.assets.assets, plane);
+    wpe_asset_release(f.assets.assets, box);
+    /* Rebuilding works from the collider's own reference and does not accumulate references. */
+    WPE_TEST_ASSERT_OK(wpe_physics_refresh(f.physics, hull));
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_asset_ref_count(f.assets.assets, box));
 
     WPE_TEST_ASSERT_NEAR(0.5, transform_of(f.ecs, hull)->position.y, 0.02);
     WPE_TEST_ASSERT_NEAR(3.0, transform_of(f.ecs, bad)->position.y, 1e-5); /* Never simulated... */

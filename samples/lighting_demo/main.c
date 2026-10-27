@@ -99,9 +99,9 @@ static WPE_Result spawn_with(WPE_Ecs* ecs, WPE_Vec3 position, WPE_Quat rotation,
     return wpe_ecs_add_component(ecs, e, WPE_COMP_TRANSFORM, &t, NULL);
 }
 
-static WPE_Result place_model(WPE_Ecs* ecs, const WPE_Model* model, WPE_Vec3 position, float yaw, float scale,
-                              const WPE_InstantiateOptions* options, WPE_Entity* out_root) {
-    WPE_Result result = wpe_model_instantiate(ecs, model, options, out_root);
+static WPE_Result place_model(WPE_Ecs* ecs, WPE_AssetManager* assets, WPE_AssetHandle model, WPE_Vec3 position, float yaw,
+                              float scale, const WPE_InstantiateOptions* options, WPE_Entity* out_root) {
+    WPE_Result result = wpe_model_instantiate(ecs, assets, model, options, out_root);
     if (result != WPE_RESULT_OK) return result;
     WPE_Transform* t = wpe_ecs_get_component(ecs, *out_root, WPE_COMP_TRANSFORM);
     t->position = position;
@@ -111,46 +111,63 @@ static WPE_Result place_model(WPE_Ecs* ecs, const WPE_Model* model, WPE_Vec3 pos
 }
 
 typedef struct Scene {
-    WPE_Model* models[8];
-    uint32_t model_count;
     WPE_Entity point_lights[3];
     WPE_Entity spot;
     WPE_Entity sun;
     WPE_Entity camera;
 } Scene;
 
-static WPE_Result track(Scene* scene, WPE_Result result, WPE_Model* model) {
-    if (result == WPE_RESULT_OK) scene->models[scene->model_count++] = model;
+/* Hands a freshly created procedural model to the asset manager, destroying it if that fails. */
+static WPE_Result add_procedural(WPE_AssetManager* assets, const char* name, WPE_Result created, WPE_Model* model,
+                                 WPE_AssetHandle* out) {
+    if (created != WPE_RESULT_OK) return created;
+    const WPE_Result result = wpe_asset_add(assets, WPE_ASSET_MODEL, name, model, out);
+    if (result != WPE_RESULT_OK) wpe_model_destroy(model);
     return result;
 }
 
-static WPE_Result build_scene(WPE_Ecs* ecs, Scene* scene, WPE_JobSystem* jobs) {
-    WPE_Model *ground = NULL, *box = NULL, *helmet = NULL, *figure = NULL, *pillar = NULL;
+static WPE_Result build_scene(WPE_Ecs* ecs, WPE_AssetManager* assets, Scene* scene) {
+    WPE_Model *ground_model = NULL, *box_model = NULL, *pillar_model = NULL;
+    WPE_AssetHandle ground = WPE_ASSET_NONE, box = WPE_ASSET_NONE, pillar = WPE_ASSET_NONE, helmet = WPE_ASSET_NONE,
+                    figure = WPE_ASSET_NONE;
     const WPE_Material ground_material = wpe_material_solid(wpe_vec4(0.55f, 0.55f, 0.58f, 1), 0.0f, 0.8f);
     const WPE_Material box_material = wpe_material_solid(wpe_vec4(0.8f, 0.35f, 0.2f, 1), 0.0f, 0.4f);
     const WPE_Material pillar_material = wpe_material_solid(wpe_vec4(0.75f, 0.78f, 0.82f, 1), 1.0f, 0.35f);
-    WPE_Result r = track(scene, wpe_model_create_plane(40.0f, 24, &ground_material, &ground), ground);
-    if (r == WPE_RESULT_OK) r = track(scene, wpe_model_create_box(wpe_vec3(1, 1, 1), &box_material, &box), box);
-    if (r == WPE_RESULT_OK) r = track(scene, wpe_model_create_box(wpe_vec3(0.6f, 3.0f, 0.6f), &pillar_material, &pillar), pillar);
-    const WPE_ModelLoadOptions load = {.jobs = jobs, .max_texture_size = 256};
-    if (r == WPE_RESULT_OK) r = track(scene, wpe_model_load(WPE_SAMPLE_ASSETS_DIR "/meshes/damaged_helmet.glb", &load, &helmet), helmet);
-    if (r == WPE_RESULT_OK) r = track(scene, wpe_model_load(WPE_SAMPLE_ASSETS_DIR "/meshes/RiggedFigure.glb", &load, &figure), figure);
-    if (r != WPE_RESULT_OK) return r;
+    WPE_Result r = add_procedural(assets, "procedural/ground", wpe_model_create_plane(40.0f, 24, &ground_material, &ground_model),
+                                  ground_model, &ground);
+    if (r == WPE_RESULT_OK) {
+        r = add_procedural(assets, "procedural/box", wpe_model_create_box(wpe_vec3(1, 1, 1), &box_material, &box_model), box_model,
+                           &box);
+    }
+    if (r == WPE_RESULT_OK) {
+        r = add_procedural(assets, "procedural/pillar",
+                           wpe_model_create_box(wpe_vec3(0.6f, 3.0f, 0.6f), &pillar_material, &pillar_model), pillar_model, &pillar);
+    }
+    if (r == WPE_RESULT_OK) r = wpe_asset_load(assets, WPE_ASSET_MODEL, "meshes/damaged_helmet.glb", &helmet);
+    if (r == WPE_RESULT_OK) r = wpe_asset_load(assets, WPE_ASSET_MODEL, "meshes/RiggedFigure.glb", &figure);
 
     WPE_Entity e;
-    r = place_model(ecs, ground, wpe_vec3(0, 0, 0), 0, 1, NULL, &e);
-    if (r == WPE_RESULT_OK) r = place_model(ecs, helmet, wpe_vec3(0, 1.2f, 0), 0.4f, 1.0f, NULL, &e);
+    if (r == WPE_RESULT_OK) r = place_model(ecs, assets, ground, wpe_vec3(0, 0, 0), 0, 1, NULL, &e);
+    if (r == WPE_RESULT_OK) r = place_model(ecs, assets, helmet, wpe_vec3(0, 1.2f, 0), 0.4f, 1.0f, NULL, &e);
     if (r == WPE_RESULT_OK) {
-        r = place_model(ecs, figure, wpe_vec3(2.6f, 0, 0.8f), -0.6f, 1.0f, &(WPE_InstantiateOptions){.animation = 0, .play = true}, &e);
+        r = place_model(ecs, assets, figure, wpe_vec3(2.6f, 0, 0.8f), -0.6f, 1.0f,
+                        &(WPE_InstantiateOptions){.animation = 0, .play = true}, &e);
     }
     const float box_spots[5][3] = {{-2.5f, 0.5f, 1.5f}, {-3.2f, 0.5f, -1.2f}, {-2.2f, 1.5f, -1.0f}, {1.8f, 0.5f, -2.4f}, {3.5f, 0.5f, -1.0f}};
     for (int i = 0; i < 5 && r == WPE_RESULT_OK; ++i) {
-        r = place_model(ecs, box, wpe_vec3(box_spots[i][0], box_spots[i][1], box_spots[i][2]), (float)i * 0.7f, 1.0f, NULL, &e);
+        r = place_model(ecs, assets, box, wpe_vec3(box_spots[i][0], box_spots[i][1], box_spots[i][2]), (float)i * 0.7f, 1.0f, NULL,
+                        &e);
     }
     for (int i = 0; i < 4 && r == WPE_RESULT_OK; ++i) {
         const float a = (float)i * WPE_PI * 0.5f + WPE_PI * 0.25f;
-        r = place_model(ecs, pillar, wpe_vec3(cosf(a) * 6.0f, 1.5f, sinf(a) * 6.0f), 0, 1.0f, NULL, &e);
+        r = place_model(ecs, assets, pillar, wpe_vec3(cosf(a) * 6.0f, 1.5f, sinf(a) * 6.0f), 0, 1.0f, NULL, &e);
     }
+    /* The placed entities hold their own references. */
+    wpe_asset_release(assets, ground);
+    wpe_asset_release(assets, box);
+    wpe_asset_release(assets, pillar);
+    wpe_asset_release(assets, helmet);
+    wpe_asset_release(assets, figure);
     if (r != WPE_RESULT_OK) return r;
 
     /* Lights. */
@@ -220,7 +237,9 @@ int main(int argc, char** argv) {
     WPE_SceneRenderer* scene_renderer = NULL;
     WPE_PostChain* post = NULL;
     WPE_Draw2D* draw2d = NULL;
-    WPE_BitmapFont* font = NULL;
+    WPE_Vfs* vfs = NULL;
+    WPE_AssetManager* assets = NULL;
+    WPE_AssetHandle font_asset = WPE_ASSET_NONE;
     Scene scene = {0};
     int exit_code = EXIT_FAILURE;
 
@@ -234,11 +253,17 @@ int main(int argc, char** argv) {
     if (result == WPE_RESULT_OK) result = wpe_scene_renderer_create(&scene_renderer);
     if (result == WPE_RESULT_OK) result = wpe_postfx_create(&post);
     if (result == WPE_RESULT_OK) result = wpe_draw2d_create(&draw2d);
-    if (result == WPE_RESULT_OK) result = wpe_font_load(WPE_SAMPLE_ASSETS_DIR "/fonts/small.png", &font);
+    if (result == WPE_RESULT_OK) result = wpe_vfs_create(&vfs);
+    if (result == WPE_RESULT_OK) result = wpe_vfs_mount_directory(vfs, WPE_SAMPLE_ASSETS_DIR);
+    if (result == WPE_RESULT_OK) {
+        result = wpe_asset_manager_create(&(WPE_AssetManagerDesc){.vfs = vfs, .jobs = jobs, .max_texture_size = 256}, &assets);
+    }
+    if (result == WPE_RESULT_OK) result = wpe_asset_load(assets, WPE_ASSET_FONT, "fonts/small.png", &font_asset);
+    const WPE_BitmapFont* font = wpe_asset_font(assets, font_asset);
     if (result == WPE_RESULT_OK) result = wpe_ecs_create(&ecs);
     if (result == WPE_RESULT_OK) result = wpe_scene_register_components(ecs);
-    if (result == WPE_RESULT_OK) result = wpe_graphics_register_components(ecs);
-    if (result == WPE_RESULT_OK) result = build_scene(ecs, &scene, jobs);
+    if (result == WPE_RESULT_OK) result = wpe_graphics_register_components(ecs, assets);
+    if (result == WPE_RESULT_OK) result = build_scene(ecs, assets, &scene);
     if (result != WPE_RESULT_OK) {
         wpe_log_error("startup failed: %s", wpe_result_to_string(result));
         goto cleanup;
@@ -348,9 +373,10 @@ int main(int argc, char** argv) {
     exit_code = EXIT_SUCCESS;
 
 cleanup:
-    wpe_ecs_destroy(ecs);
-    for (uint32_t i = 0; i < scene.model_count; ++i) wpe_model_destroy(scene.models[i]);
-    wpe_font_destroy(font);
+    wpe_ecs_destroy(ecs); /* Releases the models. */
+    wpe_asset_release(assets, font_asset);
+    wpe_asset_manager_destroy(assets);
+    wpe_vfs_destroy(vfs);
     wpe_draw2d_destroy(draw2d);
     wpe_postfx_destroy(post);
     wpe_scene_renderer_destroy(scene_renderer);

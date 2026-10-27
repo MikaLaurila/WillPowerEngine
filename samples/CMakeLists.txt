@@ -13,6 +13,6 @@ target_compile_definitions(lighting_demo PRIVATE WPE_SAMPLE_ASSETS_DIR="${PROJEC
 wpe_configure_target(lighting_demo)
 
 add_executable(script_demo script_demo/main.c)
-target_link_libraries(script_demo PRIVATE wpe::script wpe::physics wpe::graphics wpe::platform)
+target_link_libraries(script_demo PRIVATE wpe::script wpe::physics wpe::audio wpe::graphics wpe::platform)
 target_compile_definitions(script_demo PRIVATE WPE_SAMPLE_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
 wpe_configure_target(script_demo)

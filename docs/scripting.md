@@ -53,7 +53,7 @@ return Spinner
 - **Not available:** `io`, `loadstring`/`load`, `require`, `dofile`, `getfenv`/`setfenv`, and any other `os` functions.
 - **Read-only:** globals and libraries can't be modified.
 - **Separate globals per file:** each script file has its own global environment, so globals never leak between files.
-- **Paths:** script and prefab paths are relative to the project's asset root and use forward slashes. They can't be absolute or contain `..`.
+- **Paths:** script, prefab, sound and music paths are asset paths in the game's virtual file system (a directory during development, `.pak` archives in a shipped game), with forward slashes. They can't be absolute or climb above the root with `..`, so scripts can only read what the game ships.
 
 ## API reference (`wpe`)
 
@@ -69,7 +69,7 @@ Entity handles are numbers. Passing a handle that isn't alive raises an error. V
 | `wpe.get_parent(entity) -> entity?` | Parent, or nil. |
 | `wpe.set_parent(entity, parent?, keep_world = true)` | Reparent (nil detaches). With `keep_world`, the world placement is preserved. |
 | `wpe.children(entity) -> {entity}` | Direct children in order. |
-| `wpe.instantiate(prefab, [position]) -> entity` | Instantiate a registered prefab, or a glTF path relative to the asset root. Returns the root entity. An animated model starts playing its first animation. |
+| `wpe.instantiate(prefab, [position]) -> entity` | Instantiate a registered prefab, or a glTF asset path (loaded once and cached). Returns the root entity. An animated model starts playing its first animation. |
 | `wpe.attach_script(entity, path) -> bool` | Attach (or replace) a script. |
 | `wpe.get_position(entity)` / `wpe.set_position(entity, v)` | Local position. |
 | `wpe.get_rotation(entity)` / `wpe.set_rotation(entity, euler)` | Local rotation as XYZ Euler angles in radians (applied X, then Y, then Z). |
@@ -108,16 +108,39 @@ Available when the host was created with a physics world (otherwise these raise 
 
 Moving a dynamic body's entity with `wpe.set_position`/`wpe.set_rotation` teleports it. Changing a collider or rigid body after creation means calling `wpe.add_collider`/`wpe.add_rigidbody` again; changing the entity's scale needs the same.
 
+### Audio
+
+Available when the host was created with audio (otherwise these raise errors). Sounds are WAV, FLAC or MP3 asset paths; the host keeps each sound it has used loaded, so replaying is cheap. Positions are world space, and the listener is set by the host (usually the camera).
+
+| Function | Description |
+|---|---|
+| `wpe.play_sound(path, [{volume, pitch, position, min_distance, max_distance, bus, loop}]) -> voice` | Play a sound once (or looping). With `position` it is 3D: attenuated with distance (full volume within `min_distance`) and panned. Returns a voice id, or 0 if all 64 voices are busy (the oldest one-shot is reused first). |
+| `wpe.stop_sound(voice)` | Stop a voice. Ids of finished voices are ignored. |
+| `wpe.add_audio_source(entity, {sound, volume, pitch, loop, spatial, min_distance, max_distance, bus, play = true})` | Give the entity a sound that plays at its position (`spatial`, the default) or unpositioned. Replaces an existing source. |
+| `wpe.remove_audio_source(entity)` | Remove the entity's sound source. |
+| `wpe.set_audio_playing(entity, bool)` / `wpe.is_audio_playing(entity)` | Start or stop the source. A non-looping source reports false once its sound has ended. |
+| `wpe.play_music(path, [fade_seconds = 0], [loop = true])` | Stream a music track, crossfading from the current one. |
+| `wpe.stop_music([fade_seconds = 0])` | Fade out and stop the music. |
+| `wpe.set_volume(bus, volume)` / `wpe.get_volume(bus)` | Linear volume (1 = unchanged) of `wpe.BUS_MASTER`, `wpe.BUS_EFFECTS` (sounds and sources) or `wpe.BUS_MUSIC`. |
+
 `assets/scripts/api_tour.luau` exercises every function above. The integration test runs it for 60 simulated seconds.
 
 ## Hosting from C
 
 ```c
+// Assets come through a VFS (directories and/or .pak archives) and a shared asset manager.
+wpe_vfs_mount_directory(vfs, "assets");                     // or wpe_vfs_mount_pak(vfs, "game.pak")
+wpe_asset_manager_create(&(WPE_AssetManagerDesc){.vfs = vfs}, &assets);
+wpe_graphics_register_components(ecs, assets);
+
 WPE_Physics* physics;                                       // optional
-wpe_physics_create(&(WPE_PhysicsDesc){.ecs = ecs, .gravity = {{0, -9.81f, 0}}}, &physics);
+wpe_physics_create(&(WPE_PhysicsDesc){.ecs = ecs, .assets = assets, .gravity = {{0, -9.81f, 0}}}, &physics);
+WPE_Audio* audio;                                           // optional
+wpe_audio_create(&(WPE_AudioDesc){.ecs = ecs, .assets = assets}, &audio);
+wpe_audio_set_listener(audio, camera);
 WPE_ScriptHost* host;
-wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .physics = physics, .asset_root = "assets"}, &host);
-wpe_script_host_register_prefab(host, "box", box_model);   // optional named prefabs
+wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .assets = assets, .physics = physics, .audio = audio}, &host);
+wpe_script_host_register_prefab(host, "box", box_handle);  // optional named prefabs (asset handles)
 wpe_script_attach(host, entity, "scripts/spinner.luau");
 
 // Per frame (see samples/script_demo):
@@ -128,8 +151,13 @@ for (uint32_t i = 0; i < steps; ++i) {
     wpe_script_host_dispatch_physics(host);                 // collision and trigger callbacks
 }
 wpe_script_host_update(host, frame_dt);
+// ... animation, wpe_scene_update_transforms(ecs) ...
+wpe_audio_update(audio);                                    // after transforms: listener and 3D sounds
 wpe_script_host_reload_changed(host);                       // e.g. a few times per second while editing
 
-wpe_script_host_destroy(host);                              // first, then physics, then the world
+wpe_script_host_destroy(host);                              // then audio, physics, the world, the assets
+wpe_audio_destroy(audio);
 wpe_physics_destroy(physics);
+wpe_ecs_destroy(ecs);
+wpe_asset_manager_destroy(assets);
 ```

@@ -11,6 +11,7 @@
  * then inspect the new PNGs before committing them.
  */
 #include "wpe_test.h"
+#include "wpe_test_assets.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -182,16 +183,17 @@ static void test_golden_cubes_scene(void) {
 /* Renders an instantiated model from a fixed orbit position, optionally posed and with a text overlay. */
 static void render_model_golden(const char* name, const char* model_path, float yaw_deg, float pitch_deg,
                                 float distance, float target_y, float anim_time, const char* overlay) {
-    WPE_Model* model = NULL;
-    WPE_TEST_ASSERT_OK(wpe_model_load(model_path, &(WPE_ModelLoadOptions){.max_texture_size = 128}, &model));
+    WPE_TestAssets assets = wpe_test_assets_create(WPE_GOLDEN_ASSETS_DIR, 128);
+    const WPE_AssetHandle model = wpe_test_load_model(assets.assets, model_path);
     WPE_Ecs* ecs = NULL;
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&ecs));
     WPE_TEST_ASSERT_OK(wpe_scene_register_components(ecs));
-    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(ecs));
+    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(ecs, assets.assets));
     WPE_Entity root;
-    const bool animated = model->animation_count > 0;
-    WPE_TEST_ASSERT_OK(wpe_model_instantiate(
-        ecs, model, &(WPE_InstantiateOptions){.animation = animated ? 0 : WPE_MODEL_NONE}, &root));
+    const bool animated = wpe_asset_model(assets.assets, model)->animation_count > 0;
+    WPE_TEST_ASSERT_OK(
+        wpe_model_instantiate(ecs, assets.assets, model,
+                              &(WPE_InstantiateOptions){.animation = animated ? 0 : WPE_MODEL_NONE}, &root));
     WPE_Animator* animator = wpe_ecs_get_component(ecs, root, WPE_COMP_ANIMATOR);
     if (animator) {
         animator->time = anim_time;
@@ -225,8 +227,9 @@ static void render_model_golden(const char* name, const char* model_path, float 
     WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
     WPE_Draw2D* d2d = NULL;
     WPE_TEST_ASSERT_OK(wpe_draw2d_create(&d2d));
-    WPE_BitmapFont* font = NULL;
-    WPE_TEST_ASSERT_OK(wpe_font_load(WPE_GOLDEN_ASSETS_DIR "/fonts/small.png", &font));
+    WPE_AssetHandle font_asset = WPE_ASSET_NONE;
+    WPE_TEST_ASSERT_OK(wpe_asset_load(assets.assets, WPE_ASSET_FONT, "fonts/small.png", &font_asset));
+    const WPE_BitmapFont* font = wpe_asset_font(assets.assets, font_asset);
 
     WPE_TEST_ASSERT_OK(
         wpe_renderer_begin_frame(renderer, &(WPE_ClearDesc){.clear_color = true,
@@ -243,23 +246,23 @@ static void render_model_golden(const char* name, const char* model_path, float 
     WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
     compare_with_reference(name, wpe_renderer_framebuffer(renderer));
 
-    wpe_font_destroy(font);
     wpe_draw2d_destroy(d2d);
     wpe_scene_renderer_destroy(sr);
     wpe_renderer_destroy(renderer);
     wpe_jobs_destroy(jobs);
     wpe_ecs_destroy(ecs);
-    wpe_model_destroy(model);
+    wpe_asset_release(assets.assets, font_asset);
+    wpe_asset_release(assets.assets, model);
+    wpe_test_assets_destroy(&assets);
 }
 
 static void test_golden_textured_helmet_with_text(void) {
-    render_model_golden("helmet", WPE_GOLDEN_ASSETS_DIR "/meshes/damaged_helmet.glb", 25.0f, 10.0f, 3.2f,
-                        0.0f, 0.0f, "Helmet 0123456789 !?#");
+    render_model_golden("helmet", "meshes/damaged_helmet.glb", 25.0f, 10.0f, 3.2f, 0.0f, 0.0f,
+                        "Helmet 0123456789 !?#");
 }
 
 static void test_golden_skinned_figure_posed(void) {
-    render_model_golden("rigged_figure", WPE_GOLDEN_ASSETS_DIR "/meshes/RiggedFigure.glb", 30.0f, 5.0f, 1.6f,
-                        0.75f, 0.6f, NULL);
+    render_model_golden("rigged_figure", "meshes/RiggedFigure.glb", 30.0f, 5.0f, 1.6f, 0.75f, 0.6f, NULL);
 }
 
 static WPE_Entity golden_spawn(WPE_Ecs* ecs, WPE_Vec3 position, WPE_Quat rotation) {
@@ -273,28 +276,32 @@ static WPE_Entity golden_spawn(WPE_Ecs* ecs, WPE_Vec3 position, WPE_Quat rotatio
 
 /* Ground, boxes, a posed skinned figure, a shadow-casting sun, point and spot lights. */
 static void render_lighting_golden(const char* name, bool post) {
+    WPE_TestAssets assets = wpe_test_assets_create(WPE_GOLDEN_ASSETS_DIR, 0);
     WPE_Ecs* ecs = NULL;
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&ecs));
     WPE_TEST_ASSERT_OK(wpe_scene_register_components(ecs));
-    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(ecs));
+    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(ecs, assets.assets));
 
     const WPE_Material ground_mat = wpe_material_solid(wpe_vec4(0.6f, 0.6f, 0.62f, 1), 0.0f, 0.8f);
     const WPE_Material box_mat = wpe_material_solid(wpe_vec4(0.8f, 0.35f, 0.2f, 1), 0.0f, 0.4f);
-    WPE_Model *ground = NULL, *box = NULL, *figure = NULL;
-    WPE_TEST_ASSERT_OK(wpe_model_create_plane(20.0f, 12, &ground_mat, &ground));
-    WPE_TEST_ASSERT_OK(wpe_model_create_box(wpe_vec3(1, 1, 1), &box_mat, &box));
-    WPE_TEST_ASSERT_OK(wpe_model_load(WPE_GOLDEN_ASSETS_DIR "/meshes/RiggedFigure.glb", NULL, &figure));
+    WPE_Model *ground_model = NULL, *box_model = NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_create_plane(20.0f, 12, &ground_mat, &ground_model));
+    WPE_TEST_ASSERT_OK(wpe_model_create_box(wpe_vec3(1, 1, 1), &box_mat, &box_model));
+    const WPE_AssetHandle ground = wpe_test_add_model(assets.assets, "golden/ground", ground_model);
+    const WPE_AssetHandle box = wpe_test_add_model(assets.assets, "golden/box", box_model);
+    const WPE_AssetHandle figure = wpe_test_load_model(assets.assets, "meshes/RiggedFigure.glb");
 
     WPE_Entity root;
-    WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, ground, NULL, &root));
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, assets.assets, ground, NULL, &root));
     const float boxes[3][3] = {{-1.8f, 0.5f, 0.6f}, {1.6f, 0.5f, -1.2f}, {-0.6f, 0.5f, -2.0f}};
     for (int i = 0; i < 3; ++i) {
-        WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, box, NULL, &root));
+        WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, assets.assets, box, NULL, &root));
         WPE_Transform* t = wpe_ecs_get_component(ecs, root, WPE_COMP_TRANSFORM);
         t->position = wpe_vec3(boxes[i][0], boxes[i][1], boxes[i][2]);
         t->rotation = wpe_quat_from_axis_angle(wpe_vec3(0, 1, 0), (float)i * 0.6f);
     }
-    WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, figure, &(WPE_InstantiateOptions){.animation = 0}, &root));
+    WPE_TEST_ASSERT_OK(
+        wpe_model_instantiate(ecs, assets.assets, figure, &(WPE_InstantiateOptions){.animation = 0}, &root));
     WPE_Animator* animator = wpe_ecs_get_component(ecs, root, WPE_COMP_ANIMATOR);
     animator->time = 0.6f;
     wpe_animation_apply(ecs, animator);
@@ -366,9 +373,10 @@ static void render_lighting_golden(const char* name, bool post) {
     wpe_renderer_destroy(renderer);
     wpe_jobs_destroy(jobs);
     wpe_ecs_destroy(ecs);
-    wpe_model_destroy(figure);
-    wpe_model_destroy(box);
-    wpe_model_destroy(ground);
+    wpe_asset_release(assets.assets, figure);
+    wpe_asset_release(assets.assets, box);
+    wpe_asset_release(assets.assets, ground);
+    wpe_test_assets_destroy(&assets);
 }
 
 static void test_golden_lights_and_shadows(void) {

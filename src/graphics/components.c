@@ -8,21 +8,48 @@
 
 /* ---- Hooks ---------------------------------------------------------------------------------------- */
 
+/* Takes the component's reference to its model and resolves the pointer (NULL if invalid). */
+static const WPE_Model* wpe__acquire_model(WPE_AssetManager* assets, WPE_AssetHandle handle) {
+    const WPE_Model* model = wpe_asset_model(assets, handle);
+    if (model) {
+        wpe_asset_retain(assets, handle);
+    } else if (handle != WPE_ASSET_NONE) {
+        wpe_log_error("component references 0x%08x, which is not a loaded model", handle);
+    }
+    return model;
+}
+
+static void wpe__mesh_renderer_on_add(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
+    (void)ecs;
+    (void)entity;
+    WPE_MeshRenderer* mesh = component;
+    mesh->model = wpe__acquire_model(user_data, mesh->model_asset);
+}
+
 static void wpe__mesh_renderer_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
     (void)ecs;
     (void)entity;
-    (void)user_data;
     WPE_MeshRenderer* mesh = component;
+    if (mesh->model) wpe_asset_release(user_data, mesh->model_asset);
+    mesh->model = NULL;
     wpe_free(mesh->joints);
     mesh->joints = NULL;
     mesh->joint_count = 0;
 }
 
+static void wpe__animator_on_add(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
+    (void)ecs;
+    (void)entity;
+    WPE_Animator* animator = component;
+    animator->model = wpe__acquire_model(user_data, animator->model_asset);
+}
+
 static void wpe__animator_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
     (void)ecs;
     (void)entity;
-    (void)user_data;
     WPE_Animator* animator = component;
+    if (animator->model) wpe_asset_release(user_data, animator->model_asset);
+    animator->model = NULL;
     wpe_free(animator->node_entities);
     animator->node_entities = NULL;
     animator->node_count = 0;
@@ -41,8 +68,8 @@ WPE_Light wpe_light_default(WPE_LightType type) {
                        .outer_cone = 30.0f * WPE_PI / 180.0f};
 }
 
-WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs) {
-    if (!ecs) return WPE_RESULT_ERROR_NULL_ARG;
+WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs, WPE_AssetManager* assets) {
+    if (!ecs || !assets) return WPE_RESULT_ERROR_NULL_ARG;
     const struct {
         WPE_ComponentType type;
         WPE_ComponentDesc desc;
@@ -51,14 +78,18 @@ WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs) {
          {.name = "MeshRenderer",
           .size = sizeof(WPE_MeshRenderer),
           .alignment = alignof(WPE_MeshRenderer),
-          .on_remove = wpe__mesh_renderer_on_remove}},
+          .on_add = wpe__mesh_renderer_on_add,
+          .on_remove = wpe__mesh_renderer_on_remove,
+          .hook_user_data = assets}},
         {WPE_COMP_CAMERA, {.name = "Camera", .size = sizeof(WPE_Camera), .alignment = alignof(WPE_Camera)}},
         {WPE_COMP_LIGHT, {.name = "Light", .size = sizeof(WPE_Light), .alignment = alignof(WPE_Light)}},
         {WPE_COMP_ANIMATOR,
          {.name = "Animator",
           .size = sizeof(WPE_Animator),
           .alignment = alignof(WPE_Animator),
-          .on_remove = wpe__animator_on_remove}},
+          .on_add = wpe__animator_on_add,
+          .on_remove = wpe__animator_on_remove,
+          .hook_user_data = assets}},
     };
     for (size_t i = 0; i < sizeof components / sizeof components[0]; ++i) {
         const WPE_Result result = wpe_ecs_register_component(ecs, components[i].type, &components[i].desc);
@@ -127,10 +158,15 @@ static bool wpe__skin_covers_mesh(const WPE_Model* model, uint32_t mesh_index, u
     return true;
 }
 
-WPE_Result wpe_model_instantiate(WPE_Ecs* ecs, const WPE_Model* model, const WPE_InstantiateOptions* options,
-                                 WPE_Entity* out_root) {
-    if (!ecs || !model || !out_root) return WPE_RESULT_ERROR_NULL_ARG;
+WPE_Result wpe_model_instantiate(WPE_Ecs* ecs, WPE_AssetManager* assets, WPE_AssetHandle model_asset,
+                                 const WPE_InstantiateOptions* options, WPE_Entity* out_root) {
+    if (!ecs || !assets || !out_root) return WPE_RESULT_ERROR_NULL_ARG;
     *out_root = WPE_ENTITY_NULL;
+    const WPE_Model* model = wpe_asset_model(assets, model_asset);
+    if (!model) {
+        wpe_log_error("cannot instantiate 0x%08x: not a loaded model", model_asset);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
     const WPE_InstantiateOptions defaults = {.animation = WPE_MODEL_NONE};
     if (!options) options = &defaults;
     if (options->animation != WPE_MODEL_NONE && options->animation >= model->animation_count) {
@@ -169,7 +205,7 @@ WPE_Result wpe_model_instantiate(WPE_Ecs* ecs, const WPE_Model* model, const WPE
                                             &node_entities[n]);
             if (result == WPE_RESULT_OK && node->mesh != WPE_MODEL_NONE) {
                 const WPE_MeshRenderer mesh = {
-                    .model = model, .mesh = node->mesh, .skin = WPE_MODEL_NONE, .visible = true};
+                    .model_asset = model_asset, .mesh = node->mesh, .skin = WPE_MODEL_NONE, .visible = true};
                 result = wpe_ecs_add_component(ecs, node_entities[n], WPE_COMP_MESH, &mesh, NULL);
             }
             for (uint32_t c = node->first_child; c != WPE_MODEL_NONE && top < model->node_count;
@@ -194,7 +230,7 @@ WPE_Result wpe_model_instantiate(WPE_Ecs* ecs, const WPE_Model* model, const WPE
     }
 
     if (result == WPE_RESULT_OK && options->animation != WPE_MODEL_NONE) {
-        const WPE_Animator animator = {.model = model,
+        const WPE_Animator animator = {.model_asset = model_asset,
                                        .animation = options->animation,
                                        .speed = 1.0f,
                                        .playing = options->play,

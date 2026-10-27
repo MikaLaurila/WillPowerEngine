@@ -67,32 +67,6 @@ static double wpe__begin_budget(WPE_ScriptHost* host) {
     return previous;
 }
 
-/* ---- Paths ---------------------------------------------------------------------------------------- */
-
-bool wpe__script_path_is_safe(const char* path) {
-    if (!path || !path[0] || strlen(path) >= WPE__SCRIPT_PATH_MAX) return false;
-    if (path[0] == '/' || strchr(path, '\\') || strchr(path, ':')) return false;
-    /* Reject empty, "." and ".." segments. */
-    const char* segment = path;
-    for (const char* p = path;; ++p) {
-        if (*p == '/' || *p == '\0') {
-            const size_t length = (size_t)(p - segment);
-            if (length == 0 || (length == 1 && segment[0] == '.') ||
-                (length == 2 && segment[0] == '.' && segment[1] == '.')) {
-                return false;
-            }
-            if (*p == '\0') break;
-            segment = p + 1;
-        }
-    }
-    return true;
-}
-
-bool wpe__script_full_path(const WPE_ScriptHost* host, const char* path, char* out, size_t capacity) {
-    const int written = snprintf(out, capacity, "%s/%s", host->asset_root, path);
-    return written > 0 && (size_t)written < capacity;
-}
-
 /* ---- Script files --------------------------------------------------------------------------------- */
 
 typedef struct wpe__LoadOp {
@@ -152,13 +126,13 @@ static int wpe__op_load(lua_State* L) {
 /* Reads and compiles a script; on success returns owned bytecode (free with free()). */
 static WPE_Result wpe__compile_file(WPE_ScriptHost* host, const char* path, char** out_bytecode,
                                     size_t* out_size, int64_t* out_time) {
-    char full[1024];
-    if (!wpe__script_full_path(host, path, full, sizeof full)) return WPE_RESULT_ERROR_INVALID_ARG;
+    const WPE_Vfs* vfs = wpe_asset_manager_vfs(host->assets);
     void* source = NULL;
     size_t source_size = 0;
-    WPE_Result result = wpe_file_read_all(full, &source, &source_size);
+    WPE_Result result = wpe_vfs_read_all(vfs, path, &source, &source_size);
+    if (result == WPE_RESULT_ERROR_NOT_FOUND) wpe_log_error("script '%s' not found", path);
     if (result != WPE_RESULT_OK) return result;
-    if (out_time && wpe_file_modified_time(full, out_time) != WPE_RESULT_OK) *out_time = 0;
+    if (out_time && wpe_vfs_modified_time(vfs, path, out_time) != WPE_RESULT_OK) *out_time = 0;
 
     lua_CompileOptions options = {.optimizationLevel = 1, .debugLevel = 1};
     size_t bytecode_size = 0;
@@ -382,7 +356,7 @@ static int wpe__op_init(lua_State* L) {
 }
 
 WPE_Result wpe_script_host_create(const WPE_ScriptHostDesc* desc, WPE_ScriptHost** out_host) {
-    if (!desc || !desc->ecs || !desc->asset_root || !out_host) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!desc || !desc->ecs || !desc->assets || !out_host) return WPE_RESULT_ERROR_NULL_ARG;
     *out_host = NULL;
     if (wpe_ecs_is_registered(desc->ecs, WPE_COMP_SCRIPT)) {
         wpe_log_error("the world already has a script host");
@@ -390,28 +364,17 @@ WPE_Result wpe_script_host_create(const WPE_ScriptHostDesc* desc, WPE_ScriptHost
     }
 
     WPE_ScriptHost* host = wpe_alloc_zeroed(1, sizeof *host);
-    const size_t root_length = strlen(desc->asset_root);
-    char* root = wpe_alloc(root_length + 1);
-    if (!host || !root) {
-        wpe_free(host);
-        wpe_free(root);
-        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
-    }
-    memcpy(root, desc->asset_root, root_length + 1);
-    while (root_length > 1 && (root[strlen(root) - 1] == '/' || root[strlen(root) - 1] == '\\'))
-        root[strlen(root) - 1] = '\0';
-    host->asset_root = root;
+    if (!host) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     host->ecs = desc->ecs;
+    host->assets = desc->assets;
     host->physics = desc->physics;
-    host->jobs = desc->jobs;
-    host->max_texture_size = desc->max_texture_size ? desc->max_texture_size : 512;
+    host->audio = desc->audio;
     host->memory_limit = desc->memory_limit ? desc->memory_limit : WPE__DEFAULT_MEMORY_LIMIT;
     host->time_limit_seconds =
         (desc->time_limit_ms > 0.0 ? desc->time_limit_ms : WPE__DEFAULT_TIME_LIMIT_MS) / 1000.0;
 
     host->L = lua_newstate(wpe__lua_alloc, host);
     if (!host->L) {
-        wpe_free(root);
         wpe_free(host);
         return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     }
@@ -458,12 +421,14 @@ void wpe_script_host_destroy(WPE_ScriptHost* host) {
     if (host->L) lua_close(host->L);
     wpe_assert(host->memory_used == 0);
     for (uint32_t i = 0; i < host->prefab_count; ++i)
-        wpe_model_destroy(host->prefabs[i].owned);
+        wpe_asset_release(host->assets, host->prefabs[i].model);
     wpe_free(host->prefabs);
+    for (uint32_t i = 0; i < host->sound_count; ++i)
+        wpe_asset_release(host->assets, host->sounds[i].sound);
+    wpe_free(host->sounds);
     wpe_free(host->files);
     wpe_free(host->pending_destroy);
     wpe_free(host->snapshot);
-    wpe_free(host->asset_root);
     wpe_free(host);
 }
 
@@ -474,7 +439,7 @@ WPE_Result wpe_script_attach(WPE_ScriptHost* host, WPE_Entity entity, const char
         return WPE_RESULT_ERROR_INVALID_STATE;
     }
     if (!wpe_ecs_is_alive(host->ecs, entity)) return WPE_RESULT_ERROR_NOT_FOUND;
-    if (!wpe__script_path_is_safe(path)) {
+    if (!wpe_vfs_path_is_valid(path)) {
         wpe_log_error("script path '%s' is not a safe asset-relative path", path);
         return WPE_RESULT_ERROR_INVALID_ARG;
     }
@@ -609,10 +574,9 @@ uint32_t wpe_script_host_reload_changed(WPE_ScriptHost* host) {
     if (!host) return 0;
     uint32_t reloaded = 0;
     for (uint32_t i = 0; i < host->file_count; ++i) {
-        char full[1024];
         int64_t modified = 0;
-        if (!wpe__script_full_path(host, host->files[i].path, full, sizeof full) ||
-            wpe_file_modified_time(full, &modified) != WPE_RESULT_OK ||
+        if (wpe_vfs_modified_time(wpe_asset_manager_vfs(host->assets), host->files[i].path, &modified) !=
+                WPE_RESULT_OK ||
             modified == host->files[i].modified_time) {
             continue;
         }
@@ -629,13 +593,15 @@ WPE_Result wpe_script_host_reload(WPE_ScriptHost* host, const char* path) {
     return WPE_RESULT_ERROR_NOT_FOUND;
 }
 
-WPE_Result wpe_script_host_register_prefab(WPE_ScriptHost* host, const char* name, const WPE_Model* model) {
-    if (!host || !name || !model) return WPE_RESULT_ERROR_NULL_ARG;
-    if (!name[0] || strlen(name) >= WPE__SCRIPT_PREFAB_NAME_MAX) return WPE_RESULT_ERROR_INVALID_ARG;
+WPE_Result wpe_script_host_register_prefab(WPE_ScriptHost* host, const char* name, WPE_AssetHandle model) {
+    if (!host || !name) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!name[0] || strlen(name) >= WPE__SCRIPT_PREFAB_NAME_MAX || !wpe_asset_model(host->assets, model))
+        return WPE_RESULT_ERROR_INVALID_ARG;
     for (uint32_t i = 0; i < host->prefab_count; ++i) {
         if (strcmp(host->prefabs[i].name, name) == 0) {
-            wpe_model_destroy(host->prefabs[i].owned);
-            host->prefabs[i].owned = NULL;
+            wpe_asset_retain(host->assets,
+                             model); /* Before releasing: the same model may be re-registered. */
+            wpe_asset_release(host->assets, host->prefabs[i].model);
             host->prefabs[i].model = model;
             return WPE_RESULT_OK;
         }
@@ -647,31 +613,53 @@ WPE_Result wpe_script_host_register_prefab(WPE_ScriptHost* host, const char* nam
         host->prefabs = prefabs;
         host->prefab_capacity = capacity;
     }
+    wpe_asset_retain(host->assets, model);
     wpe__Prefab* prefab = &host->prefabs[host->prefab_count++];
     *prefab = (wpe__Prefab){.model = model};
     snprintf(prefab->name, sizeof prefab->name, "%s", name);
     return WPE_RESULT_OK;
 }
 
-const WPE_Model* wpe__script_find_prefab(WPE_ScriptHost* host, const char* name_or_path) {
+WPE_AssetHandle wpe__script_find_prefab(WPE_ScriptHost* host, const char* name_or_path) {
     for (uint32_t i = 0; i < host->prefab_count; ++i) {
         if (strcmp(host->prefabs[i].name, name_or_path) == 0) return host->prefabs[i].model;
     }
-    if (!wpe__script_path_is_safe(name_or_path) || strlen(name_or_path) >= WPE__SCRIPT_PREFAB_NAME_MAX) {
-        wpe_log_error("prefab '%s' is not registered and is not a safe asset path", name_or_path);
-        return NULL;
+    if (!wpe_vfs_path_is_valid(name_or_path) || strlen(name_or_path) >= WPE__SCRIPT_PREFAB_NAME_MAX) {
+        wpe_log_error("prefab '%s' is not registered and is not a valid asset path", name_or_path);
+        return WPE_ASSET_NONE;
     }
-    char full[1024];
-    if (!wpe__script_full_path(host, name_or_path, full, sizeof full)) return NULL;
-    WPE_Model* model = NULL;
-    const WPE_ModelLoadOptions options = {.jobs = host->jobs, .max_texture_size = host->max_texture_size};
-    if (wpe_model_load(full, &options, &model) != WPE_RESULT_OK) return NULL;
-    if (wpe_script_host_register_prefab(host, name_or_path, model) != WPE_RESULT_OK) {
-        wpe_model_destroy(model);
-        return NULL;
+    /* Path-based prefabs are cached under their path (the prefab table keeps them loaded). */
+    WPE_AssetHandle model = WPE_ASSET_NONE;
+    if (wpe_asset_load(host->assets, WPE_ASSET_MODEL, name_or_path, &model) != WPE_RESULT_OK)
+        return WPE_ASSET_NONE;
+    const WPE_Result result = wpe_script_host_register_prefab(host, name_or_path, model);
+    wpe_asset_release(host->assets, model); /* The prefab table holds its own reference. */
+    return result == WPE_RESULT_OK ? model : WPE_ASSET_NONE;
+}
+
+WPE_AssetHandle wpe__script_find_sound(WPE_ScriptHost* host, const char* path) {
+    char normalized[WPE_VFS_PATH_MAX];
+    if (!wpe_vfs_path_normalize(path, normalized, sizeof normalized)) {
+        wpe_log_error("'%s' is not a valid asset path", path);
+        return WPE_ASSET_NONE;
     }
-    host->prefabs[host->prefab_count - 1].owned = model;
-    return model;
+    for (uint32_t i = 0; i < host->sound_count; ++i) {
+        if (strcmp(host->sounds[i].path, normalized) == 0) return host->sounds[i].sound;
+    }
+    if (host->sound_count == host->sound_capacity) {
+        const uint32_t capacity = host->sound_capacity ? host->sound_capacity * 2 : 16;
+        wpe__CachedSound* sounds = wpe_realloc(host->sounds, (size_t)capacity * sizeof *sounds);
+        if (!sounds) return WPE_ASSET_NONE;
+        host->sounds = sounds;
+        host->sound_capacity = capacity;
+    }
+    WPE_AssetHandle sound = WPE_ASSET_NONE;
+    if (wpe_asset_load(host->assets, WPE_ASSET_SOUND, normalized, &sound) != WPE_RESULT_OK)
+        return WPE_ASSET_NONE;
+    wpe__CachedSound* entry = &host->sounds[host->sound_count++];
+    snprintf(entry->path, sizeof entry->path, "%s", normalized);
+    entry->sound = sound;
+    return sound;
 }
 
 WPE_ScriptStats wpe_script_host_stats(const WPE_ScriptHost* host) {

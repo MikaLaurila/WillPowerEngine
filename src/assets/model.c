@@ -33,12 +33,31 @@ static void wpe__cgltf_free(void* user, void* ptr) {
     wpe_free(ptr);
 }
 
+/* cgltf file callback context (cgltf_file_options.user_data; NULL reads the OS file system). */
+typedef struct wpe__FileContext {
+    const WPE_Vfs* vfs;
+} wpe__FileContext;
+
+/* Reads a file from the VFS (asset path; "." and ".." segments are resolved) or, without one, the
+ * OS file system. */
+static WPE_Result wpe__read_file(const WPE_Vfs* vfs, const char* path, void** out_data, size_t* out_size) {
+    if (!vfs) return wpe_file_read_all(path, out_data, out_size);
+    char normalized[WPE_VFS_PATH_MAX];
+    if (!wpe_vfs_path_normalize(path, normalized, sizeof normalized)) {
+        wpe_log_error("'%s' is not a valid asset path", path);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    const WPE_Result result = wpe_vfs_read_all(vfs, normalized, out_data, out_size);
+    if (result == WPE_RESULT_ERROR_NOT_FOUND) wpe_log_error("asset file '%s' not found", normalized);
+    return result;
+}
+
 static cgltf_result wpe__cgltf_read(const cgltf_memory_options* memory, const cgltf_file_options* file,
                                     const char* path, cgltf_size* size, void** data) {
     (void)memory;
-    (void)file;
     size_t read_size = 0;
-    const WPE_Result result = wpe_file_read_all(path, data, &read_size);
+    const wpe__FileContext* context = file->user_data;
+    const WPE_Result result = wpe__read_file(context ? context->vfs : NULL, path, data, &read_size);
     if (result == WPE_RESULT_OK) {
         *size = read_size;
         return cgltf_result_success;
@@ -54,6 +73,7 @@ static void wpe__cgltf_release(const cgltf_memory_options* memory, const cgltf_f
     wpe_free(data);
 }
 
+/* Base options; loads copy them and set file.user_data to their wpe__FileContext. */
 static const cgltf_options wpe__cgltf_options = {
     .memory = {.alloc_func = wpe__cgltf_alloc, .free_func = wpe__cgltf_free},
     .file = {.read = wpe__cgltf_read, .release = wpe__cgltf_release},
@@ -209,8 +229,8 @@ static WPE_TextureRef wpe__convert_texture_view(wpe__Loader* loader, const cgltf
 }
 
 /* Fetches the encoded bytes of an image: from a buffer view, a data URI or an external file. */
-static WPE_Result wpe__image_bytes(const char* model_path, const cgltf_image* image, const void** out_data,
-                                   size_t* out_size, void** out_owned) {
+static WPE_Result wpe__image_bytes(const WPE_Vfs* vfs, const char* model_path, const cgltf_image* image,
+                                   const void** out_data, size_t* out_size, void** out_owned) {
     *out_owned = NULL;
     if (image->buffer_view) {
         *out_data = cgltf_buffer_view_data(image->buffer_view);
@@ -253,7 +273,7 @@ static WPE_Result wpe__image_bytes(const char* model_path, const cgltf_image* im
 
     size_t size = 0;
     void* data = NULL;
-    const WPE_Result result = wpe_file_read_all(full, &data, &size);
+    const WPE_Result result = wpe__read_file(vfs, full, &data, &size);
     wpe_free(full);
     if (result != WPE_RESULT_OK) return result;
     *out_owned = data;
@@ -277,7 +297,7 @@ static void wpe__decode_textures(void* context, uint32_t begin, uint32_t end, ui
         const void* bytes = NULL;
         size_t size = 0;
         void* owned = NULL;
-        job->result = wpe__image_bytes(loader->path, job->image, &bytes, &size, &owned);
+        job->result = wpe__image_bytes(loader->options->vfs, loader->path, job->image, &bytes, &size, &owned);
         WPE_Image image = {0};
         if (job->result == WPE_RESULT_OK) job->result = wpe_image_decode(bytes, size, label, &image);
         wpe_free(owned);
@@ -1091,9 +1111,12 @@ WPE_Result wpe_model_load(const char* path, const WPE_ModelLoadOptions* options,
     const WPE_ModelLoadOptions default_options = {0};
     if (!options) options = &default_options;
 
+    wpe__FileContext file_context = {.vfs = options->vfs};
+    cgltf_options cgltf = wpe__cgltf_options;
+    cgltf.file.user_data = &file_context;
     cgltf_data* gltf = NULL;
-    cgltf_result parsed = cgltf_parse_file(&wpe__cgltf_options, path, &gltf);
-    if (parsed == cgltf_result_success) parsed = cgltf_load_buffers(&wpe__cgltf_options, gltf, path);
+    cgltf_result parsed = cgltf_parse_file(&cgltf, path, &gltf);
+    if (parsed == cgltf_result_success) parsed = cgltf_load_buffers(&cgltf, gltf, path);
     if (parsed == cgltf_result_success) parsed = cgltf_validate(gltf);
     if (parsed != cgltf_result_success) {
         wpe_log_error("failed to load glTF '%s': %s", path, wpe__cgltf_result_name(parsed));

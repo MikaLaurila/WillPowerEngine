@@ -106,3 +106,40 @@ FetchContent_MakeAvailable(box3d)
 
 add_library(wpe_dep_box3d INTERFACE)
 target_link_libraries(wpe_dep_box3d INTERFACE box3d::box3d)
+
+# zstd v1.5.7 (BSD) — .pak archive compression. Only the static library is built (no programs,
+# legacy formats or threading).
+set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
+set(ZSTD_MULTITHREAD_SUPPORT OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(zstd
+    URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+    URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    SOURCE_SUBDIR build/cmake
+    EXCLUDE_FROM_ALL
+    SYSTEM)
+FetchContent_MakeAvailable(zstd)
+add_library(wpe_dep_zstd INTERFACE)
+target_link_libraries(wpe_dep_zstd INTERFACE libzstd_static)
+target_include_directories(wpe_dep_zstd SYSTEM INTERFACE "${zstd_SOURCE_DIR}/lib")
+
+# miniaudio 0.11.25 (public domain / MIT-0) — audio playback and decoding (WAV, FLAC, MP3). Only
+# the single-file library is used (its CMake project is not built); src/audio compiles miniaudio.c.
+FetchContent_Declare(miniaudio
+    URL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.25.tar.gz
+    URL_HASH SHA256=b900edcffe979816e2560a0580b9b1216d674b4f17fbadeca8f777a7f8ab0274
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    SOURCE_SUBDIR wpe_header_only)
+FetchContent_MakeAvailable(miniaudio)
+add_library(wpe_dep_miniaudio INTERFACE)
+target_include_directories(wpe_dep_miniaudio SYSTEM INTERFACE "${miniaudio_SOURCE_DIR}")
+# These change miniaudio's struct layouts, so every user must see the same set. The engine mixes
+# sounds from its own data sources, so the resource manager (and its job threads) is not needed.
+target_compile_definitions(wpe_dep_miniaudio INTERFACE
+    MA_NO_RESOURCE_MANAGER MA_NO_ENCODING MA_NO_GENERATION)
+set(WPE_MINIAUDIO_SOURCE "${miniaudio_SOURCE_DIR}/miniaudio.c")

@@ -177,12 +177,14 @@ static int wpe__api_instantiate(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     const bool has_position = !lua_isnoneornil(L, 2);
     const WPE_Vec3 position = has_position ? wpe__check_vec3(L, 2) : wpe_vec3(0, 0, 0);
-    const WPE_Model* model = wpe__script_find_prefab(host, name);
-    if (!model) luaL_errorL(L, "wpe.instantiate: unknown prefab '%s'", name);
+    const WPE_AssetHandle model = wpe__script_find_prefab(host, name);
+    if (model == WPE_ASSET_NONE) luaL_errorL(L, "wpe.instantiate: unknown prefab '%s'", name);
     WPE_Entity root = WPE_ENTITY_NULL;
-    const WPE_InstantiateOptions options = {.animation = model->animation_count ? 0 : WPE_MODEL_NONE,
-                                            .play = true};
-    wpe__raise_result(L, "instantiate", wpe_model_instantiate(host->ecs, model, &options, &root));
+    const WPE_InstantiateOptions options = {
+        .animation = wpe_asset_model(host->assets, model)->animation_count ? 0 : WPE_MODEL_NONE,
+        .play = true};
+    wpe__raise_result(L, "instantiate",
+                      wpe_model_instantiate(host->ecs, host->assets, model, &options, &root));
     WPE_Transform* t = wpe_ecs_get_component(host->ecs, root, WPE_COMP_TRANSFORM);
     if (has_position) t->position = position;
     lua_pushnumber(L, (double)root);
@@ -536,9 +538,11 @@ static int wpe__api_add_collider(lua_State* L) {
     }
     if (model_name[0] != '\0') {
         collider.model = wpe__script_find_prefab(host, model_name);
-        if (!collider.model) luaL_errorL(L, "wpe.add_collider: unknown model '%s'", model_name);
+        if (collider.model == WPE_ASSET_NONE)
+            luaL_errorL(L, "wpe.add_collider: unknown model '%s'", model_name);
     }
-    if ((collider.shape == WPE_COLLIDER_CONVEX || collider.shape == WPE_COLLIDER_MESH) && !collider.model) {
+    if ((collider.shape == WPE_COLLIDER_CONVEX || collider.shape == WPE_COLLIDER_MESH) &&
+        !wpe_asset_model(host->assets, collider.model)) {
         luaL_errorL(L, "wpe.add_collider: convex and mesh colliders need a model");
     }
     WPE_Collider* stored = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_PHYSICS_COLLIDER);
@@ -639,6 +643,151 @@ static int wpe__api_get_gravity(lua_State* L) {
     return 1;
 }
 
+/* ---- Audio ----------------------------------------------------------------------------------------- */
+
+static WPE_Audio* wpe__audio(lua_State* L) {
+    WPE_Audio* audio = wpe__script_host_from(L)->audio;
+    if (!audio) luaL_errorL(L, "audio is not enabled for this game");
+    return audio;
+}
+
+static WPE_AudioBus wpe__check_bus(lua_State* L, float value) {
+    if (!(value == WPE_AUDIO_BUS_MASTER || value == WPE_AUDIO_BUS_EFFECTS || value == WPE_AUDIO_BUS_MUSIC))
+        luaL_errorL(L, "bus must be wpe.BUS_MASTER, wpe.BUS_EFFECTS or wpe.BUS_MUSIC");
+    return (WPE_AudioBus)value;
+}
+
+/* Loads a sound by path (cached by the host); raises if it cannot be loaded. */
+static WPE_AssetHandle wpe__check_sound(lua_State* L, const char* function, const char* path) {
+    const WPE_AssetHandle sound = wpe__script_find_sound(wpe__script_host_from(L), path);
+    if (sound == WPE_ASSET_NONE) luaL_errorL(L, "wpe.%s: cannot load sound '%s'", function, path);
+    return sound;
+}
+
+static int wpe__api_play_sound(lua_State* L) {
+    WPE_Audio* audio = wpe__audio(L);
+    const char* path = luaL_checkstring(L, 1);
+    WPE_AudioPlayDesc desc = {.volume = 1.0f, .pitch = 1.0f, .bus = WPE_AUDIO_BUS_EFFECTS};
+    if (!lua_isnoneornil(L, 2)) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        desc.volume = wpe__field_number(L, 2, "volume", desc.volume);
+        desc.pitch = wpe__field_number(L, 2, "pitch", desc.pitch);
+        desc.min_distance = wpe__field_number(L, 2, "min_distance", 0.0f);
+        desc.max_distance = wpe__field_number(L, 2, "max_distance", 0.0f);
+        desc.bus = wpe__check_bus(L, wpe__field_number(L, 2, "bus", (float)desc.bus));
+        desc.loop = wpe__field_bool(L, 2, "loop", false);
+        lua_getfield(L, 2, "position");
+        if (!lua_isnil(L, -1)) {
+            desc.position = wpe__check_vec3(L, -1);
+            desc.spatial = true;
+        }
+        lua_pop(L, 1);
+        if (!(desc.volume >= 0.0f) || !(desc.pitch > 0.0f))
+            luaL_errorL(L, "wpe.play_sound: invalid volume or pitch");
+    }
+    const WPE_AssetHandle sound = wpe__check_sound(L, "play_sound", path);
+    lua_pushnumber(L, (double)wpe_audio_play(audio, sound, &desc)); /* 0 when no voice was free. */
+    return 1;
+}
+
+static int wpe__api_stop_sound(lua_State* L) {
+    WPE_Audio* audio = wpe__audio(L);
+    const double voice = luaL_checknumber(L, 1);
+    if (voice >= 1.0 && voice <= (double)UINT32_MAX && voice == floor(voice))
+        wpe_audio_stop(audio, (WPE_Voice)voice);
+    return 0;
+}
+
+static int wpe__api_add_audio_source(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "add_audio_source");
+    wpe__audio(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    lua_getfield(L, 2, "sound");
+    const char* path = luaL_checkstring(L, -1); /* Stays valid: the table keeps the string alive. */
+    lua_pop(L, 1);
+    WPE_AudioSource source = wpe_audio_source_default(WPE_ASSET_NONE);
+    source.volume = wpe__field_number(L, 2, "volume", source.volume);
+    source.pitch = wpe__field_number(L, 2, "pitch", source.pitch);
+    source.min_distance = wpe__field_number(L, 2, "min_distance", source.min_distance);
+    source.max_distance = wpe__field_number(L, 2, "max_distance", source.max_distance);
+    source.bus = wpe__check_bus(L, wpe__field_number(L, 2, "bus", (float)source.bus));
+    source.loop = wpe__field_bool(L, 2, "loop", source.loop);
+    source.spatial = wpe__field_bool(L, 2, "spatial", source.spatial);
+    source.playing = wpe__field_bool(L, 2, "play", true);
+    if (!(source.volume >= 0.0f) || !(source.pitch > 0.0f) || !(source.min_distance > 0.0f) ||
+        !(source.max_distance >= source.min_distance))
+        luaL_errorL(L, "wpe.add_audio_source: invalid volume, pitch or distances");
+    source.sound = wpe__check_sound(L, "add_audio_source", path);
+    /* Replaces an existing source (the component owns a reference to its sound). */
+    if (wpe_ecs_has_component(host->ecs, entity, WPE_COMP_AUDIO_SOURCE))
+        wpe__raise_result(L, "add_audio_source",
+                          wpe_ecs_remove_component(host->ecs, entity, WPE_COMP_AUDIO_SOURCE));
+    wpe__raise_result(L, "add_audio_source",
+                      wpe_ecs_add_component(host->ecs, entity, WPE_COMP_AUDIO_SOURCE, &source, NULL));
+    return 0;
+}
+
+static int wpe__api_remove_audio_source(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "remove_audio_source");
+    wpe__audio(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    if (wpe_ecs_has_component(host->ecs, entity, WPE_COMP_AUDIO_SOURCE))
+        wpe__raise_result(L, "remove_audio_source",
+                          wpe_ecs_remove_component(host->ecs, entity, WPE_COMP_AUDIO_SOURCE));
+    return 0;
+}
+
+static WPE_AudioSource* wpe__check_audio_source(lua_State* L, WPE_Entity entity) {
+    wpe__audio(L);
+    WPE_AudioSource* source =
+        wpe_ecs_get_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_AUDIO_SOURCE);
+    if (!source) luaL_errorL(L, "entity 0x%08x has no audio source", entity);
+    return source;
+}
+
+static int wpe__api_set_audio_playing(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const bool playing = luaL_checkboolean(L, 2);
+    wpe__check_audio_source(L, entity)->playing = playing;
+    return 0;
+}
+
+static int wpe__api_is_audio_playing(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    lua_pushboolean(L, wpe__check_audio_source(L, entity)->playing);
+    return 1;
+}
+
+static int wpe__api_play_music(lua_State* L) {
+    WPE_Audio* audio = wpe__audio(L);
+    const char* path = luaL_checkstring(L, 1);
+    const float fade = (float)luaL_optnumber(L, 2, 0.0);
+    const bool loop = lua_isnoneornil(L, 3) ? true : luaL_checkboolean(L, 3);
+    wpe__raise_result(L, "play_music", wpe_audio_play_music(audio, path, fade, loop));
+    return 0;
+}
+
+static int wpe__api_stop_music(lua_State* L) {
+    wpe_audio_stop_music(wpe__audio(L), (float)luaL_optnumber(L, 1, 0.0));
+    return 0;
+}
+
+static int wpe__api_set_volume(lua_State* L) {
+    WPE_Audio* audio = wpe__audio(L);
+    const WPE_AudioBus bus = wpe__check_bus(L, (float)luaL_checknumber(L, 1));
+    const float volume = (float)luaL_checknumber(L, 2);
+    if (!(volume >= 0.0f) || !isfinite(volume)) luaL_errorL(L, "wpe.set_volume: volume must be >= 0");
+    wpe_audio_set_volume(audio, bus, volume);
+    return 0;
+}
+
+static int wpe__api_get_volume(lua_State* L) {
+    WPE_Audio* audio = wpe__audio(L);
+    lua_pushnumber(L, wpe_audio_volume(audio, wpe__check_bus(L, (float)luaL_checknumber(L, 1))));
+    return 1;
+}
+
 /* ---- Time ------------------------------------------------------------------------------------------ */
 
 static int wpe__api_time(lua_State* L) {
@@ -693,6 +842,16 @@ static const luaL_Reg wpe__api[] = {
     {"raycast", wpe__api_raycast},
     {"set_gravity", wpe__api_set_gravity},
     {"get_gravity", wpe__api_get_gravity},
+    {"play_sound", wpe__api_play_sound},
+    {"stop_sound", wpe__api_stop_sound},
+    {"add_audio_source", wpe__api_add_audio_source},
+    {"remove_audio_source", wpe__api_remove_audio_source},
+    {"set_audio_playing", wpe__api_set_audio_playing},
+    {"is_audio_playing", wpe__api_is_audio_playing},
+    {"play_music", wpe__api_play_music},
+    {"stop_music", wpe__api_stop_music},
+    {"set_volume", wpe__api_set_volume},
+    {"get_volume", wpe__api_get_volume},
     {"time", wpe__api_time},
     {"frame", wpe__api_frame},
     {NULL, NULL},
@@ -715,6 +874,8 @@ void wpe__script_api_register(lua_State* L) {
         {"BODY_DYNAMIC", WPE_BODY_DYNAMIC},       {"COLLIDER_BOX", WPE_COLLIDER_BOX},
         {"COLLIDER_SPHERE", WPE_COLLIDER_SPHERE}, {"COLLIDER_CAPSULE", WPE_COLLIDER_CAPSULE},
         {"COLLIDER_CONVEX", WPE_COLLIDER_CONVEX}, {"COLLIDER_MESH", WPE_COLLIDER_MESH},
+        {"BUS_MASTER", WPE_AUDIO_BUS_MASTER},     {"BUS_EFFECTS", WPE_AUDIO_BUS_EFFECTS},
+        {"BUS_MUSIC", WPE_AUDIO_BUS_MUSIC},
     };
     for (size_t i = 0; i < sizeof constants / sizeof constants[0]; ++i) {
         lua_pushnumber(L, constants[i].value);

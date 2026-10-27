@@ -15,6 +15,7 @@
 
 #include "core/alloc.h"
 #include "core/arena.h"
+#include "core/crc32.h"
 #include "core/debug.h"
 #include "core/fixed_step.h"
 #include "core/log.h"

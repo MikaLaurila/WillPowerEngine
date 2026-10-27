@@ -3,9 +3,12 @@
  * game loop with rigid body physics. Edit the scripts while it runs with --watch to see hot reload.
  *
  * Usage: script_demo [--width N] [--height N] [--scale N] [--frames N] [--screenshot file.png]
- *                    [--watch] [--debug-physics] [--no-vsync]
+ *                    [--watch] [--debug-physics] [--pak archive.pak] [--mute] [--no-vsync]
  *   --watch          poll script files twice a second and hot-reload changes (state is preserved)
  *   --debug-physics  draw collider wireframes
+ *   --pak            read every asset from an archive built with wpe_pak create instead of the
+ *                    assets directory
+ *   --mute           silence audio (master volume 0)
  */
 #define WPE_LOG_MODULE "scriptdemo"
 #include <stdio.h>
@@ -14,6 +17,7 @@
 
 #include "assets/font.h"
 #include "assets/procedural.h"
+#include "audio/audio.h"
 #include "core/core.h"
 #include "graphics/animation.h"
 #include "graphics/debug_lines.h"
@@ -27,7 +31,8 @@
 typedef struct Options {
     uint32_t width, height, scale, frames;
     const char* screenshot;
-    bool watch, debug_physics, vsync;
+    const char* pak;
+    bool watch, debug_physics, mute, vsync;
 } Options;
 
 static bool parse_options(int argc, char** argv, Options* o) {
@@ -37,10 +42,14 @@ static bool parse_options(int argc, char** argv, Options* o) {
             o->watch = true;
         } else if (strcmp(argv[i], "--debug-physics") == 0) {
             o->debug_physics = true;
+        } else if (strcmp(argv[i], "--mute") == 0) {
+            o->mute = true;
         } else if (strcmp(argv[i], "--no-vsync") == 0) {
             o->vsync = false;
         } else if (i + 1 < argc && strcmp(argv[i], "--screenshot") == 0) {
             o->screenshot = argv[++i];
+        } else if (i + 1 < argc && strcmp(argv[i], "--pak") == 0) {
+            o->pak = argv[++i];
         } else if (i + 1 < argc && (strcmp(argv[i], "--width") == 0 || strcmp(argv[i], "--height") == 0 ||
                                     strcmp(argv[i], "--scale") == 0 || strcmp(argv[i], "--frames") == 0)) {
             char* end = NULL;
@@ -82,12 +91,16 @@ int main(int argc, char** argv) {
     WPE_Window* window = NULL;
     WPE_Ecs* ecs = NULL;
     WPE_Physics* physics = NULL;
+    WPE_Audio* audio = NULL;
     WPE_ScriptHost* host = NULL;
     WPE_SceneRenderer* scene_renderer = NULL;
     WPE_Draw2D* draw2d = NULL;
     WPE_DebugLines* debug_lines = NULL;
-    WPE_BitmapFont* font = NULL;
-    WPE_Model *ground = NULL, *box = NULL, *helmet = NULL, *figure = NULL;
+    WPE_Vfs* vfs = NULL;
+    WPE_AssetManager* assets = NULL;
+    WPE_Model *ground_model = NULL, *box_model = NULL;
+    WPE_AssetHandle font_asset = WPE_ASSET_NONE, ground = WPE_ASSET_NONE, box = WPE_ASSET_NONE, helmet = WPE_ASSET_NONE,
+                    figure = WPE_ASSET_NONE;
     int exit_code = EXIT_FAILURE;
 
     WPE_Result r = wpe_jobs_create(WPE_JOBS_AUTO_WORKERS, &jobs);
@@ -100,31 +113,48 @@ int main(int argc, char** argv) {
     if (r == WPE_RESULT_OK) r = wpe_scene_renderer_create(&scene_renderer);
     if (r == WPE_RESULT_OK) r = wpe_draw2d_create(&draw2d);
     if (r == WPE_RESULT_OK) r = wpe_debug_lines_create(&debug_lines);
-    if (r == WPE_RESULT_OK) r = wpe_font_load(WPE_SAMPLE_ASSETS_DIR "/fonts/small.png", &font);
+    /* Every asset (scripts included) comes through the VFS: the assets directory or an archive. */
+    if (r == WPE_RESULT_OK) r = wpe_vfs_create(&vfs);
+    if (r == WPE_RESULT_OK) r = o.pak ? wpe_vfs_mount_pak(vfs, o.pak) : wpe_vfs_mount_directory(vfs, WPE_SAMPLE_ASSETS_DIR);
+    if (r == WPE_RESULT_OK) {
+        r = wpe_asset_manager_create(&(WPE_AssetManagerDesc){.vfs = vfs, .jobs = jobs, .max_texture_size = 256}, &assets);
+    }
+    if (r == WPE_RESULT_OK) r = wpe_asset_load(assets, WPE_ASSET_FONT, "fonts/small.png", &font_asset);
+    const WPE_BitmapFont* font = wpe_asset_font(assets, font_asset);
     if (r == WPE_RESULT_OK) r = wpe_ecs_create(&ecs);
     if (r == WPE_RESULT_OK) r = wpe_scene_register_components(ecs);
-    if (r == WPE_RESULT_OK) r = wpe_graphics_register_components(ecs);
-    if (r == WPE_RESULT_OK) r = wpe_physics_create(&(WPE_PhysicsDesc){.ecs = ecs, .gravity = wpe_vec3(0, -9.81f, 0)}, &physics);
+    if (r == WPE_RESULT_OK) r = wpe_graphics_register_components(ecs, assets);
     if (r == WPE_RESULT_OK) {
-        r = wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .physics = physics, .asset_root = WPE_SAMPLE_ASSETS_DIR,
-                                                         .jobs = jobs, .max_texture_size = 256},
-                                   &host);
+        r = wpe_physics_create(&(WPE_PhysicsDesc){.ecs = ecs, .assets = assets, .gravity = wpe_vec3(0, -9.81f, 0)}, &physics);
+    }
+    /* Screenshot runs are headless and reproducible: no audio device. */
+    if (r == WPE_RESULT_OK) r = wpe_audio_create(&(WPE_AudioDesc){.ecs = ecs, .assets = assets, .no_device = o.screenshot != NULL}, &audio);
+    if (r == WPE_RESULT_OK && o.mute) wpe_audio_set_volume(audio, WPE_AUDIO_BUS_MASTER, 0.0f);
+    if (r == WPE_RESULT_OK) {
+        r = wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .assets = assets, .physics = physics, .audio = audio}, &host);
     }
 
     /* Assets: procedural ground and box, imported helmet and figure (registered as script prefabs). */
     const WPE_Material ground_material = wpe_material_solid(wpe_vec4(0.5f, 0.52f, 0.55f, 1), 0.0f, 0.8f);
     const WPE_Material box_material = wpe_material_solid(wpe_vec4(0.9f, 0.55f, 0.15f, 1), 0.0f, 0.5f);
-    if (r == WPE_RESULT_OK) r = wpe_model_create_plane(30.0f, 20, &ground_material, &ground);
-    if (r == WPE_RESULT_OK) r = wpe_model_create_box(wpe_vec3(1, 1, 1), &box_material, &box);
-    const WPE_ModelLoadOptions load = {.jobs = jobs, .max_texture_size = 256};
-    if (r == WPE_RESULT_OK) r = wpe_model_load(WPE_SAMPLE_ASSETS_DIR "/meshes/damaged_helmet.glb", &load, &helmet);
-    if (r == WPE_RESULT_OK) r = wpe_model_load(WPE_SAMPLE_ASSETS_DIR "/meshes/RiggedFigure.glb", &load, &figure);
+    if (r == WPE_RESULT_OK) r = wpe_model_create_plane(30.0f, 20, &ground_material, &ground_model);
+    if (r == WPE_RESULT_OK) {
+        r = wpe_asset_add(assets, WPE_ASSET_MODEL, "procedural/ground", ground_model, &ground);
+        if (r != WPE_RESULT_OK) wpe_model_destroy(ground_model);
+    }
+    if (r == WPE_RESULT_OK) r = wpe_model_create_box(wpe_vec3(1, 1, 1), &box_material, &box_model);
+    if (r == WPE_RESULT_OK) {
+        r = wpe_asset_add(assets, WPE_ASSET_MODEL, "procedural/box", box_model, &box);
+        if (r != WPE_RESULT_OK) wpe_model_destroy(box_model);
+    }
+    if (r == WPE_RESULT_OK) r = wpe_asset_load(assets, WPE_ASSET_MODEL, "meshes/damaged_helmet.glb", &helmet);
+    if (r == WPE_RESULT_OK) r = wpe_asset_load(assets, WPE_ASSET_MODEL, "meshes/RiggedFigure.glb", &figure);
     if (r == WPE_RESULT_OK) r = wpe_script_host_register_prefab(host, "box", box);
     if (r == WPE_RESULT_OK) r = wpe_script_host_register_prefab(host, "figure", figure);
 
     /* Scene: everything that moves is driven by scripts and physics. */
     WPE_Entity e = WPE_ENTITY_NULL;
-    if (r == WPE_RESULT_OK) r = wpe_model_instantiate(ecs, ground, NULL, &e);
+    if (r == WPE_RESULT_OK) r = wpe_model_instantiate(ecs, assets, ground, NULL, &e);
     if (r == WPE_RESULT_OK) {
         WPE_Collider floor = wpe_collider_default(WPE_COLLIDER_BOX); /* Static: no rigid body. */
         floor.size = wpe_vec3(30, 1, 30);
@@ -132,7 +162,7 @@ int main(int argc, char** argv) {
         r = wpe_ecs_add_component(ecs, e, WPE_COMP_PHYSICS_COLLIDER, &floor, NULL);
     }
     for (int i = 0; i < 2 && r == WPE_RESULT_OK; ++i) {
-        r = wpe_model_instantiate(ecs, helmet, NULL, &e);
+        r = wpe_model_instantiate(ecs, assets, helmet, NULL, &e);
         if (r == WPE_RESULT_OK) {
             ((WPE_Transform*)wpe_ecs_get_component(ecs, e, WPE_COMP_TRANSFORM))->position = wpe_vec3(i ? 1.4f : -1.4f, 1.2f, 0);
             r = wpe_script_attach(host, e, "scripts/spinner.luau");
@@ -170,6 +200,7 @@ int main(int argc, char** argv) {
         const WPE_Camera cam = wpe_camera_default();
         r = wpe_ecs_add_component(ecs, camera, WPE_COMP_CAMERA, &cam, NULL);
     }
+    if (r == WPE_RESULT_OK) wpe_audio_set_listener(audio, camera); /* Hear the scene from the camera. */
     if (r != WPE_RESULT_OK) {
         wpe_log_error("startup failed: %s", wpe_result_to_string(r));
         goto cleanup;
@@ -206,6 +237,15 @@ int main(int argc, char** argv) {
         wpe_script_host_update(host, (float)dt);
         if (r == WPE_RESULT_OK) r = wpe_animation_update(ecs, (float)dt);
         if (r == WPE_RESULT_OK) r = wpe_scene_update_transforms(ecs);
+        if (r == WPE_RESULT_OK) r = wpe_audio_update(audio);
+        /* Without an output device the mixer only advances when asked: mix this frame's samples. */
+        const WPE_AudioStats audio_stats = wpe_audio_stats(audio);
+        for (uint32_t pending = audio_stats.device ? 0 : (uint32_t)(dt * audio_stats.sample_rate); pending > 0 && r == WPE_RESULT_OK;) {
+            static float mix[1024 * 8];
+            const uint32_t chunk = pending < 1024 ? pending : 1024;
+            r = wpe_audio_render(audio, mix, chunk);
+            pending -= chunk;
+        }
         if (r == WPE_RESULT_OK) {
             r = wpe_renderer_begin_frame(renderer, &(WPE_ClearDesc){.clear_color = true, .color = wpe_color_rgba8(28, 32, 44, 255),
                                                                     .clear_depth = true, .depth = 1.0f});
@@ -237,10 +277,9 @@ int main(int argc, char** argv) {
         if (now - stats_start >= 0.5) { /* Full windows only: the first frame includes startup stalls. */
             const WPE_ScriptStats stats = wpe_script_host_stats(host);
             const WPE_PhysicsStats physics_stats = wpe_physics_stats(physics);
-            snprintf(hud, sizeof hud, "%.0f fps  %u scripts  %u instances  %llu errors  %u bodies (%u awake)%s",
-                     stats_frames / fmax(now - stats_start, 1e-6), stats.scripts, stats.instances,
-                     (unsigned long long)stats.errors, physics_stats.bodies, physics_stats.awake_bodies,
-                     o.watch ? "  [watching]" : "");
+            snprintf(hud, sizeof hud, "%.0f fps  %u scripts  %llu errors  %u bodies (%u awake)  %u voices%s",
+                     stats_frames / fmax(now - stats_start, 1e-6), stats.scripts, (unsigned long long)stats.errors,
+                     physics_stats.bodies, physics_stats.awake_bodies, audio_stats.voices, o.watch ? "  [watching]" : "");
             stats_start = now;
             stats_frames = 0;
         }
@@ -254,14 +293,17 @@ int main(int argc, char** argv) {
     exit_code = EXIT_SUCCESS;
 
 cleanup:
-    wpe_script_host_destroy(host); /* Before physics and the world: runs on_destroy for every script. */
+    wpe_script_host_destroy(host); /* First: runs on_destroy for every script and releases its sounds. */
+    wpe_audio_destroy(audio);
     wpe_physics_destroy(physics);
     wpe_ecs_destroy(ecs);
-    wpe_model_destroy(figure);
-    wpe_model_destroy(helmet);
-    wpe_model_destroy(box);
-    wpe_model_destroy(ground);
-    wpe_font_destroy(font);
+    wpe_asset_release(assets, figure);
+    wpe_asset_release(assets, helmet);
+    wpe_asset_release(assets, box);
+    wpe_asset_release(assets, ground);
+    wpe_asset_release(assets, font_asset);
+    wpe_asset_manager_destroy(assets); /* After everything that holds handles. */
+    wpe_vfs_destroy(vfs);
     wpe_draw2d_destroy(draw2d);
     wpe_debug_lines_destroy(debug_lines);
     wpe_scene_renderer_destroy(scene_renderer);

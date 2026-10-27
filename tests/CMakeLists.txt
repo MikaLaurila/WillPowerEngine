@@ -23,6 +23,13 @@ add_subdirectory(integration)
 add_subdirectory(stress)
 add_subdirectory(golden)
 
+# Tool round trip: pack the sample assets, verify, extract and compare.
+add_test(NAME tools_pak_roundtrip
+    COMMAND "${CMAKE_COMMAND}" -DWPE_PAK=$<TARGET_FILE:wpe_pak> -DSOURCE=${PROJECT_SOURCE_DIR}/assets
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/pak_roundtrip -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/pak_roundtrip.cmake)
+set_tests_properties(tools_pak_roundtrip PROPERTIES LABELS "tools;vfs" TIMEOUT 300)
+add_dependencies(wpe_tests wpe_pak)
+
 # Builds every test executable, then runs the whole suite.
 add_custom_target(test_all
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -C $<CONFIG>

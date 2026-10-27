@@ -1,4 +1,5 @@
 #include "wpe_test.h"
+#include "wpe_test_assets.h"
 
 #include "assets/font.h"
 #include "graphics/animation.h"
@@ -10,11 +11,11 @@
 
 #define ASSET(path) WPE_TEST_ASSETS_DIR "/" path
 
-static WPE_Ecs* make_world(void) {
+static WPE_Ecs* make_world(WPE_AssetManager* assets) {
     WPE_Ecs* ecs = NULL;
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&ecs));
     WPE_TEST_ASSERT_OK(wpe_scene_register_components(ecs));
-    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(ecs));
+    WPE_TEST_ASSERT_OK(wpe_graphics_register_components(ecs, assets));
     return ecs;
 }
 
@@ -98,14 +99,17 @@ static void test_graphics_sample_cubic_spline(void) {
 /* ---- Instantiation and animation playback --------------------------------------------------------- */
 
 static void test_graphics_instantiate_rigged_figure(void) {
-    WPE_Model* model = NULL;
-    WPE_TEST_ASSERT_OK(wpe_model_load(ASSET("meshes/RiggedFigure.glb"), NULL, &model));
-    WPE_Ecs* ecs = make_world();
+    WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 0);
+    const WPE_AssetHandle handle = wpe_test_load_model(t.assets, "meshes/RiggedFigure.glb");
+    const WPE_Model* model = wpe_asset_model(t.assets, handle);
+    WPE_Ecs* ecs = make_world(t.assets);
 
     WPE_Entity root = WPE_ENTITY_NULL;
-    WPE_TEST_ASSERT_OK(
-        wpe_model_instantiate(ecs, model, &(WPE_InstantiateOptions){.animation = 0, .play = true}, &root));
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, t.assets, handle,
+                                             &(WPE_InstantiateOptions){.animation = 0, .play = true}, &root));
     WPE_TEST_ASSERT_EQ_UINT(model->node_count + 1, wpe_ecs_entity_count(ecs));
+    /* The caller's reference plus one per mesh renderer and one for the animator. */
+    WPE_TEST_ASSERT_EQ_UINT(3, wpe_asset_ref_count(t.assets, handle));
     WPE_TEST_ASSERT_EQ_STR("model", wpe_scene_get_name(ecs, root));
 
     WPE_EcsPoolView meshes;
@@ -149,33 +153,45 @@ static void test_graphics_instantiate_rigged_figure(void) {
     WPE_TEST_ASSERT_NEAR(0.0, animator->time, 0);
     WPE_TEST_ASSERT(!animator->playing);
 
-    /* Destroying the instance releases joint/node arrays through the component hooks (leak-checked). */
+    /* Destroying the instance releases joint/node arrays and model references through the hooks. */
     WPE_TEST_ASSERT_OK(wpe_scene_destroy_recursive(ecs, root));
     WPE_TEST_ASSERT_EQ_UINT(0, wpe_ecs_entity_count(ecs));
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_asset_ref_count(t.assets, handle));
     wpe_ecs_destroy(ecs);
-    wpe_model_destroy(model);
+    wpe_asset_release(t.assets, handle);
+    WPE_TEST_ASSERT(!wpe_asset_is_valid(t.assets, handle)); /* The last reference frees the model. */
+    wpe_test_assets_destroy(&t);
 }
 
 static void test_graphics_instantiate_validates_and_cleans_up(void) {
-    WPE_Model* model = NULL;
-    WPE_TEST_ASSERT_OK(wpe_model_load(ASSET("meshes/RiggedFigure.glb"), NULL, &model));
-    WPE_Ecs* ecs = make_world();
+    WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 0);
+    const WPE_AssetHandle handle = wpe_test_load_model(t.assets, "meshes/RiggedFigure.glb");
+    const WPE_Model* model = wpe_asset_model(t.assets, handle);
+    WPE_Ecs* ecs = make_world(t.assets);
     WPE_Entity root = WPE_ENTITY_NULL;
     wpe_log_set_stderr_enabled(false);
     WPE_TEST_ASSERT_EQ_INT(
         WPE_RESULT_ERROR_INVALID_ARG,
-        wpe_model_instantiate(ecs, model, &(WPE_InstantiateOptions){.animation = 7}, &root));
+        wpe_model_instantiate(ecs, t.assets, handle, &(WPE_InstantiateOptions){.animation = 7}, &root));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_model_instantiate(ecs, t.assets, WPE_ASSET_NONE, NULL, &root));
     wpe_log_set_stderr_enabled(true);
     WPE_TEST_ASSERT(root == WPE_ENTITY_NULL);
     WPE_TEST_ASSERT_EQ_UINT(0, wpe_ecs_entity_count(ecs));
-    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_model_instantiate(ecs, NULL, NULL, &root));
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_asset_ref_count(t.assets, handle)); /* Failed attempts hold nothing. */
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_model_instantiate(ecs, NULL, handle, NULL, &root));
 
-    /* Instances are independent; despawning the world with live instances frees everything. */
-    WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, model, NULL, &root));
-    WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, model, &(WPE_InstantiateOptions){.animation = 0}, &root));
+    /* Instances are independent; destroying the world with live instances releases everything, and
+     * the caller may drop its reference while instances still use the model. */
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, t.assets, handle, NULL, &root));
+    WPE_TEST_ASSERT_OK(
+        wpe_model_instantiate(ecs, t.assets, handle, &(WPE_InstantiateOptions){.animation = 0}, &root));
     WPE_TEST_ASSERT_EQ_UINT(2 * (model->node_count + 1), wpe_ecs_entity_count(ecs));
+    wpe_asset_release(t.assets, handle);
+    WPE_TEST_ASSERT(wpe_asset_is_valid(t.assets, handle));
     wpe_ecs_destroy(ecs);
-    wpe_model_destroy(model);
+    WPE_TEST_ASSERT(!wpe_asset_is_valid(t.assets, handle));
+    wpe_test_assets_destroy(&t);
 }
 
 /* ---- Skinning (vertex shader) --------------------------------------------------------------------- */
@@ -232,12 +248,11 @@ static WPE_Entity spawn_camera(WPE_Ecs* ecs, WPE_Vec3 position, WPE_Quat rotatio
 }
 
 static void test_graphics_scene_render_frustum_culling(void) {
-    WPE_Model* model = NULL;
-    WPE_TEST_ASSERT_OK(wpe_model_load(ASSET("meshes/damaged_helmet.glb"),
-                                      &(WPE_ModelLoadOptions){.max_texture_size = 32}, &model));
-    WPE_Ecs* ecs = make_world();
+    WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 32);
+    const WPE_AssetHandle model = wpe_test_load_model(t.assets, "meshes/damaged_helmet.glb");
+    WPE_Ecs* ecs = make_world(t.assets);
     WPE_Entity root;
-    WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, model, NULL, &root));
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, t.assets, model, NULL, &root));
     const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 0, 5), wpe_quat_identity());
     WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
 
@@ -281,11 +296,13 @@ static void test_graphics_scene_render_frustum_culling(void) {
     wpe_scene_renderer_destroy(sr);
     wpe_renderer_destroy(renderer);
     wpe_ecs_destroy(ecs);
-    wpe_model_destroy(model);
+    wpe_asset_release(t.assets, model);
+    wpe_test_assets_destroy(&t);
 }
 
 static void test_graphics_camera_matrices_validation(void) {
-    WPE_Ecs* ecs = make_world();
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
     const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 0, 0), wpe_quat_identity());
     WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
     WPE_Mat4 view, proj;
@@ -308,6 +325,7 @@ static void test_graphics_camera_matrices_validation(void) {
     WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
     WPE_TEST_ASSERT(!wpe_scene_camera_matrices(ecs, camera, 1.0f, &view, &proj));
     wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
 }
 
 /* ---- 2D ------------------------------------------------------------------------------------------- */

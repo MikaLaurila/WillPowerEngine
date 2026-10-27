@@ -50,6 +50,17 @@ typedef struct WPE_BitmapFont {
 [[nodiscard]] WPE_Result wpe_font_load(const char* path, WPE_BitmapFont** out_font);
 
 /**
+ * Loads a font from an encoded PNG/JPEG glyph sheet in memory.
+ *
+ * @param label Name used in log messages (e.g. the asset path).
+ * @return Same codes as wpe_font_load(), except WPE_RESULT_ERROR_IO.
+ *
+ * @thread_safety Any thread
+ */
+[[nodiscard]] WPE_Result wpe_font_load_memory(const void* data, size_t size, const char* label,
+                                              WPE_BitmapFont** out_font);
+
+/**
  * Builds a font from decoded sheet texels (same format as wpe_font_load()).
  *
  * @thread_safety Any thread

@@ -164,19 +164,42 @@ int main(int argc, char** argv) {
     WPE_Renderer* renderer = NULL;
     WPE_Window* window = NULL;
     WPE_Ecs* ecs = NULL;
-    WPE_Model* model = NULL;
-    WPE_BitmapFont* font = NULL;
+    WPE_Vfs* vfs = NULL;
+    WPE_AssetManager* assets = NULL;
+    WPE_AssetHandle model = WPE_ASSET_NONE, font_asset = WPE_ASSET_NONE;
     WPE_SceneRenderer* scene_renderer = NULL;
     WPE_Draw2D* draw2d = NULL;
     int exit_code = EXIT_FAILURE;
 
+    /* The model may live anywhere: mount its directory (over the sample assets, for the font) and
+     * load it by file name. */
+    char model_dir[1024];
+    snprintf(model_dir, sizeof model_dir, "%s", o.model_path);
+    char* separator = strrchr(model_dir, '/');
+    char* backslash = strrchr(model_dir, '\\');
+    if (backslash && (!separator || backslash > separator)) separator = backslash;
+    const char* model_file = separator ? o.model_path + (separator - model_dir) + 1 : o.model_path;
+    if (separator) {
+        *separator = '\0';
+    } else {
+        snprintf(model_dir, sizeof model_dir, ".");
+    }
+
     WPE_Result result = wpe_jobs_create(o.workers, &jobs);
+    if (result == WPE_RESULT_OK) result = wpe_vfs_create(&vfs);
+    if (result == WPE_RESULT_OK) result = wpe_vfs_mount_directory(vfs, WPE_SAMPLE_ASSETS_DIR);
+    if (result == WPE_RESULT_OK) result = wpe_vfs_mount_directory(vfs, model_dir);
+    if (result == WPE_RESULT_OK) {
+        result = wpe_asset_manager_create(&(WPE_AssetManagerDesc){.vfs = vfs, .jobs = jobs, .max_texture_size = o.max_texture},
+                                          &assets);
+    }
     if (result == WPE_RESULT_OK) {
         const double start = wpe_platform_time_seconds();
-        result = wpe_model_load(o.model_path, &(WPE_ModelLoadOptions){.jobs = jobs, .max_texture_size = o.max_texture}, &model);
+        result = wpe_asset_load(assets, WPE_ASSET_MODEL, model_file, &model);
         if (result == WPE_RESULT_OK) wpe_log_info("loaded %s in %.0f ms", o.model_path, (wpe_platform_time_seconds() - start) * 1000.0);
     }
-    if (result == WPE_RESULT_OK) result = wpe_font_load(WPE_SAMPLE_ASSETS_DIR "/fonts/small.png", &font);
+    if (result == WPE_RESULT_OK) result = wpe_asset_load(assets, WPE_ASSET_FONT, "fonts/small.png", &font_asset);
+    const WPE_BitmapFont* font = wpe_asset_font(assets, font_asset);
     if (result == WPE_RESULT_OK) result = wpe_renderer_create(&(WPE_RendererDesc){.width = o.width, .height = o.height, .jobs = jobs}, &renderer);
     if (result == WPE_RESULT_OK) {
         result = wpe_window_create(&(WPE_WindowDesc){.title = "WillPowerEngine - Model Viewer", .width = o.width * o.scale,
@@ -187,13 +210,13 @@ int main(int argc, char** argv) {
     if (result == WPE_RESULT_OK) result = wpe_draw2d_create(&draw2d);
     if (result == WPE_RESULT_OK) result = wpe_ecs_create(&ecs);
     if (result == WPE_RESULT_OK) result = wpe_scene_register_components(ecs);
-    if (result == WPE_RESULT_OK) result = wpe_graphics_register_components(ecs);
+    if (result == WPE_RESULT_OK) result = wpe_graphics_register_components(ecs, assets);
 
     WPE_Entity root = WPE_ENTITY_NULL, camera = WPE_ENTITY_NULL;
     if (result == WPE_RESULT_OK) {
-        const WPE_InstantiateOptions instantiate = {.animation = model->animation_count ? 0 : WPE_MODEL_NONE,
-                                                    .play = !o.screenshot};
-        result = wpe_model_instantiate(ecs, model, &instantiate, &root);
+        const WPE_InstantiateOptions instantiate = {
+            .animation = wpe_asset_model(assets, model)->animation_count ? 0 : WPE_MODEL_NONE, .play = !o.screenshot};
+        result = wpe_model_instantiate(ecs, assets, model, &instantiate, &root);
     }
     if (result == WPE_RESULT_OK) {
         camera = wpe_ecs_spawn(ecs);
@@ -282,12 +305,14 @@ int main(int argc, char** argv) {
 
 cleanup:
     wpe_ecs_destroy(ecs);
+    wpe_asset_release(assets, font_asset);
+    wpe_asset_release(assets, model);
+    wpe_asset_manager_destroy(assets);
+    wpe_vfs_destroy(vfs);
     wpe_draw2d_destroy(draw2d);
     wpe_scene_renderer_destroy(scene_renderer);
     wpe_window_destroy(window);
     wpe_renderer_destroy(renderer);
-    wpe_font_destroy(font);
-    wpe_model_destroy(model);
     wpe_jobs_destroy(jobs);
     return exit_code;
 }

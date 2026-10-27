@@ -18,7 +18,7 @@
  * KHR_materials_pbrSpecularGlossiness, KHR_materials_unlit, KHR_materials_transmission
  * (approximated as alpha blending). Assets that *require* any other extension are rejected.
  *
- * - Dependencies: core, math, renderer (textures), platform (file I/O), jobs (optional parallel
+ * - Dependencies: core, math, renderer (textures), platform (file I/O), vfs, jobs (optional parallel
  *   texture decoding), cgltf + stb_image (private)
  * - Thread affinity: load/destroy on any one thread; a loaded model is read-only and may be read
  *   from any thread
@@ -35,6 +35,7 @@
 #include "jobs/jobs.h"
 #include "math/wpe_math.h"
 #include "renderer/texture.h"
+#include "vfs/vfs.h"
 
 #define WPE_MODEL_NONE UINT32_MAX
 #define WPE_MODEL_NAME_MAX 64u
@@ -202,12 +203,14 @@ typedef struct WPE_Model {
 typedef struct WPE_ModelLoadOptions {
     WPE_JobSystem* jobs;       /* Optional: decode textures in parallel. */
     uint32_t max_texture_size; /* 0 = keep original size; otherwise downscale to fit. */
+    const WPE_Vfs* vfs;        /* Optional: read the model and its files through a VFS. */
 } WPE_ModelLoadOptions;
 
 /**
  * Loads a .gltf or .glb file (external buffers/images are resolved relative to the file).
  *
- * @param path UTF-8 path; must not be NULL.
+ * @param path UTF-8 path; must not be NULL. An asset path when options->vfs is set (relative file
+ *             references may use ".." as long as they stay inside the VFS), otherwise an OS path.
  * @param options Optional (NULL = defaults: no jobs, max_texture_size 0).
  * @param out_model Receives the model; release with wpe_model_destroy().
  * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_IO; WPE_RESULT_ERROR_PARSE

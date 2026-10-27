@@ -26,7 +26,7 @@
  * NOTE(limitation): the solver runs single-threaded. Box3D's task API needs asynchronous tasks,
  * which the engine job system (blocking parallel_for) does not provide yet.
  *
- * - Dependencies: core, math, ecs, scene, assets (mesh colliders), Box3D (private)
+ * - Dependencies: core, math, ecs, scene, assets (asset manager, for mesh colliders), Box3D (private)
  * - Thread affinity: thread owning the world
  *
  * @author WillPowerEngine Team
@@ -36,7 +36,7 @@
 
 #include <stdint.h>
 
-#include "assets/model.h"
+#include "assets/asset_manager.h"
 #include "core/result.h"
 #include "ecs/ecs.h"
 #include "math/wpe_math.h"
@@ -65,15 +65,16 @@ typedef enum WPE_ColliderShape {
     WPE_COLLIDER_BOX = 0, /* size = full extents */
     WPE_COLLIDER_SPHERE,  /* size.x = radius */
     WPE_COLLIDER_CAPSULE, /* size.x = radius, size.y = total height along local Y (>= 2 * radius) */
-    WPE_COLLIDER_CONVEX,  /* convex hull of `model`'s mesh `mesh` vertices (max 64 hull vertices) */
-    WPE_COLLIDER_MESH,    /* triangle mesh of `model`'s mesh `mesh`; static or kinematic bodies only */
+    WPE_COLLIDER_CONVEX,  /* convex hull of the vertices of mesh `mesh` of model asset `model` (max 64 hull
+                             vertices) */
+    WPE_COLLIDER_MESH,    /* triangles of the same mesh; static or kinematic bodies only */
 } WPE_ColliderShape;
 
 typedef struct WPE_Collider {
     WPE_ColliderShape shape;
     WPE_Vec3 size;
-    WPE_Vec3 offset;        /* Local-space center offset. */
-    const WPE_Model* model; /* CONVEX / MESH: borrowed; only read when the shape is (re)built. */
+    WPE_Vec3 offset;       /* Local-space center offset. */
+    WPE_AssetHandle model; /* CONVEX / MESH: a WPE_ASSET_MODEL; the component holds a reference. */
     uint32_t mesh;
     float density;
     float friction;
@@ -82,9 +83,10 @@ typedef struct WPE_Collider {
 
     /* Private (managed by the physics world). */
     uint64_t wpe__shape;
-    uint64_t wpe__static_body; /* Implicit static body when the entity has no rigid body. */
-    void* wpe__mesh;           /* Owned collision mesh data (WPE_COLLIDER_MESH). */
-    uint8_t wpe__state;        /* Pending, created or failed (not retried until wpe_physics_refresh()). */
+    uint64_t wpe__static_body;      /* Implicit static body when the entity has no rigid body. */
+    void* wpe__mesh;                /* Owned collision mesh data (WPE_COLLIDER_MESH). */
+    WPE_AssetHandle wpe__model_ref; /* Model reference held by the component. */
+    uint8_t wpe__state; /* Pending, created or failed (not retried until wpe_physics_refresh()). */
 } WPE_Collider;
 
 typedef enum WPE_PhysicsEventType {
@@ -108,9 +110,10 @@ typedef struct WPE_RaycastHit {
 } WPE_RaycastHit;
 
 typedef struct WPE_PhysicsDesc {
-    WPE_Ecs* ecs;      /* Borrowed; scene components must be registered. */
-    WPE_Vec3 gravity;  /* Meters per second squared, e.g. {0, -9.81f, 0}. */
-    uint32_t substeps; /* Solver sub-steps per step (0 = 4). */
+    WPE_Ecs* ecs;             /* Borrowed; scene components must be registered. */
+    WPE_AssetManager* assets; /* Optional, borrowed: needed for convex and mesh colliders. */
+    WPE_Vec3 gravity;         /* Meters per second squared, e.g. {0, -9.81f, 0}. */
+    uint32_t substeps;        /* Solver sub-steps per step (0 = 4). */
 } WPE_PhysicsDesc;
 
 typedef struct WPE_PhysicsStats {

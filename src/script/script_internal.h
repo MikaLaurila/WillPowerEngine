@@ -26,7 +26,7 @@
 #define WPE__SCRIPT_FAILED 0x2u
 
 typedef struct wpe__ScriptFile {
-    char path[WPE__SCRIPT_PATH_MAX]; /* Relative to the asset root. */
+    char path[WPE__SCRIPT_PATH_MAX]; /* Asset path. */
     int64_t modified_time;
     int class_ref;  /* Registry ref: the table returned by the chunk. */
     int meta_ref;   /* Registry ref: shared instance metatable {__index = class}. */
@@ -36,17 +36,21 @@ typedef struct wpe__ScriptFile {
 
 typedef struct wpe__Prefab {
     char name[WPE__SCRIPT_PREFAB_NAME_MAX];
-    const WPE_Model* model;
-    WPE_Model* owned; /* Non-NULL when the host loaded the model and must free it. */
+    WPE_AssetHandle model; /* The host holds a reference. */
 } wpe__Prefab;
+
+/* Sounds used by scripts stay loaded (one reference each) until the host is destroyed. */
+typedef struct wpe__CachedSound {
+    char path[WPE__SCRIPT_PATH_MAX];
+    WPE_AssetHandle sound;
+} wpe__CachedSound;
 
 struct WPE_ScriptHost {
     WPE_Ecs* ecs;
+    WPE_AssetManager* assets;
     WPE_Physics* physics; /* Optional. */
+    WPE_Audio* audio;     /* Optional. */
     lua_State* L;
-    char* asset_root;
-    WPE_JobSystem* jobs;
-    uint32_t max_texture_size;
 
     size_t memory_limit;
     size_t memory_used;
@@ -63,6 +67,10 @@ struct WPE_ScriptHost {
     uint32_t prefab_count;
     uint32_t prefab_capacity;
 
+    wpe__CachedSound* sounds;
+    uint32_t sound_count;
+    uint32_t sound_capacity;
+
     WPE_Entity* pending_destroy; /* Deferred wpe.destroy() targets. */
     uint32_t pending_count;
     uint32_t pending_capacity;
@@ -77,12 +85,12 @@ struct WPE_ScriptHost {
 
 /* Host services used by the bindings. */
 WPE_ScriptHost* wpe__script_host_from(lua_State* L);
-bool wpe__script_path_is_safe(const char* path);
-/* Builds asset_root + "/" + path into `out` (size `capacity`); false if it does not fit. */
-bool wpe__script_full_path(const WPE_ScriptHost* host, const char* path, char* out, size_t capacity);
 WPE_Result wpe__script_queue_destroy(WPE_ScriptHost* host, WPE_Entity entity);
-/* Finds or loads a prefab by registered name or asset-relative model path; NULL on failure (logged). */
-const WPE_Model* wpe__script_find_prefab(WPE_ScriptHost* host, const char* name_or_path);
+/* Finds or loads a prefab by registered name or model asset path; WPE_ASSET_NONE on failure (logged).
+ * The prefab table keeps the returned model loaded. */
+WPE_AssetHandle wpe__script_find_prefab(WPE_ScriptHost* host, const char* name_or_path);
+/* Finds or loads a sound by asset path (kept loaded by the host); WPE_ASSET_NONE on failure (logged). */
+WPE_AssetHandle wpe__script_find_sound(WPE_ScriptHost* host, const char* path);
 
 /* Installs the `wpe` library and `print` into the VM's globals (before sandboxing). */
 void wpe__script_api_register(lua_State* L);
