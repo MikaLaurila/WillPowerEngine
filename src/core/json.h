@@ -150,7 +150,9 @@ void wpe_json_write_array_begin(WPE_JsonWriter* writer, bool inline_items);
 void wpe_json_write_array_end(WPE_JsonWriter* writer);
 void wpe_json_write_key(WPE_JsonWriter* writer, const char* key);
 void wpe_json_write_string(WPE_JsonWriter* writer, const char* value);
-void wpe_json_write_number(WPE_JsonWriter* writer, double value); /* "%.9g": exact for floats. */
+/* A float (the value is rounded to float precision): the shortest text that reads back as the same float,
+ * whole numbers as integers ("0.06", "2000"), so files stay readable and rewriting reproduces them. */
+void wpe_json_write_number(WPE_JsonWriter* writer, double value);
 void wpe_json_write_double(WPE_JsonWriter* writer, double value); /* "%.17g": exact for doubles. */
 /* Rounded to `significant_digits` (1..17), for derived values that should stay readable ("60" degrees
  * rather than "59.9999986"); reading and rewriting such a value reproduces the same text. */

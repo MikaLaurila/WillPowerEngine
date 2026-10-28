@@ -880,8 +880,34 @@ void wpe_json_write_value(WPE_JsonWriter* writer, const WPE_JsonValue* value) {
     }
 }
 
+/* The fewest significant digits that read back as the same float as `value` (0.06f is "0.06", not
+ * "0.0599999987"); 0 for whole numbers that print exactly with "%.0f" ("2000", not "2e+03"). */
+static int wpe__shortest_float_precision(double value) {
+    const float f = (float)value;
+    if (f == floorf(f) && fabsf(f) < 1e15f) return 0;
+    for (int precision = 1; precision < 9; ++precision) {
+        char buffer[40];
+        snprintf(buffer, sizeof buffer, "%.*g", precision, (double)f);
+        if (strtof(buffer, NULL) == f) return precision;
+    }
+    return 9;
+}
+
 void wpe_json_write_number(WPE_JsonWriter* writer, double value) {
-    if (writer) wpe__write_formatted_number(writer, value, 9);
+    if (!writer) return;
+    if (!isfinite(value)) {
+        wpe__writer_misuse(writer, "non-finite number");
+        return;
+    }
+    const int precision = wpe__shortest_float_precision(value);
+    if (precision > 0) {
+        wpe__write_formatted_number(writer, (double)(float)value, precision);
+        return;
+    }
+    if (!wpe__begin_value(writer)) return;
+    char buffer[40];
+    snprintf(buffer, sizeof buffer, "%.0f", (double)(float)value);
+    wpe__append_str(writer, buffer);
 }
 
 void wpe_json_write_double(WPE_JsonWriter* writer, double value) {

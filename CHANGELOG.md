@@ -62,6 +62,8 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: the 2D and 3D views (camera, UI, a scene without a camera, play mode), view settings.
 
 ### Changed
+- Scene, prefab and other engine JSON files write floats in their shortest exact form: a value typed
+  as `0.06` is saved as `0.06` rather than `0.0599999987`, and whole numbers as integers.
 - The editor's ImGui backend functions are renamed `wpe_ui_backend_*` (the `wpe_ui_` prefix now
   belongs to the UI module).
 

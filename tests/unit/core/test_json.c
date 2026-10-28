@@ -152,7 +152,7 @@ static void test_json_writer_pretty_prints(void) {
     WPE_TEST_ASSERT_OK(wpe_json_writer_finish(w, &text, &size));
     WPE_TEST_ASSERT_EQ_STR("{\n"
                            "  \"name\": \"q\\\"\\n\\u0001\xc3\xa4\",\n"
-                           "  \"v\": [1, 0.100000001, -3],\n"
+                           "  \"v\": [1, 0.1, -3],\n"
                            "  \"list\": [\n"
                            "    true,\n"
                            "    null,\n"
@@ -205,6 +205,18 @@ static void test_json_writer_round_trips_floats(void) {
     }
     WPE_TEST_ASSERT(wpe_json_number(wpe_json_at(wpe_json_root(doc), 7), 0.0) == precise);
     wpe_json_free(doc);
+    wpe_json_writer_destroy(w);
+
+    /* Floats print as typed: the shortest text that reads back as the same float, whole numbers plainly. */
+    WPE_TEST_ASSERT_OK(wpe_json_writer_create(&w));
+    wpe_json_writer_set_compact(w, true);
+    const float readable[] = {0.06f, -9.81f, 0.0015f, 2000.0f, 1e6f, 0.85f, 123.456f, 1e-5f};
+    wpe_json_write_array_begin(w, true);
+    for (size_t i = 0; i < sizeof readable / sizeof readable[0]; ++i)
+        wpe_json_write_number(w, readable[i]);
+    wpe_json_write_array_end(w);
+    WPE_TEST_ASSERT_OK(wpe_json_writer_finish(w, &text, NULL));
+    WPE_TEST_ASSERT(strstr(text, "[0.06, -9.81, 0.0015, 2000, 1000000, 0.85, 123.456, 1e-05]") != NULL);
     wpe_json_writer_destroy(w);
 }
 
