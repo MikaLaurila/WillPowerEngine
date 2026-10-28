@@ -55,6 +55,26 @@ static void wpe__animator_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* compo
     animator->node_count = 0;
 }
 
+static void wpe__billboard_on_add(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
+    (void)ecs;
+    WPE_Billboard* billboard = component;
+    billboard->texture = wpe_asset_image(user_data, billboard->image);
+    if (billboard->texture) {
+        wpe_asset_retain(user_data, billboard->image);
+    } else if (billboard->image != WPE_ASSET_NONE) {
+        wpe_log_error("the billboard of entity 0x%08x references 0x%08x, which is not a loaded image", entity,
+                      billboard->image);
+    }
+}
+
+static void wpe__billboard_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
+    (void)ecs;
+    (void)entity;
+    WPE_Billboard* billboard = component;
+    if (billboard->texture) wpe_asset_release(user_data, billboard->image);
+    billboard->texture = NULL;
+}
+
 WPE_Camera wpe_camera_default(void) {
     return (WPE_Camera){.fov_y = WPE_PI / 3.0f, .near_z = 0.1f, .far_z = 500.0f, .ortho_height = 10.0f};
 }
@@ -89,6 +109,13 @@ WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs, WPE_AssetManager* asse
           .alignment = alignof(WPE_Animator),
           .on_add = wpe__animator_on_add,
           .on_remove = wpe__animator_on_remove,
+          .hook_user_data = assets}},
+        {WPE_COMP_BILLBOARD,
+         {.name = "Billboard",
+          .size = sizeof(WPE_Billboard),
+          .alignment = alignof(WPE_Billboard),
+          .on_add = wpe__billboard_on_add,
+          .on_remove = wpe__billboard_on_remove,
           .hook_user_data = assets}},
     };
     for (size_t i = 0; i < sizeof components / sizeof components[0]; ++i) {

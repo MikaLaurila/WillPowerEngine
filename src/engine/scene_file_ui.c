@@ -1,19 +1,27 @@
 /*
- * Scene files: the UI components ("ui", "sprite", "text", "button"; format in docs/scenes.md).
+ * Scene files: the sprite-like components: the UI ("ui", "sprite", "text", "button") and 3D sprites
+ * ("billboard"); format in docs/scenes.md.
  */
 #define WPE_LOG_MODULE "scene"
 #include <string.h>
 
 #include "engine/scene_file_internal.h"
+#include "graphics/graphics.h"
 #include "ui/ui.h"
 
 static const char* const wpe__align_x[] = {"left", "center", "right"};
 static const char* const wpe__align_y[] = {"top", "middle", "bottom"};
+static const char* const wpe__billboard_modes[] = {"fixed", "axis_aligned", "axis_aligned_y",
+                                                   "screen_aligned"};
+static const char* const wpe__billboard_blends[] = {"cutout", "alpha", "additive"};
 
 #define WPE__COUNT(array) ((uint32_t)(sizeof(array) / sizeof((array)[0])))
+#define WPE__DEGREES_PER_RADIAN (180.0 / 3.14159265358979323846)
 
 static_assert(WPE__COUNT(wpe__align_x) == WPE_UI_ALIGN_END + 1, "horizontal alignment names");
 static_assert(WPE__COUNT(wpe__align_y) == WPE_UI_ALIGN_END + 1, "vertical alignment names");
+static_assert(WPE__COUNT(wpe__billboard_modes) == WPE_BILLBOARD_SCREEN_ALIGNED + 1, "billboard mode names");
+static_assert(WPE__COUNT(wpe__billboard_blends) == WPE_BILLBOARD_ADDITIVE + 1, "billboard blend names");
 
 /* ---- Saving --------------------------------------------------------------------------------------- */
 
@@ -87,6 +95,43 @@ void wpe__save_ui_components(wpe__Saver* s, WPE_Entity e) {
     }
 }
 
+void wpe__save_billboard(wpe__Saver* s, WPE_Entity e) {
+    const WPE_Billboard* b = wpe_ecs_get_component(s->context->ecs, e, WPE_COMP_BILLBOARD);
+    if (!b) return;
+    WPE_JsonWriter* w = s->w;
+    wpe_json_write_key(w, "billboard");
+    wpe_json_write_object_begin(w);
+    wpe__write_asset(s, "image", b->image);
+    wpe__write_floats(w, "size", b->size.v, 2);
+    wpe__write_floats(w, "pivot", b->pivot.v, 2);
+    wpe_json_write_key(w, "rotation");
+    wpe_json_write_rounded(w, (double)b->rotation * WPE__DEGREES_PER_RADIAN, 6);
+    wpe__write_floats(w, "color", b->color.v, 4);
+    wpe__write_rect(w, "source", b->source);
+    const struct {
+        const char* key;
+        uint32_t value;
+    } counts[] = {
+        {"columns", b->columns}, {"rows", b->rows}, {"frame_count", b->frame_count}, {"frame", b->frame}};
+    for (size_t i = 0; i < sizeof counts / sizeof counts[0]; ++i) {
+        wpe_json_write_key(w, counts[i].key);
+        wpe_json_write_integer(w, counts[i].value);
+    }
+    wpe_json_write_key(w, "fps");
+    wpe_json_write_number(w, b->fps);
+    wpe_json_write_key(w, "loop");
+    wpe_json_write_bool(w, b->loop);
+    wpe_json_write_key(w, "mode");
+    wpe_json_write_string(w, wpe__billboard_modes[b->mode]);
+    wpe_json_write_key(w, "blend");
+    wpe_json_write_string(w, wpe__billboard_blends[b->blend]);
+    wpe_json_write_key(w, "lit");
+    wpe_json_write_bool(w, b->lit);
+    wpe_json_write_key(w, "visible");
+    wpe_json_write_bool(w, b->visible);
+    wpe_json_write_object_end(w);
+}
+
 /* ---- Loading -------------------------------------------------------------------------------------- */
 
 /* Optional array of `count` numbers in [min, max]. */
@@ -155,6 +200,48 @@ bool wpe__load_text(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     if (!wpe__read_asset(l, v, "font", WPE_ASSET_FONT, &text.font)) return false;
     const bool ok = wpe__add(l, v, e, WPE_COMP_TEXT, &text, "text");
     wpe_asset_release(l->context->assets, text.font);
+    return ok;
+}
+
+bool wpe__load_billboard(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
+    WPE_Billboard b = wpe_billboard_default();
+    float source[4] = {0};
+    uint32_t mode = b.mode, blend = b.blend;
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "billboard", "image", "size", "pivot", "rotation", "color",
+                                "source", "columns", "rows", "frame_count", "frame", "fps", "loop", "mode",
+                                "blend", "lit", "visible") ||
+        !wpe__read_ranged(l, v, "size", 2, 0.0, 1e6, b.size.v) ||
+        !wpe__read_ranged(l, v, "pivot", 2, -10.0, 10.0, b.pivot.v) ||
+        !wpe__json_read_degrees(&l->r, v, "rotation", -36000.0, 36000.0, &b.rotation) ||
+        !wpe__read_ranged(l, v, "color", 4, 0.0, 1.0, b.color.v) ||
+        !wpe__read_ranged(l, v, "source", 4, 0.0, WPE__PIXELS, source) ||
+        !wpe__json_read_uint(&l->r, v, "columns", 1, 256, &b.columns) ||
+        !wpe__json_read_uint(&l->r, v, "rows", 1, 256, &b.rows) ||
+        !wpe__json_read_uint(&l->r, v, "frame_count", 0, 65536, &b.frame_count) ||
+        !wpe__json_read_uint(&l->r, v, "frame", 0, 65535, &b.frame) ||
+        !wpe__json_read_float(&l->r, v, "fps", 0.0, 1000.0, &b.fps) ||
+        !wpe__json_read_bool(&l->r, v, "loop", &b.loop) ||
+        !wpe__json_read_enum(&l->r, v, "mode", wpe__billboard_modes, WPE__COUNT(wpe__billboard_modes),
+                             &mode) ||
+        !wpe__json_read_enum(&l->r, v, "blend", wpe__billboard_blends, WPE__COUNT(wpe__billboard_blends),
+                             &blend) ||
+        !wpe__json_read_bool(&l->r, v, "lit", &b.lit) ||
+        !wpe__json_read_bool(&l->r, v, "visible", &b.visible))
+        return false;
+    const uint32_t grid = b.columns * b.rows;
+    if (b.frame_count > grid)
+        return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE,
+                              "\"frame_count\" (%u) is more than the %u x %u grid holds", b.frame_count,
+                              b.columns, b.rows);
+    if (b.frame >= (b.frame_count ? b.frame_count : grid))
+        return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE, "\"frame\" %u is past the last frame",
+                              b.frame);
+    b.source = (WPE_Rect){source[0], source[1], source[2], source[3]};
+    b.mode = (WPE_BillboardMode)mode;
+    b.blend = (WPE_BillboardBlend)blend;
+    if (!wpe__read_asset(l, v, "image", WPE_ASSET_IMAGE, &b.image)) return false;
+    const bool ok = wpe__add(l, v, e, WPE_COMP_BILLBOARD, &b, "billboard");
+    wpe_asset_release(l->context->assets, b.image); /* The component holds its own reference. */
     return ok;
 }
 

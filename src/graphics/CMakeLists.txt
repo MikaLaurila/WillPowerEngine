@@ -1,5 +1,6 @@
 add_library(wpe_graphics STATIC
     animation.c
+    billboard.c
     components.c
     debug_lines.c
     draw2d.c
@@ -13,5 +14,5 @@ wpe_configure_target(wpe_graphics)
 
 # Shaders run per vertex/pixel; keep them optimized in Debug builds as well.
 if(NOT MSVC)
-    set_source_files_properties(material_shader.c draw2d.c postfx.c PROPERTIES COMPILE_OPTIONS "-O2")
+    set_source_files_properties(material_shader.c billboard.c draw2d.c postfx.c PROPERTIES COMPILE_OPTIONS "-O2")
 endif()

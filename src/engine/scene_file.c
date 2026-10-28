@@ -360,6 +360,7 @@ void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
         wpe__write_bool(w, "cast_shadows", light->cast_shadows);
         wpe_json_write_object_end(w);
     }
+    wpe__save_billboard(s, e);
     const WPE_Animator* animator = wpe_ecs_get_component(ecs, e, WPE_COMP_ANIMATOR);
     if (animator) {
         wpe_json_write_key(w, "animator");
@@ -1236,9 +1237,9 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
     for (uint32_t i = 0; i < count; ++i) {
         const WPE_JsonValue* v = wpe_json_at(entities, i);
         if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "entity", "id", "name", "parent", "transform", "instance",
-                                    "mesh", "camera", "light", "animator", "rigidbody", "collider",
-                                    "audio_source", "ui", "sprite", "text", "button", "script", "components",
-                                    "prefab"))
+                                    "mesh", "camera", "light", "billboard", "animator", "rigidbody",
+                                    "collider", "audio_source", "ui", "sprite", "text", "button", "script",
+                                    "components", "prefab"))
             return false;
         uint32_t id = 0;
         if (!wpe__read_file_id(l, wpe_json_get(v, "id"), v, &id))
@@ -1300,6 +1301,7 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
         {"mesh", wpe__load_mesh},
         {"camera", wpe__load_camera},
         {"light", wpe__load_light},
+        {"billboard", wpe__load_billboard},
         {"animator", wpe__load_animator},
         {"rigidbody", wpe__load_rigidbody},
         {"collider", wpe__load_collider},
@@ -1451,6 +1453,7 @@ static const struct {
     {"mesh", WPE_COMP_MESH, wpe__load_mesh},
     {"camera", WPE_COMP_CAMERA, wpe__load_camera},
     {"light", WPE_COMP_LIGHT, wpe__load_light},
+    {"billboard", WPE_COMP_BILLBOARD, wpe__load_billboard},
     {"animator", WPE_COMP_ANIMATOR, wpe__load_animator},
     {"rigidbody", WPE_COMP_PHYSICS_RIGIDBODY, wpe__load_rigidbody},
     {"collider", WPE_COMP_PHYSICS_COLLIDER, wpe__load_collider},
@@ -1569,7 +1572,7 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
     wpe__Loader l = wpe__edit_loader(context, "create_entity");
     /* "id" is accepted and ignored, so a saved entity (wpe_scene_save_entity) can be fed back as a copy. */
     if (!WPE__JSON_CHECK_OBJECT(&l.r, description, "entity", "id", "name", "parent", "transform", "instance",
-                                "mesh", "camera", "light", "animator", "rigidbody", "collider",
+                                "mesh", "camera", "light", "billboard", "animator", "rigidbody", "collider",
                                 "audio_source", "ui", "sprite", "text", "button", "script", "components",
                                 "prefab"))
         return l.r.result;
@@ -1584,9 +1587,9 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
         if (e == WPE_ENTITY_NULL) return WPE_RESULT_ERROR_CAPACITY;
     }
     /* The scene-file order: identity first, then components, scripts last. */
-    static const char* const order[] = {"name",         "transform", "parent",   "instance",  "mesh",
-                                        "camera",       "light",     "animator", "rigidbody", "collider",
-                                        "audio_source", "ui",        "sprite",   "text",      "button"};
+    static const char* const order[] = {
+        "name",     "transform", "parent",   "instance",     "mesh", "camera", "light", "billboard",
+        "animator", "rigidbody", "collider", "audio_source", "ui",   "sprite", "text",  "button"};
     bool ok = true;
     for (size_t i = 0; ok && i < sizeof order / sizeof order[0]; ++i) {
         const WPE_JsonValue* value = wpe_json_get(description, order[i]);

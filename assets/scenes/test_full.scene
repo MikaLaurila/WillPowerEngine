@@ -236,6 +236,37 @@
       "parent": 32,
       "ui": {},
       "text": {"text": "Press", "color": [0.1, 0.1, 0.1, 1], "scale": 1, "align": "center", "valign": "middle"}
+    },
+    {
+      "id": 34,
+      "name": "tree",
+      "transform": {"position": [-6, 0, -5]},
+      "billboard": {"image": "sprites/tree.png", "size": [2, 3], "pivot": [0.5, 0], "mode": "axis_aligned_y", "lit": true}
+    },
+    {
+      "id": 35,
+      "name": "leaning tree",
+      "transform": {"position": [-8, 0, -3], "euler": [0, 0, 20]},
+      "billboard": {"image": "sprites/tree.png", "size": [1.5, 2.25], "pivot": [0.5, 0], "mode": "axis_aligned"}
+    },
+    {
+      "id": 36,
+      "name": "glow",
+      "transform": {"position": [0, 2, -4]},
+      "billboard": {"image": "sprites/glow.png", "size": [1.5, 1.5], "color": [1, 0.8, 0.4, 1], "blend": "additive"}
+    },
+    {
+      "id": 37,
+      "name": "coin",
+      "transform": {"position": [3, 1.5, -3]},
+      "billboard": {"image": "sprites/coin.png", "size": [0.8, 0.8], "columns": 4, "fps": 8, "blend": "alpha",
+                    "mode": "axis_aligned_y"}
+    },
+    {
+      "id": 38,
+      "name": "sign",
+      "transform": {"position": [5, 1, -6], "euler": [0, -30, 0]},
+      "billboard": {"size": [2, 1], "color": [0.2, 0.6, 1, 0.6], "mode": "fixed", "blend": "alpha", "rotation": 10}
     }
   ]
 }

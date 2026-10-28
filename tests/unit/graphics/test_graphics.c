@@ -247,6 +247,190 @@ static WPE_Entity spawn_camera(WPE_Ecs* ecs, WPE_Vec3 position, WPE_Quat rotatio
     return camera;
 }
 
+/* ---- Billboards ------------------------------------------------------------------------------------- */
+
+static WPE_Mat4 translation(WPE_Vec3 v) {
+    return wpe_mat4_from_trs(v, wpe_quat_identity(), wpe_vec3(1, 1, 1));
+}
+
+static void assert_vec3(WPE_Vec3 expected, WPE_Vec3 actual) {
+    for (int i = 0; i < 3; ++i)
+        WPE_TEST_ASSERT_NEAR(expected.v[i], actual.v[i], 1e-5);
+}
+
+static void test_graphics_billboard_corners(void) {
+    const WPE_Mat4 world = translation(wpe_vec3(1, 2, 0));
+    const WPE_Mat4 camera = translation(wpe_vec3(1, 2, 5)); /* Looking down -Z at it. */
+    WPE_Billboard b = wpe_billboard_default();
+    WPE_Vec3 c[4], n;
+    /* Screen-aligned, centered: counter-clockwise from the bottom-left, facing the camera. */
+    WPE_TEST_ASSERT(wpe_billboard_corners(&b, &world, &camera, c, &n));
+    assert_vec3(wpe_vec3(0.5f, 1.5f, 0), c[0]);
+    assert_vec3(wpe_vec3(1.5f, 1.5f, 0), c[1]);
+    assert_vec3(wpe_vec3(1.5f, 2.5f, 0), c[2]);
+    assert_vec3(wpe_vec3(0.5f, 2.5f, 0), c[3]);
+    assert_vec3(wpe_vec3(0, 0, 1), n);
+    /* The pivot is the point at the entity: (0.5, 0) stands the quad on it. Size scales with the entity. */
+    b.pivot = (WPE_Vec2){.x = 0.5f, .y = 0.0f};
+    b.size = (WPE_Vec2){.x = 2.0f, .y = 1.0f};
+    const WPE_Mat4 scaled =
+        wpe_mat4_mul(&world, &(WPE_Mat4){.m = {{1, 0, 0, 0}, {0, 3, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}}});
+    WPE_TEST_ASSERT(wpe_billboard_corners(&b, &scaled, &camera, c, &n));
+    assert_vec3(wpe_vec3(0, 2, 0), c[0]);
+    assert_vec3(wpe_vec3(2, 5, 0), c[2]);
+
+    /* Upright about world Y: seen from +X (and from above) it stays vertical and faces +X. */
+    b = wpe_billboard_default();
+    b.mode = WPE_BILLBOARD_AXIS_ALIGNED_Y;
+    const WPE_Mat4 high = translation(wpe_vec3(6, 12, 0));
+    WPE_TEST_ASSERT(wpe_billboard_corners(&b, &world, &high, c, &n));
+    assert_vec3(wpe_vec3(1, 1.5f, 0.5f), c[0]); /* Its right points -Z for a viewer at +X. */
+    assert_vec3(wpe_vec3(1, 2.5f, -0.5f), c[2]);
+    assert_vec3(wpe_vec3(1, 0, 0), n);
+    /* Screen-aligned instead follows the camera's own axes. */
+    b.mode = WPE_BILLBOARD_SCREEN_ALIGNED;
+    const WPE_Mat4 turned =
+        wpe_mat4_mul(&high, &(WPE_Mat4){.m = {{0, 0, -1, 0}, {0, 1, 0, 0}, {1, 0, 0, 0}, {0, 0, 0, 1}}});
+    WPE_TEST_ASSERT(wpe_billboard_corners(&b, &world, &turned, c, &n));
+    assert_vec3(wpe_vec3(1, 1.5f, 0.5f), c[0]);
+    /* About the entity's own Y: an entity tilted 90 degrees about Z has its Y along -X. */
+    b.mode = WPE_BILLBOARD_AXIS_ALIGNED;
+    const WPE_Mat4 tilted =
+        wpe_mat4_mul(&world, &(WPE_Mat4){.m = {{0, 1, 0, 0}, {-1, 0, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}}});
+    WPE_TEST_ASSERT(wpe_billboard_corners(&b, &tilted, &camera, c, &n));
+    assert_vec3(wpe_vec3(1.5f, 1.5f, 0), c[0]); /* "Up" is -X, "right" is -Y from the camera at +Z. */
+    assert_vec3(wpe_vec3(0.5f, 2.5f, 0), c[2]);
+    /* Fixed: the entity's XY plane, whatever the camera does; rotation turns it within its plane. */
+    b.mode = WPE_BILLBOARD_FIXED;
+    WPE_TEST_ASSERT(wpe_billboard_corners(&b, &world, &high, c, &n));
+    assert_vec3(wpe_vec3(0.5f, 1.5f, 0), c[0]);
+    assert_vec3(wpe_vec3(0, 0, 1), n);
+    b.rotation = WPE_PI * 0.5f;
+    WPE_TEST_ASSERT(wpe_billboard_corners(&b, &world, &high, c, &n));
+    assert_vec3(wpe_vec3(1.5f, 1.5f, 0), c[0]); /* A quarter turn counter-clockwise. */
+    /* Empty quads have no corners. */
+    b.size.x = 0.0f;
+    WPE_TEST_ASSERT(!wpe_billboard_corners(&b, &world, &camera, c, &n));
+}
+
+static void test_graphics_billboard_animation(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_Billboard b = wpe_billboard_default();
+    b.columns = 4;
+    b.fps = 10.0f;
+    const WPE_Entity looping = wpe_ecs_spawn(ecs);
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, looping, WPE_COMP_BILLBOARD, &b, NULL));
+    b.loop = false;
+    b.frame_count = 3;
+    const WPE_Entity once = wpe_ecs_spawn(ecs);
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, once, WPE_COMP_BILLBOARD, &b, NULL));
+    b.fps = 0.0f;
+    const WPE_Entity still = wpe_ecs_spawn(ecs);
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, still, WPE_COMP_BILLBOARD, &b, NULL));
+
+    wpe_billboard_update(ecs, 0.25f); /* 2.5 frames: two whole frames, half of the next one kept. */
+    const WPE_Billboard* l = wpe_ecs_get_component(ecs, looping, WPE_COMP_BILLBOARD);
+    WPE_TEST_ASSERT_EQ_UINT(2, l->frame);
+    WPE_TEST_ASSERT_NEAR(0.05, l->frame_time, 1e-5);
+    wpe_billboard_update(ecs, 0.2f); /* 4 and a half frames in all: the loop wraps to frame 0. */
+    WPE_TEST_ASSERT_EQ_UINT(
+        0, ((const WPE_Billboard*)wpe_ecs_get_component(ecs, looping, WPE_COMP_BILLBOARD))->frame);
+    /* Without looping it stops on its last frame (frame_count 3 of the 4 cells). */
+    WPE_TEST_ASSERT_EQ_UINT(
+        2, ((const WPE_Billboard*)wpe_ecs_get_component(ecs, once, WPE_COMP_BILLBOARD))->frame);
+    WPE_TEST_ASSERT_EQ_UINT(
+        0, ((const WPE_Billboard*)wpe_ecs_get_component(ecs, still, WPE_COMP_BILLBOARD))->frame);
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
+static uint32_t count_color(const WPE_Framebuffer* fb, WPE_Color color);
+
+/* Renders the world from `camera` into a black frame; returns the frame. */
+static const WPE_Framebuffer* render_scene(WPE_Renderer* renderer, WPE_SceneRenderer* sr, WPE_Ecs* ecs,
+                                           WPE_Entity camera, WPE_SceneRenderStats* stats) {
+    WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
+    WPE_TEST_ASSERT_OK(wpe_renderer_begin_frame(
+        renderer,
+        &(WPE_ClearDesc){.clear_color = true, .color = 0xFF000000u, .clear_depth = true, .depth = 1.0f}));
+    WPE_TEST_ASSERT_OK(wpe_scene_render(sr, renderer, ecs, camera, NULL, stats));
+    WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
+    return wpe_renderer_framebuffer(renderer);
+}
+
+static void test_graphics_billboard_draws_frames_and_blends(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    /* Two frames side by side: opaque red, then fully transparent. */
+    const uint32_t texels[2] = {0xFFFF0000u, 0x00000000u};
+    WPE_Texture* texture = NULL;
+    WPE_TEST_ASSERT_OK(
+        wpe_texture_create(&(WPE_TextureDesc){.width = 2, .height = 1, .texels = texels}, &texture));
+    WPE_AssetHandle image = WPE_ASSET_NONE;
+    WPE_TEST_ASSERT_OK(wpe_asset_add(t.assets, WPE_ASSET_IMAGE, "test/frames", texture, &image));
+    WPE_Ecs* ecs = make_world(t.assets);
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 0, 5), wpe_quat_identity());
+    WPE_Billboard settings = wpe_billboard_default();
+    settings.image = image;
+    settings.columns = 2;
+    settings.size = (WPE_Vec2){.x = 2, .y = 2};
+    const WPE_Entity sprite = wpe_ecs_spawn(ecs);
+    const WPE_Transform at = wpe_transform_identity();
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, sprite, WPE_COMP_TRANSFORM, &at, NULL));
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, sprite, WPE_COMP_BILLBOARD, &settings, NULL));
+    wpe_asset_release(t.assets, image); /* The billboard holds its own reference. */
+    WPE_TEST_ASSERT(wpe_asset_is_valid(t.assets, image));
+
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_SceneRenderStats stats;
+
+    /* Frame 0, unlit cutout: exactly the image's red, in the middle of the view. */
+    const WPE_Framebuffer* fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(1, stats.billboards_submitted);
+    const uint32_t red = count_color(fb, 0xFFFF0000u);
+    WPE_TEST_ASSERT(red > 100);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFF0000u, fb->color[24 * 64 + 32]);
+    /* Frame 1 is transparent: cut out entirely. */
+    WPE_Billboard* live = wpe_ecs_get_component(ecs, sprite, WPE_COMP_BILLBOARD);
+    live->frame = 1;
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(0, count_color(fb, 0xFFFF0000u));
+    /* Additive: half the tint added to the black background over the same area. */
+    live = wpe_ecs_get_component(ecs, sprite, WPE_COMP_BILLBOARD);
+    live->frame = 0;
+    live->blend = WPE_BILLBOARD_ADDITIVE;
+    live->color = wpe_vec4(1, 1, 1, 0.5f);
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    const WPE_Color half = fb->color[24 * 64 + 32];
+    WPE_TEST_ASSERT(((half >> 16) & 0xFF) >= 126 && ((half >> 16) & 0xFF) <= 129 && (half & 0xFFFF) == 0);
+    /* Lit: the default sun (the world has no lights) brightens it above ambient, never above the image. */
+    live = wpe_ecs_get_component(ecs, sprite, WPE_COMP_BILLBOARD);
+    live->blend = WPE_BILLBOARD_CUTOUT;
+    live->color = wpe_vec4(1, 1, 1, 1);
+    live->lit = true;
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    const uint32_t lit_red = (fb->color[24 * 64 + 32] >> 16) & 0xFF;
+    WPE_TEST_ASSERT(lit_red > 64 && lit_red < 255);
+    /* Behind the camera: culled. Hidden: skipped. */
+    live = wpe_ecs_get_component(ecs, sprite, WPE_COMP_BILLBOARD);
+    live->lit = false;
+    ((WPE_Transform*)wpe_ecs_get_component(ecs, sprite, WPE_COMP_TRANSFORM))->position = wpe_vec3(0, 0, 10);
+    render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT(stats.billboards_submitted == 0 && stats.billboards_culled == 1);
+    live->visible = false;
+    render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT(stats.billboards_submitted == 0 && stats.billboards_culled == 0);
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    WPE_TEST_ASSERT(!wpe_asset_is_valid(t.assets, image));
+    wpe_test_assets_destroy(&t);
+}
+
 static void test_graphics_scene_render_frustum_culling(void) {
     WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 32);
     const WPE_AssetHandle model = wpe_test_load_model(t.assets, "meshes/damaged_helmet.glb");
@@ -438,14 +622,14 @@ static void test_graphics_debug_lines(void) {
     wpe_renderer_destroy(renderer);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_graphics_sample_linear_step_and_clamp),
-              WPE_TEST_CASE(test_graphics_sample_rotation_slerps_shortest_path),
-              WPE_TEST_CASE(test_graphics_sample_cubic_spline),
-              WPE_TEST_CASE(test_graphics_instantiate_rigged_figure),
-              WPE_TEST_CASE(test_graphics_instantiate_validates_and_cleans_up),
-              WPE_TEST_CASE(test_graphics_material_vertex_shader_skinning),
-              WPE_TEST_CASE(test_graphics_shininess_range),
-              WPE_TEST_CASE(test_graphics_scene_render_frustum_culling),
-              WPE_TEST_CASE(test_graphics_camera_matrices_validation),
-              WPE_TEST_CASE(test_graphics_draw2d_text_is_pixel_exact),
-              WPE_TEST_CASE(test_graphics_debug_lines))
+WPE_TEST_MAIN(
+    WPE_TEST_CASE(test_graphics_sample_linear_step_and_clamp),
+    WPE_TEST_CASE(test_graphics_sample_rotation_slerps_shortest_path),
+    WPE_TEST_CASE(test_graphics_sample_cubic_spline), WPE_TEST_CASE(test_graphics_instantiate_rigged_figure),
+    WPE_TEST_CASE(test_graphics_instantiate_validates_and_cleans_up),
+    WPE_TEST_CASE(test_graphics_material_vertex_shader_skinning),
+    WPE_TEST_CASE(test_graphics_shininess_range), WPE_TEST_CASE(test_graphics_scene_render_frustum_culling),
+    WPE_TEST_CASE(test_graphics_billboard_corners), WPE_TEST_CASE(test_graphics_billboard_animation),
+    WPE_TEST_CASE(test_graphics_billboard_draws_frames_and_blends),
+    WPE_TEST_CASE(test_graphics_camera_matrices_validation),
+    WPE_TEST_CASE(test_graphics_draw2d_text_is_pixel_exact), WPE_TEST_CASE(test_graphics_debug_lines))

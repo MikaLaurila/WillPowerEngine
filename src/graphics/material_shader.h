@@ -94,6 +94,10 @@ const WPE_ShaderProgram* wpe_shader_material(void);
  */
 const WPE_ShaderProgram* wpe_shader_material_depth(bool alpha_masked);
 
+/** @return How much fog covers a point `distance` from the camera, 0 (none) to 1. @thread_safety Any thread
+ */
+float wpe_fog_factor(const WPE_FogParams* fog, float distance);
+
 /** @return Blinn-Phong exponent for a glossiness in [0, 1] (2 at 0, 2048 at 1). @thread_safety Any thread */
 float wpe_material_shininess(float glossiness);
 

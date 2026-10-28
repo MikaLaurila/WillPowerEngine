@@ -61,6 +61,25 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Engine: `wpe_engine_set_draw_scene`. UI: `wpe_ui_pick` can count every element (editors).
 - Tests: the 2D and 3D views (camera, UI, a scene without a camera, play mode), view settings.
 
+### Added (billboards)
+- `WPE_Billboard` (`billboard` in scenes, docs in `docs/scenes.md#billboards`): 3D sprites drawn by
+  the scene renderer, depth tested and fogged.
+  - Modes: fixed, axis-aligned (the entity's Y), axis-aligned to world Y, and screen-aligned; a pivot
+    and an in-plane rotation.
+  - Blending: cutout (no sorting), alpha (sorted with transparent geometry) or additive.
+  - Unlit by default; `lit` uses the ambient, point/spot lights and the sun with its shadow, wrapped
+    softly.
+  - Sprite sheets: a grid of frames played at `fps` (looping or once) by `wpe_billboard_update`.
+- Scripts: `wpe.set_billboard`, `wpe.get_billboard`, `wpe.remove_billboard`.
+- Editor: billboards are picked in the viewport, added from **+ Entity** or by dropping an image
+  into the 3D view, and have choices for mode and blend in the inspector.
+- Graphics: `wpe_billboard_corners`, `wpe_fog_factor`; render stats count billboards.
+- Assets: `sprites/tree.png`, `glow.png` and `coin.png`; the master test scene has a billboard of
+  every mode and blend.
+- Tests: corner geometry for every mode, pivot, scale and rotation; sprite-sheet timing; drawing
+  (frames, cutout, additive, lit, culling, image lifetime); scene round trips and rejected mistakes;
+  the script API in the master test scene.
+
 ### Added (new projects)
 - `wpe_editor <dir> --init [--name <title>]` (and `wpe_project_create`): creates a project in a new or
   empty directory: project.json with move/jump actions, and a starter scene (camera, sun, ground with a

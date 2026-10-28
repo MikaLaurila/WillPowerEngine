@@ -8,6 +8,7 @@
 #include "core/arena.h"
 #include "core/debug.h"
 #include "core/log.h"
+#include "graphics/billboard_internal.h"
 
 struct WPE_SceneRenderer {
     WPE_Arena frame;           /* Per-call data; valid until the next wpe_scene_render(). */
@@ -441,6 +442,134 @@ static WPE_Result wpe__render_shadow_map(WPE_SceneRenderer* sr, WPE_JobSystem* j
     return WPE_RESULT_OK;
 }
 
+/* ---- Billboards ----------------------------------------------------------------------------------- */
+
+/* What every billboard of the main pass shares. */
+typedef struct wpe__BillboardPass {
+    const WPE_Mat4* view;
+    const WPE_Mat4* view_projection;
+    WPE_Mat4 camera_world; /* Rigid. */
+    WPE_Vec3 camera_position;
+    const WPE_SceneRenderSettings* settings;
+    const wpe__Sun* sun;
+    const WPE_ShaderLight* lights;
+    uint32_t light_count;
+    const WPE_Mat4* shadow_matrix;
+} wpe__BillboardPass;
+
+/* The texture coordinates of the billboard's current frame: (u0, v0) top-left, (u1, v1) bottom-right. */
+static void wpe__billboard_uvs(const WPE_Billboard* b, float* u0, float* v0, float* u1, float* v1) {
+    const float tw = b->texture ? (float)b->texture->levels[0].width : 1.0f;
+    const float th = b->texture ? (float)b->texture->levels[0].height : 1.0f;
+    WPE_Rect r = b->source;
+    if (!(r.width > 0.0f) || !(r.height > 0.0f)) r = (WPE_Rect){0.0f, 0.0f, tw, th};
+    const uint32_t columns = b->columns ? b->columns : 1, rows = b->rows ? b->rows : 1;
+    const uint32_t grid = columns * rows;
+    const uint32_t count = b->frame_count && b->frame_count < grid ? b->frame_count : grid;
+    const uint32_t frame = b->frame < count ? b->frame : count - 1;
+    const float cw = r.width / (float)columns, ch = r.height / (float)rows;
+    const uint32_t column = frame % columns, row = frame / columns; /* Whole cells. */
+    *u0 = (r.x + (float)column * cw) / tw;
+    *v0 = (r.y + (float)row * ch) / th;
+    *u1 = *u0 + cw / tw;
+    *v1 = *v0 + ch / th;
+}
+
+static WPE_Result wpe__render_billboards(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const WPE_Ecs* ecs,
+                                         const wpe__BillboardPass* pass, WPE_SceneRenderStats* stats) {
+    static const uint32_t indices[6] = {0, 1, 2, 0, 2, 3};
+    const wpe__Frustum frustum = wpe__frustum_from_matrix(pass->view_projection);
+    WPE_Result result = WPE_RESULT_OK;
+    WPE_EcsIter it = wpe_ecs_query((WPE_Ecs*)ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_BILLBOARD) |
+                                                                        WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    while (wpe_ecs_iter_next(&it) && result == WPE_RESULT_OK) {
+        const WPE_Billboard* b = wpe_ecs_iter_get(&it, WPE_COMP_BILLBOARD);
+        const WPE_Transform* t = wpe_ecs_iter_get(&it, WPE_COMP_TRANSFORM);
+        WPE_Vec3 corners[4], normal;
+        if (!b->visible || !wpe_billboard_corners(b, &t->world, &pass->camera_world, corners, &normal))
+            continue;
+        WPE_Aabb box = {.min = corners[0], .max = corners[0]};
+        for (int c = 1; c < 4; ++c) {
+            box.min = wpe_vec3(fminf(box.min.x, corners[c].x), fminf(box.min.y, corners[c].y),
+                               fminf(box.min.z, corners[c].z));
+            box.max = wpe_vec3(fmaxf(box.max.x, corners[c].x), fmaxf(box.max.y, corners[c].y),
+                               fmaxf(box.max.z, corners[c].z));
+        }
+        if (pass->settings->frustum_culling && !wpe__aabb_visible(&frustum, &box)) {
+            ++stats->billboards_culled;
+            continue;
+        }
+        /* The corners live in the frame arena: the renderer reads them until the frame ends. */
+        wpe__BillboardVertex* vertices = wpe_arena_alloc(&sr->frame, 4 * sizeof *vertices, 0);
+        if (!vertices) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        float u0, v0, u1, v1;
+        wpe__billboard_uvs(b, &u0, &v0, &u1, &v1);
+        const float us[4] = {u0, u1, u1, u0}, vs[4] = {v1, v1, v0, v0};
+        for (int c = 0; c < 4; ++c) {
+            vertices[c] =
+                (wpe__BillboardVertex){.position = corners[c], .normal = normal, .u = us[c], .v = vs[c]};
+            for (int i = 0; i < 4; ++i)
+                vertices[c].color[i] = b->color.v[i];
+        }
+
+        const WPE_Vec3 center = wpe_vec3_scale(wpe_vec3_add(box.min, box.max), 0.5f);
+        wpe__BillboardUniforms uniforms = {
+            .view_projection = *pass->view_projection,
+            .camera_position = pass->camera_position,
+            .texture = b->texture,
+            .fog = pass->settings->fog,
+            .cutout = b->blend == WPE_BILLBOARD_CUTOUT,
+            .additive = b->blend == WPE_BILLBOARD_ADDITIVE,
+            .lit = b->lit,
+        };
+        if (b->lit) {
+            uniforms.ambient = pass->settings->ambient;
+            uniforms.has_sun = pass->sun->present;
+            uniforms.sun_direction = pass->sun->direction;
+            uniforms.sun_color = pass->sun->present ? pass->sun->color : wpe_vec3(0, 0, 0);
+            uniforms.sun_shadow = sr->has_shadow ? &sr->shadow : NULL;
+            uniforms.shadow_matrix = *pass->shadow_matrix;
+            uniforms.light_count =
+                wpe__select_lights(pass->lights, pass->light_count, center,
+                                   wpe_vec3_length(wpe_vec3_sub(box.max, center)), uniforms.lights);
+        }
+
+        /* Cut-outs are opaque; blended billboards go back to front with the other transparent geometry. */
+        WPE_RenderState state = wpe_render_state_default();
+        state.cull = WPE_CULL_NONE;
+        bool transparent = false;
+        if (b->blend == WPE_BILLBOARD_ADDITIVE) {
+            state.blend = WPE_BLEND_ADDITIVE;
+            state.depth_write = false;
+            transparent = true;
+        } else if (b->blend == WPE_BILLBOARD_ALPHA) {
+            if (pass->settings->dither_transparency) {
+                state.blend = WPE_BLEND_ALPHA_DITHER;
+            } else {
+                state.blend = WPE_BLEND_ALPHA;
+                state.depth_write = false;
+                transparent = true;
+            }
+        }
+        const uint32_t depth_key = wpe__depth_key(-wpe_mat4_transform_point(pass->view, center).z);
+        const uint64_t sort_key = transparent
+                                      ? (UINT64_C(1) << 63) | ((uint64_t)(UINT32_MAX - depth_key) << 30)
+                                      : (uint64_t)depth_key << 30;
+        result = wpe_renderer_submit(renderer, &(WPE_DrawDesc){.program = wpe__shader_billboard(),
+                                                               .uniforms = &uniforms,
+                                                               .uniforms_size = sizeof uniforms,
+                                                               .vertices = vertices,
+                                                               .vertex_stride = sizeof *vertices,
+                                                               .vertex_count = 4,
+                                                               .indices = indices,
+                                                               .index_count = 6,
+                                                               .state = state,
+                                                               .sort_key = sort_key});
+        if (result == WPE_RESULT_OK) ++stats->billboards_submitted;
+    }
+    return result;
+}
+
 /* ---- Main pass ------------------------------------------------------------------------------------ */
 
 WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const WPE_Ecs* ecs,
@@ -571,6 +700,18 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
                                          });
             if (result == WPE_RESULT_OK) ++stats.primitives_submitted;
         }
+    }
+    if (result == WPE_RESULT_OK && wpe_ecs_component_count(ecs, WPE_COMP_BILLBOARD) > 0) {
+        wpe__BillboardPass pass = {.view = &view,
+                                   .view_projection = &view_projection,
+                                   .camera_position = camera_position,
+                                   .settings = settings,
+                                   .sun = &sun,
+                                   .lights = lights,
+                                   .light_count = light_count,
+                                   .shadow_matrix = &shadow_matrix};
+        if (wpe__camera_rigid_world(camera_transform, &pass.camera_world))
+            result = wpe__render_billboards(sr, renderer, ecs, &pass, &stats);
     }
     if (out_stats) *out_stats = stats;
     return result;

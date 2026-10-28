@@ -59,6 +59,7 @@ Loading is **strict**. Unknown keys, wrong types, out-of-range values, dangling 
 | `mesh` | `model` (asset path, or null), `mesh` (index in the model, default 0), `skin` and `joints` (skinned meshes: the skin index and one entity id or null per joint), `visible` (default true). |
 | `camera` | `fov` (vertical, degrees, default 60), `near` (0.1), `far` (500), `orthographic` (false), `ortho_height` (visible height of orthographic cameras, 10). Cameras look down their local −Z axis. |
 | `light` | `type` (`"directional"`, `"point"`, `"spot"`), `color` `[r, g, b]`, `intensity`, `range`, `inner_cone` and `outer_cone` (spot half-angles in degrees), `cast_shadows` (the main directional light). Lights shine along local −Z. |
+| `billboard` | A 3D sprite: a textured quad at the entity (see [Billboards](#billboards)). `image` (asset path, or null for a plain quad), `size` `[width, height]` (world units, default `[1, 1]`, times the entity's scale), `pivot` `[x, y]` (the point at the entity: `[0.5, 0.5]` centered, `[0.5, 0]` standing on it), `rotation` (degrees, in the quad's plane), `color` `[r, g, b, a]`, `source` `[x, y, width, height]` (a region of the image in texels), `columns`, `rows`, `frame_count` (0 = the whole grid), `frame` (from 0), `fps` (0 = still), `loop` (default true), `mode` (`"fixed"`, `"axis_aligned"`, `"axis_aligned_y"`, `"screen_aligned"`, the default), `blend` (`"cutout"`, the default, `"alpha"`, `"additive"`), `lit` (default false), `visible`. |
 | `animator` | `model`, `animation` (index), `time`, `speed`, `playing`, `loop`, `nodes` (one entity id or null per model node). Usually created by `instance`. |
 | `rigidbody` | `type` (`"static"`, `"kinematic"`, `"dynamic"`), `linear_damping`, `angular_damping`, `gravity_scale`, `lock_rotation`, `continuous`, `initial_velocity` `[x, y, z]`. |
 | `collider` | `shape` (`"box"`, `"sphere"`, `"capsule"`, `"convex"`, `"mesh"`), `size` (box: full extents; sphere: `[radius, …]`; capsule: `[radius, height, …]` with height ≥ 2 × radius), `offset`, `density`, `friction`, `restitution`, `trigger`; convex and mesh colliders also take `model` and `mesh`. Without a rigid body a collider is static level geometry. |
@@ -71,6 +72,28 @@ Loading is **strict**. Unknown keys, wrong types, out-of-range values, dangling 
 | `components` | Game-defined components by name, read and written by the game's `WPE_ComponentSerializer`s. |
 
 An entity may have no components at all (`{"id": 7}`).
+
+## Billboards
+
+A `billboard` is a 3D sprite: an image on a quad that lives in the world like any object (depth tested, fogged), placed by the entity's transform.
+
+- **Turning** (`mode`):
+  - `screen_aligned` always faces the screen: particles, icons, pick-ups.
+  - `axis_aligned_y` stays upright and turns about the world's Y axis toward the camera: trees, characters, signs that shouldn't tip over when seen from above.
+  - `axis_aligned` does the same about the entity's own Y axis (a leaning tree, a beam along a direction).
+  - `fixed` is a double-sided quad in the entity's XY plane, turned only by its transform: a decal, a sign on a wall.
+- **Blending** (`blend`): `cutout` draws texels with alpha ≥ 0.5 as solid and skips the rest, so it needs no sorting. `alpha` blends soft edges and is drawn back to front after opaque geometry. `additive` adds light, for glows, fire and sparks (fog fades it out rather than tinting it).
+- **Lighting:** unlit by default: the image's own colors. With `lit`, the scene's ambient light, point and spot lights and the sun (with its shadow) light it from the side facing the camera, softly, so a quad turned away from a light is dimmer rather than black.
+- **Sprite sheets:** `columns` × `rows` cells of the image (or of `source`), read left to right and top to bottom. `fps` plays them; `loop` false stops on the last frame. Scripts can set `frame` directly.
+
+NOTE(limitation): billboards don't cast shadows yet, and their images are sampled without mipmaps (pixel-art style).
+
+```json
+{"id": 9, "name": "tree", "transform": {"position": [-6, 0, -5]},
+ "billboard": {"image": "sprites/tree.png", "size": [2, 3], "pivot": [0.5, 0], "mode": "axis_aligned_y", "lit": true}},
+{"id": 10, "name": "coin", "transform": {"position": [3, 1.5, -3]},
+ "billboard": {"image": "sprites/coin.png", "size": [0.8, 0.8], "columns": 4, "fps": 8, "blend": "alpha"}}
+```
 
 ## UI
 

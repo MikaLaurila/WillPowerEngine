@@ -193,6 +193,16 @@ Drawn on top of the 3D scene after post-processing (HUDs, menus), in call order,
 | `wpe.draw_text(x, y, text, [color = white], [scale = 1])` | Bitmap text in the project's font (`"\n"` starts a line). |
 | `wpe.text_size(text, [scale = 1]) -> width, height` | The size `draw_text` would cover. |
 
+### Billboards
+
+3D sprites ([scenes.md](scenes.md#billboards)). A billboard table has the scene-file fields: `image` (asset path), `size` and `pivot` (vectors, x and y used), `rotation` (radians), `color` (`wpe.color`), `columns`, `rows`, `frame_count`, `frame` (**1-based** here, like animations), `fps`, `loop`, `mode` and `blend` (the scene-file names as strings), `lit`, `visible`.
+
+| Function | Description |
+|---|---|
+| `wpe.set_billboard(entity, table)` | Changes the fields given (others keep their values), adding a billboard if the entity has none. A new `image` is loaded and replaces the old one. |
+| `wpe.get_billboard(entity) -> table?` | Every field (`image` is nil for a plain quad), or nil without a billboard. |
+| `wpe.remove_billboard(entity)` | Removes it (a no-op without one). |
+
 ### UI
 
 The scene's UI elements (`ui`, `sprite`, `text` and `button` components, see [scenes.md](scenes.md#ui)) are retained: change them and they stay changed. Functions raise when the entity lacks the component they need.

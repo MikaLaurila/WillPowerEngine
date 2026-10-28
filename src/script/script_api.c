@@ -1163,6 +1163,179 @@ static int wpe__api_text_size(lua_State* L) {
     return 2;
 }
 
+/* ---- Billboards ------------------------------------------------------------------------------------ */
+
+static const char* const wpe__billboard_modes[] = {"fixed", "axis_aligned", "axis_aligned_y",
+                                                   "screen_aligned"};
+static const char* const wpe__billboard_blends[] = {"cutout", "alpha", "additive"};
+static_assert(sizeof wpe__billboard_modes / sizeof wpe__billboard_modes[0] ==
+                  WPE_BILLBOARD_SCREEN_ALIGNED + 1,
+              "billboard mode names");
+static_assert(sizeof wpe__billboard_blends / sizeof wpe__billboard_blends[0] == WPE_BILLBOARD_ADDITIVE + 1,
+              "billboard blend names");
+
+/* A field naming one of `names` (nil keeps `fallback`); raises on anything else. */
+static uint32_t wpe__field_choice(lua_State* L, int table, const char* key, const char* const* names,
+                                  uint32_t count, uint32_t fallback) {
+    lua_getfield(L, table, key);
+    uint32_t value = fallback;
+    if (!lua_isnil(L, -1)) {
+        const char* name = luaL_checkstring(L, -1);
+        value = count;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (strcmp(name, names[i]) == 0) value = i;
+        }
+        if (value == count)
+            luaL_errorL(L, "%s \"%s\" is not one of the choices (see docs/scripting.md)", key, name);
+    }
+    lua_pop(L, 1);
+    return value;
+}
+
+/* A whole-number field in [min, max]. */
+static uint32_t wpe__field_count(lua_State* L, int table, const char* key, uint32_t min, uint32_t max,
+                                 uint32_t fallback) {
+    const float value = wpe__field_number(L, table, key, (float)fallback);
+    if (!(value >= (float)min && value <= (float)max) || value != floorf(value))
+        luaL_errorL(L, "%s must be a whole number from %u to %u", key, min, max);
+    return (uint32_t)value;
+}
+
+/* Reads a billboard description table over `base` (missing fields keep their values). An "image" path is
+ * returned through *out_image (NULL when the table has none). Raises on bad fields. */
+static WPE_Billboard wpe__check_billboard(lua_State* L, int table, WPE_Billboard base,
+                                          const char** out_image) {
+    luaL_checktype(L, table, LUA_TTABLE);
+    lua_getfield(L, table, "image");
+    *out_image = lua_isnil(L, -1) ? NULL : luaL_checkstring(L, -1);
+    lua_pop(L, 1); /* The string stays valid: the table holds it. */
+    lua_getfield(L, table, "size");
+    if (!lua_isnil(L, -1)) {
+        const WPE_Vec3 size = wpe__check_vec3(L, -1);
+        if (!(size.x >= 0.0f && size.y >= 0.0f)) luaL_errorL(L, "size must not be negative");
+        base.size = (WPE_Vec2){.x = size.x, .y = size.y};
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, table, "pivot");
+    if (!lua_isnil(L, -1)) {
+        const WPE_Vec3 pivot = wpe__check_vec3(L, -1);
+        base.pivot = (WPE_Vec2){.x = pivot.x, .y = pivot.y};
+    }
+    lua_pop(L, 1);
+    base.rotation = wpe__field_number(L, table, "rotation", base.rotation);
+    lua_getfield(L, table, "color");
+    if (!lua_isnil(L, -1)) base.color = wpe_color_to_vec4(wpe__opt_color(L, -1));
+    lua_pop(L, 1);
+    base.columns = wpe__field_count(L, table, "columns", 1, 256, base.columns);
+    base.rows = wpe__field_count(L, table, "rows", 1, 256, base.rows);
+    base.frame_count =
+        wpe__field_count(L, table, "frame_count", 0, base.columns * base.rows, base.frame_count);
+    const uint32_t count = base.frame_count ? base.frame_count : base.columns * base.rows;
+    base.frame =
+        wpe__field_count(L, table, "frame", 1, count, (base.frame < count ? base.frame : count - 1) + 1) - 1;
+    base.fps = wpe__field_number(L, table, "fps", base.fps);
+    if (!(base.fps >= 0.0f && base.fps <= 1000.0f)) luaL_errorL(L, "fps must be 0..1000");
+    base.loop = wpe__field_bool(L, table, "loop", base.loop);
+    base.mode = (WPE_BillboardMode)wpe__field_choice(L, table, "mode", wpe__billboard_modes,
+                                                     WPE_BILLBOARD_SCREEN_ALIGNED + 1, base.mode);
+    base.blend = (WPE_BillboardBlend)wpe__field_choice(L, table, "blend", wpe__billboard_blends,
+                                                       WPE_BILLBOARD_ADDITIVE + 1, base.blend);
+    base.lit = wpe__field_bool(L, table, "lit", base.lit);
+    base.visible = wpe__field_bool(L, table, "visible", base.visible);
+    return base;
+}
+
+/* Changes (or adds) an entity's billboard; a new image replaces the component, so its hooks take the
+ * new reference. */
+static int wpe__api_set_billboard(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_Billboard* existing = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_BILLBOARD);
+    const char* image = NULL;
+    WPE_Billboard billboard =
+        wpe__check_billboard(L, 2, existing ? *existing : wpe_billboard_default(), &image);
+    existing =
+        wpe_ecs_get_component(host->ecs, entity, WPE_COMP_BILLBOARD); /* Re-fetch after raising calls. */
+    const bool replace = !existing || image;
+    if (!replace) {
+        *(WPE_Billboard*)existing = billboard;
+        return 0;
+    }
+    wpe__check_unrestricted(L, "set_billboard");
+    WPE_AssetHandle loaded = WPE_ASSET_NONE;
+    if (image) {
+        if (!wpe_vfs_path_is_valid(image))
+            luaL_errorL(L, "wpe.set_billboard: '%s' is not an asset path", image);
+        wpe__raise_result(L, "set_billboard", wpe_asset_load(host->assets, WPE_ASSET_IMAGE, image, &loaded));
+        billboard.image = loaded;
+    }
+    /* Raising is unsafe while `loaded` is held: collect the result, release, then raise. */
+    WPE_Result result = WPE_RESULT_OK;
+    if (existing) result = wpe_ecs_remove_component(host->ecs, entity, WPE_COMP_BILLBOARD);
+    if (result == WPE_RESULT_OK)
+        result = wpe_ecs_add_component(host->ecs, entity, WPE_COMP_BILLBOARD, &billboard, NULL);
+    wpe_asset_release(host->assets, loaded);
+    wpe__raise_result(L, "set_billboard", result);
+    return 0;
+}
+
+static int wpe__api_get_billboard(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_Billboard* found = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_BILLBOARD);
+    if (!found) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const WPE_Billboard b = *found; /* Copy before pushing: pushes may run the GC but not move ECS data. */
+    const char* image = wpe_asset_path(host->assets, b.image);
+    lua_createtable(L, 0, 15);
+    if (image) {
+        lua_pushstring(L, image);
+        lua_setfield(L, -2, "image");
+    }
+    wpe__push_vec3(L, wpe_vec3(b.size.x, b.size.y, 0));
+    lua_setfield(L, -2, "size");
+    wpe__push_vec3(L, wpe_vec3(b.pivot.x, b.pivot.y, 0));
+    lua_setfield(L, -2, "pivot");
+    lua_pushnumber(L, b.rotation);
+    lua_setfield(L, -2, "rotation");
+    lua_pushnumber(L, (double)wpe_color_from_vec4(b.color));
+    lua_setfield(L, -2, "color");
+    const struct {
+        const char* key;
+        double value;
+    } numbers[] = {{"columns", b.columns},
+                   {"rows", b.rows},
+                   {"frame_count", b.frame_count},
+                   {"frame", (double)b.frame + 1.0},
+                   {"fps", b.fps}};
+    for (size_t i = 0; i < sizeof numbers / sizeof numbers[0]; ++i) {
+        lua_pushnumber(L, numbers[i].value);
+        lua_setfield(L, -2, numbers[i].key);
+    }
+    lua_pushboolean(L, b.loop);
+    lua_setfield(L, -2, "loop");
+    lua_pushstring(L, wpe__billboard_modes[b.mode]);
+    lua_setfield(L, -2, "mode");
+    lua_pushstring(L, wpe__billboard_blends[b.blend]);
+    lua_setfield(L, -2, "blend");
+    lua_pushboolean(L, b.lit);
+    lua_setfield(L, -2, "lit");
+    lua_pushboolean(L, b.visible);
+    lua_setfield(L, -2, "visible");
+    return 1;
+}
+
+static int wpe__api_remove_billboard(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "remove_billboard");
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    if (wpe_ecs_has_component(host->ecs, entity, WPE_COMP_BILLBOARD))
+        wpe__raise_result(L, "remove_billboard",
+                          wpe_ecs_remove_component(host->ecs, entity, WPE_COMP_BILLBOARD));
+    return 0;
+}
+
 /* ---- UI -------------------------------------------------------------------------------------------- */
 
 /* The entity's UI component of `type`; raises when it has none. */
@@ -1382,6 +1555,9 @@ static const luaL_Reg wpe__api[] = {
     {"draw_text", wpe__api_draw_text},
     {"draw_rect", wpe__api_draw_rect},
     {"text_size", wpe__api_text_size},
+    {"set_billboard", wpe__api_set_billboard},
+    {"get_billboard", wpe__api_get_billboard},
+    {"remove_billboard", wpe__api_remove_billboard},
     {"get_text", wpe__api_get_text},
     {"set_text", wpe__api_set_text},
     {"set_text_color", wpe__api_set_text_color},

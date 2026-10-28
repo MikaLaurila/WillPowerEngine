@@ -328,16 +328,25 @@ static const char* const* wpe__choices(const char* component, const char* key, u
     static const char* const effects[] = {"ssao", "chromatic_aberration", "ps1", "vignette", "color_adjust"};
     static const char* const aligns[] = {"left", "center", "right"};
     static const char* const valigns[] = {"top", "middle", "bottom"};
+    static const char* const billboard_modes[] = {"fixed", "axis_aligned", "axis_aligned_y",
+                                                  "screen_aligned"};
+    static const char* const billboard_blends[] = {"cutout", "alpha", "additive"};
     const struct {
         const char* component;
         const char* key;
         const char* const* choices;
         uint32_t count;
     } table[] = {
-        {"light", "type", lights, 3},     {"rigidbody", "type", bodies, 3},
-        {"collider", "shape", shapes, 5}, {"audio_source", "bus", buses, 2},
-        {"environment", "mode", fogs, 3}, {"environment", "effect", effects, 5},
-        {"text", "align", aligns, 3},     {"text", "valign", valigns, 3},
+        {"light", "type", lights, 3},
+        {"rigidbody", "type", bodies, 3},
+        {"collider", "shape", shapes, 5},
+        {"audio_source", "bus", buses, 2},
+        {"environment", "mode", fogs, 3},
+        {"environment", "effect", effects, 5},
+        {"text", "align", aligns, 3},
+        {"text", "valign", valigns, 3},
+        {"billboard", "mode", billboard_modes, 4},
+        {"billboard", "blend", billboard_blends, 3},
     };
     for (size_t i = 0; i < sizeof table / sizeof table[0]; ++i) {
         if (strcmp(table[i].component, component) == 0 && strcmp(table[i].key, key) == 0) {
@@ -350,9 +359,9 @@ static const char* const* wpe__choices(const char* component, const char* key, u
 
 /* Optional asset references (null when there is none), by component and key. */
 static bool wpe__is_asset_key(const char* component, const char* key) {
-    static const char* const table[][2] = {{"mesh", "model"},     {"animator", "model"},
-                                           {"collider", "model"}, {"audio_source", "sound"},
-                                           {"sprite", "image"},   {"text", "font"}};
+    static const char* const table[][2] = {
+        {"mesh", "model"},   {"animator", "model"}, {"collider", "model"}, {"audio_source", "sound"},
+        {"sprite", "image"}, {"text", "font"},      {"billboard", "image"}};
     for (size_t i = 0; i < sizeof table / sizeof table[0]; ++i) {
         if (strcmp(table[i][0], component) == 0 && strcmp(table[i][1], key) == 0) return true;
     }
@@ -581,6 +590,30 @@ static WPE_Entity wpe__pick(WPE_EditorUi* ui, float sx, float sy) {
             best_distance = distance;
             best = it.entity;
         }
+    }
+    /* Billboards, as the camera sees them: the ray against each quad's plane, inside all four edges. */
+    const WPE_Transform* eye =
+        wpe_ecs_get_component(ecs, wpe_engine_camera(wpe_editor_engine(ui->editor)), WPE_COMP_TRANSFORM);
+    it = wpe_ecs_query(
+        ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_BILLBOARD) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    while (eye && wpe_ecs_iter_next(&it)) {
+        const WPE_Billboard* b = wpe_ecs_iter_get(&it, WPE_COMP_BILLBOARD);
+        const WPE_Transform* t = wpe_ecs_iter_get(&it, WPE_COMP_TRANSFORM);
+        WPE_Vec3 c[4], n;
+        if (!b->visible || !wpe_billboard_corners(b, &t->world, &eye->world, c, &n)) continue;
+        const float facing = wpe_vec3_dot(direction, n);
+        if (fabsf(facing) < 1e-6f) continue;
+        const float distance = wpe_vec3_dot(wpe_vec3_sub(c[0], origin), n) / facing;
+        if (!(distance > 0.0f) || distance >= best_distance) continue;
+        const WPE_Vec3 p = wpe_vec3_add(origin, wpe_vec3_scale(direction, distance));
+        bool inside = true;
+        for (int i = 0; i < 4 && inside; ++i) {
+            const WPE_Vec3 edge = wpe_vec3_sub(c[(i + 1) % 4], c[i]);
+            inside = wpe_vec3_dot(wpe_vec3_cross(edge, wpe_vec3_sub(p, c[i])), n) >= 0.0f;
+        }
+        if (!inside) continue;
+        best_distance = distance;
+        best = it.entity;
     }
     /* Walk up past the "model" roots created by instances to the entity the scene file describes. */
     for (WPE_Entity e = best; e != WPE_ENTITY_NULL; e = wpe_scene_get_parent(ecs, e)) {
@@ -1313,8 +1346,44 @@ static WPE_JsonWriter* wpe__begin_ui_element(WPE_EditorUi* ui, const char* name,
     return w;
 }
 
+/* A billboard of an image (NULL: a plain quad) in front of the editor camera: one unit tall, `aspect`
+ * (width / height) wide. */
+static void wpe__ui_create_billboard(WPE_EditorUi* ui, const char* name, const char* image, float aspect) {
+    WPE_Vec3 position = wpe_vec3(0, 0, 0);
+    const WPE_Transform* cam =
+        wpe_ecs_get_component(wpe__ui_ecs(ui), wpe_editor_camera(ui->editor), WPE_COMP_TRANSFORM);
+    if (cam)
+        position = wpe_vec3_add(
+            cam->position, wpe_vec3_scale(wpe_quat_rotate_vec3(cam->rotation, wpe_vec3(0, 0, -1)), 6.0f));
+    WPE_JsonWriter* w = wpe__ui_begin("create_entity");
+    if (!w) return;
+    wpe_json_write_key(w, "entity");
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "name");
+    wpe_json_write_string(w, name);
+    wpe_json_write_key(w, "transform");
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "position");
+    wpe_json_write_array_begin(w, true);
+    for (int i = 0; i < 3; ++i)
+        wpe_json_write_number(w, roundf(position.v[i] * 10.0f) / 10.0f);
+    wpe_json_write_array_end(w);
+    wpe_json_write_object_end(w);
+    wpe_json_write_key(w, "billboard");
+    wpe_json_write_object_begin(w);
+    if (image) {
+        wpe_json_write_key(w, "image");
+        wpe_json_write_string(w, image);
+    }
+    wpe__write_pair(w, "size", (WPE_Vec2){.x = aspect > 0.0f ? aspect : 1.0f, .y = 1.0f});
+    wpe_json_write_object_end(w);
+    wpe_json_write_object_end(w);
+    wpe__ui_send(ui, w);
+}
+
 /* Adds a UI element: "panel", "text", "button" (with a label inside) or an image's sprite (`image` set,
- * at the image's size). One undo step; it ends selected, and the editor switches to the 2D view. */
+ * at the image's size). One undo step; it ends selected, and the editor switches to the 2D view. In the 3D
+ * view an image becomes a billboard instead. */
 static void wpe__ui_create_element(WPE_EditorUi* ui, const char* kind, const char* image) {
     ++ui->canvas_drag; /* A fresh undo step key for this element (and the button's label). */
     const WPE_Entity parent = wpe_editor_selection(ui->editor);
@@ -1331,6 +1400,12 @@ static void wpe__ui_create_element(WPE_EditorUi* ui, const char* kind, const cha
         snprintf(name, sizeof name, "%s", slash ? slash + 1 : image);
         char* dot = strrchr(name, '.');
         if (dot) *dot = '\0';
+        if (!wpe_editor_view(ui->editor).view_2d) {
+            /* The 3D view: a billboard one unit tall, 6 units in front of the camera. */
+            wpe__ui_create_billboard(ui, name, image, width / height);
+            wpe_asset_release(assets, handle);
+            return;
+        }
         w = wpe__begin_ui_element(ui, name, parent);
         if (w) {
             wpe__write_centered_ui(w, width, height);
@@ -1521,6 +1596,10 @@ static void wpe__ui_hierarchy(WPE_EditorUi* ui) {
                 wpe__ui_send(ui, w);
             }
         }
+        if (igMenuItem_Bool("Billboard", NULL, false, true))
+            wpe__ui_create_billboard(ui, "billboard", NULL, 1.0f);
+        if (igIsItemHovered(0))
+            igSetTooltip("A 3D sprite; drop an image from Assets into the 3D view for one");
         igSeparator();
         igTextDisabled("UI (inside the selected UI element)");
         if (igMenuItem_Bool("Panel", NULL, false, true)) wpe__ui_create_element(ui, "panel", NULL);
@@ -1709,8 +1788,9 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
         igButton("Add box collider fitted to meshes", (ImVec2_c){-1.0f, 0}))
         wpe__ui_entity_command(ui, "fit_collider", entity);
     /* Adding a component: those needing an asset take the path typed here. */
-    static const char* const addable[] = {"transform",    "mesh", "camera", "light", "rigidbody", "collider",
-                                          "audio_source", "ui",   "sprite", "text",  "button",    "script"};
+    static const char* const addable[] = {"transform", "mesh",     "camera",       "light", "billboard",
+                                          "rigidbody", "collider", "audio_source", "ui",    "sprite",
+                                          "text",      "button",   "script"};
     igSetNextItemWidth(-1.0f);
     igInputText("##asset_path", ui->add_path, sizeof ui->add_path, 0, NULL, NULL);
     if (igIsItemHovered(0))
@@ -1726,12 +1806,14 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
             wpe_json_write_string(w, addable[i]);
             wpe_json_write_key(w, "value");
             wpe_json_write_object_begin(w);
-            const char* path_key = strcmp(addable[i], "mesh") == 0           ? "model"
-                                   : strcmp(addable[i], "audio_source") == 0 ? "sound"
-                                   : strcmp(addable[i], "script") == 0       ? "path"
-                                   : strcmp(addable[i], "sprite") == 0 && wpe__is_image_path(ui->add_path)
-                                       ? "image"
-                                       : NULL;
+            const char* path_key =
+                strcmp(addable[i], "mesh") == 0           ? "model"
+                : strcmp(addable[i], "audio_source") == 0 ? "sound"
+                : strcmp(addable[i], "script") == 0       ? "path"
+                : (strcmp(addable[i], "sprite") == 0 || strcmp(addable[i], "billboard") == 0) &&
+                        wpe__is_image_path(ui->add_path)
+                    ? "image"
+                    : NULL;
             if (path_key && ui->add_path[0]) {
                 wpe_json_write_key(w, path_key);
                 wpe_json_write_string(w, ui->add_path);

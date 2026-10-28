@@ -349,6 +349,15 @@ Implemented in `src/input/` (public API in `input/input.h`; SDL3 private).
 - The protocol each frame is `begin_frame` → `handle_event` for every OS event → `update` → queries. Edges belong to frames, and taps shorter than a frame still report both edges.
 - Events reach the module as opaque `WPE_PlatformEvent`s from the platform's pump. Tests push real SDL events and use SDL virtual joysticks, so no hardware is needed.
 
+### 4.5.1 Billboards
+
+Implemented in `src/graphics/billboard.c` (component in `graphics/graphics.h`). Docs: `docs/scenes.md#billboards`.
+- A billboard is a quad built on the CPU each frame for the camera (`wpe_billboard_corners`) and drawn by `wpe_scene_render` with its own shader: depth tested and fogged like meshes, unlit by default, optionally lit (ambient, point/spot lights, the sun with its shadow, half-Lambert so quads facing away stay readable).
+- Blending decides sorting: cutouts are opaque (no sort), alpha and additive go back to front with transparent meshes.
+- Sprite-sheet frames advance in the simulation (`wpe_billboard_update`); scripts and scenes can set the frame directly.
+- They are the building block for particles (next): a particle system should batch many quads per draw through the same shader rather than one entity per particle.
+- NOTE(limitation): no shadow casting, no mipmaps (nearest sampling).
+
 ### 4.6.1 UI
 
 Implemented in `src/ui/` (public API in `ui/ui.h`). Docs: `docs/scenes.md#ui`.

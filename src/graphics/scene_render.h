@@ -13,6 +13,8 @@
  *    influential point/spot lights per object (WPE_MAX_OBJECT_LIGHTS), chooses render state from
  *    the material and submits draws that render opaque geometry front-to-back and blended
  *    geometry back-to-front afterwards.
+ * 4. Billboards (WPE_Billboard): turned toward the camera, culled, lit when asked, and drawn with the
+ *    meshes (cut-outs as opaque geometry, blended ones in the back-to-front pass).
  *
  * Usage per frame: wpe_renderer_begin_frame() → wpe_scene_render() → (2D, etc.) →
  * wpe_renderer_end_frame(). Per-frame data (palettes, shadow map) lives in the scene renderer
@@ -56,6 +58,8 @@ typedef struct WPE_SceneRenderStats {
     uint32_t primitives_culled;
     uint32_t shadow_casters; /* Primitives drawn into the shadow map. */
     uint32_t lights;         /* Point/spot lights in the world. */
+    uint32_t billboards_submitted;
+    uint32_t billboards_culled;
 } WPE_SceneRenderStats;
 
 typedef struct WPE_SceneRenderer WPE_SceneRenderer;

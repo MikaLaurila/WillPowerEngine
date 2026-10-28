@@ -271,7 +271,7 @@ static bool wpe__resolve_alpha(const WPE_Material* m, float* alpha) {
     }
 }
 
-static float wpe__fog_factor(const WPE_FogParams* fog, float distance) {
+float wpe_fog_factor(const WPE_FogParams* fog, float distance) {
     switch (fog->mode) {
     case WPE_FOG_LINEAR: {
         const float span = fog->end - fog->start;
@@ -361,7 +361,7 @@ static bool wpe__material_fs(const void* uniforms, const WPE_FragmentInput* in, 
     for (int i = 0; i < 3; ++i)
         color.v[i] += m->emissive_factor.v[i] * emissive_tex.v[i];
 
-    const float fog = wpe__fog_factor(&u->fog, v[WPE__V_DISTANCE]);
+    const float fog = wpe_fog_factor(&u->fog, v[WPE__V_DISTANCE]);
     if (fog > 0.0f) color = wpe_vec3_lerp(color, u->fog.color, fog);
 
     *out_color = wpe_vec4(color.x, color.y, color.z, base.w);

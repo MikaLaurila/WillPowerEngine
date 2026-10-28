@@ -172,6 +172,32 @@ function Tour:on_start()
 	assert(tw > 0 and th > 0)
 	assert(wpe.color(1, 0, 0) == 0xFFFF0000)
 
+	-- Billboards (3D sprites): read, change, add, swap the image, remove.
+	local coin = wpe.find("coin")
+	local b = wpe.get_billboard(coin)
+	assert(b.image == "sprites/coin.png" and b.columns == 4 and b.frame == 1 and b.fps == 8)
+	assert(b.mode == "axis_aligned_y" and b.blend == "alpha" and b.loop and not b.lit and b.visible)
+	assert(near(b.size.x, 0.8) and near(b.size.y, 0.8) and near(b.pivot.x, 0.5))
+	wpe.set_billboard(coin, { frame = 3, fps = 0 }) -- hold the third frame
+	assert(wpe.get_billboard(coin).frame == 3)
+	assert(not pcall(wpe.set_billboard, coin, { frame = 5 })) -- the sheet has 4 frames
+	assert(not pcall(wpe.set_billboard, coin, { mode = "sideways" }))
+	wpe.set_billboard(coin, { fps = 8 })
+	self.marker = wpe.spawn("tour_marker")
+	wpe.set_position(self.marker, vector.create(2, 3, 2))
+	wpe.set_billboard(self.marker, { image = "sprites/glow.png", blend = "additive", color = wpe.color(0.4, 1, 0.4) })
+	assert(wpe.get_billboard(self.marker).image == "sprites/glow.png")
+	wpe.set_billboard(self.marker, { image = "sprites/tree.png", lit = true, size = vector.create(1, 1.5, 0) })
+	local swapped = wpe.get_billboard(self.marker)
+	assert(swapped.image == "sprites/tree.png" and swapped.blend == "additive" and swapped.lit)
+	assert(not pcall(wpe.set_billboard, self.marker, { image = "sprites/missing.png" }))
+	wpe.remove_billboard(self.marker)
+	assert(wpe.get_billboard(self.marker) == nil)
+	wpe.set_billboard(self.marker, { color = wpe.color(1, 0, 0) }) -- a plain quad, no image
+	assert(wpe.get_billboard(self.marker).image == nil)
+	self.coin = coin
+	self.coin_frames = {}
+
 	-- UI: the scene's HUD (a nine-sliced panel with wrapped text and a button). The UI was laid out at the
 	-- start of this frame, so rectangles are known and buttons can take the focus.
 	local hud, hud_text, button = wpe.find("hud"), wpe.find("hud text"), wpe.find("hud button")
@@ -220,8 +246,15 @@ function Tour:on_update(dt)
 	elseif self.updates == 2 then
 		assert(select(2, wpe.ui_rect(self.hud)) == 18, "the moved HUD should be laid out again")
 	elseif self.updates == 120 then
+		local shown = 0
+		for _ in self.coin_frames do
+			shown += 1
+		end
+		assert(shown >= 3, "the coin's sprite sheet should animate")
+	elseif self.updates == 120 then
 		assert(wpe.get_position(self.ball).y < 0.55, "the ball should rest on the ground")
 	end
+	self.coin_frames[wpe.get_billboard(self.coin).frame] = true
 	assert(wpe.time() >= 0 and wpe.frame() >= 0)
 	wpe.draw_rect(256, 0, 64, 10, wpe.color(0.1, 0.2, 0.4, 0.7))
 	wpe.draw_text(258, 2, "tour " .. self.updates, wpe.color(1, 1, 1), 1)
@@ -241,6 +274,7 @@ function Tour:on_destroy()
 	wpe.destroy(self.ball)
 	wpe.destroy(self.pillar)
 	wpe.destroy(self.speaker)
+	wpe.destroy(self.marker)
 end
 
 return Tour

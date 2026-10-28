@@ -84,6 +84,7 @@ enum WPE_BuiltinComponent {
     WPE_COMP_SPRITE = 15,
     WPE_COMP_TEXT = 16,
     WPE_COMP_BUTTON = 17,
+    WPE_COMP_BILLBOARD = 18, /* 3D sprites (graphics/graphics.h). */
     WPE_COMP_USER_FIRST = 32,
 };
 
