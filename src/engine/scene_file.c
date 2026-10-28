@@ -37,8 +37,8 @@ static const char* const wpe__collider_shapes[] = {"box", "sphere", "capsule", "
 static const char* const wpe__buses[] = {"master", "effects", "music"};
 static const char* const wpe__fog_modes[] = {"none", "linear", "exponential"};
 static const char* const wpe__sky_modes[] = {"color", "gradient", "panorama"};
-static const char* const wpe__postfx_kinds[] = {"ssao", "chromatic_aberration", "ps1", "vignette",
-                                                "color_adjust"};
+static const char* const wpe__postfx_kinds[] = {"ssao",     "chromatic_aberration", "ps1",
+                                                "vignette", "color_adjust",         "depth_of_field"};
 
 #define WPE__COUNT(array) ((uint32_t)(sizeof(array) / sizeof((array)[0])))
 
@@ -47,7 +47,7 @@ static_assert(WPE__COUNT(wpe__body_types) == WPE_BODY_DYNAMIC + 1, "body type na
 static_assert(WPE__COUNT(wpe__collider_shapes) == WPE_COLLIDER_MESH + 1, "collider shape names");
 static_assert(WPE__COUNT(wpe__buses) == WPE_AUDIO_BUS_COUNT, "bus names");
 static_assert(WPE__COUNT(wpe__fog_modes) == WPE_FOG_EXPONENTIAL + 1, "fog mode names");
-static_assert(WPE__COUNT(wpe__postfx_kinds) == WPE_POSTFX_COLOR_ADJUST + 1, "post effect names");
+static_assert(WPE__COUNT(wpe__postfx_kinds) == WPE_POSTFX_DEPTH_OF_FIELD + 1, "post effect names");
 
 /* ---- Environment ---------------------------------------------------------------------------------- */
 
@@ -59,6 +59,7 @@ static WPE_PostFxConfig wpe__postfx_default(WPE_PostFxKind kind) {
     config.ps1 = *(const WPE_Ps1Params*)wpe_postfx_ps1(NULL).params;
     config.vignette = *(const WPE_VignetteParams*)wpe_postfx_vignette(NULL).params;
     config.color_adjust = *(const WPE_ColorAdjustParams*)wpe_postfx_color_adjust(NULL).params;
+    config.depth_of_field = *(const WPE_DepthOfFieldParams*)wpe_postfx_depth_of_field(NULL).params;
     return config;
 }
 
@@ -90,6 +91,9 @@ uint32_t wpe_scene_environment_effects(const WPE_SceneEnvironment* environment, 
             break;
         case WPE_POSTFX_COLOR_ADJUST:
             out_effects[i] = wpe_postfx_color_adjust(&c->color_adjust);
+            break;
+        case WPE_POSTFX_DEPTH_OF_FIELD:
+            out_effects[i] = wpe_postfx_depth_of_field(&c->depth_of_field);
             break;
         }
         out_effects[i].enabled = c->enabled;
@@ -283,6 +287,12 @@ static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment*
             wpe__write_number(w, "brightness", c->color_adjust.brightness);
             wpe__write_number(w, "contrast", c->color_adjust.contrast);
             wpe__write_number(w, "saturation", c->color_adjust.saturation);
+            break;
+        case WPE_POSTFX_DEPTH_OF_FIELD:
+            wpe__write_number(w, "focus_distance", c->depth_of_field.focus_distance);
+            wpe__write_number(w, "focus_range", c->depth_of_field.focus_range);
+            wpe__write_number(w, "falloff", c->depth_of_field.falloff);
+            wpe__write_number(w, "radius_pixels", c->depth_of_field.radius_pixels);
             break;
         }
         wpe_json_write_object_end(w);
@@ -863,6 +873,15 @@ static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_Sc
                      wpe__json_read_float(&l->r, e, "brightness", -1, 1, &c.color_adjust.brightness) &&
                      wpe__json_read_float(&l->r, e, "contrast", 0, 4, &c.color_adjust.contrast) &&
                      wpe__json_read_float(&l->r, e, "saturation", 0, 4, &c.color_adjust.saturation);
+                break;
+            case WPE_POSTFX_DEPTH_OF_FIELD:
+                ok = WPE__JSON_CHECK_OBJECT(&l->r, e, "depth_of_field", "effect", "enabled", "focus_distance",
+                                            "focus_range", "falloff", "radius_pixels") &&
+                     wpe__json_read_float(&l->r, e, "focus_distance", 0, 1e6,
+                                          &c.depth_of_field.focus_distance) &&
+                     wpe__json_read_float(&l->r, e, "focus_range", 0, 1e6, &c.depth_of_field.focus_range) &&
+                     wpe__json_read_float(&l->r, e, "falloff", 0, 1e6, &c.depth_of_field.falloff) &&
+                     wpe__json_read_float(&l->r, e, "radius_pixels", 0, 16, &c.depth_of_field.radius_pixels);
                 break;
             }
             if (!ok || !wpe__json_read_bool(&l->r, e, "enabled", &c.enabled)) return false;

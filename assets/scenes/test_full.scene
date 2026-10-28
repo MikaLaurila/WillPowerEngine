@@ -17,7 +17,9 @@
       {"effect": "chromatic_aberration", "strength_pixels": 0.75},
       {"effect": "ps1", "levels": 32, "dither_strength": 0.5},
       {"effect": "vignette", "strength": 0.3, "radius": 0.8},
-      {"effect": "color_adjust", "enabled": false, "brightness": 0.05, "contrast": 1.1, "saturation": 1.2}
+      {"effect": "color_adjust", "enabled": false, "brightness": 0.05, "contrast": 1.1, "saturation": 1.2},
+      {"effect": "depth_of_field", "enabled": false, "focus_distance": 6, "focus_range": 2, "falloff": 8,
+       "radius_pixels": 2}
     ],
     "music": {"path": "music/ambient.wav", "fade": 1}
   },

@@ -211,7 +211,9 @@ static void test_engine_scene_round_trip(void) {
     WPE_TEST_ASSERT_OK(wpe_scene_load_asset(&ctx_a, "scenes/test_full.scene", &env, &camera));
     WPE_TEST_ASSERT(camera != WPE_ENTITY_NULL);
     WPE_TEST_ASSERT_EQ_STR("main camera", wpe_scene_get_name(a.ecs, camera));
-    WPE_TEST_ASSERT_EQ_UINT(5, env.postfx_count);
+    WPE_TEST_ASSERT_EQ_UINT(6, env.postfx_count);
+    WPE_TEST_ASSERT(env.postfx[5].kind == WPE_POSTFX_DEPTH_OF_FIELD &&
+                    env.postfx[5].depth_of_field.falloff == 8.0f);
     WPE_TEST_ASSERT(!env.postfx[4].enabled && env.postfx[2].kind == WPE_POSTFX_PS1 &&
                     env.postfx[2].ps1.levels == 32);
     WPE_TEST_ASSERT_EQ_STR("music/ambient.wav", env.music);

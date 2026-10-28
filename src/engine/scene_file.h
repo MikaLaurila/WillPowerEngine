@@ -46,6 +46,7 @@ typedef enum WPE_PostFxKind {
     WPE_POSTFX_PS1,
     WPE_POSTFX_VIGNETTE,
     WPE_POSTFX_COLOR_ADJUST,
+    WPE_POSTFX_DEPTH_OF_FIELD,
 } WPE_PostFxKind;
 
 /** One configured post-processing effect; only the parameters matching `kind` are used. */
@@ -57,6 +58,7 @@ typedef struct WPE_PostFxConfig {
     WPE_Ps1Params ps1;
     WPE_VignetteParams vignette;
     WPE_ColorAdjustParams color_adjust;
+    WPE_DepthOfFieldParams depth_of_field;
 } WPE_PostFxConfig;
 
 /** Scene-wide settings stored with the entities. */

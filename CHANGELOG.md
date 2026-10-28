@@ -69,6 +69,17 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (depth of field)
+- `depth_of_field` post effect (`wpe_postfx_depth_of_field`): sharp around `focus_distance` (within
+  `focus_range`), blurring over `falloff` to `radius_pixels`, in front and behind. Each pixel's blur
+  radius comes from the depth buffer, then a separable blur over it, where samples count only when
+  they're behind the pixel and within its blur, or in front and their own blur reaches it. So sharp
+  objects in front of a blurred background keep their edges (no halos), and a blurred foreground
+  softens over what's behind it.
+- Scene files and the editor's effect list; the character demo uses it.
+- Tests: the sharp half unchanged, the far half blurred without the near half's color, a blurred
+  foreground spilling over, no radius no change.
+
 ### Added (sky)
 - `sky` in the scene environment (`WPE_SkySettings` in the render settings): `color` (the clear
   color, as before), `gradient` (zenith, horizon and ground colors, with a curve) or `panorama` (an

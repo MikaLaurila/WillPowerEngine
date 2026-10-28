@@ -7,6 +7,10 @@
     "fog": {"mode": "linear", "color": [0.62, 0.72, 0.84], "start": 25, "end": 60},
     "sky": {"mode": "gradient", "zenith": [0.2, 0.36, 0.68], "horizon": [0.62, 0.72, 0.84], "ground": [0.36, 0.38, 0.4],
             "curve": 0.6, "sun_size": 2.5, "sun_color": [1, 0.95, 0.82], "sun_glow": 0.35},
+    "postfx": [
+      {"effect": "depth_of_field", "enabled": true, "focus_distance": 7, "focus_range": 3, "falloff": 12,
+       "radius_pixels": 2.5}
+    ],
     "shadows": {"enabled": true, "map_size": 1024, "distance": 24}
   },
   "camera": 1,

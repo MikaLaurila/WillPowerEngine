@@ -451,6 +451,70 @@ static void test_lighting_postfx_ssao_darkens_creases_only(void) {
     wpe_renderer_destroy(r);
 }
 
+/* The window depth of a view distance (inverse of wpe_postfx_linear_depth). */
+static float window_depth(float z) {
+    const float n = k_post_camera.near_z, f = k_post_camera.far_z;
+    return (f + n - 2.0f * n * f / z) / (f - n) * 0.5f + 0.5f;
+}
+
+/* Left half: solid red at `left_z`. Right half: one-pixel black and white columns at `right_z`. */
+static WPE_Renderer* two_halves(float left_z, float right_z) {
+    WPE_Renderer* r = filled_renderer(0xFF000000u);
+    WPE_Framebuffer* fb = wpe_renderer_framebuffer_for_write(r);
+    for (uint32_t y = 0; y < S; ++y) {
+        for (uint32_t x = 0; x < S; ++x) {
+            const bool left = x < S / 2;
+            fb->color[y * S + x] = left ? 0xFFFF0000u : ((x & 1) ? 0xFFFFFFFFu : 0xFF000000u);
+            fb->depth[y * S + x] = window_depth(left ? left_z : right_z);
+        }
+    }
+    return r;
+}
+
+static void test_lighting_postfx_depth_of_field(void) {
+    WPE_PostChain* chain = NULL;
+    WPE_TEST_ASSERT_OK(wpe_postfx_create(&chain));
+    const WPE_DepthOfFieldParams params = {
+        .focus_distance = 5.0f, .focus_range = 1.0f, .falloff = 5.0f, .radius_pixels = 3.0f};
+    const WPE_PostEffect effect = wpe_postfx_depth_of_field(&params);
+    const uint32_t row = (S / 2) * S;
+
+    /* Red in focus in front, stripes far behind: the stripes blur to gray; the red stays sharp, and none of
+     * it bleeds onto the blurred background beside it. */
+    WPE_Renderer* r = two_halves(5.0f, 50.0f);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(r);
+    for (uint32_t x = 0; x < S / 2; ++x)
+        WPE_TEST_ASSERT_EQ_UINT(0xFFFF0000u, fb->color[row + x]);
+    for (uint32_t x = S / 2; x < S - 4; ++x) {
+        const WPE_Color c = fb->color[row + x];
+        const uint32_t red = (c >> 16) & 0xFFu, green = (c >> 8) & 0xFFu;
+        WPE_TEST_ASSERT_MSG(red == green, "x %u: 0x%08x has red from the sharp side", x, c);
+        WPE_TEST_ASSERT_MSG(green > 0x40u && green < 0xC0u, "x %u: 0x%08x not blurred", x, c);
+    }
+    wpe_renderer_destroy(r);
+
+    /* A blurred red foreground in front of sharp stripes softens over them. */
+    r = two_halves(1.0f, 5.0f);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    fb = wpe_renderer_framebuffer(r);
+    /* The red is 3 past the sharp range: blurred 0.6 of the way, 1.8 pixels, reaching the first stripe. */
+    const WPE_Color edge = fb->color[row + S / 2];
+    WPE_TEST_ASSERT_MSG(((edge >> 16) & 0xFFu) > ((edge >> 8) & 0xFFu), "0x%08x has no red", edge);
+    WPE_TEST_ASSERT_EQ_UINT(0xFF000000u, fb->color[row + S - 8]); /* Sharp, far from the edge. */
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFFFFFFu, fb->color[row + S - 7]);
+    wpe_renderer_destroy(r);
+
+    /* No radius, no change. */
+    const WPE_DepthOfFieldParams none = {.focus_distance = 5.0f, .radius_pixels = 0.0f};
+    const WPE_PostEffect off = wpe_postfx_depth_of_field(&none);
+    r = two_halves(5.0f, 50.0f);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &off, 1, &k_post_camera));
+    WPE_TEST_ASSERT_EQ_UINT(0xFF000000u, wpe_renderer_framebuffer(r)->color[row + S - 8]);
+    wpe_renderer_destroy(r);
+    wpe_postfx_destroy(chain);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_lighting_attenuation_shape),
               WPE_TEST_CASE(test_lighting_shadow_visibility_pcf),
               WPE_TEST_CASE(test_lighting_point_light_pool), WPE_TEST_CASE(test_lighting_spot_cone),
@@ -461,4 +525,5 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_lighting_attenuation_shape),
               WPE_TEST_CASE(test_lighting_procedural_models),
               WPE_TEST_CASE(test_lighting_generated_tangents_are_orthonormal),
               WPE_TEST_CASE(test_lighting_postfx_color_effects),
-              WPE_TEST_CASE(test_lighting_postfx_ssao_darkens_creases_only))
+              WPE_TEST_CASE(test_lighting_postfx_ssao_darkens_creases_only),
+              WPE_TEST_CASE(test_lighting_postfx_depth_of_field))

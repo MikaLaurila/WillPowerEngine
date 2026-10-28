@@ -259,6 +259,67 @@ static void wpe__color_adjust_pass(const WPE_PostContext* c, const void* params_
     }
 }
 
+/* ---- Depth of field ----------------------------------------------------------------------------------- */
+
+#define WPE__DOF_MAX_RADIUS 16
+
+/*
+ * Pass 0 stores each pixel's blur radius in aux and copies the image; passes 1 and 2 blur it
+ * horizontally, then vertically (a separable box over each pixel's own radius). A sample counts when
+ * it lies behind the pixel and within the pixel's radius (the pixel's blur reaches over it), or lies in
+ * front and its own blur reaches the pixel (a blurred foreground spills over what's behind). So sharp
+ * objects in front of a blurred background keep their edges, and blurred ones in front soften theirs.
+ */
+static void wpe__dof_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass, uint32_t row_begin,
+                          uint32_t row_end) {
+    const WPE_DepthOfFieldParams* p = params_ptr;
+    const uint32_t w = c->width, h = c->height;
+    const float radius = fminf(fmaxf(p->radius_pixels, 0.0f), (float)WPE__DOF_MAX_RADIUS);
+    const int32_t taps = (int32_t)ceilf(radius); /* No pixel's blur reaches further. */
+    if (pass == 0) {
+        for (uint32_t y = row_begin; y < row_end; ++y) {
+            for (uint32_t x = 0; x < w; ++x) {
+                const size_t i = (size_t)y * w + x;
+                c->dst[i] = c->src[i];
+                /* The background (nothing drawn) counts as far away. */
+                const float z =
+                    c->depth[i] < 1.0f ? wpe_postfx_linear_depth(&c->camera, c->depth[i]) : c->camera.far_z;
+                const float off = fabsf(z - p->focus_distance) - p->focus_range;
+                const float amount =
+                    off <= 0.0f ? 0.0f : (p->falloff > 0.0f ? wpe__clamp01(off / p->falloff) : 1.0f);
+                c->aux[i] = amount * radius;
+            }
+        }
+        return;
+    }
+    const bool horizontal = pass == 1;
+    for (uint32_t y = row_begin; y < row_end; ++y) {
+        for (uint32_t x = 0; x < w; ++x) {
+            const size_t i = (size_t)y * w + x;
+            const float own = c->aux[i];
+            const float depth = c->depth[i];
+            float sum[3] = {0.0f, 0.0f, 0.0f};
+            float weight = 0.0f;
+            for (int32_t k = -taps; k <= taps; ++k) {
+                const int32_t sx = horizontal ? (int32_t)x + k : (int32_t)x;
+                const int32_t sy = horizontal ? (int32_t)y : (int32_t)y + k;
+                if (sx < 0 || sy < 0 || sx >= (int32_t)w || sy >= (int32_t)h) continue;
+                const size_t j = (size_t)sy * w + (size_t)sx;
+                const float reach = (float)(k < 0 ? -k : k);
+                const bool behind = c->depth[j] >= depth;
+                if (k != 0 && !(behind ? reach <= own : reach <= c->aux[j])) continue;
+                const WPE_Vec4 v = wpe_color_to_vec4(c->src[j]);
+                sum[0] += v.x;
+                sum[1] += v.y;
+                sum[2] += v.z;
+                weight += 1.0f;
+            }
+            const float a = wpe_color_to_vec4(c->src[i]).w;
+            c->dst[i] = wpe_color_from_vec4(wpe_vec4(sum[0] / weight, sum[1] / weight, sum[2] / weight, a));
+        }
+    }
+}
+
 /* ---- Constructors ---------------------------------------------------------------------------------- */
 
 static const WPE_SsaoParams wpe__ssao_defaults = {
@@ -268,6 +329,16 @@ static const WPE_Ps1Params wpe__ps1_defaults = {.levels = 32, .dither_strength =
 static const WPE_VignetteParams wpe__vignette_defaults = {.strength = 0.5f, .radius = 0.5f};
 static const WPE_ColorAdjustParams wpe__color_adjust_defaults = {
     .brightness = 0.0f, .contrast = 1.0f, .saturation = 1.0f};
+static const WPE_DepthOfFieldParams wpe__dof_defaults = {
+    .focus_distance = 8.0f, .focus_range = 2.0f, .falloff = 10.0f, .radius_pixels = 3.0f};
+
+WPE_PostEffect wpe_postfx_depth_of_field(const WPE_DepthOfFieldParams* params) {
+    return (WPE_PostEffect){.name = "depth_of_field",
+                            .pass = wpe__dof_pass,
+                            .pass_count = 3,
+                            .params = params ? params : &wpe__dof_defaults,
+                            .enabled = true};
+}
 
 WPE_PostEffect wpe_postfx_ssao(const WPE_SsaoParams* params) {
     return (WPE_PostEffect){.name = "ssao",

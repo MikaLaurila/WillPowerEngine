@@ -10,8 +10,8 @@
  * the renderer's job system, so pass functions run concurrently on disjoint row ranges and must
  * only write rows [row_begin, row_end) of dst/aux.
  *
- * Built-in effects: SSAO, chromatic aberration, PS1-style dither + color quantization, vignette
- * and color adjustment (brightness/contrast/saturation).
+ * Built-in effects: SSAO, chromatic aberration, PS1-style dither + color quantization, vignette,
+ * color adjustment (brightness/contrast/saturation) and depth of field.
  *
  * Usage: wpe_renderer_end_frame() → wpe_postfx_apply() → optionally another renderer frame
  * without clearing for HUD/2D that should not be post-processed.
@@ -105,6 +105,15 @@ typedef struct WPE_ColorAdjustParams {
     float saturation; /* 0 = grayscale, 1 = unchanged. */
 } WPE_ColorAdjustParams;
 
+/* Depth of field: what's near `focus_distance` is sharp, and the image blurs with distance from there,
+ * in front and behind. Distances are along the view (view units). */
+typedef struct WPE_DepthOfFieldParams {
+    float focus_distance; /* Sharpest distance. */
+    float focus_range;    /* Within this of focus_distance (either side) stays sharp. */
+    float falloff;        /* Beyond the sharp range, the blur grows to full over this distance. */
+    float radius_pixels;  /* Full blur radius (0..16). */
+} WPE_DepthOfFieldParams;
+
 /** @return The built-in effect with its default parameters (`params` points at static defaults).
  * @thread_safety Any thread */
 WPE_PostEffect wpe_postfx_ssao(const WPE_SsaoParams* params);
@@ -112,6 +121,7 @@ WPE_PostEffect wpe_postfx_chromatic_aberration(const WPE_ChromaticAberrationPara
 WPE_PostEffect wpe_postfx_ps1(const WPE_Ps1Params* params);
 WPE_PostEffect wpe_postfx_vignette(const WPE_VignetteParams* params);
 WPE_PostEffect wpe_postfx_color_adjust(const WPE_ColorAdjustParams* params);
+WPE_PostEffect wpe_postfx_depth_of_field(const WPE_DepthOfFieldParams* params);
 
 /** @return Linear view-space depth for a window depth value. @thread_safety Any thread */
 float wpe_postfx_linear_depth(const WPE_PostCamera* camera, float window_depth);

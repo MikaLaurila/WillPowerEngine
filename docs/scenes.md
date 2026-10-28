@@ -239,7 +239,7 @@ Scene contexts that load instances need `WPE_COMP_PREFAB` registered (`wpe_prefa
 | `default_sun` | `enabled`, `direction`, `color`: a light used when the scene has no light entities at all. |
 | `gravity` | Physics gravity `[x, y, z]` in m/s² (default `[0, -9.81, 0]`). |
 | `music` | `path` of a music track started when the scene loads (looping) and the crossfade `fade` in seconds. The same track keeps playing across scenes. Without `music`, the previous scene's music fades out. |
-| `postfx` | Up to 8 post-processing effects, applied in order. Each object has `effect` and `enabled` (default true), plus the effect's parameters: `ssao` (`radius_pixels`, `strength`, `depth_range`, `bias`), `chromatic_aberration` (`strength_pixels`), `ps1` (`levels`, `dither_strength`), `vignette` (`strength`, `radius`), `color_adjust` (`brightness`, `contrast`, `saturation`). |
+| `postfx` | Up to 8 post-processing effects, applied in order. Each object has `effect` and `enabled` (default true), plus the effect's parameters: `ssao` (`radius_pixels`, `strength`, `depth_range`, `bias`), `chromatic_aberration` (`strength_pixels`), `ps1` (`levels`, `dither_strength`), `vignette` (`strength`, `radius`), `color_adjust` (`brightness`, `contrast`, `saturation`), `depth_of_field` (`focus_distance`: the sharpest distance from the camera; `focus_range`: how far either side of it stays sharp; `falloff`: over how much further the blur grows to full; `radius_pixels`: the full blur, up to 16). Depth of field keeps sharp edges in front of a blurred background, while a blurred foreground softens over what's behind it. |
 
 ## Saving
 
