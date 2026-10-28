@@ -35,6 +35,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - The fly camera no longer snaps to another direction when the right mouse button is pressed again
   after turning more than 90 degrees from where it started: the yaw and pitch it resumes from now come
   from the view direction instead of Euler angles, whose yaw only reads back within ±90 degrees.
+- Moving along an axis that points nearly at the camera no longer flings the entity thousands of
+  units away. Move drags follow the point on the axis nearest the mouse ray (and pause where that
+  point is undefined), and handles shorter than 12 pixels on screen can't be grabbed.
 
 ### Added (prefabs)
 - Prefab files (`.prefab`): reusable entity trees in the scene schema, placed in scenes as linked

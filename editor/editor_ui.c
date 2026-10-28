@@ -657,6 +657,23 @@ static float wpe__segment_distance(ImVec2_c a, ImVec2_c b, ImVec2_c p, float* ou
 }
 
 /* Point `i` of the rotation ring around `axis` (unit length, world space). */
+/* Where on the line `origin + s * axis` (axis of unit length) the mouse ray through a screen point
+ * passes nearest: `s`. False when the ray runs within about 6 degrees of the axis, where `s` jumps
+ * wildly with every pixel, or when that point is behind the camera or more than 1000 units out. */
+static bool wpe__axis_param(const WPE_EditorUi* ui, WPE_Vec3 origin, WPE_Vec3 axis, float sx, float sy,
+                            float* out_s) {
+    WPE_Vec3 ray_origin, ray_dir;
+    if (!wpe__ray(ui, sx, sy, &ray_origin, &ray_dir)) return false;
+    const WPE_Vec3 w = wpe_vec3_sub(origin, ray_origin);
+    const float b = wpe_vec3_dot(axis, ray_dir), d = wpe_vec3_dot(axis, w), e = wpe_vec3_dot(ray_dir, w);
+    const float denom = 1.0f - b * b;
+    if (denom < 0.01f) return false;
+    const float s = (b * e - d) / denom, t = (e - b * d) / denom;
+    if (!(t > 0.0f && t < 1000.0f)) return false;
+    *out_s = s;
+    return true;
+}
+
 static WPE_Vec3 wpe__ring_point(WPE_Vec3 center, WPE_Vec3 axis, float radius, int i) {
     /* Any vector not parallel to the axis gives the ring's plane basis. */
     const WPE_Vec3 seed = fabsf(axis.x) < 0.9f ? wpe_vec3(1, 0, 0) : wpe_vec3(0, 1, 0);
@@ -729,6 +746,9 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
         visible[a] = wpe__to_screen(ui, &view_projection,
                                     wpe_vec3_add(center, wpe_vec3_scale(axes[a], length)), &ends[a]);
         if (!visible[a]) continue;
+        /* A handle pointing nearly at the camera is too short to aim a drag with, so it can't be taken. */
+        const float hx = ends[a].x - c.x, hy = ends[a].y - c.y;
+        if (hx * hx + hy * hy < 12.0f * 12.0f) continue;
         float s = 0.0f;
         const float d = wpe__segment_distance(c, ends[a], mouse, &s);
         if (d < hover_distance && s > 0.15f) {
@@ -824,8 +844,14 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
     const float along = (mx * dx + my * dy) / screen_length;
     char label[32];
     if (view.gizmo == WPE_EDITOR_GIZMO_MOVE) {
-        /* World units along the handle (it spans `length` of them), then into the parent's space. */
-        float amount = along * length / screen_length;
+        /* World units along the axis: from the axis point nearest the mouse ray when the drag started to
+         * the one nearest it now, then into the parent's space. */
+        float start_s, now_s;
+        if (!wpe__axis_param(ui, ui->gizmo_start_center, axes[a], ui->gizmo_mouse_x, ui->gizmo_mouse_y,
+                             &start_s) ||
+            !wpe__axis_param(ui, ui->gizmo_start_center, axes[a], mouse.x, mouse.y, &now_s))
+            return true; /* No usable point (the axis points along the ray): the entity stays put. */
+        float amount = now_s - start_s;
         if (snap && view.gizmo_local) {
             amount = wpe__snap(amount, view.snap_move); /* Whole steps along the entity's own axis. */
         } else if (snap) {
