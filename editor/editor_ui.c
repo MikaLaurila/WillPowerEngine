@@ -1666,6 +1666,10 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
                     }
                     igPopID();
                 }
+                if (strcmp(key, "collider") == 0 && igSmallButton("Fit to meshes")) command = "fit_collider";
+                if (strcmp(key, "collider") == 0 && igIsItemHovered(0))
+                    igSetTooltip(
+                        "Size and center the collider around the meshes of this entity and its children");
             }
             if (!keep && !removed_key) removed_key = key;
         }
@@ -1698,6 +1702,12 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
     wpe_json_free(doc);
 
     igSeparator();
+    /* Something with meshes and no collider: one click gives it a box around them. */
+    const WPE_Hierarchy* node = wpe_ecs_get_component(wpe__ui_ecs(ui), entity, WPE_COMP_HIERARCHY);
+    if (!wpe_ecs_has_component(wpe__ui_ecs(ui), entity, WPE_COMP_PHYSICS_COLLIDER) &&
+        (wpe_ecs_has_component(wpe__ui_ecs(ui), entity, WPE_COMP_MESH) || (node && node->first_child)) &&
+        igButton("Add box collider fitted to meshes", (ImVec2_c){-1.0f, 0}))
+        wpe__ui_entity_command(ui, "fit_collider", entity);
     /* Adding a component: those needing an asset take the path typed here. */
     static const char* const addable[] = {"transform",    "mesh", "camera", "light", "rigidbody", "collider",
                                           "audio_source", "ui",   "sprite", "text",  "button",    "script"};

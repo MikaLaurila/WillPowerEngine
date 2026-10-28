@@ -506,12 +506,80 @@ static void test_editor_snap_settings(void) {
     wpe_editor_destroy(editor);
 }
 
+static WPE_Entity id_of(WPE_Editor* editor, const char* name);
+
+/* An entity's collider, read back through get_entity: size, offset and shape; returns its density. */
+static double collider_of(WPE_Editor* editor, WPE_Entity e, float size[3], float offset[3],
+                          const char** shape) {
+    char command[64];
+    snprintf(command, sizeof command, "{\"cmd\": \"get_entity\", \"id\": %u}", e);
+    WPE_JsonDocument* reply = run(editor, command, true);
+    const WPE_JsonValue* collider = wpe_json_get(result_of(reply), "collider");
+    WPE_TEST_ASSERT(collider != NULL);
+    for (uint32_t i = 0; i < 3; ++i) {
+        size[i] = (float)wpe_json_number(wpe_json_at(wpe_json_get(collider, "size"), i), -1);
+        offset[i] = (float)wpe_json_number(wpe_json_at(wpe_json_get(collider, "offset"), i), -1);
+    }
+    static char shape_name[16];
+    snprintf(shape_name, sizeof shape_name, "%s", wpe_json_string(wpe_json_get(collider, "shape")));
+    *shape = shape_name;
+    const double density = wpe_json_number(wpe_json_get(collider, "density"), -1);
+    wpe_json_free(reply);
+    return density;
+}
+
+static void test_editor_fits_colliders_to_meshes(void) {
+    WPE_Editor* editor = open_editor();
+    float size[3], offset[3];
+    const char* shape = NULL;
+    /* Its own mesh (a unit box), measured in its own space: the entity's scale applies on top. */
+    run_ok(editor,
+           "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"long\", \"transform\": {\"scale\": [2, 1, "
+           "1], \"position\": [5, 0, 0]}, \"mesh\": {\"model\": \"meshes/box.prim\"}}}");
+    const WPE_Entity box = id_of(editor, "long");
+    const uint32_t steps = wpe_editor_undo_count(editor);
+    run_ok(editor, "{\"cmd\": \"fit_collider\"}"); /* The selection: the entity just created. */
+    WPE_TEST_ASSERT_EQ_UINT(steps + 1, wpe_editor_undo_count(editor));
+    collider_of(editor, box, size, offset, &shape);
+    WPE_TEST_ASSERT_EQ_STR("box", shape);
+    for (int i = 0; i < 3; ++i) {
+        WPE_TEST_ASSERT_NEAR(1.0, size[i], 1e-5);
+        WPE_TEST_ASSERT_NEAR(0.0, offset[i], 1e-5);
+    }
+    /* An empty parent around a child moved up and stretched. */
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"holder\", \"transform\": {}}}");
+    const WPE_Entity holder = id_of(editor, "holder");
+    char command[256];
+    snprintf(command, sizeof command,
+             "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"part\", \"parent\": %u, \"transform\": "
+             "{\"position\": [0, 1, 0], \"scale\": [1, 2, 1]}, \"mesh\": {\"model\": \"meshes/box.prim\"}}}",
+             holder);
+    run_ok(editor, command);
+    /* A sphere keeps its shape and its other settings. */
+    snprintf(command, sizeof command,
+             "{\"cmd\": \"set_component\", \"id\": %u, \"component\": \"collider\", \"value\": {\"shape\": "
+             "\"sphere\", \"density\": 3}}",
+             holder);
+    run_ok(editor, command);
+    snprintf(command, sizeof command, "{\"cmd\": \"fit_collider\", \"id\": %u}", holder);
+    run_ok(editor, command);
+    WPE_TEST_ASSERT_NEAR(3.0, collider_of(editor, holder, size, offset, &shape), 0);
+    WPE_TEST_ASSERT_EQ_STR("sphere", shape);
+    WPE_TEST_ASSERT_NEAR(1.0, size[0], 1e-5); /* Half the tallest extent (2). */
+    WPE_TEST_ASSERT_NEAR(1.0, offset[1], 1e-5);
+    WPE_TEST_ASSERT_NEAR(0.0, offset[0], 1e-5);
+    /* Nothing to fit to: refused, and no undo step is left. */
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"empty\", \"transform\": {}}}");
+    const uint32_t before = wpe_editor_undo_count(editor);
+    wpe_json_free(run(editor, "{\"cmd\": \"fit_collider\"}", false));
+    WPE_TEST_ASSERT_EQ_UINT(before, wpe_editor_undo_count(editor));
+    wpe_editor_destroy(editor);
+}
+
 static WPE_Color pixel(WPE_Editor* editor, uint32_t x, uint32_t y) {
     const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(wpe_editor_engine(editor)));
     return fb->color[y * fb->width + x];
 }
-
-static WPE_Entity id_of(WPE_Editor* editor, const char* name);
 
 static void test_editor_2d_view_shows_the_game_and_its_ui(void) {
     WPE_Editor* editor = open_editor();
@@ -687,15 +755,13 @@ static void test_editor_prefab_commands(void) {
     wpe_editor_destroy(editor);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_editor_coalesces_continuous_edits),
-              WPE_TEST_CASE(test_editor_prefab_commands),
-              WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
-              WPE_TEST_CASE(test_editor_guards_unsaved_changes),
-              WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
-              WPE_TEST_CASE(test_editor_view_settings_and_overlays),
-              WPE_TEST_CASE(test_editor_physics_follows_edits),
-              WPE_TEST_CASE(test_editor_hot_reloads_scripts),
-              WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
-              WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
-              WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
-              WPE_TEST_CASE(test_editor_play_mode_restores_the_scene))
+WPE_TEST_MAIN(
+    WPE_TEST_CASE(test_editor_coalesces_continuous_edits), WPE_TEST_CASE(test_editor_prefab_commands),
+    WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
+    WPE_TEST_CASE(test_editor_fits_colliders_to_meshes), WPE_TEST_CASE(test_editor_guards_unsaved_changes),
+    WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
+    WPE_TEST_CASE(test_editor_view_settings_and_overlays), WPE_TEST_CASE(test_editor_physics_follows_edits),
+    WPE_TEST_CASE(test_editor_hot_reloads_scripts), WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
+    WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
+    WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
+    WPE_TEST_CASE(test_editor_play_mode_restores_the_scene))

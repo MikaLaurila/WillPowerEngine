@@ -678,8 +678,10 @@ static void wpe__grow(WPE_Vec3* lo, WPE_Vec3* hi, WPE_Vec3 p) {
     }
 }
 
-/* World-space bounds of the meshes of an entity and its descendants; false when there are none. */
-static bool wpe__subtree_bounds(WPE_Ecs* ecs, WPE_Entity root, WPE_Vec3* out_lo, WPE_Vec3* out_hi) {
+/* Bounds of the meshes of an entity and its descendants, in world space transformed by `space` (NULL: world
+ * space); false when there are none. */
+static bool wpe__subtree_bounds(WPE_Ecs* ecs, WPE_Entity root, const WPE_Mat4* space, WPE_Vec3* out_lo,
+                                WPE_Vec3* out_hi) {
     WPE_Entity* stack = wpe_alloc((size_t)wpe_ecs_entity_count(ecs) * sizeof *stack);
     if (!stack) return false;
     WPE_Vec3 lo = wpe_vec3(1e30f, 1e30f, 1e30f), hi = wpe_vec3(-1e30f, -1e30f, -1e30f);
@@ -692,6 +694,7 @@ static bool wpe__subtree_bounds(WPE_Ecs* ecs, WPE_Entity root, WPE_Vec3* out_lo,
         WPE_Mat4 world;
         if (mesh && mesh->model && mesh->mesh < mesh->model->mesh_count &&
             wpe_scene_compute_world_matrix(ecs, e, &world)) {
+            if (space) world = wpe_mat4_mul(space, &world);
             const WPE_Aabb* b = &mesh->model->meshes[mesh->mesh].bounds;
             for (int corner = 0; corner < 8; ++corner) {
                 const WPE_Vec3 p =
@@ -714,6 +717,101 @@ static bool wpe__subtree_bounds(WPE_Ecs* ecs, WPE_Entity root, WPE_Vec3* out_lo,
     return found;
 }
 
+/* Fits the entity's collider (a new box when it has none) around its meshes and its descendants' meshes. The
+ * bounds are measured in the entity's own space, since colliders are sized there and scaled with the entity.
+ */
+static WPE_Result wpe__cmd_fit_collider(wpe__Call* call) {
+    WPE_Ecs* ecs = wpe__ecs(call);
+    WPE_Entity e = wpe_editor_selection(call->editor);
+    if (wpe_json_get(call->args, "id")) {
+        const WPE_Result result = wpe__entity_arg(call, "id", &e);
+        if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    }
+    if (e == WPE_ENTITY_NULL)
+        return wpe__null(call,
+                         wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "select an entity or give \"id\""));
+    WPE_Mat4 world, to_local;
+    if (!wpe_scene_compute_world_matrix(ecs, e, &world) || !wpe_mat4_inverse(&world, &to_local))
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_STATE,
+                                         "entity %u has no usable transform (a zero scale?)", e));
+    WPE_Vec3 lo, hi;
+    if (!wpe__subtree_bounds(ecs, e, &to_local, &lo, &hi))
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_NOT_FOUND,
+                                         "entity %u has no mesh, and neither have its children", e));
+    const WPE_Collider* existing = wpe_ecs_get_component(ecs, e, WPE_COMP_PHYSICS_COLLIDER);
+    const WPE_ColliderShape shape = existing ? existing->shape : WPE_COLLIDER_BOX;
+    if (shape == WPE_COLLIDER_CONVEX || shape == WPE_COLLIDER_MESH)
+        return wpe__null(call,
+                         wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                                   "convex and mesh colliders take their shape from the model already"));
+    /* Flat meshes (a ground plane) still get a sliver of thickness. */
+    WPE_Vec3 extent = wpe_vec3_sub(hi, lo);
+    for (int i = 0; i < 3; ++i)
+        extent.v[i] = extent.v[i] > 0.01f ? extent.v[i] : 0.01f;
+    const WPE_Vec3 center = wpe_vec3_scale(wpe_vec3_add(lo, hi), 0.5f);
+    WPE_Vec3 size = extent; /* Box: full extents. */
+    if (shape == WPE_COLLIDER_SPHERE) {
+        const float r = fmaxf(extent.x, fmaxf(extent.y, extent.z)) * 0.5f;
+        size = wpe_vec3(r, r, r);
+    } else if (shape == WPE_COLLIDER_CAPSULE) {
+        /* Upright: the radius covers X and Z, the height Y (at least the two end caps). */
+        const float r = fmaxf(extent.x, extent.z) * 0.5f;
+        size = wpe_vec3(r, fmaxf(extent.y, 2.0f * r), r);
+    }
+
+    /* The collider as it is (or a new box), with the fitted size and offset. */
+    const WPE_SceneContext context = wpe__editor_context(call->editor);
+    WPE_JsonWriter* current = NULL;
+    WPE_JsonWriter* fitted = NULL;
+    WPE_JsonDocument* entity = NULL;
+    WPE_JsonDocument* value = NULL;
+    const char* text = NULL;
+    size_t size_bytes = 0;
+    WPE_Result result = wpe_json_writer_create(&current);
+    if (result == WPE_RESULT_OK) result = wpe_scene_save_entity(&context, e, current);
+    if (result == WPE_RESULT_OK) result = wpe_json_writer_finish(current, &text, &size_bytes);
+    if (result == WPE_RESULT_OK) result = wpe_json_parse(text, size_bytes, &entity, NULL);
+    if (result == WPE_RESULT_OK) result = wpe_json_writer_create(&fitted);
+    if (result == WPE_RESULT_OK) {
+        const WPE_JsonValue* collider = wpe_json_get(wpe_json_root(entity), "collider");
+        wpe_json_write_object_begin(fitted);
+        if (!collider) {
+            wpe_json_write_key(fitted, "shape");
+            wpe_json_write_string(fitted, "box");
+        }
+        for (uint32_t i = 0; i < wpe_json_count(collider); ++i) {
+            const char* key = NULL;
+            const WPE_JsonValue* member = wpe_json_member(collider, i, &key);
+            if (strcmp(key, "size") == 0 || strcmp(key, "offset") == 0) continue;
+            wpe_json_write_key(fitted, key);
+            wpe_json_write_value(fitted, member);
+        }
+        const struct {
+            const char* key;
+            WPE_Vec3 v;
+        } parts[] = {{"size", size}, {"offset", center}};
+        for (size_t p = 0; p < 2; ++p) {
+            wpe_json_write_key(fitted, parts[p].key);
+            wpe_json_write_array_begin(fitted, true);
+            for (int i = 0; i < 3; ++i)
+                wpe_json_write_number(fitted, parts[p].v.v[i]);
+            wpe_json_write_array_end(fitted);
+        }
+        wpe_json_write_object_end(fitted);
+        result = wpe_json_writer_finish(fitted, &text, &size_bytes);
+    }
+    if (result == WPE_RESULT_OK) result = wpe_json_parse(text, size_bytes, &value, NULL);
+    if (result == WPE_RESULT_OK) result = wpe__editor_begin_change(call->editor);
+    if (result == WPE_RESULT_OK)
+        result = wpe_scene_set_component(&context, e, "collider", wpe_json_root(value));
+    wpe_json_free(value);
+    wpe_json_free(entity);
+    wpe_json_writer_destroy(fitted);
+    wpe_json_writer_destroy(current);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    return wpe_scene_save_entity(&context, e, call->w);
+}
+
 static WPE_Result wpe__cmd_focus(wpe__Call* call) {
     WPE_Editor* editor = call->editor;
     WPE_Ecs* ecs = wpe__ecs(call);
@@ -732,7 +830,7 @@ static WPE_Result wpe__cmd_focus(wpe__Call* call) {
     /* A sphere around the entity's meshes (or a unit sphere at its origin), seen whole. */
     WPE_Vec3 lo, hi, center;
     float radius = 1.0f;
-    if (wpe__subtree_bounds(ecs, e, &lo, &hi)) {
+    if (wpe__subtree_bounds(ecs, e, NULL, &lo, &hi)) {
         center = wpe_vec3_scale(wpe_vec3_add(lo, hi), 0.5f);
         radius = wpe_vec3_length(wpe_vec3_sub(hi, lo)) * 0.5f;
         radius = radius > 0.25f ? radius : 0.25f;
@@ -880,6 +978,10 @@ static const struct {
     {"screenshot", wpe__cmd_screenshot, "{path, target = \"game\"|\"editor\"}"},
     {"camera", wpe__cmd_camera, "{position: [x,y,z], target: [x,y,z]}: place the editor camera"},
     {"focus", wpe__cmd_focus, "{id = selection}: frame the entity and its children -> {position, target}"},
+    {"fit_collider", wpe__cmd_fit_collider,
+     "{id = selection}: size the collider (a new box if none) to the meshes of the entity and its children "
+     "-> "
+     "the entity"},
     {"run_lua", wpe__cmd_run_lua, "{code}: run Luau with the wpe API (undoable)"},
     {"list_assets", wpe__cmd_list_assets, "{prefix?} -> asset paths"},
     {"export", wpe__cmd_export, "{output, runtime?} -> {files, bytes}"},

@@ -61,6 +61,11 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Engine: `wpe_engine_set_draw_scene`. UI: `wpe_ui_pick` can count every element (editors).
 - Tests: the 2D and 3D views (camera, UI, a scene without a camera, play mode), view settings.
 
+### Added (editor: fit colliders to meshes)
+- `fit_collider` command and inspector buttons (**Fit to meshes** on a collider, **Add box collider fitted
+  to meshes** without one): sizes and centers a box, sphere or capsule collider around the meshes of
+  the entity and its children, in the entity's own space; other collider settings are kept.
+
 ### Added (built-in font)
 - `assets/fonts/small.png` is compiled into the engine (`wpe_font_create_builtin`): projects that name no
   font, or whose font file is missing (with a warning), get text with it.
