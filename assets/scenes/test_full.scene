@@ -245,8 +245,8 @@
     },
     {
       "id": 35,
-      "name": "leaning tree",
-      "transform": {"position": [-8, 0, -3], "euler": [0, 0, 20]},
+      "name": "facing tree",
+      "transform": {"position": [-8, 0, -3]},
       "billboard": {"image": "sprites/tree.png", "size": [1.5, 2.25], "pivot": [0.5, 0], "mode": "axis_aligned"}
     },
     {

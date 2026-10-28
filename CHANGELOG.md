@@ -64,7 +64,7 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ### Added (billboards)
 - `WPE_Billboard` (`billboard` in scenes, docs in `docs/scenes.md#billboards`): 3D sprites drawn by
   the scene renderer, depth tested and fogged.
-  - Modes: fixed, axis-aligned (the entity's Y), axis-aligned to world Y, and screen-aligned; a pivot
+  - Modes: fixed, axis-aligned (faces the camera from any side, upright), axis-aligned to world Y, and screen-aligned; a pivot
     and an in-plane rotation.
   - Blending: cutout (no sorting), alpha (sorted with transparent geometry) or additive.
   - Unlit by default; `lit` uses the ambient, point/spot lights and the sun with its shadow, wrapped

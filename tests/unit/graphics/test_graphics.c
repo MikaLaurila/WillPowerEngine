@@ -293,13 +293,25 @@ static void test_graphics_billboard_corners(void) {
         wpe_mat4_mul(&high, &(WPE_Mat4){.m = {{0, 0, -1, 0}, {0, 1, 0, 0}, {1, 0, 0, 0}, {0, 0, 0, 1}}});
     WPE_TEST_ASSERT(wpe_billboard_corners(&b, &world, &turned, c, &n));
     assert_vec3(wpe_vec3(1, 1.5f, 0.5f), c[0]);
-    /* About the entity's own Y: an entity tilted 90 degrees about Z has its Y along -X. */
+    /* Axis-aligned: faces the camera's position, upright, whatever the entity's rotation. Straight ahead it
+     * matches the screen-aligned quad even for a tilted entity; from above and in front it tips back to face
+     * the camera, its right staying level. */
     b.mode = WPE_BILLBOARD_AXIS_ALIGNED;
     const WPE_Mat4 tilted =
         wpe_mat4_mul(&world, &(WPE_Mat4){.m = {{0, 1, 0, 0}, {-1, 0, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}}});
     WPE_TEST_ASSERT(wpe_billboard_corners(&b, &tilted, &camera, c, &n));
-    assert_vec3(wpe_vec3(1.5f, 1.5f, 0), c[0]); /* "Up" is -X, "right" is -Y from the camera at +Z. */
-    assert_vec3(wpe_vec3(0.5f, 2.5f, 0), c[2]);
+    assert_vec3(wpe_vec3(0.5f, 1.5f, 0), c[0]);
+    assert_vec3(wpe_vec3(1.5f, 2.5f, 0), c[2]);
+    const WPE_Mat4 above = translation(wpe_vec3(1, 7, 5));
+    WPE_TEST_ASSERT(wpe_billboard_corners(&b, &tilted, &above, c, &n));
+    const float h = 0.35355339f; /* Half a unit along a 45-degree diagonal. */
+    assert_vec3(wpe_vec3(0.5f, 2.0f - h, h), c[0]);
+    assert_vec3(wpe_vec3(1.5f, 2.0f + h, -h), c[2]);
+    assert_vec3(wpe_vec3(0, 0.70710678f, 0.70710678f), n);
+    /* Straight above, the camera's right decides the turn and the quad lies flat, facing up. */
+    const WPE_Mat4 overhead = translation(wpe_vec3(1, 9, 0));
+    WPE_TEST_ASSERT(wpe_billboard_corners(&b, &world, &overhead, c, &n));
+    assert_vec3(wpe_vec3(0, 1, 0), n);
     /* Fixed: the entity's XY plane, whatever the camera does; rotation turns it within its plane. */
     b.mode = WPE_BILLBOARD_FIXED;
     WPE_TEST_ASSERT(wpe_billboard_corners(&b, &world, &high, c, &n));

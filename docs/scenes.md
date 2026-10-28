@@ -78,10 +78,10 @@ An entity may have no components at all (`{"id": 7}`).
 A `billboard` is a 3D sprite: an image on a quad that lives in the world like any object (depth tested, fogged), placed by the entity's transform.
 
 - **Turning** (`mode`):
-  - `screen_aligned` always faces the screen: particles, icons, pick-ups.
-  - `axis_aligned_y` stays upright and turns about the world's Y axis toward the camera: trees, characters, signs that shouldn't tip over when seen from above.
-  - `axis_aligned` does the same about the entity's own Y axis (a leaning tree, a beam along a direction).
-  - `fixed` is a double-sided quad in the entity's XY plane, turned only by its transform: a decal, a sign on a wall.
+  - `screen_aligned` lies parallel to the screen, turning and rolling with the camera: particles, icons, pick-ups.
+  - `axis_aligned_y` stays upright and turns only about the world's Y axis toward the camera: trees, characters, signs that shouldn't tip back when seen from above.
+  - `axis_aligned` faces the camera from every side, above included, and stays upright: it tips back to face a camera above it, but never tilts sideways or rolls with the camera (clouds, smoke, distant trees).
+  - `fixed` is a double-sided quad in the entity's XY plane, turned only by its transform: a decal, a sign on a wall. It is the only mode that follows the entity's rotation; the others use its position and scale (and `rotation` turns any of them within its plane).
 - **Blending** (`blend`): `cutout` draws texels with alpha ≥ 0.5 as solid and skips the rest, so it needs no sorting. `alpha` blends soft edges and is drawn back to front after opaque geometry. `additive` adds light, for glows, fire and sparks (fog fades it out rather than tinting it).
 - **Lighting:** unlit by default: the image's own colors. With `lit`, the scene's ambient light, point and spot lights and the sun (with its shadow) light it from the side facing the camera, softly, so a quad turned away from a light is dimmer rather than black.
 - **Sprite sheets:** `columns` × `rows` cells of the image (or of `source`), read left to right and top to bottom. `fps` plays them; `loop` false stops on the last frame. Scripts can set `frame` directly.

@@ -84,8 +84,9 @@ typedef struct WPE_Animator {
 
 /** How a billboard turns. */
 typedef enum WPE_BillboardMode {
-    WPE_BILLBOARD_FIXED = 0,      /* A double-sided quad in the entity's XY plane, turned by its transform. */
-    WPE_BILLBOARD_AXIS_ALIGNED,   /* Turns about the entity's own Y axis to face the camera. */
+    WPE_BILLBOARD_FIXED = 0,    /* A double-sided quad in the entity's XY plane, turned by its transform. */
+    WPE_BILLBOARD_AXIS_ALIGNED, /* Faces the camera from any side (above too), kept upright (no tilt or roll).
+                                 */
     WPE_BILLBOARD_AXIS_ALIGNED_Y, /* Turns about the world's Y axis to face the camera (trees, characters). */
     WPE_BILLBOARD_SCREEN_ALIGNED, /* Always faces the screen (particles, icons). */
 } WPE_BillboardMode;
@@ -127,7 +128,8 @@ WPE_Billboard wpe_billboard_default(void);
 /**
  * World-space corners of a billboard as seen from a camera, counter-clockwise when looked at: bottom-left,
  * bottom-right, top-right, top-left; and the quad's normal, which faces the camera (except FIXED quads,
- * whose normal is the entity's +Z).
+ * whose normal is the entity's +Z). Only FIXED quads follow the entity's rotation; the others use its
+ * position and scale.
  *
  * @param world The entity's world matrix. @param camera_world The camera's world matrix.
  * @return false for an empty quad (zero size or scale).

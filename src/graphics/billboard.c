@@ -41,13 +41,21 @@ bool wpe_billboard_corners(const WPE_Billboard* b, const WPE_Mat4* world, const 
         right = wpe__direction_or(wpe__column(world, 0), wpe_vec3(1, 0, 0));
         up = wpe__direction_or(wpe__column(world, 1), wpe_vec3(0, 1, 0));
         break;
-    case WPE_BILLBOARD_AXIS_ALIGNED:
+    case WPE_BILLBOARD_AXIS_ALIGNED: {
+        /* Faces the camera's position from any side, above included, and stays upright: its up is the
+         * world's up as far as facing the camera allows (no tilt, no roll with the camera). Straight above
+         * or below, the camera's right decides the turn. */
+        const WPE_Vec3 facing =
+            wpe__direction_or(to_camera, wpe__direction_or(wpe__column(camera_world, 2), wpe_vec3(0, 0, 1)));
+        right = wpe__direction_or(wpe_vec3_cross(wpe_vec3(0, 1, 0), facing), camera_right);
+        up = wpe__direction_or(wpe_vec3_cross(facing, right), camera_up);
+        right = wpe_vec3_cross(up, facing); /* Square again: the fallback right needn't be perpendicular. */
+        break;
+    }
     case WPE_BILLBOARD_AXIS_ALIGNED_Y:
-        /* Upright along the axis, turned so the quad faces the camera as much as the axis allows. A camera
-         * right on the axis leaves no turn to make: the camera's right is used. */
-        up = b->mode == WPE_BILLBOARD_AXIS_ALIGNED_Y
-                 ? wpe_vec3(0, 1, 0)
-                 : wpe__direction_or(wpe__column(world, 1), wpe_vec3(0, 1, 0));
+        /* Upright along world Y, turned about it so the quad faces the camera as much as the axis allows. A
+         * camera right on the axis leaves no turn to make: the camera's right is used. */
+        up = wpe_vec3(0, 1, 0);
         right = wpe__direction_or(wpe_vec3_cross(up, to_camera), camera_right);
         break;
     case WPE_BILLBOARD_SCREEN_ALIGNED:
