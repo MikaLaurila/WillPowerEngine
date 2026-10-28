@@ -136,6 +136,12 @@ function Tour:on_start()
 	assert(require("scripts/lib/util.luau") == util, "a module loads once")
 	assert(util.approach(0, 10, 3) == 3 and near(util.angle_delta(0, 1.5 * math.pi), -0.5 * math.pi))
 	assert(not pcall(require, "scripts/lib/missing"))
+	local parent, inner = wpe.spawn("tour_find_parent"), wpe.spawn("tour_find_inner")
+	local leaf = wpe.spawn("tour_find_leaf")
+	wpe.set_parent(inner, parent)
+	wpe.set_parent(leaf, inner)
+	assert(util.find_child(parent, "tour_find_leaf") == leaf and util.find_child(parent, "nothing") == nil)
+	wpe.destroy(parent)
 	assert(not pcall(require, "../outside"))
 
 	-- Timers run on game time; a cancelled one never runs.

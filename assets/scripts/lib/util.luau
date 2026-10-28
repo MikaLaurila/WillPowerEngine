@@ -14,6 +14,21 @@ function util.angle_delta(from: number, to: number): number
 	return (to - from + math.pi) % (2 * math.pi) - math.pi
 end
 
+-- The first entity named `name` under `root` (searched depth first), or nil. Unlike wpe.find, it stays
+-- within one instance, so each copy of a model finds its own parts.
+function util.find_child(root: number, name: string): number?
+	for _, child in wpe.children(root) do
+		if wpe.get_name(child) == name then
+			return child
+		end
+		local found = util.find_child(child, name)
+		if found then
+			return found
+		end
+	end
+	return nil
+end
+
 -- Horizontal unit vectors of the camera's view: forward along the ground, and right.
 function util.camera_axes(): (vector, vector)
 	local camera = wpe.get_camera()

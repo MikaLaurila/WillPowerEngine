@@ -127,7 +127,7 @@ Entity handles are numbers. Passing a handle that isn't alive raises an error. V
 | `wpe.set_light(entity, {type, color, intensity, range, inner_cone, outer_cone, shadows})` | Add or update a light. Missing fields keep their current values (or the defaults). |
 | `wpe.get_light(entity) -> table?` / `wpe.remove_light(entity)` | Read or remove a light. |
 | `wpe.LIGHT_DIRECTIONAL`, `wpe.LIGHT_POINT`, `wpe.LIGHT_SPOT` | Light type constants. |
-| `wpe.set_visible(entity, bool)` | Show or hide every mesh in the entity's subtree. |
+| `wpe.set_visible(entity, bool)` | Show or hide every mesh in the entity's subtree. An instantiated model has an entity per glTF node, named as in the file, so its parts (a sword drawn or sheathed) can be shown and hidden one by one: find them under the instance with `util.find_child(root, name)` from `scripts/lib/util.luau`, which unlike `wpe.find` stays within that copy of the model. |
 | `wpe.play_animation(entity, [animation], [loop = true], [fade = 0])` | Play an instantiated model's animation from its start: a 1-based index or the animation's name. nil resumes the current one where it is. With `fade` seconds it crossfades: the previous animation carries on underneath while the new one blends in, so a walk turns into a run without a jump. |
 | `wpe.stop_animation(entity)` | Pause playback. |
 | `wpe.animation_time(entity, [seconds]) -> seconds` | Get or set the playback position. |
