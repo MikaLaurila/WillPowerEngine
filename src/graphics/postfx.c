@@ -2,6 +2,7 @@
 #include "graphics/postfx.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <string.h>
 
 #include "core/alloc.h"
@@ -320,6 +321,65 @@ static void wpe__dof_pass(const WPE_PostContext* c, const void* params_ptr, uint
     }
 }
 
+/* ---- Distortions ------------------------------------------------------------------------------------ */
+
+/* Each pixel shows the image from a little toward the center across the ring, so the ring pushes it
+ * outward; the push peaks mid-ring and fades smoothly to its edges. */
+static void wpe__shockwave_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
+                                uint32_t row_begin, uint32_t row_end) {
+    (void)pass;
+    const WPE_ShockwaveParams* p = params_ptr;
+    const float h = (float)c->height;
+    const float cx = p->center_x * (float)c->width, cy = p->center_y * h;
+    const float width = p->width > 1e-4f ? p->width : 1e-4f;
+    for (uint32_t y = row_begin; y < row_end; ++y) {
+        for (uint32_t x = 0; x < c->width; ++x) {
+            const size_t i = (size_t)y * c->width + x;
+            const float dx = ((float)x + 0.5f - cx) / h, dy = ((float)y + 0.5f - cy) / h;
+            const float d = sqrtf(dx * dx + dy * dy);
+            const float ring = (d - p->radius) / width;
+            if (!(fabsf(ring) < 1.0f) || !(d > 1e-6f)) {
+                c->dst[i] = c->src[i];
+                continue;
+            }
+            const float bump = (1.0f - ring * ring) * (1.0f - ring * ring);
+            const float push = p->strength_pixels * bump / d / h; /* Along the unit direction, in heights. */
+            const int32_t sx = (int32_t)floorf(cx + (dx - dx * push) * h);
+            const int32_t sy = (int32_t)floorf(cy + (dy - dy * push) * h);
+            c->dst[i] = wpe__texel_clamped(c, sx, sy);
+        }
+    }
+}
+
+#define WPE__RADIAL_SAMPLES 8
+
+static void wpe__radial_blur_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
+                                  uint32_t row_begin, uint32_t row_end) {
+    (void)pass;
+    const WPE_RadialBlurParams* p = params_ptr;
+    const float cx = p->center_x * (float)c->width, cy = p->center_y * (float)c->height;
+    const float strength = wpe__clamp01(p->strength);
+    for (uint32_t y = row_begin; y < row_end; ++y) {
+        for (uint32_t x = 0; x < c->width; ++x) {
+            const float px = (float)x + 0.5f, py = (float)y + 0.5f;
+            float sum[3] = {0.0f, 0.0f, 0.0f};
+            for (int k = 0; k < WPE__RADIAL_SAMPLES; ++k) {
+                const float t = strength * (float)k / (float)WPE__RADIAL_SAMPLES;
+                const WPE_Color s = wpe__texel_clamped(c, (int32_t)floorf(px + (cx - px) * t),
+                                                       (int32_t)floorf(py + (cy - py) * t));
+                const WPE_Vec4 v = wpe_color_to_vec4(s);
+                sum[0] += v.x;
+                sum[1] += v.y;
+                sum[2] += v.z;
+            }
+            const size_t i = (size_t)y * c->width + x;
+            const float n = (float)WPE__RADIAL_SAMPLES;
+            c->dst[i] = wpe_color_from_vec4(
+                wpe_vec4(sum[0] / n, sum[1] / n, sum[2] / n, wpe_color_to_vec4(c->src[i]).w));
+        }
+    }
+}
+
 /* ---- Constructors ---------------------------------------------------------------------------------- */
 
 static const WPE_SsaoParams wpe__ssao_defaults = {
@@ -378,4 +438,165 @@ WPE_PostEffect wpe_postfx_color_adjust(const WPE_ColorAdjustParams* params) {
                             .pass_count = 1,
                             .params = params ? params : &wpe__color_adjust_defaults,
                             .enabled = true};
+}
+
+static const WPE_ShockwaveParams wpe__shockwave_defaults = {
+    .center_x = 0.5f, .center_y = 0.5f, .radius = 0.3f, .width = 0.08f, .strength_pixels = 6.0f};
+static const WPE_RadialBlurParams wpe__radial_blur_defaults = {
+    .center_x = 0.5f, .center_y = 0.5f, .strength = 0.15f};
+
+WPE_PostEffect wpe_postfx_shockwave(const WPE_ShockwaveParams* params) {
+    return (WPE_PostEffect){.name = "shockwave",
+                            .pass = wpe__shockwave_pass,
+                            .pass_count = 1,
+                            .params = params ? params : &wpe__shockwave_defaults,
+                            .enabled = true};
+}
+
+WPE_PostEffect wpe_postfx_radial_blur(const WPE_RadialBlurParams* params) {
+    return (WPE_PostEffect){.name = "radial_blur",
+                            .pass = wpe__radial_blur_pass,
+                            .pass_count = 1,
+                            .params = params ? params : &wpe__radial_blur_defaults,
+                            .enabled = true};
+}
+
+/* ---- Configured effects ----------------------------------------------------------------------------- */
+
+static const char* const wpe__kind_names[WPE_POSTFX_KIND_COUNT] = {
+    "ssao",         "chromatic_aberration", "ps1",       "vignette",
+    "color_adjust", "depth_of_field",       "shockwave", "radial_blur"};
+
+/* Each kind's parameters in scene-file order, with the ranges files and scripts may use. */
+static const WPE_PostFxParam wpe__ssao_params[] = {
+    {"radius_pixels", offsetof(WPE_PostFxConfig, ssao.radius_pixels), 0.5, 64, false},
+    {"strength", offsetof(WPE_PostFxConfig, ssao.strength), 0, 1, false},
+    {"depth_range", offsetof(WPE_PostFxConfig, ssao.depth_range), 0, 1e6, false},
+    {"bias", offsetof(WPE_PostFxConfig, ssao.bias), 0, 1e6, false}};
+static const WPE_PostFxParam wpe__chromatic_params[] = {
+    {"strength_pixels", offsetof(WPE_PostFxConfig, chromatic_aberration.strength_pixels), 0, 64, false}};
+static const WPE_PostFxParam wpe__ps1_params[] = {
+    {"levels", offsetof(WPE_PostFxConfig, ps1.levels), 2, 256, true},
+    {"dither_strength", offsetof(WPE_PostFxConfig, ps1.dither_strength), 0, 1, false}};
+static const WPE_PostFxParam wpe__vignette_params[] = {
+    {"strength", offsetof(WPE_PostFxConfig, vignette.strength), 0, 1, false},
+    {"radius", offsetof(WPE_PostFxConfig, vignette.radius), 0, 1.5, false}};
+static const WPE_PostFxParam wpe__color_adjust_params[] = {
+    {"brightness", offsetof(WPE_PostFxConfig, color_adjust.brightness), -1, 1, false},
+    {"contrast", offsetof(WPE_PostFxConfig, color_adjust.contrast), 0, 4, false},
+    {"saturation", offsetof(WPE_PostFxConfig, color_adjust.saturation), 0, 4, false}};
+static const WPE_PostFxParam wpe__dof_params[] = {
+    {"focus_distance", offsetof(WPE_PostFxConfig, depth_of_field.focus_distance), 0, 1e6, false},
+    {"focus_range", offsetof(WPE_PostFxConfig, depth_of_field.focus_range), 0, 1e6, false},
+    {"falloff", offsetof(WPE_PostFxConfig, depth_of_field.falloff), 0, 1e6, false},
+    {"radius_pixels", offsetof(WPE_PostFxConfig, depth_of_field.radius_pixels), 0, 16, false}};
+static const WPE_PostFxParam wpe__shockwave_params[] = {
+    {"center_x", offsetof(WPE_PostFxConfig, shockwave.center_x), -1, 2, false},
+    {"center_y", offsetof(WPE_PostFxConfig, shockwave.center_y), -1, 2, false},
+    {"radius", offsetof(WPE_PostFxConfig, shockwave.radius), 0, 4, false},
+    {"width", offsetof(WPE_PostFxConfig, shockwave.width), 0.001, 2, false},
+    {"strength_pixels", offsetof(WPE_PostFxConfig, shockwave.strength_pixels), -64, 64, false}};
+static const WPE_PostFxParam wpe__radial_blur_params[] = {
+    {"center_x", offsetof(WPE_PostFxConfig, radial_blur.center_x), -1, 2, false},
+    {"center_y", offsetof(WPE_PostFxConfig, radial_blur.center_y), -1, 2, false},
+    {"strength", offsetof(WPE_PostFxConfig, radial_blur.strength), 0, 1, false}};
+
+static const struct {
+    const WPE_PostFxParam* params;
+    uint32_t count;
+} wpe__kind_params[WPE_POSTFX_KIND_COUNT] = {
+#define WPE__TABLE(t) {t, (uint32_t)(sizeof(t) / sizeof((t)[0]))}
+    WPE__TABLE(wpe__ssao_params),      WPE__TABLE(wpe__chromatic_params),    WPE__TABLE(wpe__ps1_params),
+    WPE__TABLE(wpe__vignette_params),  WPE__TABLE(wpe__color_adjust_params), WPE__TABLE(wpe__dof_params),
+    WPE__TABLE(wpe__shockwave_params), WPE__TABLE(wpe__radial_blur_params),
+#undef WPE__TABLE
+};
+
+const char* wpe_postfx_kind_name(WPE_PostFxKind kind) {
+    return (uint32_t)kind < WPE_POSTFX_KIND_COUNT ? wpe__kind_names[kind] : NULL;
+}
+
+bool wpe_postfx_kind_from_name(const char* name, WPE_PostFxKind* out_kind) {
+    for (uint32_t i = 0; name && i < WPE_POSTFX_KIND_COUNT; ++i) {
+        if (strcmp(wpe__kind_names[i], name) != 0) continue;
+        if (out_kind) *out_kind = (WPE_PostFxKind)i;
+        return true;
+    }
+    return false;
+}
+
+const WPE_PostFxParam* wpe_postfx_params(WPE_PostFxKind kind, uint32_t* out_count) {
+    const bool valid = (uint32_t)kind < WPE_POSTFX_KIND_COUNT;
+    if (out_count) *out_count = valid ? wpe__kind_params[kind].count : 0;
+    return valid ? wpe__kind_params[kind].params : NULL;
+}
+
+double wpe_postfx_param_get(const WPE_PostFxConfig* config, const WPE_PostFxParam* param) {
+    const unsigned char* at = (const unsigned char*)config + param->offset;
+    if (param->integer) {
+        uint32_t value;
+        memcpy(&value, at, sizeof value);
+        return value;
+    }
+    float value;
+    memcpy(&value, at, sizeof value);
+    return value;
+}
+
+void wpe_postfx_param_set(WPE_PostFxConfig* config, const WPE_PostFxParam* param, double value) {
+    if (!(value == value)) value = param->min; /* NaN */
+    value = value < param->min ? param->min : value > param->max ? param->max : value;
+    unsigned char* at = (unsigned char*)config + param->offset;
+    if (param->integer) {
+        const uint32_t whole = (uint32_t)lround(value);
+        memcpy(at, &whole, sizeof whole);
+    } else {
+        const float single = (float)value;
+        memcpy(at, &single, sizeof single);
+    }
+}
+
+WPE_PostFxConfig wpe_postfx_config_default(WPE_PostFxKind kind) {
+    return (WPE_PostFxConfig){.kind = kind,
+                              .enabled = true,
+                              .ssao = wpe__ssao_defaults,
+                              .chromatic_aberration = wpe__chromatic_defaults,
+                              .ps1 = wpe__ps1_defaults,
+                              .vignette = wpe__vignette_defaults,
+                              .color_adjust = wpe__color_adjust_defaults,
+                              .depth_of_field = wpe__dof_defaults,
+                              .shockwave = wpe__shockwave_defaults,
+                              .radial_blur = wpe__radial_blur_defaults};
+}
+
+WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* c) {
+    WPE_PostEffect effect = {0};
+    switch (c->kind) {
+    case WPE_POSTFX_SSAO:
+        effect = wpe_postfx_ssao(&c->ssao);
+        break;
+    case WPE_POSTFX_CHROMATIC_ABERRATION:
+        effect = wpe_postfx_chromatic_aberration(&c->chromatic_aberration);
+        break;
+    case WPE_POSTFX_PS1:
+        effect = wpe_postfx_ps1(&c->ps1);
+        break;
+    case WPE_POSTFX_VIGNETTE:
+        effect = wpe_postfx_vignette(&c->vignette);
+        break;
+    case WPE_POSTFX_COLOR_ADJUST:
+        effect = wpe_postfx_color_adjust(&c->color_adjust);
+        break;
+    case WPE_POSTFX_DEPTH_OF_FIELD:
+        effect = wpe_postfx_depth_of_field(&c->depth_of_field);
+        break;
+    case WPE_POSTFX_SHOCKWAVE:
+        effect = wpe_postfx_shockwave(&c->shockwave);
+        break;
+    case WPE_POSTFX_RADIAL_BLUR:
+        effect = wpe_postfx_radial_blur(&c->radial_blur);
+        break;
+    }
+    effect.enabled = c->enabled;
+    return effect;
 }

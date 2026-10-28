@@ -69,6 +69,19 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (post effects from scripts; shockwave and radial blur)
+- Scripts change the scene's post effects while the game runs: `wpe.get_postfx`, `wpe.set_postfx`
+  (by index or effect name), `wpe.add_postfx`, `wpe.remove_postfx` (`WPE_ScriptApp.postfx`).
+- New effects to animate: `shockwave` (a ring warping the image outward from a screen point) and
+  `radial_blur` (smearing toward a point). `wpe.world_to_screen` turns a world position into
+  pixels through the current camera (fresh, even after scripts moved it this frame).
+- Effect kinds, configs and a table of each kind's parameters (names, ranges, whole numbers) moved
+  to `graphics/postfx.h` (`WPE_PostFxConfig`, `wpe_postfx_params`, `wpe_postfx_from_config`); scene
+  files read and write post effects through it, with unchanged text.
+- The character demo's fire button sends a shockwave out from the hero.
+- Tests: the shockwave moves only its ring, the radial blur leaves its center; configs (names,
+  parameters, clamping); the script functions in the master scene.
+
 ### Added (depth of field)
 - `depth_of_field` post effect (`wpe_postfx_depth_of_field`): sharp around `focus_distance` (within
   `focus_range`), blurring over `falloff` to `radius_pixels`, in front and behind. Each pixel's blur

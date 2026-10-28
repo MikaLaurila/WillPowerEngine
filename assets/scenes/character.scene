@@ -39,7 +39,7 @@
       "name": "game",
       "script": {"path": "scripts/game.luau",
                  "properties": {"next_scene": "scenes/demo.scene", "title": "Character controller",
-                                "help": "WASD/stick move  Space/A jump;Shift/LT run  R/Back reset"}}
+                                "help": "WASD/stick move  Space/A jump;Shift/LT run  F,LMB/X shockwave;R/Back reset"}}
     },
     {
       "id": 5,

@@ -37,8 +37,6 @@ static const char* const wpe__collider_shapes[] = {"box", "sphere", "capsule", "
 static const char* const wpe__buses[] = {"master", "effects", "music"};
 static const char* const wpe__fog_modes[] = {"none", "linear", "exponential"};
 static const char* const wpe__sky_modes[] = {"color", "gradient", "panorama"};
-static const char* const wpe__postfx_kinds[] = {"ssao",     "chromatic_aberration", "ps1",
-                                                "vignette", "color_adjust",         "depth_of_field"};
 
 #define WPE__COUNT(array) ((uint32_t)(sizeof(array) / sizeof((array)[0])))
 
@@ -47,21 +45,8 @@ static_assert(WPE__COUNT(wpe__body_types) == WPE_BODY_DYNAMIC + 1, "body type na
 static_assert(WPE__COUNT(wpe__collider_shapes) == WPE_COLLIDER_MESH + 1, "collider shape names");
 static_assert(WPE__COUNT(wpe__buses) == WPE_AUDIO_BUS_COUNT, "bus names");
 static_assert(WPE__COUNT(wpe__fog_modes) == WPE_FOG_EXPONENTIAL + 1, "fog mode names");
-static_assert(WPE__COUNT(wpe__postfx_kinds) == WPE_POSTFX_DEPTH_OF_FIELD + 1, "post effect names");
 
 /* ---- Environment ---------------------------------------------------------------------------------- */
-
-static WPE_PostFxConfig wpe__postfx_default(WPE_PostFxKind kind) {
-    WPE_PostFxConfig config = {.kind = kind, .enabled = true};
-    config.ssao = *(const WPE_SsaoParams*)wpe_postfx_ssao(NULL).params;
-    config.chromatic_aberration =
-        *(const WPE_ChromaticAberrationParams*)wpe_postfx_chromatic_aberration(NULL).params;
-    config.ps1 = *(const WPE_Ps1Params*)wpe_postfx_ps1(NULL).params;
-    config.vignette = *(const WPE_VignetteParams*)wpe_postfx_vignette(NULL).params;
-    config.color_adjust = *(const WPE_ColorAdjustParams*)wpe_postfx_color_adjust(NULL).params;
-    config.depth_of_field = *(const WPE_DepthOfFieldParams*)wpe_postfx_depth_of_field(NULL).params;
-    return config;
-}
 
 WPE_SceneEnvironment wpe_scene_environment_default(void) {
     return (WPE_SceneEnvironment){.clear_color = wpe_vec3(0.11f, 0.125f, 0.17f),
@@ -74,30 +59,8 @@ uint32_t wpe_scene_environment_effects(const WPE_SceneEnvironment* environment, 
     if (!environment || !out_effects) return 0;
     const uint32_t count =
         environment->postfx_count < WPE_SCENE_MAX_POSTFX ? environment->postfx_count : WPE_SCENE_MAX_POSTFX;
-    for (uint32_t i = 0; i < count; ++i) {
-        const WPE_PostFxConfig* c = &environment->postfx[i];
-        switch (c->kind) {
-        case WPE_POSTFX_SSAO:
-            out_effects[i] = wpe_postfx_ssao(&c->ssao);
-            break;
-        case WPE_POSTFX_CHROMATIC_ABERRATION:
-            out_effects[i] = wpe_postfx_chromatic_aberration(&c->chromatic_aberration);
-            break;
-        case WPE_POSTFX_PS1:
-            out_effects[i] = wpe_postfx_ps1(&c->ps1);
-            break;
-        case WPE_POSTFX_VIGNETTE:
-            out_effects[i] = wpe_postfx_vignette(&c->vignette);
-            break;
-        case WPE_POSTFX_COLOR_ADJUST:
-            out_effects[i] = wpe_postfx_color_adjust(&c->color_adjust);
-            break;
-        case WPE_POSTFX_DEPTH_OF_FIELD:
-            out_effects[i] = wpe_postfx_depth_of_field(&c->depth_of_field);
-            break;
-        }
-        out_effects[i].enabled = c->enabled;
-    }
+    for (uint32_t i = 0; i < count; ++i)
+        out_effects[i] = wpe_postfx_from_config(&environment->postfx[i]);
     return count;
 }
 
@@ -263,37 +226,17 @@ static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment*
     for (uint32_t i = 0; i < env->postfx_count && i < WPE_SCENE_MAX_POSTFX; ++i) {
         const WPE_PostFxConfig* c = &env->postfx[i];
         wpe_json_write_object_begin(w);
-        wpe__write_string(w, "effect", wpe__postfx_kinds[c->kind]);
+        wpe__write_string(w, "effect", wpe_postfx_kind_name(c->kind));
         wpe__write_bool(w, "enabled", c->enabled);
-        switch (c->kind) {
-        case WPE_POSTFX_SSAO:
-            wpe__write_number(w, "radius_pixels", c->ssao.radius_pixels);
-            wpe__write_number(w, "strength", c->ssao.strength);
-            wpe__write_number(w, "depth_range", c->ssao.depth_range);
-            wpe__write_number(w, "bias", c->ssao.bias);
-            break;
-        case WPE_POSTFX_CHROMATIC_ABERRATION:
-            wpe__write_number(w, "strength_pixels", c->chromatic_aberration.strength_pixels);
-            break;
-        case WPE_POSTFX_PS1:
-            wpe__write_integer(w, "levels", c->ps1.levels);
-            wpe__write_number(w, "dither_strength", c->ps1.dither_strength);
-            break;
-        case WPE_POSTFX_VIGNETTE:
-            wpe__write_number(w, "strength", c->vignette.strength);
-            wpe__write_number(w, "radius", c->vignette.radius);
-            break;
-        case WPE_POSTFX_COLOR_ADJUST:
-            wpe__write_number(w, "brightness", c->color_adjust.brightness);
-            wpe__write_number(w, "contrast", c->color_adjust.contrast);
-            wpe__write_number(w, "saturation", c->color_adjust.saturation);
-            break;
-        case WPE_POSTFX_DEPTH_OF_FIELD:
-            wpe__write_number(w, "focus_distance", c->depth_of_field.focus_distance);
-            wpe__write_number(w, "focus_range", c->depth_of_field.focus_range);
-            wpe__write_number(w, "falloff", c->depth_of_field.falloff);
-            wpe__write_number(w, "radius_pixels", c->depth_of_field.radius_pixels);
-            break;
+        uint32_t count = 0;
+        const WPE_PostFxParam* params = wpe_postfx_params(c->kind, &count);
+        for (uint32_t p = 0; p < count; ++p) {
+            const double value = wpe_postfx_param_get(c, &params[p]);
+            if (params[p].integer) {
+                wpe__write_integer(w, params[p].name, (uint32_t)value);
+            } else {
+                wpe__write_number(w, params[p].name, (float)value);
+            }
         }
         wpe_json_write_object_end(w);
     }
@@ -835,56 +778,34 @@ static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_Sc
             if (wpe_json_type(e) != WPE_JSON_OBJECT || !wpe_json_get(e, "effect"))
                 return wpe__json_fail(&l->r, e, WPE_RESULT_ERROR_PARSE,
                                       "each post effect needs an \"effect\" name");
-            if (!wpe__json_read_enum(&l->r, e, "effect", wpe__postfx_kinds, WPE__COUNT(wpe__postfx_kinds),
-                                     &kind))
-                return false;
-            WPE_PostFxConfig c = wpe__postfx_default((WPE_PostFxKind)kind);
-            bool ok = false;
-            switch (c.kind) {
-            case WPE_POSTFX_SSAO:
-                ok = WPE__JSON_CHECK_OBJECT(&l->r, e, "ssao", "effect", "enabled", "radius_pixels",
-                                            "strength", "depth_range", "bias") &&
-                     wpe__json_read_float(&l->r, e, "radius_pixels", 0.5, 64, &c.ssao.radius_pixels) &&
-                     wpe__json_read_float(&l->r, e, "strength", 0, 1, &c.ssao.strength) &&
-                     wpe__json_read_float(&l->r, e, "depth_range", 0, 1e6, &c.ssao.depth_range) &&
-                     wpe__json_read_float(&l->r, e, "bias", 0, 1e6, &c.ssao.bias);
-                break;
-            case WPE_POSTFX_CHROMATIC_ABERRATION:
-                ok = WPE__JSON_CHECK_OBJECT(&l->r, e, "chromatic_aberration", "effect", "enabled",
-                                            "strength_pixels") &&
-                     wpe__json_read_float(&l->r, e, "strength_pixels", 0, 64,
-                                          &c.chromatic_aberration.strength_pixels);
-                break;
-            case WPE_POSTFX_PS1:
-                ok = WPE__JSON_CHECK_OBJECT(&l->r, e, "ps1", "effect", "enabled", "levels",
-                                            "dither_strength") &&
-                     wpe__json_read_uint(&l->r, e, "levels", 2, 256, &c.ps1.levels) &&
-                     wpe__json_read_float(&l->r, e, "dither_strength", 0, 1, &c.ps1.dither_strength);
-                break;
-            case WPE_POSTFX_VIGNETTE:
-                ok =
-                    WPE__JSON_CHECK_OBJECT(&l->r, e, "vignette", "effect", "enabled", "strength", "radius") &&
-                    wpe__json_read_float(&l->r, e, "strength", 0, 1, &c.vignette.strength) &&
-                    wpe__json_read_float(&l->r, e, "radius", 0, 1.5, &c.vignette.radius);
-                break;
-            case WPE_POSTFX_COLOR_ADJUST:
-                ok = WPE__JSON_CHECK_OBJECT(&l->r, e, "color_adjust", "effect", "enabled", "brightness",
-                                            "contrast", "saturation") &&
-                     wpe__json_read_float(&l->r, e, "brightness", -1, 1, &c.color_adjust.brightness) &&
-                     wpe__json_read_float(&l->r, e, "contrast", 0, 4, &c.color_adjust.contrast) &&
-                     wpe__json_read_float(&l->r, e, "saturation", 0, 4, &c.color_adjust.saturation);
-                break;
-            case WPE_POSTFX_DEPTH_OF_FIELD:
-                ok = WPE__JSON_CHECK_OBJECT(&l->r, e, "depth_of_field", "effect", "enabled", "focus_distance",
-                                            "focus_range", "falloff", "radius_pixels") &&
-                     wpe__json_read_float(&l->r, e, "focus_distance", 0, 1e6,
-                                          &c.depth_of_field.focus_distance) &&
-                     wpe__json_read_float(&l->r, e, "focus_range", 0, 1e6, &c.depth_of_field.focus_range) &&
-                     wpe__json_read_float(&l->r, e, "falloff", 0, 1e6, &c.depth_of_field.falloff) &&
-                     wpe__json_read_float(&l->r, e, "radius_pixels", 0, 16, &c.depth_of_field.radius_pixels);
-                break;
+            const char* kinds[WPE_POSTFX_KIND_COUNT];
+            for (uint32_t k = 0; k < WPE_POSTFX_KIND_COUNT; ++k)
+                kinds[k] = wpe_postfx_kind_name((WPE_PostFxKind)k);
+            if (!wpe__json_read_enum(&l->r, e, "effect", kinds, WPE_POSTFX_KIND_COUNT, &kind)) return false;
+            WPE_PostFxConfig c = wpe_postfx_config_default((WPE_PostFxKind)kind);
+            /* The kind's parameters, described by graphics/postfx.h: names, ranges, whole numbers. */
+            uint32_t count = 0;
+            const WPE_PostFxParam* params = wpe_postfx_params(c.kind, &count);
+            const char* allowed[2 + 16] = {"effect", "enabled"};
+            for (uint32_t p = 0; p < count && p < 16; ++p)
+                allowed[2 + p] = params[p].name;
+            if (!wpe__json_check_object(&l->r, e, kinds[kind], allowed, 2 + count)) return false;
+            for (uint32_t p = 0; p < count; ++p) {
+                const WPE_PostFxParam* param = &params[p];
+                bool ok = false;
+                if (param->integer) {
+                    uint32_t value = (uint32_t)wpe_postfx_param_get(&c, param);
+                    ok = wpe__json_read_uint(&l->r, e, param->name, (uint32_t)param->min,
+                                             (uint32_t)param->max, &value);
+                    wpe_postfx_param_set(&c, param, value);
+                } else {
+                    float value = (float)wpe_postfx_param_get(&c, param);
+                    ok = wpe__json_read_float(&l->r, e, param->name, param->min, param->max, &value);
+                    wpe_postfx_param_set(&c, param, value);
+                }
+                if (!ok) return false;
             }
-            if (!ok || !wpe__json_read_bool(&l->r, e, "enabled", &c.enabled)) return false;
+            if (!wpe__json_read_bool(&l->r, e, "enabled", &c.enabled)) return false;
             env->postfx[env->postfx_count++] = c;
         }
     }

@@ -15,6 +15,7 @@
 #include "core/log.h"
 #include "graphics/animation.h"
 #include "graphics/graphics.h"
+#include "graphics/scene_render.h"
 #include "platform/platform.h"
 #include "scene/scene.h"
 #include "script/script_internal.h"
@@ -1667,6 +1668,156 @@ static int wpe__api_screen_size(lua_State* L) {
     return 2;
 }
 
+/* wpe.world_to_screen(position) -> x, y, in_front: where a world point shows on screen, in pixels (from the
+ * top-left), through the current camera. */
+static int wpe__api_world_to_screen(lua_State* L) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_ScriptApp* app =
+        wpe__app(L, host->app.get_camera != NULL && host->app.screen_size != NULL, "world_to_screen");
+    const WPE_Vec3 p = wpe__check_vec3(L, 1);
+    uint32_t width = 0, height = 0;
+    app->screen_size(app->user_data, &width, &height);
+    /* The view from the camera's current placement: its cached world matrix is only refreshed once a frame,
+     * after scripts may have moved it. */
+    const WPE_Entity camera = app->get_camera(app->user_data);
+    WPE_Mat4 view, projection, world, rigid;
+    WPE_Vec3 position, scale;
+    WPE_Quat rotation;
+    if (!wpe_scene_camera_matrices(host->ecs, camera, height ? (float)width / (float)height : 1.0f, &view,
+                                   &projection) ||
+        !wpe_scene_compute_world_matrix(host->ecs, camera, &world) ||
+        !wpe_mat4_decompose(&world, &position, &rotation, &scale))
+        luaL_errorL(L, "wpe.world_to_screen: there is no camera");
+    rigid = wpe_mat4_from_trs(position, wpe_quat_normalize(rotation), wpe_vec3(1.0f, 1.0f, 1.0f));
+    if (!wpe_mat4_inverse(&rigid, &view))
+        luaL_errorL(L, "wpe.world_to_screen: the camera's placement is degenerate");
+    const WPE_Mat4 view_projection = wpe_mat4_mul(&projection, &view);
+    const WPE_Vec4 clip = wpe_mat4_mul_vec4(&view_projection, wpe_vec4(p.x, p.y, p.z, 1.0f));
+    const bool in_front = clip.w > 1e-6f;
+    const float w = in_front ? clip.w : 1e-6f;
+    lua_pushnumber(L, (clip.x / w * 0.5 + 0.5) * width);
+    lua_pushnumber(L, (0.5 - clip.y / w * 0.5) * height);
+    lua_pushboolean(L, in_front);
+    return 3;
+}
+
+/* ---- Post-processing ------------------------------------------------------------------------------- */
+
+static WPE_PostFxConfig* wpe__postfx_list(lua_State* L, const char* function, uint32_t** out_count) {
+    const WPE_ScriptApp* app = wpe__app(L, wpe__script_host_from(L)->app.postfx != NULL, function);
+    return app->postfx(app->user_data, out_count);
+}
+
+static void wpe__push_postfx(lua_State* L, const WPE_PostFxConfig* c) {
+    uint32_t count = 0;
+    const WPE_PostFxParam* params = wpe_postfx_params(c->kind, &count);
+    lua_createtable(L, 0, (int)count + 2);
+    lua_pushstring(L, wpe_postfx_kind_name(c->kind));
+    lua_setfield(L, -2, "effect");
+    lua_pushboolean(L, c->enabled);
+    lua_setfield(L, -2, "enabled");
+    for (uint32_t p = 0; p < count; ++p) {
+        lua_pushnumber(L, wpe_postfx_param_get(c, &params[p]));
+        lua_setfield(L, -2, params[p].name);
+    }
+}
+
+/* An effect by 1-based index, or the first of a kind's name; raises when there's none. Returns the 0-based
+ * index. */
+static uint32_t wpe__check_postfx(lua_State* L, int arg, const WPE_PostFxConfig* list, uint32_t count,
+                                  const char* function) {
+    if (lua_type(L, arg) == LUA_TSTRING) {
+        const char* name = lua_tostring(L, arg);
+        for (uint32_t i = 0; i < count; ++i)
+            if (strcmp(wpe_postfx_kind_name(list[i].kind), name) == 0) return i;
+        luaL_errorL(L, "wpe.%s: the scene has no '%s' effect", function, name);
+    }
+    const double index = luaL_checknumber(L, arg);
+    if (!(index >= 1.0 && index <= (double)count && index == floor(index)))
+        luaL_errorL(L, "wpe.%s: no effect %g (the scene has %u)", function, index, count);
+    return (uint32_t)index - 1;
+}
+
+/* Sets `enabled` and parameters from a table onto *c (a copy: it may raise halfway). "effect" is the
+ * caller's. */
+static void wpe__read_postfx(lua_State* L, int table, WPE_PostFxConfig* c, const char* function) {
+    luaL_checktype(L, table, LUA_TTABLE);
+    uint32_t count = 0;
+    const WPE_PostFxParam* params = wpe_postfx_params(c->kind, &count);
+    lua_pushnil(L);
+    while (lua_next(L, table)) {
+        if (lua_type(L, -2) != LUA_TSTRING) luaL_errorL(L, "wpe.%s: effect fields are named", function);
+        const char* key = lua_tostring(L, -2);
+        if (strcmp(key, "effect") == 0) {
+            lua_pop(L, 1);
+            continue;
+        }
+        if (strcmp(key, "enabled") == 0) {
+            c->enabled = luaL_checkboolean(L, -1);
+            lua_pop(L, 1);
+            continue;
+        }
+        const WPE_PostFxParam* param = NULL;
+        for (uint32_t p = 0; p < count && !param; ++p)
+            if (strcmp(params[p].name, key) == 0) param = &params[p];
+        if (!param)
+            luaL_errorL(L, "wpe.%s: '%s' has no parameter '%s'", function, wpe_postfx_kind_name(c->kind),
+                        key);
+        if (lua_type(L, -1) != LUA_TNUMBER) luaL_errorL(L, "wpe.%s: '%s' must be a number", function, key);
+        wpe_postfx_param_set(c, param, lua_tonumber(L, -1));
+        lua_pop(L, 1);
+    }
+}
+
+static int wpe__api_get_postfx(lua_State* L) {
+    uint32_t* count = NULL;
+    const WPE_PostFxConfig* list = wpe__postfx_list(L, "get_postfx", &count);
+    lua_createtable(L, (int)*count, 0);
+    for (uint32_t i = 0; i < *count; ++i) {
+        wpe__push_postfx(L, &list[i]);
+        lua_rawseti(L, -2, (int)i + 1);
+    }
+    return 1;
+}
+
+static int wpe__api_set_postfx(lua_State* L) {
+    uint32_t* count = NULL;
+    WPE_PostFxConfig* list = wpe__postfx_list(L, "set_postfx", &count);
+    const uint32_t index = wpe__check_postfx(L, 1, list, *count, "set_postfx");
+    WPE_PostFxConfig c = list[index];
+    wpe__read_postfx(L, 2, &c, "set_postfx");
+    list[index] = c;
+    return 0;
+}
+
+static int wpe__api_add_postfx(lua_State* L) {
+    uint32_t* count = NULL;
+    WPE_PostFxConfig* list = wpe__postfx_list(L, "add_postfx", &count);
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_getfield(L, 1, "effect");
+    WPE_PostFxKind kind;
+    if (lua_type(L, -1) != LUA_TSTRING || !wpe_postfx_kind_from_name(lua_tostring(L, -1), &kind))
+        luaL_errorL(
+            L, "wpe.add_postfx: \"effect\" must name an effect (\"shockwave\", \"depth_of_field\", ...)");
+    lua_pop(L, 1);
+    if (*count >= WPE_POSTFX_MAX_EFFECTS)
+        luaL_errorL(L, "wpe.add_postfx: the scene already has %u effects", WPE_POSTFX_MAX_EFFECTS);
+    WPE_PostFxConfig c = wpe_postfx_config_default(kind);
+    wpe__read_postfx(L, 1, &c, "add_postfx");
+    list[(*count)++] = c;
+    lua_pushnumber(L, *count);
+    return 1;
+}
+
+static int wpe__api_remove_postfx(lua_State* L) {
+    uint32_t* count = NULL;
+    WPE_PostFxConfig* list = wpe__postfx_list(L, "remove_postfx", &count);
+    const uint32_t index = wpe__check_postfx(L, 1, list, *count, "remove_postfx");
+    memmove(&list[index], &list[index + 1], (size_t)(*count - index - 1) * sizeof *list);
+    --*count;
+    return 0;
+}
+
 /* ---- 2D drawing ------------------------------------------------------------------------------------ */
 
 static WPE_Draw2D* wpe__draw2d(lua_State* L) {
@@ -2358,6 +2509,11 @@ static const luaL_Reg wpe__api[] = {
     {"set_camera", wpe__api_set_camera},
     {"get_camera", wpe__api_get_camera},
     {"screen_size", wpe__api_screen_size},
+    {"world_to_screen", wpe__api_world_to_screen},
+    {"get_postfx", wpe__api_get_postfx},
+    {"set_postfx", wpe__api_set_postfx},
+    {"add_postfx", wpe__api_add_postfx},
+    {"remove_postfx", wpe__api_remove_postfx},
     {"color", wpe__api_color},
     {"draw_text", wpe__api_draw_text},
     {"draw_rect", wpe__api_draw_rect},

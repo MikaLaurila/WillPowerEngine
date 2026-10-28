@@ -1,7 +1,7 @@
 -- A walking character on a character controller: moves relative to the camera (move_x / move_y),
 -- runs (boost), jumps when standing (jump), faces the way it walks, and goes back to its start
 -- (reset, or after a fall). Slopes up to the controller's max_slope are walkable, steeper ones
--- aren't; crates get pushed.
+-- aren't; crates get pushed. "fire" sends a shockwave out from it (post effects driven by script).
 local util = require("scripts/lib/util")
 
 local Hero = {}
@@ -12,6 +12,34 @@ function Hero:on_start()
 	self.velocity = vector.create(0, 0, 0)
 	self.jump_requested = false
 	self.yaw = wpe.get_rotation(self.entity).y
+	-- The "fire" action's shockwave: two post effects, off until used.
+	wpe.add_postfx({ effect = "shockwave", enabled = false, width = 0.06 })
+	wpe.add_postfx({ effect = "radial_blur", enabled = false })
+end
+
+local WAVE_SECONDS = 0.4
+
+-- Animates the shockwave: a ring growing out from the hero while it and a radial blur fade.
+function Hero:update_wave(dt)
+	if not self.wave then
+		return
+	end
+	self.wave += dt
+	local t = self.wave / WAVE_SECONDS
+	if t >= 1 then
+		self.wave = nil
+		wpe.set_postfx("shockwave", { enabled = false })
+		wpe.set_postfx("radial_blur", { enabled = false })
+		return
+	end
+	-- Centered on the hero's chest; effect positions are fractions of the screen.
+	local x, y = wpe.world_to_screen(wpe.get_world_position(self.entity) + vector.create(0, 1, 0))
+	local width, height = wpe.screen_size()
+	local cx, cy = x / width, y / height
+	wpe.set_postfx("shockwave", {
+		enabled = true, center_x = cx, center_y = cy, radius = 0.05 + 0.55 * t, strength_pixels = 8 * (1 - t),
+	})
+	wpe.set_postfx("radial_blur", { enabled = true, center_x = cx, center_y = cy, strength = 0.12 * (1 - t) })
 end
 
 function Hero:on_update(dt)
@@ -23,6 +51,11 @@ function Hero:on_update(dt)
 		wpe.set_position(self.entity, self.spawn)
 		self.velocity = vector.create(0, 0, 0)
 	end
+	if wpe.action_pressed("fire", self.player) then
+		self.wave = 0
+		wpe.play_sound("sounds/thud.wav", { volume = 0.4, pitch = 0.6 })
+	end
+	self:update_wave(dt)
 end
 
 function Hero:on_fixed_update(dt)

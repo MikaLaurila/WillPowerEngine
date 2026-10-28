@@ -11,7 +11,8 @@
  * only write rows [row_begin, row_end) of dst/aux.
  *
  * Built-in effects: SSAO, chromatic aberration, PS1-style dither + color quantization, vignette,
- * color adjustment (brightness/contrast/saturation) and depth of field.
+ * color adjustment (brightness/contrast/saturation), depth of field, and the shockwave and radial
+ * blur distortions. WPE_PostFxConfig describes any of them as data (scene files, scripts).
  *
  * Usage: wpe_renderer_end_frame() → wpe_postfx_apply() → optionally another renderer frame
  * without clearing for HUD/2D that should not be post-processed.
@@ -114,6 +115,84 @@ typedef struct WPE_DepthOfFieldParams {
     float radius_pixels;  /* Full blur radius (0..16). */
 } WPE_DepthOfFieldParams;
 
+/* A ring that warps the image outward, centered on a screen point; grow `radius` over a moment for a
+ * shockwave (an impact, a slash). Positions are fractions of the screen ((0, 0) top-left); distances
+ * fractions of its height. */
+typedef struct WPE_ShockwaveParams {
+    float center_x, center_y;
+    float radius;          /* The ring's distance from the center. */
+    float width;           /* How thick the ring is. */
+    float strength_pixels; /* How far the ring pushes the image (negative pulls it in). */
+} WPE_ShockwaveParams;
+
+/* Smears the image toward a screen point (a dash, a heavy hit), more toward the edges. */
+typedef struct WPE_RadialBlurParams {
+    float center_x, center_y; /* Fractions of the screen. */
+    float strength;           /* 0..1: how far toward the center each pixel smears. */
+} WPE_RadialBlurParams;
+
+/* ---- Configured effects (scene files, scripts) ---------------------------------------------------- */
+
+#define WPE_POSTFX_MAX_EFFECTS 8u /* Effects a scene can have. */
+
+typedef enum WPE_PostFxKind {
+    WPE_POSTFX_SSAO = 0,
+    WPE_POSTFX_CHROMATIC_ABERRATION,
+    WPE_POSTFX_PS1,
+    WPE_POSTFX_VIGNETTE,
+    WPE_POSTFX_COLOR_ADJUST,
+    WPE_POSTFX_DEPTH_OF_FIELD,
+    WPE_POSTFX_SHOCKWAVE,
+    WPE_POSTFX_RADIAL_BLUR,
+} WPE_PostFxKind;
+#define WPE_POSTFX_KIND_COUNT 8u
+
+/** One configured built-in effect; only the parameters matching `kind` are used. */
+typedef struct WPE_PostFxConfig {
+    WPE_PostFxKind kind;
+    bool enabled;
+    WPE_SsaoParams ssao;
+    WPE_ChromaticAberrationParams chromatic_aberration;
+    WPE_Ps1Params ps1;
+    WPE_VignetteParams vignette;
+    WPE_ColorAdjustParams color_adjust;
+    WPE_DepthOfFieldParams depth_of_field;
+    WPE_ShockwaveParams shockwave;
+    WPE_RadialBlurParams radial_blur;
+} WPE_PostFxConfig;
+
+/** A parameter of an effect kind: its name (in scene files and scripts), where it lives in a
+ * WPE_PostFxConfig (a float, or a uint32_t when `integer`) and its allowed range. */
+typedef struct WPE_PostFxParam {
+    const char* name;
+    size_t offset;
+    double min, max;
+    bool integer;
+} WPE_PostFxParam;
+
+/** @return The kind's name ("ssao", "depth_of_field", ...), or NULL. @thread_safety Any thread */
+const char* wpe_postfx_kind_name(WPE_PostFxKind kind);
+
+/** @return Whether `name` is a kind's name (then *out_kind receives it). @thread_safety Any thread */
+bool wpe_postfx_kind_from_name(const char* name, WPE_PostFxKind* out_kind);
+
+/** @return The kind's parameters in their file order (static storage); *out_count receives how many.
+ * @thread_safety Any thread */
+const WPE_PostFxParam* wpe_postfx_params(WPE_PostFxKind kind, uint32_t* out_count);
+
+/** @return A parameter's value in a config. @thread_safety Any thread */
+double wpe_postfx_param_get(const WPE_PostFxConfig* config, const WPE_PostFxParam* param);
+
+/** Sets a parameter (clamped to its range; rounded for integers). @thread_safety Any thread */
+void wpe_postfx_param_set(WPE_PostFxConfig* config, const WPE_PostFxParam* param, double value);
+
+/** @return An enabled config of `kind` with its default parameters. @thread_safety Any thread */
+WPE_PostFxConfig wpe_postfx_config_default(WPE_PostFxKind kind);
+
+/** @return The effect a config describes (`params` points into `config`, which must outlive its use).
+ * @thread_safety Any thread */
+WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* config);
+
 /** @return The built-in effect with its default parameters (`params` points at static defaults).
  * @thread_safety Any thread */
 WPE_PostEffect wpe_postfx_ssao(const WPE_SsaoParams* params);
@@ -122,6 +201,8 @@ WPE_PostEffect wpe_postfx_ps1(const WPE_Ps1Params* params);
 WPE_PostEffect wpe_postfx_vignette(const WPE_VignetteParams* params);
 WPE_PostEffect wpe_postfx_color_adjust(const WPE_ColorAdjustParams* params);
 WPE_PostEffect wpe_postfx_depth_of_field(const WPE_DepthOfFieldParams* params);
+WPE_PostEffect wpe_postfx_shockwave(const WPE_ShockwaveParams* params);
+WPE_PostEffect wpe_postfx_radial_blur(const WPE_RadialBlurParams* params);
 
 /** @return Linear view-space depth for a window depth value. @thread_safety Any thread */
 float wpe_postfx_linear_depth(const WPE_PostCamera* camera, float window_depth);

@@ -515,6 +515,84 @@ static void test_lighting_postfx_depth_of_field(void) {
     wpe_postfx_destroy(chain);
 }
 
+/* One-pixel black and white columns over the whole frame. */
+static WPE_Renderer* striped(void) {
+    WPE_Renderer* r = filled_renderer(0xFF000000u);
+    WPE_Framebuffer* fb = wpe_renderer_framebuffer_for_write(r);
+    for (uint32_t i = 0; i < S * S; ++i)
+        fb->color[i] = (i % S) & 1 ? 0xFFFFFFFFu : 0xFF000000u;
+    return r;
+}
+
+static uint32_t changed_pixels(const WPE_Framebuffer* fb, uint32_t y0, uint32_t y1, uint32_t x0,
+                               uint32_t x1) {
+    uint32_t changed = 0;
+    for (uint32_t y = y0; y < y1; ++y)
+        for (uint32_t x = x0; x < x1; ++x)
+            changed += fb->color[y * S + x] != ((x & 1) ? 0xFFFFFFFFu : 0xFF000000u);
+    return changed;
+}
+
+static void test_lighting_postfx_distortions(void) {
+    WPE_PostChain* chain = NULL;
+    WPE_TEST_ASSERT_OK(wpe_postfx_create(&chain));
+
+    /* A shockwave ring around the center, 0.25 of the height out (16 pixels) and 0.05 (3 pixels) thick:
+     * the image moves on the ring and nowhere else. */
+    const WPE_ShockwaveParams ring = {
+        .center_x = 0.5f, .center_y = 0.5f, .radius = 0.25f, .width = 0.05f, .strength_pixels = 3.0f};
+    WPE_PostEffect effect = wpe_postfx_shockwave(&ring);
+    WPE_Renderer* r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(r);
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(fb, 26, 38, 26, 38));          /* Inside the ring. */
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(fb, 0, 8, 0, S));              /* Outside it. */
+    WPE_TEST_ASSERT(changed_pixels(fb, 28, 36, S / 2 + 12, S / 2 + 20) > 0); /* On it, beside the center. */
+    wpe_renderer_destroy(r);
+
+    /* A radial blur leaves the center and smears toward it more at the edges. */
+    const WPE_RadialBlurParams blur = {.center_x = 0.5f, .center_y = 0.5f, .strength = 0.3f};
+    effect = wpe_postfx_radial_blur(&blur);
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    fb = wpe_renderer_framebuffer(r);
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(fb, 31, 33, 31, 33));
+    const WPE_Color edge = fb->color[(S / 2) * S + 3];
+    WPE_TEST_ASSERT_MSG(edge != 0xFFFFFFFFu && edge != 0xFF000000u, "0x%08x is not blurred", edge);
+    wpe_renderer_destroy(r);
+    wpe_postfx_destroy(chain);
+}
+
+/* Effect configs as data: names, parameters, clamping, and the effect they make. */
+static void test_lighting_postfx_configs(void) {
+    WPE_PostFxKind kind;
+    WPE_TEST_ASSERT(wpe_postfx_kind_from_name("shockwave", &kind) && kind == WPE_POSTFX_SHOCKWAVE);
+    WPE_TEST_ASSERT(!wpe_postfx_kind_from_name("bloom", &kind) && !wpe_postfx_kind_from_name(NULL, &kind));
+    for (uint32_t k = 0; k < WPE_POSTFX_KIND_COUNT; ++k) {
+        WPE_TEST_ASSERT(wpe_postfx_kind_name((WPE_PostFxKind)k) != NULL);
+        uint32_t count = 0;
+        WPE_TEST_ASSERT(wpe_postfx_params((WPE_PostFxKind)k, &count) != NULL && count > 0);
+        const WPE_PostFxConfig config = wpe_postfx_config_default((WPE_PostFxKind)k);
+        const WPE_PostEffect effect = wpe_postfx_from_config(&config);
+        WPE_TEST_ASSERT_EQ_STR(wpe_postfx_kind_name((WPE_PostFxKind)k), effect.name);
+        WPE_TEST_ASSERT(effect.enabled && effect.pass && effect.pass_count > 0);
+    }
+    WPE_TEST_ASSERT(wpe_postfx_kind_name((WPE_PostFxKind)WPE_POSTFX_KIND_COUNT) == NULL);
+
+    WPE_PostFxConfig ps1 = wpe_postfx_config_default(WPE_POSTFX_PS1);
+    uint32_t count = 0;
+    const WPE_PostFxParam* params = wpe_postfx_params(WPE_POSTFX_PS1, &count);
+    WPE_TEST_ASSERT(count == 2 && strcmp(params[0].name, "levels") == 0 && params[0].integer);
+    wpe_postfx_param_set(&ps1, &params[0], 9.6);
+    WPE_TEST_ASSERT_EQ_UINT(10, ps1.ps1.levels);
+    wpe_postfx_param_set(&ps1, &params[0], 1e9); /* Clamped. */
+    WPE_TEST_ASSERT_EQ_UINT(256, ps1.ps1.levels);
+    wpe_postfx_param_set(&ps1, &params[1], -5.0);
+    WPE_TEST_ASSERT_NEAR(0.0, wpe_postfx_param_get(&ps1, &params[1]), 0);
+    ps1.enabled = false;
+    WPE_TEST_ASSERT(!wpe_postfx_from_config(&ps1).enabled);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_lighting_attenuation_shape),
               WPE_TEST_CASE(test_lighting_shadow_visibility_pcf),
               WPE_TEST_CASE(test_lighting_point_light_pool), WPE_TEST_CASE(test_lighting_spot_cone),
@@ -526,4 +604,5 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_lighting_attenuation_shape),
               WPE_TEST_CASE(test_lighting_generated_tangents_are_orthonormal),
               WPE_TEST_CASE(test_lighting_postfx_color_effects),
               WPE_TEST_CASE(test_lighting_postfx_ssao_darkens_creases_only),
-              WPE_TEST_CASE(test_lighting_postfx_depth_of_field))
+              WPE_TEST_CASE(test_lighting_postfx_depth_of_field),
+              WPE_TEST_CASE(test_lighting_postfx_distortions), WPE_TEST_CASE(test_lighting_postfx_configs))

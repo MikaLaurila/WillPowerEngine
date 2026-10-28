@@ -281,6 +281,35 @@ Provided by the application running the scripts (the engine runtime). Elsewhere 
 | `wpe.quit()` | Exit the game after the current frame. |
 | `wpe.set_camera(entity)` / `wpe.get_camera() -> entity?` | The camera the scene is rendered from and heard from. Without one, the scene file's `camera`, then the first camera found, is used. |
 | `wpe.screen_size() -> width, height` | The framebuffer (canvas) size in pixels. |
+| `wpe.world_to_screen(position) -> x, y, in_front` | Where a world point shows on screen, in pixels from the top-left, through the current camera (as it is now, even after a script moved it this frame). `in_front` is false for points behind the camera. |
+
+### Post-processing
+
+The scene's post effects (its file's `postfx` list, see [scenes.md](scenes.md)) can be changed while the game runs, and new ones added for a moment: flash a shockwave on a hit, blur the screen on a dash, refocus the depth of field on the player. Changes last until the scene is loaded again. An effect is a table `{effect = "shockwave", enabled = true, ...}` with its parameters by their scene-file names; missing ones keep their values (or the defaults, when adding), and values are clamped to each parameter's range.
+
+| Function | Description |
+|---|---|
+| `wpe.get_postfx() -> {effect, ...}` | The scene's effects, in the order they apply. |
+| `wpe.set_postfx(which, {...})` | Changes an effect's `enabled` and parameters. `which` is a 1-based index or an effect name (the first effect of that kind). |
+| `wpe.add_postfx({effect = name, ...}) -> index` | Appends an effect (at most 8 in all). |
+| `wpe.remove_postfx(which)` | Removes an effect; later ones move up. |
+
+Two effects are made for scripts to animate: `shockwave` (a ring warping the image outward from `center_x`, `center_y` (fractions of the screen), at `radius` (fractions of its height), `width` thick, pushing `strength_pixels`) and `radial_blur` (smearing toward `center_x`, `center_y` by `strength`, 0..1). A hit that ripples out from the player:
+
+```lua
+function Hero:on_start()
+	wpe.add_postfx({ effect = "shockwave", enabled = false })
+end
+
+function Hero:hit_wave(t) -- t from 0 to 1 over a few tenths of a second
+	local x, y = wpe.world_to_screen(wpe.get_world_position(self.entity))
+	local width, height = wpe.screen_size()
+	wpe.set_postfx("shockwave", { enabled = t < 1, center_x = x / width, center_y = y / height,
+		radius = 0.05 + 0.5 * t, strength_pixels = 8 * (1 - t) })
+end
+```
+
+`scripts/hero.luau` in `scenes/character.scene` does this on the fire button, with a radial blur. Effects run in C over every pixel; scripts choose and drive them, but can't run their own per-pixel code (Luau would be far too slow for that).
 
 ### 2D drawing
 

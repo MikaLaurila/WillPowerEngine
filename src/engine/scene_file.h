@@ -37,29 +37,9 @@
 
 /** Scene file format version written by this engine (files with a newer version are rejected). */
 #define WPE_SCENE_FORMAT_VERSION 1u
-/** Maximum number of post-processing effects in a scene environment. */
-#define WPE_SCENE_MAX_POSTFX 8u
-
-typedef enum WPE_PostFxKind {
-    WPE_POSTFX_SSAO = 0,
-    WPE_POSTFX_CHROMATIC_ABERRATION,
-    WPE_POSTFX_PS1,
-    WPE_POSTFX_VIGNETTE,
-    WPE_POSTFX_COLOR_ADJUST,
-    WPE_POSTFX_DEPTH_OF_FIELD,
-} WPE_PostFxKind;
-
-/** One configured post-processing effect; only the parameters matching `kind` are used. */
-typedef struct WPE_PostFxConfig {
-    WPE_PostFxKind kind;
-    bool enabled;
-    WPE_SsaoParams ssao;
-    WPE_ChromaticAberrationParams chromatic_aberration;
-    WPE_Ps1Params ps1;
-    WPE_VignetteParams vignette;
-    WPE_ColorAdjustParams color_adjust;
-    WPE_DepthOfFieldParams depth_of_field;
-} WPE_PostFxConfig;
+/** Maximum number of post-processing effects in a scene environment (WPE_PostFxConfig, kinds and their
+ * parameters are in graphics/postfx.h). */
+#define WPE_SCENE_MAX_POSTFX WPE_POSTFX_MAX_EFFECTS
 
 /** Scene-wide settings stored with the entities. */
 typedef struct WPE_SceneEnvironment {

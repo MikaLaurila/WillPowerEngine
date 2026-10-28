@@ -111,6 +111,12 @@ static const char* wpe__app_save_directory(void* user_data) {
     return engine->save_dir;
 }
 
+static WPE_PostFxConfig* wpe__app_postfx(void* user_data, uint32_t** out_count) {
+    WPE_Engine* engine = user_data;
+    *out_count = &engine->environment.postfx_count;
+    return engine->environment.postfx;
+}
+
 static WPE_SceneContext wpe__context(const WPE_Engine* engine) {
     return (WPE_SceneContext){
         .ecs = engine->ecs, .assets = engine->assets, .scripts = engine->scripts, .prefabs = engine->prefabs};
@@ -235,7 +241,8 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                    .get_camera = wpe__app_get_camera,
                                    .screen_size = wpe__app_screen_size,
                                    .instantiate = wpe__app_instantiate,
-                                   .save_directory = wpe__app_save_directory};
+                                   .save_directory = wpe__app_save_directory,
+                                   .postfx = wpe__app_postfx};
         result =
             wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = engine->ecs,
                                                          .assets = engine->assets,

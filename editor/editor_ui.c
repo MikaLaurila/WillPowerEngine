@@ -327,8 +327,8 @@ static const char* const* wpe__choices(const char* component, const char* key, u
     static const char* const shapes[] = {"box", "sphere", "capsule", "convex", "mesh"};
     static const char* const buses[] = {"effects", "music"};
     static const char* const fogs[] = {"none", "linear", "exponential"};
-    static const char* const effects[] = {"ssao",     "chromatic_aberration", "ps1",
-                                          "vignette", "color_adjust",         "depth_of_field"};
+    static const char* const effects[] = {"ssao",         "chromatic_aberration", "ps1",       "vignette",
+                                          "color_adjust", "depth_of_field",       "shockwave", "radial_blur"};
     static const char* const aligns[] = {"left", "center", "right"};
     static const char* const valigns[] = {"top", "middle", "bottom"};
     static const char* const billboard_modes[] = {"fixed", "axis_aligned", "axis_aligned_y",
@@ -348,7 +348,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
         {"audio_source", "bus", buses, 2},
         {"fog", "mode", fogs, 3}, /* The environment's objects go by their own names (wpe__draw_value). */
         {"sky", "mode", skies, 3},
-        {"environment", "effect", effects, 6},
+        {"environment", "effect", effects, 8},
         {"text", "align", aligns, 3},
         {"text", "valign", valigns, 3},
         {"billboard", "mode", billboard_modes, 4},

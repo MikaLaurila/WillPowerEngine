@@ -185,6 +185,38 @@ function Tour:on_start()
 	assert(not pcall(wpe.save_data, "tour", { [2] = 1 }))
 	assert(not pcall(wpe.save_data, "tour", nil))
 
+	-- Post effects at runtime: read, change, add and remove (the scene file's list is the starting point).
+	local effects = wpe.get_postfx()
+	local before = #effects
+	assert(before >= 1 and type(effects[1].effect) == "string" and type(effects[1].enabled) == "boolean")
+	wpe.set_postfx("vignette", { strength = 0.4, enabled = true })
+	local vignette
+	for _, effect in wpe.get_postfx() do
+		if effect.effect == "vignette" then
+			vignette = effect
+		end
+	end
+	assert(vignette and near(vignette.strength, 0.4) and vignette.enabled)
+	local wave = wpe.add_postfx({ effect = "shockwave", radius = 0.1, strength_pixels = 4 })
+	assert(wave == before + 1 and wpe.get_postfx()[wave].effect == "shockwave")
+	assert(near(wpe.get_postfx()[wave].radius, 0.1) and near(wpe.get_postfx()[wave].width, 0.08)) -- defaults fill in
+	wpe.set_postfx(wave, { radius = 9 }) -- clamped to its range
+	assert(near(wpe.get_postfx()[wave].radius, 4))
+	assert(not pcall(wpe.set_postfx, wave, { bloom = 1 }))
+	assert(not pcall(wpe.set_postfx, 99, {}) and not pcall(wpe.set_postfx, "radial_blur", {}))
+	assert(not pcall(wpe.add_postfx, { effect = "bloom" }))
+	wpe.remove_postfx(wave)
+	assert(#wpe.get_postfx() == before)
+
+	-- Screen positions: a point straight ahead of the camera is in the middle of the screen.
+	local camera = wpe.get_camera()
+	local ahead = wpe.get_world_position(camera) + wpe.forward(camera) * 5
+	local sx, sy, in_front = wpe.world_to_screen(ahead)
+	local width, height = wpe.screen_size()
+	assert(in_front and near(sx, width / 2, 0.5) and near(sy, height / 2, 0.5),
+		string.format("world_to_screen: %s %s %s of %d x %d", tostring(sx), tostring(sy), tostring(in_front), width, height))
+	assert(select(3, wpe.world_to_screen(wpe.get_world_position(camera) - wpe.forward(camera) * 5)) == false)
+
 	-- A character controller, walked in a circle at the fixed rate.
 	self.walker = wpe.spawn("tour_walker")
 	wpe.set_position(self.walker, vector.create(-12, 0.5, 12))

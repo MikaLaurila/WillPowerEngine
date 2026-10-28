@@ -71,6 +71,7 @@
 #include "core/result.h"
 #include "ecs/ecs.h"
 #include "graphics/draw2d.h"
+#include "graphics/postfx.h"
 #include "input/input.h"
 #include "physics/physics.h"
 #include "ui/ui.h"
@@ -107,6 +108,9 @@ typedef struct WPE_ScriptApp {
     /* The existing directory for wpe.save_data/load_data files (ending in a separator or not), or NULL
      * when saving isn't possible. Asked on first use, so a directory is only made for games that save. */
     const char* (*save_directory)(void* user_data);
+    /* The scene's post effects, which scripts may change: the array (room for WPE_POSTFX_MAX_EFFECTS) and,
+     * through out_count, its count. */
+    WPE_PostFxConfig* (*postfx)(void* user_data, uint32_t** out_count);
 } WPE_ScriptApp;
 
 typedef struct WPE_ScriptHostDesc {
