@@ -58,7 +58,7 @@ typedef struct WPE_ProjectPrefab {
 typedef struct WPE_ProjectSettings {
     char name[WPE_PROJECT_NAME_MAX];    /* Window title. */
     char start_scene[WPE_VFS_PATH_MAX]; /* Loaded at startup ("" = start empty). */
-    char font[WPE_VFS_PATH_MAX];        /* Font for script text drawing ("" = none). */
+    char font[WPE_VFS_PATH_MAX];        /* Font sheet for text ("" = the built-in font). */
     uint32_t width, height;             /* Framebuffer resolution (16..4096). */
     uint32_t scale;                     /* Initial window size multiplier (1..16). */
     bool vsync, resizable, fullscreen;
@@ -103,5 +103,18 @@ WPE_Result wpe_project_load(const WPE_Vfs* vfs, WPE_ProjectSettings* out);
  * @thread_safety Any thread
  */
 WPE_Result wpe_project_write(const WPE_ProjectSettings* settings, WPE_JsonWriter* writer);
+
+/**
+ * Creates a new project in an OS directory (made if missing): project.json (the default settings, the
+ * given name, move_x / move_y / jump input actions, starting in scenes/main.scene) and a starter scene
+ * with a camera, a sun, a ground and a cube spun by scripts/spin.luau. Text uses the built-in font.
+ *
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_INVALID_ARG (an empty or too long
+ *         name, or a too long path); WPE_RESULT_ERROR_ALREADY_EXISTS (the directory has files: nothing is
+ *         overwritten); WPE_RESULT_ERROR_IO. Errors are logged.
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_project_create(const char* os_directory, const char* name);
 
 #endif /* WPE_ENGINE_PROJECT_H */

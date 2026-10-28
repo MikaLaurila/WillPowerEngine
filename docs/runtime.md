@@ -11,6 +11,21 @@ assets/
 ├── sounds/  music/  fonts/  ui/
 ```
 
+## Starting a new game
+
+```bash
+./build/bin/wpe_editor my_game --init                     # create my_game/ and open it in the editor
+./build/bin/wpe_editor my_game --init --name "My Game"    # ... with a window title other than the folder's
+```
+
+`--init` creates the project in a new or empty directory (it never overwrites files):
+
+- `project.json`: the default settings, `move_x` / `move_y` / `jump` input actions (WASD, arrows, left stick; Space, A), starting in `scenes/main.scene`;
+- `scenes/main.scene`: a camera, a sun with shadows, a ground with a collider, and a cube;
+- `meshes/ground.prim`, `meshes/cube.prim`, and `scripts/spin.luau`, which spins the cube.
+
+Text uses the engine's built-in font until the project names its own. It works with the editor's other options, for example `--init --command '...'` for an agent setting up a project headless. From C: `wpe_project_create()`.
+
 ## Running a game
 
 ```bash

@@ -14,6 +14,9 @@
  *
  *   wpe_editor --send '<json>' [--send '<json>' ...] [--port <n>]
  *       Sends commands to a running editor and prints the replies.
+ *
+ *   --init [--name <title>] with a project directory creates a new project there first (the directory
+ *       must be new or empty), then opens it as above. The name defaults to the directory's.
  */
 #define WPE_LOG_MODULE "editor"
 #include <stdio.h>
@@ -43,11 +46,14 @@ typedef struct Options {
     uint32_t send_count;
     uint16_t port;
     bool server;
+    bool init;
+    const char* name;
 } Options;
 
 static int usage(void) {
     fprintf(stderr, "usage:\n"
                     "  wpe_editor <project-dir> [--scene <path>] [--port <n> | --no-server]\n"
+                    "  wpe_editor <new-project-dir> --init [--name <title>] [any of the above]\n"
                     "  wpe_editor <project-dir> --run <commands-file> [--scene <path>]\n"
                     "  wpe_editor <project-dir> --command '<json>' [--command '<json>' ...]\n"
                     "  wpe_editor --send '<json>' [--send '<json>' ...] [--port <n>]\n");
@@ -62,6 +68,10 @@ static bool parse_options(int argc, char** argv, Options* o) {
         if (!arg) return false;
         if (strcmp(arg, "--no-server") == 0) {
             o->server = false;
+        } else if (strcmp(arg, "--init") == 0) {
+            o->init = true;
+        } else if (value && strcmp(arg, "--name") == 0) {
+            o->name = argv[++i];
         } else if (value && strcmp(arg, "--scene") == 0) {
             o->scene = argv[++i];
         } else if (value && strcmp(arg, "--run") == 0) {
@@ -83,7 +93,8 @@ static bool parse_options(int argc, char** argv, Options* o) {
             return false;
         }
     }
-    if (o->send_count > 0) return !o->project && !o->run && o->command_count == 0;
+    if (o->send_count > 0) return !o->project && !o->run && o->command_count == 0 && !o->init;
+    if (o->name && !o->init) return false;
     return o->project != NULL && !(o->run && o->command_count > 0);
 }
 
@@ -356,11 +367,35 @@ static int run_window(const Options* o) {
     return result == WPE_RESULT_OK ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+/* --init: a new project in the project directory, named after it unless --name says otherwise. */
+static bool init_project(const Options* o) {
+    char name[WPE_PROJECT_NAME_MAX];
+    if (o->name) {
+        snprintf(name, sizeof name, "%s", o->name);
+    } else {
+        /* The last path component, ignoring trailing separators. */
+        size_t end = strlen(o->project);
+        while (end > 1 && (o->project[end - 1] == '/' || o->project[end - 1] == '\\'))
+            --end;
+        size_t start = end;
+        while (start > 0 && o->project[start - 1] != '/' && o->project[start - 1] != '\\')
+            --start;
+        const size_t length = end - start < sizeof name - 1 ? end - start : sizeof name - 1;
+        memcpy(name, o->project + start, length);
+        name[length] = '\0';
+    }
+    const WPE_Result result = wpe_project_create(o->project, name[0] ? name : "New game");
+    if (result != WPE_RESULT_OK)
+        fprintf(stderr, "cannot create the project: %s\n", wpe_result_to_string(result));
+    return result == WPE_RESULT_OK;
+}
+
 int main(int argc, char** argv) {
     wpe_platform_attach_console();
     Options o;
     if (!parse_options(argc, argv, &o)) return usage();
     if (o.send_count > 0) return run_client(&o);
+    if (o.init && !init_project(&o)) return EXIT_FAILURE;
     if (o.run || o.command_count > 0) return run_headless(&o);
     return run_window(&o);
 }

@@ -2,6 +2,7 @@ add_library(wpe_engine STATIC
     engine.c
     export.c
     json_read.c
+    new_project.c
     prefab.c
     project.c
     scene_file.c

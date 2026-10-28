@@ -49,6 +49,7 @@ WPE_UPDATE_GOLDEN=1 ctest --test-dir build -R golden    # regenerate golden PNGs
 ./build/bin/wpe_export assets out/demo.exe                        # standalone game: the runtime with the project appended as a .pak
 ctest --test-dir build -L integration                             # the master test scene for 60 simulated seconds (every scripting API)
 ./build/bin/wpe_editor assets                                     # the editor (window + command server on 127.0.0.1:47800)
+./build/bin/wpe_editor my_game --init                         # a new project (wpe_project_create), then the editor
 ./build/bin/wpe_editor assets --command '{"cmd": "help"}'         # editor commands headless (--run file.jsonl for batches)
 ./build/bin/wpe_editor assets --command '{"cmd": "screenshot", "target": "editor", "path": "out.png"}'   # see the whole editor
 ./build/bin/wpe_editor --send '{"cmd": "status"}'                 # a command to a running editor

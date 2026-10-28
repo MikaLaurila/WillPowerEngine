@@ -61,6 +61,11 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Engine: `wpe_engine_set_draw_scene`. UI: `wpe_ui_pick` can count every element (editors).
 - Tests: the 2D and 3D views (camera, UI, a scene without a camera, play mode), view settings.
 
+### Added (new projects)
+- `wpe_editor <dir> --init [--name <title>]` (and `wpe_project_create`): creates a project in a new or
+  empty directory: project.json with move/jump actions, and a starter scene (camera, sun, ground with a
+  collider, a cube spun by a script). It never overwrites files.
+
 ### Added (editor: fit colliders to meshes)
 - `fit_collider` command and inspector buttons (**Fit to meshes** on a collider, **Add box collider fitted
   to meshes** without one): sizes and centers a box, sphere or capsule collider around the meshes of

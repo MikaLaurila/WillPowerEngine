@@ -760,6 +760,57 @@ static void test_engine_ui_clicks_reach_scripts(void) {
     wpe_engine_destroy(engine);
 }
 
+static bool remove_file(const char* relative_path, void* user_data) {
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", (const char*)user_data, relative_path);
+    WPE_TEST_ASSERT_OK(wpe_path_remove(path));
+    return true;
+}
+
+/* Deletes a project made by wpe_project_create (its files, then its directories), if present. */
+static void remove_new_project(const char* directory) {
+    if (!wpe_directory_exists(directory)) return;
+    WPE_TEST_ASSERT_OK(wpe_directory_walk(directory, remove_file, (void*)directory));
+    static const char* const subdirectories[] = {"scenes", "scripts", "meshes"};
+    for (size_t i = 0; i < sizeof subdirectories / sizeof subdirectories[0]; ++i) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/%s", directory, subdirectories[i]);
+        if (wpe_directory_exists(path)) WPE_TEST_ASSERT_OK(wpe_path_remove(path));
+    }
+    WPE_TEST_ASSERT_OK(wpe_path_remove(directory));
+}
+
+/* A new project runs as it is: its scene loads, the cube's script spins it, and nothing is overwritten. */
+static void test_engine_creates_new_projects(void) {
+    remove_new_project(ROOT "/new_game"); /* Left by an earlier run. */
+    WPE_TEST_ASSERT_OK(wpe_project_create(ROOT "/new_game", "New Game"));
+    quiet(true);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_ALREADY_EXISTS, wpe_project_create(ROOT "/new_game", "Again"));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_project_create(ROOT "/unnamed", ""));
+    quiet(false);
+    WPE_TEST_ASSERT(!wpe_directory_exists(ROOT "/unnamed"));
+
+    WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_engine_create(
+        &(WPE_EngineDesc){.project_dir = ROOT "/new_game", .headless = true, .workers = 2}, &engine));
+    WPE_TEST_ASSERT_EQ_STR("New Game", wpe_engine_project(engine)->name);
+    WPE_TEST_ASSERT_EQ_UINT(3, wpe_input_action_count(wpe_engine_input(engine)));
+    WPE_Ecs* ecs = wpe_engine_ecs(engine);
+    WPE_TEST_ASSERT_EQ_STR("camera", wpe_scene_get_name(ecs, wpe_engine_camera(engine)));
+    WPE_Entity cube = WPE_ENTITY_NULL;
+    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_SCRIPT)});
+    if (wpe_ecs_iter_next(&it)) cube = it.entity;
+    WPE_TEST_ASSERT_EQ_STR("cube", wpe_scene_get_name(ecs, cube));
+    WPE_TEST_ASSERT_OK(wpe_engine_run(engine, &(WPE_RunOptions){.frames = 10, .fixed_dt = 1.0 / 30.0}));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(wpe_engine_scripts(engine)).errors);
+    const WPE_Transform* t = wpe_ecs_get_component(ecs, cube, WPE_COMP_TRANSFORM);
+    WPE_TEST_ASSERT(fabsf(t->rotation.y) > 0.1f); /* Turned about Y. */
+    /* The ground fills the bottom of the view, below the sky's clear color. */
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(engine));
+    WPE_TEST_ASSERT(fb->color[(fb->height - 4) * fb->width + 4] != fb->color[4 * fb->width + 4]);
+    wpe_engine_destroy(engine);
+}
+
 /* A project whose font file is missing starts with the built-in font, and its texts are drawn. */
 static void test_engine_falls_back_to_the_builtin_font(void) {
     WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/nofont/scenes"));
@@ -885,4 +936,4 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_engine_scene_save_filter), WPE_TEST_CASE(test_engine_embedded_edit_mode),
     WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts),
     WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
-    WPE_TEST_CASE(test_engine_export_embeds_the_project))
+    WPE_TEST_CASE(test_engine_creates_new_projects), WPE_TEST_CASE(test_engine_export_embeds_the_project))
