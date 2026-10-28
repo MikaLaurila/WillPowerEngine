@@ -110,7 +110,7 @@ static void wpe__ui_free(void* pointer, void* user_data) {
     wpe_free(pointer);
 }
 
-WPE_Result wpe_ui_create(WPE_PlatformRenderer* gpu, WPE_UiBackend** out_ui) {
+WPE_Result wpe_ui_backend_create(WPE_PlatformRenderer* gpu, WPE_UiBackend** out_ui) {
     if (!out_ui) return WPE_RESULT_ERROR_NULL_ARG;
     *out_ui = NULL;
     if (wpe__ui_exists) {
@@ -138,7 +138,7 @@ WPE_Result wpe_ui_create(WPE_PlatformRenderer* gpu, WPE_UiBackend** out_ui) {
     return WPE_RESULT_OK;
 }
 
-void wpe_ui_destroy(WPE_UiBackend* ui) {
+void wpe_ui_backend_destroy(WPE_UiBackend* ui) {
     if (!ui) return;
     /* ImGui marks its textures for destruction when the context goes; the slots own them either way. */
     igDestroyContext(ui->context);
@@ -156,7 +156,7 @@ void wpe_ui_destroy(WPE_UiBackend* ui) {
     wpe__ui_exists = false;
 }
 
-bool wpe_ui_is_gpu(const WPE_UiBackend* ui) {
+bool wpe_ui_backend_is_gpu(const WPE_UiBackend* ui) {
     return ui && ui->gpu;
 }
 
@@ -217,8 +217,8 @@ static void wpe__ui_release(wpe__UiTexture* slot) {
     *slot = (wpe__UiTexture){0};
 }
 
-WPE_Result wpe_ui_set_image(WPE_UiBackend* ui, uint64_t* id, uint32_t width, uint32_t height,
-                            const WPE_Color* texels) {
+WPE_Result wpe_ui_backend_set_image(WPE_UiBackend* ui, uint64_t* id, uint32_t width, uint32_t height,
+                                    const WPE_Color* texels) {
     if (!ui || !id || !texels) return WPE_RESULT_ERROR_NULL_ARG;
     if (width == 0 || height == 0 || width > INT32_MAX / 4 || height > INT32_MAX / 4) {
         wpe_log_error("invalid UI image size %ux%u", width, height);
@@ -292,7 +292,7 @@ static WPE_Result wpe__ui_update_textures(WPE_UiBackend* ui, ImDrawData* data) {
 
 /* ---- Frames --------------------------------------------------------------------------------------- */
 
-void wpe_ui_new_frame(WPE_UiBackend* ui, uint32_t width, uint32_t height, float dt) {
+void wpe_ui_backend_new_frame(WPE_UiBackend* ui, uint32_t width, uint32_t height, float dt) {
     if (!wpe_check(ui != NULL)) return;
     ImGuiIO* io = igGetIO_Nil();
     io->DisplaySize = (ImVec2_c){(float)width, (float)height};
@@ -321,10 +321,11 @@ static uint32_t wpe__ui_clip(float value, uint32_t limit) {
     return value >= (float)limit ? limit : (uint32_t)value;
 }
 
-WPE_Result wpe_ui_render(WPE_UiBackend* ui, WPE_Renderer* renderer) {
+WPE_Result wpe_ui_backend_render(WPE_UiBackend* ui, WPE_Renderer* renderer) {
     if (!ui || !renderer) return WPE_RESULT_ERROR_NULL_ARG;
     if (ui->gpu) {
-        wpe_log_error("wpe_ui_render draws in software; this backend presents with wpe_ui_present");
+        wpe_log_error(
+            "wpe_ui_backend_render draws in software; this backend presents with wpe_ui_backend_present");
         return WPE_RESULT_ERROR_INVALID_STATE;
     }
     igRender();
@@ -398,7 +399,7 @@ WPE_Result wpe_ui_render(WPE_UiBackend* ui, WPE_Renderer* renderer) {
 
 /* ---- GPU ------------------------------------------------------------------------------------------ */
 
-void wpe_ui_output_size(const WPE_UiBackend* ui, uint32_t* out_width, uint32_t* out_height) {
+void wpe_ui_backend_output_size(const WPE_UiBackend* ui, uint32_t* out_width, uint32_t* out_height) {
     int w = 0, h = 0;
     if (ui && ui->gpu && !SDL_GetCurrentRenderOutputSize(ui->gpu, &w, &h)) w = h = 0;
     if (out_width) *out_width = w > 0 ? (uint32_t)w : 0;
@@ -456,10 +457,11 @@ static bool wpe__ui_draw_gpu(WPE_UiBackend* ui, const ImDrawData* data, int widt
     return SDL_SetRenderClipRect(ui->gpu, NULL);
 }
 
-WPE_Result wpe_ui_present(WPE_UiBackend* ui, WPE_Color clear_color) {
+WPE_Result wpe_ui_backend_present(WPE_UiBackend* ui, WPE_Color clear_color) {
     if (!ui) return WPE_RESULT_ERROR_NULL_ARG;
     if (!ui->gpu) {
-        wpe_log_error("wpe_ui_present needs a GPU backend; software backends draw with wpe_ui_render");
+        wpe_log_error(
+            "wpe_ui_backend_present needs a GPU backend; software backends draw with wpe_ui_backend_render");
         return WPE_RESULT_ERROR_INVALID_STATE;
     }
     igRender();
@@ -503,7 +505,7 @@ WPE_Result wpe_ui_present(WPE_UiBackend* ui, WPE_Color clear_color) {
     return WPE_RESULT_OK;
 }
 
-WPE_Result wpe_ui_capture(WPE_UiBackend* ui, WPE_Image* out_image) {
+WPE_Result wpe_ui_backend_capture(WPE_UiBackend* ui, WPE_Image* out_image) {
     if (!ui || !out_image) return WPE_RESULT_ERROR_NULL_ARG;
     *out_image = (WPE_Image){0};
     if (!ui->gpu || !ui->frame) {
@@ -597,7 +599,7 @@ static ImGuiKey wpe__ui_key(SDL_Scancode scancode) {
     return ImGuiKey_None;
 }
 
-void wpe_ui_handle_event(WPE_UiBackend* ui, const WPE_PlatformEvent* platform_event) {
+void wpe_ui_backend_handle_event(WPE_UiBackend* ui, const WPE_PlatformEvent* platform_event) {
     if (!wpe_check(ui != NULL && platform_event != NULL)) return;
     const SDL_Event* e = (const SDL_Event*)platform_event;
     ImGuiIO* io = igGetIO_Nil();
@@ -644,10 +646,10 @@ void wpe_ui_handle_event(WPE_UiBackend* ui, const WPE_PlatformEvent* platform_ev
     }
 }
 
-bool wpe_ui_wants_mouse(const WPE_UiBackend* ui) {
+bool wpe_ui_backend_wants_mouse(const WPE_UiBackend* ui) {
     return ui && igGetIO_Nil()->WantCaptureMouse;
 }
 
-bool wpe_ui_wants_keyboard(const WPE_UiBackend* ui) {
+bool wpe_ui_backend_wants_keyboard(const WPE_UiBackend* ui) {
     return ui && igGetIO_Nil()->WantCaptureKeyboard;
 }

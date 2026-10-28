@@ -35,7 +35,7 @@ Loading is **strict**. Unknown keys, wrong types, out-of-range values, dangling 
 }
 ```
 
-`assets/scenes/demo.scene` (the playable demo) and `assets/scenes/test_full.scene` (the master test scene, which uses every component) are complete examples.
+`assets/scenes/title.scene` (the demo's 2D title menu), `assets/scenes/demo.scene` (the playable demo) and `assets/scenes/test_full.scene` (the master test scene, which uses every component) are complete examples.
 
 ## Document
 
@@ -63,10 +63,51 @@ Loading is **strict**. Unknown keys, wrong types, out-of-range values, dangling 
 | `rigidbody` | `type` (`"static"`, `"kinematic"`, `"dynamic"`), `linear_damping`, `angular_damping`, `gravity_scale`, `lock_rotation`, `continuous`, `initial_velocity` `[x, y, z]`. |
 | `collider` | `shape` (`"box"`, `"sphere"`, `"capsule"`, `"convex"`, `"mesh"`), `size` (box: full extents; sphere: `[radius, …]`; capsule: `[radius, height, …]` with height ≥ 2 × radius), `offset`, `density`, `friction`, `restitution`, `trigger`; convex and mesh colliders also take `model` and `mesh`. Without a rigid body a collider is static level geometry. |
 | `audio_source` | `sound` (asset path, required), `volume`, `pitch`, `min_distance`, `max_distance`, `bus` (`"effects"` or `"music"`), `loop`, `spatial`, `playing`. |
+| `ui` | Makes the entity a UI element (see [UI](#ui) below): `anchor_min`, `anchor_max`, `offset_min`, `offset_max` (each `[x, y]`), `visible` (default true). |
+| `sprite` | `image` (asset path of a PNG or JPEG, or null for a plain rectangle), `color` `[r, g, b, a]` (0..1, default white), `source` `[x, y, width, height]` (a region of the image in texels; zero size = all of it), `slice` `[left, top, right, bottom]` (nine-slice borders in texels; 0 = stretch the whole image). |
+| `text` | `text` (the string; `\n` breaks lines), `font` (asset path of a font sheet, or null for the project's font), `color` `[r, g, b, a]`, `scale` (0.1..64, default 1), `align` (`"left"`, `"center"`, `"right"`), `valign` (`"top"`, `"middle"`, `"bottom"`), `wrap` (break lines at spaces to fit the width). |
+| `button` | `interactable` (default true), and the tints `normal`, `focused`, `pressed`, `disabled` (`[r, g, b, a]`, 0..2, multiplying everything the button and its descendants draw; defaults 1, 1.25, 0.75 and 0.6 with alpha 0.6). |
 | `script` | `path` (asset path of a Luau script) and `properties` (an object of numbers, booleans, strings and `[x, y, z]` vectors, set on the instance before `on_start`; see [scripting.md](scripting.md#script-properties)). |
 | `components` | Game-defined components by name, read and written by the game's `WPE_ComponentSerializer`s. |
 
 An entity may have no components at all (`{"id": 7}`).
+
+## UI
+
+Menus, HUDs and other 2D interfaces are entities with a `ui` component, drawn over the scene after post-processing. A **2D scene** is simply a scene without a camera: it shows the clear color and its UI. A scene with a camera can have UI too (a HUD, or a menu over a 3D backdrop).
+
+**Layout.** Each corner of an element is placed relative to its parent element's rectangle (or to the screen, the game's framebuffer, when the parent is not a UI element):
+
+- `anchor_min` / `anchor_max` pick a point of the parent for the top-left and bottom-right corners, as fractions: `[0, 0]` is the parent's top-left, `[1, 1]` its bottom-right, `[0.5, 0.5]` its center.
+- `offset_min` / `offset_max` move each corner from its anchor, in pixels (y grows downwards).
+
+With both anchors at the same point the element keeps its size (`offset_max - offset_min`); with the anchors apart it stretches with its parent. The defaults (anchors at the parent's corners, no offsets) fill the parent, so `"ui": {}` makes a full-screen background or a label covering its button. Some common layouts:
+
+| Element | `ui` |
+|---|---|
+| 200 × 40, centered | `{"anchor_min": [0.5, 0.5], "anchor_max": [0.5, 0.5], "offset_min": [-100, -20], "offset_max": [100, 20]}` |
+| 64 × 16 in the top-right corner, 4 pixels in | `{"anchor_min": [1, 0], "anchor_max": [1, 0], "offset_min": [-68, 4], "offset_max": [-4, 20]}` |
+| A bar across the bottom, 12 pixels tall | `{"anchor_min": [0, 1], "offset_min": [0, -12]}` |
+| Its parent, minus a 6-pixel margin | `{"offset_min": [6, 6], "offset_max": [-6, -6]}` |
+
+**Drawing order.** Parents draw before their children, children in hierarchy order, and top-level elements in the order they were created, so later ones are on top. An element's `Transform` is ignored, and children are not clipped to their parent.
+
+**Buttons.** A `button` makes its element focusable and clickable. One button has the focus at a time, and its state tints the button and everything under it:
+
+- **Mouse:** moving over a button focuses it; pressing and releasing the left button on it clicks it.
+- **Keyboard and gamepad:** the arrow keys, the D-pad and the left stick move the focus to the nearest button in that direction (holding one repeats). Return, Space or the pad's south button (A / Cross) click the focused button. When nothing has the focus, the first of these inputs focuses the first button.
+- **Rebinding:** input actions named `ui_up`, `ui_down`, `ui_left`, `ui_right` or `ui_submit` in `project.json` replace that input's defaults.
+
+A click calls `on_click` on the button entity's script; scripts can also move the focus (`wpe.ui_focus`), see [scripting.md](scripting.md#ui). The UI reacts only while the game runs (not in the editor's edit mode).
+
+```json
+{"id": 1, "name": "menu", "ui": {"anchor_min": [0.5, 0.5], "anchor_max": [0.5, 0.5], "offset_min": [-70, -30], "offset_max": [70, 30]},
+ "sprite": {"image": "ui/panel.png", "color": [0.17, 0.19, 0.27, 1], "slice": [4, 4, 4, 4]}},
+{"id": 2, "name": "play", "parent": 1, "ui": {"anchor_max": [1, 0], "offset_min": [10, 10], "offset_max": [-10, 32]},
+ "sprite": {"image": "ui/panel.png", "color": [0.93, 0.6, 0.22, 1], "slice": [4, 4, 4, 4]},
+ "button": {}, "script": {"path": "scripts/menu_button.luau", "properties": {"scene": "scenes/demo.scene"}}},
+{"id": 3, "parent": 2, "ui": {}, "text": {"text": "Play", "align": "center", "valign": "middle"}}
+```
 
 ## Prefabs
 

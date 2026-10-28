@@ -349,14 +349,24 @@ Implemented in `src/input/` (public API in `input/input.h`; SDL3 private).
 - The protocol each frame is `begin_frame` → `handle_event` for every OS event → `update` → queries. Edges belong to frames, and taps shorter than a frame still report both edges.
 - Events reach the module as opaque `WPE_PlatformEvent`s from the platform's pump. Tests push real SDL events and use SDL virtual joysticks, so no hardware is needed.
 
+### 4.6.1 UI
+
+Implemented in `src/ui/` (public API in `ui/ui.h`). Docs: `docs/scenes.md#ui`.
+- **Retained, entity-based.** A UI element is an entity with a `WPE_UiRect` (`WPE_COMP_UI`); `WPE_Sprite`, `WPE_Text` and `WPE_Button` add what it shows and does. Elements are laid out against their parent element's rectangle with anchors (fractions) plus offsets (pixels), or against the framebuffer when the parent is not a UI element. The default fills the parent.
+- **2D is "no camera", not a separate scene type.** The engine draws the UI in the overlay pass (after post-processing, after debug lines, before the scripts' immediate 2D), so a scene without a camera is a 2D screen and a scene with one gets a HUD.
+- **Order and picking** follow the hierarchy: parents before children, top-level elements by `wpe_ecs_spawn_serial`. `wpe_ui_layout` stores each element's rectangle and `shown` flag in the component; picking and navigation use that layout.
+- **One focus.** The mouse, the arrow keys / D-pad / left stick (spatial navigation with repeat) and Return / Space / south button drive it. Project actions named `ui_up`... `ui_submit` replace an input's defaults. Clicks are collected per `wpe_ui_update` and the engine passes them to scripts (`wpe_script_host_notify(..., "on_click")`) before the fixed steps. The UI reacts only while simulating.
+- **Asset and string lifetime:** sprites and texts hold their image/font reference from their add hook to their remove hook; a text's add hook copies the string (the component owns the copy, `wpe_ui_set_text` replaces it).
+- NOTE(limitation): no rotation/scale for elements and no clipping of children; text is the bitmap font (no proportional TTF yet).
+
 ### 4.7 Engine runtime, scenes and export
 
 Implemented in `src/engine/`. Docs: `docs/scenes.md` and `docs/runtime.md`.
 - `WPE_Engine` is the integration layer, used by the runtime and later the editor. It owns every subsystem, reads `project.json`, loads scenes and runs the frame:
-  1. Input.
+  1. Input, then the UI's focus and clicks (scripts' `on_click`).
   2. Fixed steps (scripts, physics, collision callbacks).
   3. Scripts' update, animation, transforms and audio.
-  4. Scene rendering, then the scene's post-processing, then the scripts' 2D drawing on top.
+  4. Scene rendering, then the scene's post-processing, then debug lines, the UI and the scripts' 2D drawing on top.
   5. Present.
   6. Scene switches and quits requested by scripts are applied.
 - Scenes are JSON documents:
@@ -408,6 +418,7 @@ willpower_engine/
 │   ├── vfs/            # Virtual file system and .pak archives (zstd)
 │   ├── script/         # Luau VM and bindings
 │   ├── input/          # SDL3 keyboard, mouse and gamepad input with actions
+│   ├── ui/             # Retained UI: anchored rectangles, sprites, text, buttons, focus navigation
 │   └── engine/         # Game runtime: project, scene and prefab files, frame loop, export
 ├── editor/             # wpe_editor: model and commands (editor.c, editor_commands.c), UI (editor_ui.c,
 │   │                   # ui_backend.c: ImGui on the GPU or the software rasterizer), main.c (window, server, CLI)
@@ -418,8 +429,8 @@ willpower_engine/
 ├── tests/              # Test suites
 ├── tools/              # Command-line tools (wpe_pak: .pak archives; wpe_export: game export)
 ├── docs/               # Guides and specifications (scripting, assets and .pak, scenes, runtime and export)
-├── assets/             # The sample game project: project.json, scenes/ (demo and master test scene),
-│                       # scripts/, meshes/ (glTF and .prim), sounds/, music/, fonts/
+├── assets/             # The sample game project: project.json, scenes/ (2D title menu, demo and master test
+│                       # scene), scripts/, meshes/ (glTF and .prim), sounds/, music/, fonts/, ui/ (images)
 ├── CMakeLists.txt
 ├── AGENTS.md           # This file
 └── README.md

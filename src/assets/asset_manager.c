@@ -4,6 +4,7 @@
 #include "assets/procedural.h"
 #include <string.h>
 
+#include "assets/image.h"
 #include "core/alloc.h"
 #include "core/debug.h"
 #include "core/log.h"
@@ -81,6 +82,32 @@ static WPE_Result wpe__load_font(WPE_AssetManager* assets, const char* path, voi
 static void wpe__destroy_font(void* asset, void* user_data) {
     (void)user_data;
     wpe_font_destroy(asset);
+}
+
+/* Images keep their full size and no mips: 2D drawing samples level 0 with nearest filtering. */
+static WPE_Result wpe__load_image(WPE_AssetManager* assets, const char* path, void* user_data,
+                                  void** out_asset) {
+    (void)user_data;
+    void* data = NULL;
+    size_t size = 0;
+    WPE_Result result = wpe_vfs_read_all(assets->vfs, path, &data, &size);
+    if (result == WPE_RESULT_ERROR_NOT_FOUND) wpe_log_error("image '%s' not found", path);
+    WPE_Image image = {0};
+    if (result == WPE_RESULT_OK) result = wpe_image_decode(data, size, path, &image);
+    wpe_free(data);
+    if (result != WPE_RESULT_OK) return result;
+    result = wpe_texture_create(
+        &(WPE_TextureDesc){.width = image.width, .height = image.height, .texels = image.pixels},
+        (WPE_Texture**)out_asset);
+    if (result != WPE_RESULT_OK)
+        wpe_log_error("image '%s' cannot be used: %s", path, wpe_result_to_string(result));
+    wpe_image_free(&image);
+    return result;
+}
+
+static void wpe__destroy_image(void* asset, void* user_data) {
+    (void)user_data;
+    wpe_texture_destroy(asset);
 }
 
 /* ---- Slots --------------------------------------------------------------------------------------- */
@@ -174,6 +201,9 @@ WPE_Result wpe_asset_manager_create(const WPE_AssetManagerDesc* desc, WPE_AssetM
                          .registered = true};
     assets->types[WPE_ASSET_FONT] = (wpe__TypeEntry){
         .loader = {.name = "font", .load = wpe__load_font, .destroy = wpe__destroy_font}, .registered = true};
+    assets->types[WPE_ASSET_IMAGE] =
+        (wpe__TypeEntry){.loader = {.name = "image", .load = wpe__load_image, .destroy = wpe__destroy_image},
+                         .registered = true};
     *out_assets = assets;
     return WPE_RESULT_OK;
 }

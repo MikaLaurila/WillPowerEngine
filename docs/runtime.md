@@ -5,10 +5,10 @@ A game is a directory of assets with a `project.json` at its root. During develo
 ```
 assets/
 ├── project.json      # name, display, start scene, input actions, prefabs
-├── scenes/           # demo.scene, test_full.scene
+├── scenes/           # title.scene (the 2D start menu), demo.scene, test_full.scene
 ├── scripts/          # Luau behavior
 ├── meshes/           # glTF models and .prim primitives
-├── sounds/  music/  fonts/
+├── sounds/  music/  fonts/  ui/
 ```
 
 ## Running a game
@@ -48,7 +48,7 @@ The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which t
   "format": "wpe.project",
   "version": 1,
   "name": "WillPowerEngine Demo",
-  "start_scene": "scenes/demo.scene",
+  "start_scene": "scenes/title.scene",
   "font": "fonts/small.png",
   "display": {"width": 320, "height": 240, "scale": 3, "vsync": true, "resizable": true, "fullscreen": false},
   "simulation": {"fixed_rate": 60, "max_steps": 8},

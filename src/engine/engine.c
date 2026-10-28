@@ -42,6 +42,7 @@ struct WPE_Engine {
     WPE_PrefabCache* prefabs;
     WPE_Audio* audio;
     WPE_Input* input;
+    WPE_Ui* ui;
     WPE_ScriptHost* scripts;
 
     WPE_SceneEnvironment environment;
@@ -52,6 +53,7 @@ struct WPE_Engine {
     bool quit;
     bool embedded;        /* The host forwards events and shows the framebuffer. */
     bool simulating;      /* Scripts, physics, animation and audio run (false: edit mode). */
+    bool draw_ui;         /* The UI is drawn over the scene (the editor's 3D view hides it). */
     bool mouse_captured;  /* As applied to the window. */
     double audio_backlog; /* Device-less mixing: frames owed to the mixer (fractional). */
     float* audio_mix;
@@ -177,6 +179,12 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
         result = wpe_input_create(&(WPE_InputDesc){.settings = p->input}, &engine->input);
     if (result == WPE_RESULT_OK) result = wpe_input_set_actions(engine->input, p->actions, p->action_count);
     if (result == WPE_RESULT_OK) {
+        result = wpe_ui_create(
+            &(WPE_UiDesc){
+                .ecs = engine->ecs, .assets = engine->assets, .input = engine->input, .font = engine->font},
+            &engine->ui);
+    }
+    if (result == WPE_RESULT_OK) {
         const WPE_ScriptApp app = {.user_data = engine,
                                    .load_scene = wpe__app_load_scene,
                                    .quit = wpe__app_quit,
@@ -192,6 +200,7 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                                          .input = engine->input,
                                                          .draw2d = engine->draw2d,
                                                          .font = engine->font,
+                                                         .ui = engine->ui,
                                                          .app = &app,
                                                          .memory_limit = (size_t)p->script_memory_mb << 20,
                                                          .time_limit_ms = p->script_time_limit_ms},
@@ -229,6 +238,7 @@ WPE_Result wpe_engine_create(const WPE_EngineDesc* desc, WPE_Engine** out_engine
     engine->environment = wpe_scene_environment_default();
     engine->embedded = desc->embedded;
     engine->simulating = true;
+    engine->draw_ui = true;
 
     WPE_Result result = wpe__mount(engine, desc);
     if (result == WPE_RESULT_OK) result = wpe__create_graphics(engine, desc);
@@ -254,6 +264,7 @@ void wpe_engine_destroy(WPE_Engine* engine) {
     wpe_audio_destroy(engine->audio);
     wpe_physics_destroy(engine->physics);
     wpe_ecs_destroy(engine->ecs);
+    wpe_ui_destroy(engine->ui);
     wpe_prefab_cache_destroy(engine->prefabs);
     wpe_asset_release(engine->assets, engine->font);
     wpe_asset_manager_destroy(engine->assets);
@@ -359,8 +370,14 @@ static uint8_t wpe__channel(float value) {
 }
 
 static WPE_Result wpe__simulate(WPE_Engine* engine, double dt) {
+    /* The UI reacts to this frame's input first, so scripts see its clicks in this frame. */
+    WPE_Result result = wpe_ui_update(engine->ui, engine->project.width, engine->project.height, (float)dt);
+    uint32_t clicks = 0;
+    const WPE_Entity* clicked = wpe_ui_clicks(engine->ui, &clicks);
+    for (uint32_t i = 0; i < clicks && result == WPE_RESULT_OK; ++i)
+        result = wpe_script_host_notify(engine->scripts, clicked[i], "on_click");
+    if (result != WPE_RESULT_OK) return result;
     const uint32_t steps = wpe_fixed_step_advance(&engine->clock, dt);
-    WPE_Result result = WPE_RESULT_OK;
     for (uint32_t s = 0; s < steps && result == WPE_RESULT_OK; ++s) {
         wpe_script_host_fixed_update(engine->scripts, (float)engine->clock.step);
         result = wpe_physics_step(engine->physics, (float)engine->clock.step);
@@ -475,10 +492,11 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
             .near_z = cam->near_z, .far_z = cam->far_z, .orthographic = cam->orthographic};
         result = wpe_postfx_apply(engine->postfx, engine->renderer, effects, count, &post);
     }
-    /* Debug overlays and script 2D drawing go on top, untouched by post-processing. */
+    /* Debug overlays, the UI and script 2D drawing go on top, untouched by post-processing. */
     if (result == WPE_RESULT_OK) result = wpe_renderer_begin_frame(engine->renderer, &(WPE_ClearDesc){0});
     if (result == WPE_RESULT_OK) {
         if (camera != WPE_ENTITY_NULL) result = wpe__draw_debug(engine, camera);
+        if (result == WPE_RESULT_OK && engine->draw_ui) result = wpe_ui_draw(engine->ui, engine->renderer);
         if (result == WPE_RESULT_OK) result = wpe_draw2d_submit(engine->draw2d, engine->renderer);
         const WPE_Result end = wpe_renderer_end_frame(engine->renderer);
         if (result == WPE_RESULT_OK) result = end;
@@ -620,6 +638,18 @@ WPE_PrefabCache* wpe_engine_prefabs(const WPE_Engine* engine) {
 
 WPE_Audio* wpe_engine_audio(const WPE_Engine* engine) {
     return engine ? engine->audio : NULL;
+}
+
+WPE_Ui* wpe_engine_ui(const WPE_Engine* engine) {
+    return engine ? engine->ui : NULL;
+}
+
+void wpe_engine_set_draw_ui(WPE_Engine* engine, bool draw_ui) {
+    if (wpe_check(engine != NULL)) engine->draw_ui = draw_ui;
+}
+
+bool wpe_engine_draws_ui(const WPE_Engine* engine) {
+    return engine && engine->draw_ui;
 }
 
 WPE_ScriptHost* wpe_engine_scripts(const WPE_Engine* engine) {

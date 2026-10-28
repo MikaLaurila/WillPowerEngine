@@ -80,6 +80,10 @@ enum WPE_BuiltinComponent {
     WPE_COMP_AUDIO_SOURCE = 11,
     WPE_COMP_ANIMATOR = 12,
     WPE_COMP_PREFAB = 13, /* Prefab instance membership (engine/prefab.h). */
+    WPE_COMP_UI = 14,     /* UI elements (ui/ui.h): rectangle, sprite, text, button. */
+    WPE_COMP_SPRITE = 15,
+    WPE_COMP_TEXT = 16,
+    WPE_COMP_BUTTON = 17,
     WPE_COMP_USER_FIRST = 32,
 };
 

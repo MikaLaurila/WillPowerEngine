@@ -6,12 +6,12 @@
  *        - **Software**: into a WPE_Renderer framebuffer by the engine's rasterizer, which needs no
  *          window or GPU. Headless runs use this, so they can still capture the whole editor.
  *
- * Per frame: wpe_ui_handle_event() for each OS event → wpe_ui_new_frame() → ImGui calls (ig*) →
- * software: wpe_ui_render() inside a renderer frame (between begin_frame and end_frame);
- * GPU: wpe_ui_present().
+ * Per frame: wpe_ui_backend_handle_event() for each OS event → wpe_ui_backend_new_frame() → ImGui calls (ig*)
+ * → software: wpe_ui_backend_render() inside a renderer frame (between begin_frame and end_frame); GPU:
+ * wpe_ui_backend_present().
  *
  * Textures: ImGui's own (the font atlas) are created and updated by the backend as ImGui requests.
- * Images shown with igImage (the game view) are uploaded with wpe_ui_set_image().
+ * Images shown with igImage (the game view) are uploaded with wpe_ui_backend_set_image().
  *
  * One backend per process (ImGui keeps a global current context).
  *
@@ -40,35 +40,35 @@ typedef struct WPE_UiBackend WPE_UiBackend;
  *
  * @thread_safety Main thread only
  */
-[[nodiscard]] WPE_Result wpe_ui_create(WPE_PlatformRenderer* gpu, WPE_UiBackend** out_ui);
+[[nodiscard]] WPE_Result wpe_ui_backend_create(WPE_PlatformRenderer* gpu, WPE_UiBackend** out_ui);
 
 /** Destroys the context and every texture it created; NULL is a no-op. @thread_safety Main thread only */
-void wpe_ui_destroy(WPE_UiBackend* ui);
+void wpe_ui_backend_destroy(WPE_UiBackend* ui);
 
 /** @return Whether the backend draws through a GPU renderer (false: software). */
-bool wpe_ui_is_gpu(const WPE_UiBackend* ui);
+bool wpe_ui_backend_is_gpu(const WPE_UiBackend* ui);
 
 /** Feeds an OS event (keyboard, mouse, text, focus) to ImGui. @thread_safety Main thread only */
-void wpe_ui_handle_event(WPE_UiBackend* ui, const WPE_PlatformEvent* event);
+void wpe_ui_backend_handle_event(WPE_UiBackend* ui, const WPE_PlatformEvent* event);
 
 /** @return Whether ImGui wants the mouse / keyboard (so the application should not act on them). */
-bool wpe_ui_wants_mouse(const WPE_UiBackend* ui);
-bool wpe_ui_wants_keyboard(const WPE_UiBackend* ui);
+bool wpe_ui_backend_wants_mouse(const WPE_UiBackend* ui);
+bool wpe_ui_backend_wants_keyboard(const WPE_UiBackend* ui);
 
 /**
- * Gets the GPU renderer's output size in pixels: the display size to pass to wpe_ui_new_frame().
+ * Gets the GPU renderer's output size in pixels: the display size to pass to wpe_ui_backend_new_frame().
  * Software backends report 0 x 0 (their display is the framebuffer they render into).
  *
  * @thread_safety Main thread only
  */
-void wpe_ui_output_size(const WPE_UiBackend* ui, uint32_t* out_width, uint32_t* out_height);
+void wpe_ui_backend_output_size(const WPE_UiBackend* ui, uint32_t* out_width, uint32_t* out_height);
 
 /** Starts an ImGui frame for a display of the given size in pixels. @thread_safety Main thread only */
-void wpe_ui_new_frame(WPE_UiBackend* ui, uint32_t width, uint32_t height, float dt);
+void wpe_ui_backend_new_frame(WPE_UiBackend* ui, uint32_t width, uint32_t height, float dt);
 
 /**
  * Software: finishes the ImGui frame and submits it to a recording renderer frame whose framebuffer
- * has the display size. Buffers stay valid until the next wpe_ui_render(), so end the renderer frame
+ * has the display size. Buffers stay valid until the next wpe_ui_backend_render(), so end the renderer frame
  * first.
  *
  * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_INVALID_STATE (a GPU backend),
@@ -76,21 +76,21 @@ void wpe_ui_new_frame(WPE_UiBackend* ui, uint32_t width, uint32_t height, float 
  *
  * @thread_safety Main thread only
  */
-WPE_Result wpe_ui_render(WPE_UiBackend* ui, WPE_Renderer* renderer);
+WPE_Result wpe_ui_backend_render(WPE_UiBackend* ui, WPE_Renderer* renderer);
 
 /**
  * GPU: finishes the ImGui frame, draws it over `clear_color` and shows it in the window. The frame is
- * kept for wpe_ui_capture().
+ * kept for wpe_ui_backend_capture().
  *
  * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_INVALID_STATE (a software
  *         backend), WPE_RESULT_ERROR_OUT_OF_MEMORY or WPE_RESULT_ERROR (SDL failure; logged).
  *
  * @thread_safety Main thread only
  */
-WPE_Result wpe_ui_present(WPE_UiBackend* ui, WPE_Color clear_color);
+WPE_Result wpe_ui_backend_present(WPE_UiBackend* ui, WPE_Color clear_color);
 
 /**
- * GPU: reads back the last frame wpe_ui_present() showed (opaque pixels).
+ * GPU: reads back the last frame wpe_ui_backend_present() showed (opaque pixels).
  *
  * @param out_image Receives the image; free with wpe_image_free().
  * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_INVALID_STATE (a software
@@ -98,7 +98,7 @@ WPE_Result wpe_ui_present(WPE_UiBackend* ui, WPE_Color clear_color);
  *
  * @thread_safety Main thread only
  */
-WPE_Result wpe_ui_capture(WPE_UiBackend* ui, WPE_Image* out_image);
+WPE_Result wpe_ui_backend_capture(WPE_UiBackend* ui, WPE_Image* out_image);
 
 /**
  * Creates or updates an image for igImage, shown with nearest filtering.
@@ -111,7 +111,7 @@ WPE_Result wpe_ui_capture(WPE_UiBackend* ui, WPE_Image* out_image);
  *
  * @thread_safety Main thread only
  */
-WPE_Result wpe_ui_set_image(WPE_UiBackend* ui, uint64_t* id, uint32_t width, uint32_t height,
-                            const WPE_Color* texels);
+WPE_Result wpe_ui_backend_set_image(WPE_UiBackend* ui, uint64_t* id, uint32_t width, uint32_t height,
+                                    const WPE_Color* texels);
 
 #endif /* WPE_EDITOR_UI_BACKEND_H */

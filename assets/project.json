@@ -2,7 +2,7 @@
   "format": "wpe.project",
   "version": 1,
   "name": "WillPowerEngine Demo",
-  "start_scene": "scenes/demo.scene",
+  "start_scene": "scenes/title.scene",
   "font": "fonts/small.png",
   "display": {
     "width": 320,

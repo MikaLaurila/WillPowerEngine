@@ -53,6 +53,7 @@ struct WPE_ScriptHost {
     WPE_Input* input;     /* Optional. */
     WPE_Draw2D* draw2d;   /* Optional. */
     WPE_AssetHandle font; /* Optional; the host holds a reference. */
+    WPE_Ui* ui;           /* Optional. */
     WPE_ScriptApp app;    /* Zeroed when the application provides no services. */
     lua_State* L;
 

@@ -10,7 +10,7 @@
  * Handles are 32-bit generational values (WPE_ASSET_NONE = 0 is never valid), so a stale handle
  * to a destroyed asset is detected instead of aliasing a newer one.
  *
- * Asset types: models (glTF) and fonts are built in; other modules register loaders for theirs
+ * Asset types: models (glTF), fonts and images are built in; other modules register loaders for theirs
  * (the audio module registers sounds). Assets created in code (procedural meshes) are added with
  * wpe_asset_add() under a unique name and then behave like loaded ones.
  *
@@ -40,6 +40,7 @@ enum WPE_BuiltinAssetType {
     WPE_ASSET_MODEL = 1, /* WPE_Model (glTF / GLB) */
     WPE_ASSET_FONT = 2,  /* WPE_BitmapFont (PNG / JPEG glyph sheet) */
     WPE_ASSET_SOUND = 3, /* Registered by the audio module. */
+    WPE_ASSET_IMAGE = 4, /* WPE_Texture (PNG / JPEG), without mips: sprites and other 2D images. */
     WPE_ASSET_USER_FIRST = 16,
 };
 #define WPE_ASSET_MAX_TYPES 32u
@@ -189,6 +190,11 @@ static inline const WPE_Model* wpe_asset_model(const WPE_AssetManager* assets, W
 /** @return The font behind a WPE_ASSET_FONT handle, or NULL. @thread_safety See wpe_asset_get() */
 static inline const WPE_BitmapFont* wpe_asset_font(const WPE_AssetManager* assets, WPE_AssetHandle handle) {
     return (const WPE_BitmapFont*)wpe_asset_get(assets, handle, WPE_ASSET_FONT);
+}
+
+/** @return The texture behind a WPE_ASSET_IMAGE handle, or NULL. @thread_safety See wpe_asset_get() */
+static inline const WPE_Texture* wpe_asset_image(const WPE_AssetManager* assets, WPE_AssetHandle handle) {
+    return (const WPE_Texture*)wpe_asset_get(assets, handle, WPE_ASSET_IMAGE);
 }
 
 #endif /* WPE_ASSETS_ASSET_MANAGER_H */

@@ -372,6 +372,7 @@ WPE_Result wpe_script_host_create(const WPE_ScriptHostDesc* desc, WPE_ScriptHost
     host->audio = desc->audio;
     host->input = desc->input;
     host->draw2d = desc->draw2d;
+    host->ui = desc->ui;
     if (desc->app) host->app = *desc->app;
     if (desc->font != WPE_ASSET_NONE) {
         if (!wpe_asset_font(desc->assets, desc->font)) {
@@ -543,6 +544,15 @@ WPE_Result wpe_script_host_dispatch_physics(WPE_ScriptHost* host) {
         wpe__notify(host, event.entity_a, methods[event.type], event.entity_b);
         wpe__notify(host, event.entity_b, methods[event.type], event.entity_a);
     }
+    wpe__flush_destroys(host);
+    return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_script_host_notify(WPE_ScriptHost* host, WPE_Entity entity, const char* method) {
+    if (!host || !method) return WPE_RESULT_ERROR_NULL_ARG;
+    const WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
+    if (s && (s->state & WPE__SCRIPT_STARTED) && !(s->state & WPE__SCRIPT_FAILED))
+        wpe__call_method(host, entity, s->instance_ref, s->script, method, false, 0.0);
     wpe__flush_destroys(host);
     return WPE_RESULT_OK;
 }

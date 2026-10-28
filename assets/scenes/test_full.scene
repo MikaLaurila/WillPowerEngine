@@ -208,6 +208,34 @@
         "path": "prefabs/crate.prefab",
         "overrides": {"1": {"collider": {"shape": "box", "size": [1, 1, 1], "density": 3}}}
       }
+    },
+    {
+      "id": 30,
+      "name": "hud",
+      "ui": {"anchor_min": [1, 0], "anchor_max": [1, 0], "offset_min": [-110, 14], "offset_max": [-6, 50]},
+      "sprite": {"image": "ui/panel.png", "color": [0.2, 0.3, 0.5, 0.85], "slice": [4, 4, 4, 4]}
+    },
+    {
+      "id": 31,
+      "name": "hud text",
+      "parent": 30,
+      "ui": {"anchor_max": [1, 1], "offset_min": [6, 4], "offset_max": [-6, -4]},
+      "text": {"text": "UI over 3D", "font": "fonts/small.png", "align": "center", "valign": "middle", "wrap": true}
+    },
+    {
+      "id": 32,
+      "name": "hud button",
+      "parent": 30,
+      "ui": {"anchor_min": [0, 1], "anchor_max": [1, 1], "offset_min": [0, 4], "offset_max": [0, 24]},
+      "sprite": {"image": "ui/panel.png", "color": [0.9, 0.6, 0.2, 1], "source": [0, 0, 12, 12], "slice": [4, 4, 4, 4]},
+      "button": {"interactable": true, "focused": [1.2, 1.2, 1.2, 1], "disabled": [0.5, 0.5, 0.5, 0.5]}
+    },
+    {
+      "id": 33,
+      "name": "hud button label",
+      "parent": 32,
+      "ui": {},
+      "text": {"text": "Press", "color": [0.1, 0.1, 0.1, 1], "scale": 1, "align": "center", "valign": "middle"}
     }
   ]
 }

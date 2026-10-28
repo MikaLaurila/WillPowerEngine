@@ -26,6 +26,31 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   functions, edit mode, editor commands (undo/redo, coalescing, scenes, play mode, screenshots),
   and a command-line test that drives the editor like an agent.
 
+### Added (2D scenes and UI)
+- UI module (`ui/ui.h`, docs in `docs/scenes.md#ui`): retained UI elements as entities.
+  - `ui`: a rectangle anchored to its parent element or the screen (anchor fractions plus pixel
+    offsets; the default fills the parent).
+  - `sprite`: an image (PNG/JPEG, a region of it, optionally nine-sliced) or a plain color.
+  - `text`: bitmap-font text, aligned horizontally and vertically, optionally word-wrapped.
+  - `button`: focusable and clickable; its state tints it and its children.
+- Navigation: the mouse, arrow keys, D-pad and left stick (nearest button in that direction, with
+  repeat), Return/Space/pad south to click. Project actions `ui_up`... `ui_submit` rebind it.
+- 2D scenes: a scene without a camera shows its clear color and UI. The UI draws after
+  post-processing and debug lines, under the scripts' immediate 2D.
+- Scripts: `on_click`, and `wpe.get_text`/`set_text`, `set_text_color`, `set_sprite_color`,
+  `set_ui_visible`/`is_ui_visible`, `get_ui_offsets`/`set_ui_offsets`, `ui_rect`,
+  `set_interactable`, `ui_focus`/`ui_focused`. C: `wpe_script_host_notify`.
+- Assets: images (`WPE_ASSET_IMAGE`). Engine: `wpe_engine_ui`, `wpe_engine_set_draw_ui`.
+- Demo: `scenes/title.scene`, a 2D title menu (now the start scene) with buttons for the demo, the
+  master test scene and quitting; `ui/panel.png`. The master test scene has a HUD over 3D.
+- Tests: layout, picking, drawing (pixel-exact sprites, nine-slice, tints, text alignment and
+  wrapping against plain 2D drawing), keyboard and mouse navigation with clicks, action rebinding;
+  UI scene round trips and rejected mistakes; engine clicks reaching scripts in a 2D scene.
+
+### Changed
+- The editor's ImGui backend functions are renamed `wpe_ui_backend_*` (the `wpe_ui_` prefix now
+  belongs to the UI module).
+
 ### Added (editor: light icons)
 - An icon at every light in the viewport in edit mode, in the light's color: a bulb for point lights,
   a cone showing a spot light's direction and angle, and a sun with an arrow for directional lights.

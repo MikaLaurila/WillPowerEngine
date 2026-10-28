@@ -28,7 +28,7 @@ The asset manager loads assets through a VFS, caches them by `(type, path)` and 
 
   The usual pattern is: load, set the handle in the component, add the component, and release your own reference whenever it suits you.
 - Assets created in code, such as procedural meshes, are handed over with `wpe_asset_add(assets, type, "procedural/box", model, &handle)`. From then on they behave like loaded ones.
-- **Built-in types:** models (glTF/GLB and `.prim` primitives) and fonts. The audio module registers sounds (WAV, FLAC, MP3). Games can register their own types from `WPE_ASSET_USER_FIRST` with a load/destroy pair.
+- **Built-in types:** models (glTF/GLB and `.prim` primitives), fonts and images (PNG or JPEG for sprites, `WPE_ASSET_IMAGE`: a texture at full size without mips). The audio module registers sounds (WAV, FLAC, MP3). Games can register their own types from `WPE_ASSET_USER_FIRST` with a load/destroy pair.
 
 **Destroy order:** destroy everything that holds handles first (script host, audio, physics, the ECS world), then the asset manager, then the VFS. If anything still holds a reference at shutdown, a warning names the asset.
 

@@ -1,6 +1,7 @@
 #include "wpe_test.h"
 #include "wpe_test_assets.h"
 
+#include <SDL3/SDL.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -29,7 +30,7 @@ static void test_engine_project_from_assets(void) {
     static WPE_ProjectSettings p;
     WPE_TEST_ASSERT_OK(wpe_project_load(t.vfs, &p));
     WPE_TEST_ASSERT_EQ_STR("WillPowerEngine Demo", p.name);
-    WPE_TEST_ASSERT_EQ_STR("scenes/demo.scene", p.start_scene);
+    WPE_TEST_ASSERT_EQ_STR("scenes/title.scene", p.start_scene);
     WPE_TEST_ASSERT_EQ_STR("fonts/small.png", p.font);
     WPE_TEST_ASSERT(p.width == 320 && p.height == 240 && p.scale == 3 && p.vsync && !p.fullscreen);
     WPE_TEST_ASSERT_NEAR(60.0, p.fixed_rate, 0.0);
@@ -138,6 +139,7 @@ typedef struct World {
     WPE_Ecs* ecs;
     WPE_Physics* physics;
     WPE_Audio* audio;
+    WPE_Ui* ui;
     WPE_ScriptHost* scripts;
 } World;
 
@@ -152,9 +154,10 @@ static World make_world(void) {
         &w.physics));
     WPE_TEST_ASSERT_OK(wpe_audio_create(
         &(WPE_AudioDesc){.ecs = w.ecs, .assets = w.assets.assets, .no_device = true}, &w.audio));
+    WPE_TEST_ASSERT_OK(wpe_ui_create(&(WPE_UiDesc){.ecs = w.ecs, .assets = w.assets.assets}, &w.ui));
     WPE_TEST_ASSERT_OK(wpe_script_host_create(
         &(WPE_ScriptHostDesc){
-            .ecs = w.ecs, .assets = w.assets.assets, .physics = w.physics, .audio = w.audio},
+            .ecs = w.ecs, .assets = w.assets.assets, .physics = w.physics, .audio = w.audio, .ui = w.ui},
         &w.scripts));
     return w;
 }
@@ -164,6 +167,7 @@ static void free_world(World* w) {
     wpe_audio_destroy(w->audio);
     wpe_physics_destroy(w->physics);
     wpe_ecs_destroy(w->ecs);
+    wpe_ui_destroy(w->ui);
     WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_stats(w->assets.assets).assets); /* Nothing leaked. */
     wpe_test_assets_destroy(&w->assets);
 }
@@ -222,7 +226,11 @@ static void test_engine_scene_round_trip(void) {
                                      WPE_COMP_PHYSICS_RIGIDBODY,
                                      WPE_COMP_PHYSICS_COLLIDER,
                                      WPE_COMP_AUDIO_SOURCE,
-                                     WPE_COMP_ANIMATOR};
+                                     WPE_COMP_ANIMATOR,
+                                     WPE_COMP_UI,
+                                     WPE_COMP_SPRITE,
+                                     WPE_COMP_TEXT,
+                                     WPE_COMP_BUTTON};
     for (size_t i = 0; i < sizeof all / sizeof all[0]; ++i)
         WPE_TEST_ASSERT_MSG(count_of(&a, all[i]) > 0, "no component of type %u", all[i]);
     WPE_TEST_ASSERT_EQ_UINT(2, count_of(&a, WPE_COMP_CAMERA));
@@ -260,6 +268,19 @@ static void test_engine_scene_round_trip(void) {
         triggers += c->is_trigger;
     }
     WPE_TEST_ASSERT(mesh_colliders == 1 && triggers == 1);
+    it = wpe_ecs_query(b.ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_TEXT)});
+    uint32_t wrapped = 0;
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_Text* text = wpe_ecs_iter_get(&it, WPE_COMP_TEXT);
+        if (strcmp(text->text, "UI over 3D") != 0) continue;
+        wrapped += text->wrap && text->align_x == WPE_UI_ALIGN_CENTER && text->glyphs != NULL;
+    }
+    WPE_TEST_ASSERT_EQ_UINT(1, wrapped);
+    it = wpe_ecs_query(b.ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_SPRITE)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_Sprite* sprite = wpe_ecs_iter_get(&it, WPE_COMP_SPRITE);
+        WPE_TEST_ASSERT(sprite->texture != NULL && sprite->slice.x == 4.0f);
+    }
 
     wpe_json_writer_destroy(w1);
     wpe_json_writer_destroy(w2);
@@ -298,6 +319,17 @@ static void test_engine_scene_rejects_mistakes_and_rolls_back(void) {
         "{\"id\": 2, \"rigidbody\": {\"type\": \"floating\"}}",
         "{\"id\": 2, \"instance\": {\"model\": \"meshes/box.prim\", \"animation\": 0}}",
         "{\"id\": 2, \"components\": {\"Unknown\": {}}}",
+        "{\"id\": 2, \"ui\": {\"anchor_min\": [0]}}",
+        "{\"id\": 2, \"ui\": {\"offset_max\": [1e9, 0]}}",
+        "{\"id\": 2, \"sprite\": {\"color\": [1, 1, 1, 2]}}",
+        "{\"id\": 2, \"sprite\": {\"image\": \"ui/missing.png\"}}",
+        "{\"id\": 2, \"sprite\": {\"slice\": [-1, 0, 0, 0]}}",
+        "{\"id\": 2, \"text\": {\"text\": 5}}",
+        "{\"id\": 2, \"text\": {\"align\": \"middle\"}}",
+        "{\"id\": 2, \"text\": {\"scale\": 0}}",
+        "{\"id\": 2, \"text\": {\"font\": \"meshes/box.prim\"}}",
+        "{\"id\": 2, \"button\": {\"pressed\": [3, 1, 1, 1]}}",
+        "{\"id\": 2, \"button\": {\"clickable\": true}}",
     };
     World w = make_world();
     const WPE_SceneContext ctx = context_of(&w);
@@ -613,6 +645,120 @@ static void write_tiny_game(void) {
                "return S\n");
 }
 
+/* A 2D menu: no camera, a button whose script writes its click count into a label. */
+static void write_menu_game(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/menu/scenes"));
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/menu/scripts"));
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/menu/fonts"));
+    void* font = NULL;
+    size_t size = 0;
+    WPE_TEST_ASSERT_OK(wpe_file_read_all(WPE_TEST_ASSETS_DIR "/fonts/small.png", &font, &size));
+    WPE_File* file = NULL;
+    WPE_TEST_ASSERT_OK(wpe_file_open(ROOT "/menu/fonts/small.png", true, &file));
+    WPE_TEST_ASSERT_OK(wpe_file_write(file, font, size));
+    WPE_TEST_ASSERT_OK(wpe_file_close(file));
+    wpe_free(font);
+    write_text(ROOT "/menu/project.json",
+               "{\"format\": \"wpe.project\", \"version\": 1, \"name\": \"Menu\", \"start_scene\": "
+               "\"scenes/menu.scene\", \"font\": \"fonts/small.png\",\n"
+               " \"display\": {\"width\": 64, \"height\": 48}}\n");
+    write_text(ROOT "/menu/scenes/menu.scene",
+               "{\"format\": \"wpe.scene\", \"version\": 1,\n"
+               " \"environment\": {\"clear_color\": [0, 0, 1]},\n"
+               " \"entities\": [\n"
+               "  {\"id\": 1, \"name\": \"start\", \"ui\": {\"anchor_max\": [0, 0], \"offset_min\": [8, "
+               "8],\n   \"offset_max\": [56, 24]},\n"
+               "   \"sprite\": {\"color\": [1, 0, 0, 1]}, \"button\": {\"focused\": [1, 1, 1, 1]},\n"
+               "   \"script\": {\"path\": \"scripts/start.luau\"}},\n"
+               "  {\"id\": 2, \"name\": \"label\", \"ui\": {\"anchor_min\": [0, 1], \"offset_min\": [0, "
+               "-18], \"offset_max\": [0, -8]},\n"
+               "   \"text\": {\"text\": \"none\"}}]}\n");
+    write_text(ROOT "/menu/scripts/start.luau",
+               "local S = {}\n"
+               "function S:on_start() self.clicks = 0; self.label = wpe.find('label') end\n"
+               "function S:on_click()\n"
+               "  self.clicks += 1\n"
+               "  assert(wpe.ui_focused() == self.entity)\n"
+               "  wpe.set_text(self.label, 'clicks ' .. self.clicks)\n"
+               "end\n"
+               "return S\n");
+}
+
+static void send_event(WPE_Engine* engine, SDL_Event e) {
+    wpe_engine_handle_event(engine, (const WPE_PlatformEvent*)&e);
+}
+
+/* A zeroed event: an initializer list would only set the union's first member. */
+static SDL_Event make_event(SDL_EventType type) {
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = type;
+    return e;
+}
+
+static void test_engine_ui_clicks_reach_scripts(void) {
+    write_menu_game();
+    WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_engine_create(
+        &(WPE_EngineDesc){
+            .project_dir = ROOT "/menu", .embedded = true, .no_audio_device = true, .workers = 2},
+        &engine));
+    WPE_Ecs* ecs = wpe_engine_ecs(engine);
+    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_TEXT)});
+    WPE_TEST_ASSERT(wpe_ecs_iter_next(&it));
+    const WPE_Entity label = it.entity;
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0)); /* on_start runs. */
+    /* A 2D scene: the clear color, the UI on top. */
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(engine));
+    WPE_TEST_ASSERT_EQ_UINT(0xFF0000FFu, fb->color[2 * fb->width + 2]);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFF0000u, fb->color[10 * fb->width + 10]);
+
+    /* A mouse click on the button. */
+    SDL_Event motion = make_event(SDL_EVENT_MOUSE_MOTION);
+    motion.motion.x = 20.0f;
+    motion.motion.y = 12.0f;
+    motion.motion.xrel = 1.0f;
+    send_event(engine, motion);
+    SDL_Event button = make_event(SDL_EVENT_MOUSE_BUTTON_DOWN);
+    button.button.button = SDL_BUTTON_LEFT;
+    button.button.down = true;
+    button.button.x = 20.0f;
+    button.button.y = 12.0f;
+    send_event(engine, button);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    button.type = SDL_EVENT_MOUSE_BUTTON_UP;
+    button.button.down = false;
+    send_event(engine, button);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    WPE_TEST_ASSERT_EQ_STR("clicks 1",
+                           ((const WPE_Text*)wpe_ecs_get_component(ecs, label, WPE_COMP_TEXT))->text);
+
+    /* Return clicks the focused button. */
+    SDL_Event key = make_event(SDL_EVENT_KEY_DOWN);
+    key.key.scancode = SDL_SCANCODE_RETURN;
+    key.key.down = true;
+    send_event(engine, key);
+    key.type = SDL_EVENT_KEY_UP;
+    key.key.down = false;
+    send_event(engine, key);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    WPE_TEST_ASSERT_EQ_STR("clicks 2",
+                           ((const WPE_Text*)wpe_ecs_get_component(ecs, label, WPE_COMP_TEXT))->text);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(wpe_engine_scripts(engine)).errors);
+
+    /* In edit mode the UI is drawn but does not react; the editor's 3D view hides it. */
+    wpe_engine_set_simulating(engine, false);
+    send_event(engine, key);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    WPE_TEST_ASSERT_EQ_STR("clicks 2",
+                           ((const WPE_Text*)wpe_ecs_get_component(ecs, label, WPE_COMP_TEXT))->text);
+    WPE_TEST_ASSERT(wpe_engine_draws_ui(engine));
+    wpe_engine_set_draw_ui(engine, false);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    WPE_TEST_ASSERT_EQ_UINT(0xFF0000FFu, fb->color[10 * fb->width + 10]);
+    wpe_engine_destroy(engine);
+}
+
 static void test_engine_runs_scenes_headless(void) {
     write_tiny_game();
     WPE_Engine* engine = NULL;
@@ -712,4 +858,5 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_engine_scene_rejects_mistakes_and_rolls_back),
     WPE_TEST_CASE(test_engine_scene_game_components), WPE_TEST_CASE(test_engine_scene_editing_functions),
     WPE_TEST_CASE(test_engine_scene_save_filter), WPE_TEST_CASE(test_engine_embedded_edit_mode),
-    WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_export_embeds_the_project))
+    WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts),
+    WPE_TEST_CASE(test_engine_export_embeds_the_project))

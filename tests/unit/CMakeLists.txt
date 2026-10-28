@@ -31,7 +31,9 @@ set_tests_properties(script_script PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT
 # Tests write scratch files into their working directory.
 set_tests_properties(assets_assets PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 wpe_add_test(input_input SOURCES input/test_input.c LIBS wpe::input wpe_dep_sdl3 LABELS unit input)
-wpe_add_test(engine_engine SOURCES engine/test_engine.c LIBS wpe::engine LABELS unit engine)
+wpe_add_test(ui_ui SOURCES ui/test_ui.c LIBS wpe::ui wpe_dep_sdl3 LABELS unit ui)
+target_compile_definitions(test_ui_ui PRIVATE WPE_TEST_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
+wpe_add_test(engine_engine SOURCES engine/test_engine.c LIBS wpe::engine wpe_dep_sdl3 LABELS unit engine)
 target_compile_definitions(test_engine_engine PRIVATE WPE_TEST_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
 set_tests_properties(engine_engine PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 wpe_add_test(engine_prefab SOURCES engine/test_prefab.c LIBS wpe::engine LABELS unit engine)

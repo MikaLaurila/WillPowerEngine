@@ -1,0 +1,79 @@
+{
+  "format": "wpe.scene",
+  "version": 1,
+  "environment": {"clear_color": [0.06, 0.07, 0.11]},
+  "entities": [
+    {
+      "id": 1,
+      "name": "title",
+      "ui": {"anchor_max": [1, 0], "offset_min": [0, 36], "offset_max": [0, 60]},
+      "text": {"text": "WillPowerEngine", "color": [0.95, 0.65, 0.25, 1], "scale": 3, "align": "center"}
+    },
+    {
+      "id": 2,
+      "name": "subtitle",
+      "ui": {"anchor_max": [1, 0], "offset_min": [0, 66], "offset_max": [0, 76]},
+      "text": {"text": "A multithreaded software rasterizer", "color": [0.6, 0.65, 0.75, 1], "align": "center"}
+    },
+    {
+      "id": 3,
+      "name": "menu",
+      "ui": {"anchor_min": [0.5, 0.5], "anchor_max": [0.5, 0.5], "offset_min": [-70, -12], "offset_max": [70, 88]},
+      "sprite": {"image": "ui/panel.png", "color": [0.17, 0.19, 0.27, 0.95], "slice": [4, 4, 4, 4]}
+    },
+    {
+      "id": 4,
+      "name": "play",
+      "parent": 3,
+      "ui": {"anchor_max": [1, 0], "offset_min": [10, 10], "offset_max": [-10, 32]},
+      "sprite": {"image": "ui/panel.png", "color": [0.93, 0.6, 0.22, 1], "slice": [4, 4, 4, 4]},
+      "button": {},
+      "script": {"path": "scripts/menu_button.luau", "properties": {"scene": "scenes/demo.scene", "focus": true}}
+    },
+    {
+      "id": 5,
+      "name": "play label",
+      "parent": 4,
+      "ui": {},
+      "text": {"text": "Play the demo", "color": [0.08, 0.08, 0.1, 1], "align": "center", "valign": "middle"}
+    },
+    {
+      "id": 6,
+      "name": "test scene",
+      "parent": 3,
+      "ui": {"anchor_max": [1, 0], "offset_min": [10, 39], "offset_max": [-10, 61]},
+      "sprite": {"image": "ui/panel.png", "color": [0.55, 0.6, 0.72, 1], "slice": [4, 4, 4, 4]},
+      "button": {},
+      "script": {"path": "scripts/menu_button.luau", "properties": {"scene": "scenes/test_full.scene"}}
+    },
+    {
+      "id": 7,
+      "name": "test scene label",
+      "parent": 6,
+      "ui": {},
+      "text": {"text": "Master test scene", "color": [0.08, 0.08, 0.1, 1], "align": "center", "valign": "middle"}
+    },
+    {
+      "id": 8,
+      "name": "quit",
+      "parent": 3,
+      "ui": {"anchor_max": [1, 0], "offset_min": [10, 68], "offset_max": [-10, 90]},
+      "sprite": {"image": "ui/panel.png", "color": [0.55, 0.6, 0.72, 1], "slice": [4, 4, 4, 4]},
+      "button": {},
+      "script": {"path": "scripts/menu_button.luau", "properties": {"scene": "quit"}}
+    },
+    {
+      "id": 9,
+      "name": "quit label",
+      "parent": 8,
+      "ui": {},
+      "text": {"text": "Quit", "color": [0.08, 0.08, 0.1, 1], "align": "center", "valign": "middle"}
+    },
+    {
+      "id": 10,
+      "name": "hint",
+      "ui": {"anchor_min": [0, 1], "offset_min": [0, -16], "offset_max": [0, -6]},
+      "text": {"text": "Arrows / D-pad and Return / A, or the mouse", "color": [0.45, 0.5, 0.6, 1], "align": "center"}
+    }
+  ]
+}

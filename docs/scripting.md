@@ -29,6 +29,9 @@ end
 function Spinner:on_trigger_enter(other)    -- physics: a trigger overlap began (also on_trigger_exit)
 end
 
+function Spinner:on_click()                 -- UI: this entity's button was clicked
+end
+
 return Spinner
 ```
 
@@ -59,6 +62,7 @@ When a scene is saved, each property is written with its current value, so a scr
   - `on_fixed_update` only begins after `on_start` has run.
   - `on_destroy` runs only for instances that started.
   - Collision and trigger callbacks run after each physics step, for both entities involved (each gets the other as `other`). A trigger's own script and the visiting entity's script both get `on_trigger_enter`/`on_trigger_exit`.
+  - `on_click` runs at the start of the frame, before the fixed steps and `on_update`, for each button clicked by that frame's input (on the button entity's own script).
 - **Changing the world:** scripts may spawn, modify and destroy entities freely during `on_start`, `on_update` and `on_fixed_update`. `wpe.destroy` is deferred: the entity and its children are destroyed at the end of the current update.
 - **Inside `on_destroy`:** you may read and modify components and call `wpe.destroy`. Spawning, attaching scripts, adding/removing lights or physics components and reparenting raise errors there. When the entity is being despawned, its physics body is already gone.
 - **Errors:** an error in a callback is logged with a stack trace, and that instance is disabled until its script is reloaded. Other scripts keep running.
@@ -189,6 +193,20 @@ Drawn on top of the 3D scene after post-processing (HUDs, menus), in call order,
 | `wpe.draw_text(x, y, text, [color = white], [scale = 1])` | Bitmap text in the project's font (`"\n"` starts a line). |
 | `wpe.text_size(text, [scale = 1]) -> width, height` | The size `draw_text` would cover. |
 
+### UI
+
+The scene's UI elements (`ui`, `sprite`, `text` and `button` components, see [scenes.md](scenes.md#ui)) are retained: change them and they stay changed. Functions raise when the entity lacks the component they need.
+
+| Function | Description |
+|---|---|
+| `wpe.get_text(entity) -> string` / `wpe.set_text(entity, text)` | A text's string. |
+| `wpe.set_text_color(entity, color)` / `wpe.set_sprite_color(entity, color)` | A text's or sprite's color (`wpe.color`). |
+| `wpe.set_ui_visible(entity, visible)` / `wpe.is_ui_visible(entity) -> boolean` | Hides or shows an element and everything under it. |
+| `wpe.get_ui_offsets(entity) -> min_x, min_y, max_x, max_y` / `wpe.set_ui_offsets(entity, min_x, min_y, max_x, max_y)` | The corner offsets in pixels (moving or resizing an element; anchors stay). |
+| `wpe.ui_rect(entity) -> x, y, width, height` | Where the element is on screen, from the last layout (this frame's, which runs before scripts; changes made since show next frame). |
+| `wpe.set_interactable(entity, interactable)` | Enables or disables a button. |
+| `wpe.ui_focus(entity or nil) -> boolean` / `wpe.ui_focused() -> entity?` | Moves the focus to a shown, interactable button (false if it can't take it), or clears it. |
+
 `assets/scripts/api_tour.luau` exercises every function above, as part of the master test scene that the scene test runs for 60 simulated seconds. `wpe.load_scene` and `wpe.quit` end a scene, so the engine tests cover those two instead.
 
 ## Hosting from C
@@ -210,6 +228,7 @@ WPE_ScriptHost* host;
 wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = ecs, .assets = assets, .physics = physics, .audio = audio,
                                              .input = input,            // optional: input API
                                              .draw2d = draw2d, .font = font, // optional: 2D drawing
+                                             .ui = ui,                  // optional: UI focus (ui/ui.h)
                                              .app = &app},              // optional: load_scene, quit, camera
                        &host);
 wpe_script_host_register_prefab(host, "box", box_handle);  // optional named prefabs (asset handles)

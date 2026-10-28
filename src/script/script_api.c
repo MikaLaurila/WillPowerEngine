@@ -1163,6 +1163,128 @@ static int wpe__api_text_size(lua_State* L) {
     return 2;
 }
 
+/* ---- UI -------------------------------------------------------------------------------------------- */
+
+/* The entity's UI component of `type`; raises when it has none. */
+static void* wpe__check_ui_part(lua_State* L, WPE_Entity entity, WPE_ComponentType type, const char* what) {
+    void* component = wpe_ecs_get_component(wpe__script_host_from(L)->ecs, entity, type);
+    if (!component) luaL_errorL(L, "entity 0x%08x has no %s", entity, what);
+    return component;
+}
+
+static WPE_Ui* wpe__check_ui(lua_State* L) {
+    WPE_Ui* ui = wpe__script_host_from(L)->ui;
+    if (!ui) luaL_errorL(L, "the UI is not enabled for this game");
+    return ui;
+}
+
+static int wpe__api_get_text(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_Text* text = wpe__check_ui_part(L, entity, WPE_COMP_TEXT, "Text");
+    lua_pushstring(L, text->text ? text->text : "");
+    return 1;
+}
+
+static int wpe__api_set_text(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const char* string = luaL_checkstring(L, 2);
+    wpe__check_ui_part(L, entity, WPE_COMP_TEXT, "Text");
+    wpe__raise_result(L, "set_text", wpe_ui_set_text(wpe__script_host_from(L)->ecs, entity, string));
+    return 0;
+}
+
+static int wpe__api_set_text_color(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    luaL_checkany(L, 2);
+    const WPE_Color color = wpe__opt_color(L, 2);
+    WPE_Text* text = wpe__check_ui_part(L, entity, WPE_COMP_TEXT, "Text");
+    text->color = wpe_color_to_vec4(color);
+    return 0;
+}
+
+static int wpe__api_set_sprite_color(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    luaL_checkany(L, 2);
+    const WPE_Color color = wpe__opt_color(L, 2);
+    WPE_Sprite* sprite = wpe__check_ui_part(L, entity, WPE_COMP_SPRITE, "Sprite");
+    sprite->color = wpe_color_to_vec4(color);
+    return 0;
+}
+
+static int wpe__api_set_ui_visible(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const bool visible = luaL_checkboolean(L, 2);
+    WPE_UiRect* element = wpe__check_ui_part(L, entity, WPE_COMP_UI, "UI rectangle");
+    element->visible = visible;
+    return 0;
+}
+
+static int wpe__api_is_ui_visible(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_UiRect* element = wpe__check_ui_part(L, entity, WPE_COMP_UI, "UI rectangle");
+    lua_pushboolean(L, element->visible);
+    return 1;
+}
+
+static int wpe__api_get_ui_offsets(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_UiRect element = *(const WPE_UiRect*)wpe__check_ui_part(L, entity, WPE_COMP_UI, "UI rectangle");
+    lua_pushnumber(L, element.offset_min.x);
+    lua_pushnumber(L, element.offset_min.y);
+    lua_pushnumber(L, element.offset_max.x);
+    lua_pushnumber(L, element.offset_max.y);
+    return 4;
+}
+
+static int wpe__api_set_ui_offsets(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    float values[4];
+    for (int i = 0; i < 4; ++i) {
+        values[i] = (float)luaL_checknumber(L, 2 + i);
+        if (!(fabsf(values[i]) <= 1e6f)) luaL_errorL(L, "argument #%d: offsets are -1e6..1e6 pixels", 2 + i);
+    }
+    WPE_UiRect* element = wpe__check_ui_part(L, entity, WPE_COMP_UI, "UI rectangle");
+    element->offset_min = (WPE_Vec2){.x = values[0], .y = values[1]};
+    element->offset_max = (WPE_Vec2){.x = values[2], .y = values[3]};
+    return 0;
+}
+
+/* The rectangle from the last layout (the frame before, during updates). */
+static int wpe__api_ui_rect(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_Rect r = ((const WPE_UiRect*)wpe__check_ui_part(L, entity, WPE_COMP_UI, "UI rectangle"))->rect;
+    lua_pushnumber(L, r.x);
+    lua_pushnumber(L, r.y);
+    lua_pushnumber(L, r.width);
+    lua_pushnumber(L, r.height);
+    return 4;
+}
+
+static int wpe__api_set_interactable(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const bool interactable = luaL_checkboolean(L, 2);
+    WPE_Button* button = wpe__check_ui_part(L, entity, WPE_COMP_BUTTON, "Button");
+    button->interactable = interactable;
+    return 0;
+}
+
+static int wpe__api_ui_focus(lua_State* L) {
+    WPE_Ui* ui = wpe__check_ui(L);
+    const WPE_Entity entity = lua_isnoneornil(L, 1) ? WPE_ENTITY_NULL : wpe__check_entity(L, 1);
+    lua_pushboolean(L, wpe_ui_focus(ui, entity));
+    return 1;
+}
+
+static int wpe__api_ui_focused(lua_State* L) {
+    const WPE_Entity focused = wpe_ui_focused(wpe__check_ui(L));
+    if (focused == WPE_ENTITY_NULL) {
+        lua_pushnil(L);
+    } else {
+        lua_pushnumber(L, (double)focused);
+    }
+    return 1;
+}
+
 /* ---- Time ------------------------------------------------------------------------------------------ */
 
 static int wpe__api_time(lua_State* L) {
@@ -1260,6 +1382,18 @@ static const luaL_Reg wpe__api[] = {
     {"draw_text", wpe__api_draw_text},
     {"draw_rect", wpe__api_draw_rect},
     {"text_size", wpe__api_text_size},
+    {"get_text", wpe__api_get_text},
+    {"set_text", wpe__api_set_text},
+    {"set_text_color", wpe__api_set_text_color},
+    {"set_sprite_color", wpe__api_set_sprite_color},
+    {"set_ui_visible", wpe__api_set_ui_visible},
+    {"is_ui_visible", wpe__api_is_ui_visible},
+    {"get_ui_offsets", wpe__api_get_ui_offsets},
+    {"set_ui_offsets", wpe__api_set_ui_offsets},
+    {"ui_rect", wpe__api_ui_rect},
+    {"set_interactable", wpe__api_set_interactable},
+    {"ui_focus", wpe__api_ui_focus},
+    {"ui_focused", wpe__api_ui_focused},
     {"time", wpe__api_time},
     {"frame", wpe__api_frame},
     {NULL, NULL},

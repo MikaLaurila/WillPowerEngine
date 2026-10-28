@@ -172,6 +172,34 @@ function Tour:on_start()
 	assert(tw > 0 and th > 0)
 	assert(wpe.color(1, 0, 0) == 0xFFFF0000)
 
+	-- UI: the scene's HUD (a nine-sliced panel with wrapped text and a button). The UI was laid out at the
+	-- start of this frame, so rectangles are known and buttons can take the focus.
+	local hud, hud_text, button = wpe.find("hud"), wpe.find("hud text"), wpe.find("hud button")
+	assert(wpe.get_text(hud_text) == "UI over 3D")
+	wpe.set_text(hud_text, "API tour")
+	assert(wpe.get_text(hud_text) == "API tour")
+	wpe.set_text_color(hud_text, wpe.color(1, 1, 0.6))
+	wpe.set_sprite_color(hud, wpe.color(0.1, 0.2, 0.4, 0.9))
+	assert(not pcall(wpe.set_text, hud, "x")) -- the panel has no Text
+	assert(not pcall(wpe.set_sprite_color, hud_text, 0)) -- and the text no Sprite
+	local x0, y0, x1, y1 = wpe.get_ui_offsets(hud)
+	assert(x0 == -110 and y0 == 14 and x1 == -6 and y1 == 50)
+	local rx, ry, rw, rh = wpe.ui_rect(hud)
+	assert(rw == 104 and rh == 36 and ry == 14 and rx == width - 110)
+	wpe.set_ui_offsets(hud, x0, y0 + 4, x1, y1 + 4) -- takes effect at the next layout
+	assert(select(2, wpe.get_ui_offsets(hud)) == 18)
+	assert(wpe.is_ui_visible(hud))
+	wpe.set_ui_visible(hud, false)
+	assert(not wpe.is_ui_visible(hud))
+	wpe.set_ui_visible(hud, true)
+	assert(wpe.ui_focused() == nil)
+	assert(wpe.ui_focus(button) and wpe.ui_focused() == button)
+	wpe.set_interactable(button, false) -- the next update takes the focus away
+	assert(not wpe.ui_focus(button))
+	wpe.set_interactable(button, true)
+	assert(wpe.ui_focus(nil) and wpe.ui_focused() == nil)
+	self.hud = hud
+
 	self.updates = 0
 	self.fixed = 0
 end
@@ -189,6 +217,8 @@ function Tour:on_update(dt)
 		wpe.remove_audio_source(self.speaker)
 		wpe.stop_music(0.25)
 		wpe.play_music("music/ambient.wav", 0, true)
+	elseif self.updates == 2 then
+		assert(select(2, wpe.ui_rect(self.hud)) == 18, "the moved HUD should be laid out again")
 	elseif self.updates == 120 then
 		assert(wpe.get_position(self.ball).y < 0.55, "the ball should rest on the ground")
 	end

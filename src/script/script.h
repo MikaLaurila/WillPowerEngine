@@ -14,6 +14,7 @@
  * function Spinner:on_reload() end -- optional: called after hot reload, state is preserved
  * function Spinner:on_collision_enter(other) end -- with physics (see below); also
  * function Spinner:on_collision_exit(other) end  -- on_trigger_enter(other) / on_trigger_exit(other)
+ * function Spinner:on_click() end -- a UI button on this entity was clicked (see ui/ui.h)
  * return Spinner
  * @endcode
  *
@@ -28,6 +29,7 @@
  *   already gone when on_destroy runs on despawn.
  * - on_collision_enter/exit(other), on_trigger_enter/exit(other): from
  *   wpe_script_host_dispatch_physics(), for both entities of each event of the last physics step.
+ * - Events of the application (on_click from the UI) through wpe_script_host_notify().
  *
  * Fixed-step order per step: wpe_script_host_fixed_update(), wpe_physics_step(),
  * wpe_script_host_dispatch_physics(). Destroy order: script host, audio, physics, ECS world,
@@ -48,8 +50,8 @@
  *
  * The Luau-side API (the read-only global `wpe`) is documented in docs/scripting.md.
  *
- * - Dependencies: core, math, ecs, scene, graphics, assets (asset manager, VFS), physics, audio, input, Luau
- *   (private)
+ * - Dependencies: core, math, ecs, scene, graphics, assets (asset manager, VFS), physics, audio, input, ui,
+ *   Luau (private)
  * - Thread affinity: main thread only (one VM per host)
  *
  * @author WillPowerEngine Team
@@ -67,6 +69,7 @@
 #include "graphics/draw2d.h"
 #include "input/input.h"
 #include "physics/physics.h"
+#include "ui/ui.h"
 
 /** Script component data. Managed by the host; do not modify. */
 typedef struct WPE_Script {
@@ -109,6 +112,9 @@ typedef struct WPE_ScriptHostDesc {
      * frame). Text needs `font` too, a WPE_ASSET_FONT handle the host keeps a reference to. */
     WPE_Draw2D* draw2d;
     WPE_AssetHandle font;
+    /* Optional, borrowed: enables the UI focus functions (the UI component functions only need the
+     * components registered). */
+    WPE_Ui* ui;
     const WPE_ScriptApp* app; /* Optional; copied. */
     size_t memory_limit;      /* VM heap limit in bytes (0 = 64 MiB). */
     double time_limit_ms;     /* Budget per callback invocation (0 = 250 ms). */
@@ -197,6 +203,16 @@ WPE_Result wpe_script_host_fixed_update(WPE_ScriptHost* host, float dt);
  * @thread_safety Main thread
  */
 WPE_Result wpe_script_host_dispatch_physics(WPE_ScriptHost* host);
+
+/**
+ * Calls `method` (an event callback without arguments, such as "on_click") on the started, healthy
+ * script of an entity, if it has one and the method exists, then applies deferred destroys.
+ *
+ * @return WPE_RESULT_OK or WPE_RESULT_ERROR_NULL_ARG. Script errors are logged, not returned.
+ *
+ * @thread_safety Main thread
+ */
+WPE_Result wpe_script_host_notify(WPE_ScriptHost* host, WPE_Entity entity, const char* method);
 
 /**
  * Recompiles every script file whose modification time changed since it was loaded.

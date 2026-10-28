@@ -183,8 +183,7 @@ static void wpe__write_refs(wpe__Saver* s, const char* key, const WPE_Entity* en
     wpe_json_write_array_end(s->w);
 }
 
-/* Writes an asset reference by path (null for no asset). */
-static void wpe__write_asset(wpe__Saver* s, const char* key, WPE_AssetHandle handle) {
+void wpe__write_asset(wpe__Saver* s, const char* key, WPE_AssetHandle handle) {
     wpe_json_write_key(s->w, key);
     const char* path = wpe_asset_path(s->context->assets, handle);
     if (path) {
@@ -419,6 +418,7 @@ void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
         wpe__write_bool(w, "playing", source->playing);
         wpe_json_write_object_end(w);
     }
+    wpe__save_ui_components(s, e);
     if (wpe_ecs_has_component(ecs, e, WPE_COMP_SCRIPT)) {
         const char* path = wpe_script_path(s->context->scripts, e);
         if (!path) {
@@ -617,9 +617,8 @@ WPE_Result wpe__write_file_atomic(const char* os_path, const char* text, size_t 
 
 /* ---- Loading -------------------------------------------------------------------------------------- */
 
-/* Optional asset path; loads it (the caller owns the reference). NULL in the file means none. */
-static bool wpe__read_asset(wpe__Loader* l, const WPE_JsonValue* object, const char* key, WPE_AssetType type,
-                            WPE_AssetHandle* out) {
+bool wpe__read_asset(wpe__Loader* l, const WPE_JsonValue* object, const char* key, WPE_AssetType type,
+                     WPE_AssetHandle* out) {
     *out = WPE_ASSET_NONE;
     const WPE_JsonValue* v = wpe_json_get(object, key);
     if (!v || wpe_json_type(v) == WPE_JSON_NULL) return true;
@@ -668,8 +667,8 @@ static bool wpe__read_refs(wpe__Loader* l, const WPE_JsonValue* object, const ch
     return true;
 }
 
-static bool wpe__add(wpe__Loader* l, const WPE_JsonValue* at, WPE_Entity e, WPE_ComponentType type,
-                     const void* data, const char* what) {
+bool wpe__add(wpe__Loader* l, const WPE_JsonValue* at, WPE_Entity e, WPE_ComponentType type, const void* data,
+              const char* what) {
     if (!wpe_ecs_is_registered(l->context->ecs, type))
         return wpe__json_fail(&l->r, at, WPE_RESULT_ERROR_UNSUPPORTED,
                               "%s components are not available (module not created)", what);
@@ -1238,7 +1237,8 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
         const WPE_JsonValue* v = wpe_json_at(entities, i);
         if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "entity", "id", "name", "parent", "transform", "instance",
                                     "mesh", "camera", "light", "animator", "rigidbody", "collider",
-                                    "audio_source", "script", "components", "prefab"))
+                                    "audio_source", "ui", "sprite", "text", "button", "script", "components",
+                                    "prefab"))
             return false;
         uint32_t id = 0;
         if (!wpe__read_file_id(l, wpe_json_get(v, "id"), v, &id))
@@ -1296,10 +1296,18 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
         const char* key;
         bool (*load)(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
     } loaders[] = {
-        {"instance", wpe__load_instance},     {"mesh", wpe__load_mesh},
-        {"camera", wpe__load_camera},         {"light", wpe__load_light},
-        {"animator", wpe__load_animator},     {"rigidbody", wpe__load_rigidbody},
-        {"collider", wpe__load_collider},     {"audio_source", wpe__load_audio_source},
+        {"instance", wpe__load_instance},
+        {"mesh", wpe__load_mesh},
+        {"camera", wpe__load_camera},
+        {"light", wpe__load_light},
+        {"animator", wpe__load_animator},
+        {"rigidbody", wpe__load_rigidbody},
+        {"collider", wpe__load_collider},
+        {"audio_source", wpe__load_audio_source},
+        {"ui", wpe__load_ui},
+        {"sprite", wpe__load_sprite},
+        {"text", wpe__load_text},
+        {"button", wpe__load_button},
         {"components", wpe__load_components},
     };
     for (uint32_t i = 0; i < count; ++i) {
@@ -1447,6 +1455,10 @@ static const struct {
     {"rigidbody", WPE_COMP_PHYSICS_RIGIDBODY, wpe__load_rigidbody},
     {"collider", WPE_COMP_PHYSICS_COLLIDER, wpe__load_collider},
     {"audio_source", WPE_COMP_AUDIO_SOURCE, wpe__load_audio_source},
+    {"ui", WPE_COMP_UI, wpe__load_ui},
+    {"sprite", WPE_COMP_SPRITE, wpe__load_sprite},
+    {"text", WPE_COMP_TEXT, wpe__load_text},
+    {"button", WPE_COMP_BUTTON, wpe__load_button},
     {"script", WPE_COMP_SCRIPT, wpe__load_script},
 };
 
@@ -1558,7 +1570,8 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
     /* "id" is accepted and ignored, so a saved entity (wpe_scene_save_entity) can be fed back as a copy. */
     if (!WPE__JSON_CHECK_OBJECT(&l.r, description, "entity", "id", "name", "parent", "transform", "instance",
                                 "mesh", "camera", "light", "animator", "rigidbody", "collider",
-                                "audio_source", "script", "components", "prefab"))
+                                "audio_source", "ui", "sprite", "text", "button", "script", "components",
+                                "prefab"))
         return l.r.result;
     /* A prefab instance starts from its prefab; the description's parts then replace the root's. */
     const WPE_JsonValue* prefab = wpe_json_get(description, "prefab");
@@ -1571,9 +1584,9 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
         if (e == WPE_ENTITY_NULL) return WPE_RESULT_ERROR_CAPACITY;
     }
     /* The scene-file order: identity first, then components, scripts last. */
-    static const char* const order[] = {"name",      "transform", "parent",      "instance",
-                                        "mesh",      "camera",    "light",       "animator",
-                                        "rigidbody", "collider",  "audio_source"};
+    static const char* const order[] = {"name",         "transform", "parent",   "instance",  "mesh",
+                                        "camera",       "light",     "animator", "rigidbody", "collider",
+                                        "audio_source", "ui",        "sprite",   "text",      "button"};
     bool ok = true;
     for (size_t i = 0; ok && i < sizeof order / sizeof order[0]; ++i) {
         const WPE_JsonValue* value = wpe_json_get(description, order[i]);

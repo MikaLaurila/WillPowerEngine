@@ -63,7 +63,8 @@ static const char* wpe__string_arg(const wpe__Call* call, const char* key) {
 /* ---- Queries ---------------------------------------------------------------------------------------- */
 
 static const char* const wpe__component_keys[] = {
-    "transform", "mesh", "camera", "light", "animator", "rigidbody", "collider", "audio_source", "script"};
+    "transform",    "mesh", "camera", "light", "animator", "rigidbody", "collider",
+    "audio_source", "ui",   "sprite", "text",  "button",   "script"};
 static const WPE_ComponentType wpe__component_types[] = {WPE_COMP_TRANSFORM,
                                                          WPE_COMP_MESH,
                                                          WPE_COMP_CAMERA,
@@ -72,7 +73,14 @@ static const WPE_ComponentType wpe__component_types[] = {WPE_COMP_TRANSFORM,
                                                          WPE_COMP_PHYSICS_RIGIDBODY,
                                                          WPE_COMP_PHYSICS_COLLIDER,
                                                          WPE_COMP_AUDIO_SOURCE,
+                                                         WPE_COMP_UI,
+                                                         WPE_COMP_SPRITE,
+                                                         WPE_COMP_TEXT,
+                                                         WPE_COMP_BUTTON,
                                                          WPE_COMP_SCRIPT};
+static_assert(sizeof wpe__component_keys / sizeof wpe__component_keys[0] ==
+                  sizeof wpe__component_types / sizeof wpe__component_types[0],
+              "one type per component key");
 
 static WPE_Result wpe__cmd_list_entities(wpe__Call* call) {
     WPE_Ecs* ecs = wpe__ecs(call);

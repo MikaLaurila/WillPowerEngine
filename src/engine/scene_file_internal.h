@@ -60,6 +60,27 @@ bool wpe__apply(wpe__Loader* l, WPE_Entity e, const char* key, const WPE_JsonVal
 /* The component type stored under a scene-file key (WPE_COMP_NONE for unknown keys). */
 WPE_ComponentType wpe__edit_type(const WPE_SceneContext* context, const char* key);
 
+/* Writes an asset reference by path (null for no asset). */
+void wpe__write_asset(wpe__Saver* s, const char* key, WPE_AssetHandle handle);
+
+/* Optional asset path under `key`; loads it (the caller owns the reference). null in the file means none. */
+bool wpe__read_asset(wpe__Loader* l, const WPE_JsonValue* object, const char* key, WPE_AssetType type,
+                     WPE_AssetHandle* out);
+
+/* Adds a component loaded from `at` (errors are reported there; `what` names it in messages). */
+bool wpe__add(wpe__Loader* l, const WPE_JsonValue* at, WPE_Entity e, WPE_ComponentType type, const void* data,
+              const char* what);
+
+/* ---- UI components (scene_file_ui.c) --------------------------------------------------------------- */
+
+/* Writes the entity's "ui", "sprite", "text" and "button" (those it has). */
+void wpe__save_ui_components(wpe__Saver* s, WPE_Entity e);
+
+bool wpe__load_ui(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
+bool wpe__load_sprite(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
+bool wpe__load_text(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
+bool wpe__load_button(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
+
 /* Writes a whole file at an OS path through a temporary file, so it is replaced completely or not at all. */
 WPE_Result wpe__write_file_atomic(const char* os_path, const char* text, size_t size);
 

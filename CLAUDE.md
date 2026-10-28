@@ -157,7 +157,12 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
     - `scene_file_internal.h` shares the loader and saver with `prefab.c`. `core/json` has `wpe_json_write_value`/`wpe_json_equal` for the comparison.
     - Prefab files can't nest instances yet. Worlds built by hand must call `wpe_prefab_register` before loading scenes with instances.
   - `wpe_engine_set_debug_draw` turns on the ground grid and physics wireframes. They're drawn in the overlay pass after post-processing, depth tested, under the scripts' 2D drawing.
-- **ECS hook order:** on despawn, `on_remove` hooks run in descending type-id order: PrefabLink (13) first, then AudioSource (11), Collider (10) and RigidBody (9) before Script (8), which runs before Hierarchy (2). So the physics body is already gone when `on_destroy` runs.
+- **ui** (`ui/ui.h`, docs in `docs/scenes.md#ui`, AGENTS.md §4.6.1): retained UI entities: `WPE_UiRect` (`WPE_COMP_UI` 14: anchors + pixel offsets against the parent element or the framebuffer; the default fills the parent), `WPE_Sprite` (15, `WPE_ASSET_IMAGE` images, nine-slice), `WPE_Text` (16; the add hook copies the string, `wpe_ui_set_text` replaces it), `WPE_Button` (17).
+  - The engine owns one `WPE_Ui`: `wpe_ui_update` (only while simulating) runs focus, navigation and clicks before the fixed steps and the engine calls `on_click` through `wpe_script_host_notify`; `wpe_ui_draw` runs in the overlay frame after debug lines and before scripts' immediate 2D. A scene without a camera is a 2D scene.
+  - Draw order: parents before children, top-level elements by spawn serial. `wpe_ui_layout` stores `rect`/`shown` in the component (picking, navigation and the editor read them).
+  - The editor's ImGui backend functions are `wpe_ui_backend_*` (the `wpe_ui_` prefix belongs to this module).
+  - Tests building SDL events must zero them whole (`SDL_zero`): `= {0}` or designated initializers only set the union's first member, and garbage in `key.repeat` makes key presses vanish at random.
+- **ECS hook order:** on despawn, `on_remove` hooks run in descending type-id order: Button (17) to UiRect (14) and PrefabLink (13) first, then AudioSource (11), Collider (10) and RigidBody (9) before Script (8), which runs before Hierarchy (2). So the physics body is already gone when `on_destroy` runs.
 - **renderer extras:**
   - `WPE_RenderState.depth_only` writes depth only; the fragment shader may be NULL in that mode. This is used for shadow passes.
   - `WPE_DrawDesc.subdivision_levels/edge_pixels` require `program->vertex_lerp`.

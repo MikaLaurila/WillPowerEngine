@@ -10,10 +10,12 @@
  *
  * Frame (wpe_engine_frame()):
  *  1. Input: OS events are pumped into the input module and actions evaluated.
- *  2. Simulation: fixed steps (scripts' on_fixed_update, physics, collision callbacks), then the
- *     scripts' on_update, animation, transforms and audio.
- *  3. Rendering from the scene camera, the scene's post-processing, then the scripts' 2D drawing
- *     on top (not post-processed), and presenting to the window.
+ *  2. Simulation: the UI's focus and clicks (scripts' on_click), fixed steps (scripts'
+ *     on_fixed_update, physics, collision callbacks), then the scripts' on_update, animation,
+ *     transforms and audio.
+ *  3. Rendering from the scene camera (a scene without one is 2D: only the clear color), the
+ *     scene's post-processing, then the UI and the scripts' 2D drawing on top (not
+ *     post-processed), and presenting to the window.
  *  4. Requests made by scripts during the frame (wpe.load_scene, wpe.quit) take effect.
  *
  * Headless engines (no window) still render, so frames can be captured with
@@ -41,6 +43,7 @@
 #include "physics/physics.h"
 #include "renderer/renderer.h"
 #include "script/script.h"
+#include "ui/ui.h"
 #include "vfs/vfs.h"
 
 typedef struct WPE_Engine WPE_Engine;
@@ -164,6 +167,7 @@ WPE_Physics* wpe_engine_physics(const WPE_Engine* engine);
 /** Parsed prefab files (for scene contexts that load or instantiate prefabs). */
 WPE_PrefabCache* wpe_engine_prefabs(const WPE_Engine* engine);
 WPE_Audio* wpe_engine_audio(const WPE_Engine* engine);
+WPE_Ui* wpe_engine_ui(const WPE_Engine* engine);
 WPE_ScriptHost* wpe_engine_scripts(const WPE_Engine* engine);
 WPE_Renderer* wpe_engine_renderer(const WPE_Engine* engine);
 const WPE_ProjectSettings* wpe_engine_project(const WPE_Engine* engine);
@@ -182,6 +186,11 @@ void wpe_engine_set_debug_draw(WPE_Engine* engine, const WPE_EngineDebugDraw* de
 
 /** @return The debug overlays. @thread_safety Main thread only */
 WPE_EngineDebugDraw wpe_engine_debug_draw(const WPE_Engine* engine);
+
+/** Whether the UI (ui/ui.h) is drawn over the scene (default true; the editor's 3D view turns it off).
+ * @thread_safety Main thread only */
+void wpe_engine_set_draw_ui(WPE_Engine* engine, bool draw_ui);
+bool wpe_engine_draws_ui(const WPE_Engine* engine);
 
 /** Per-frame statistics of the last frame. */
 typedef struct WPE_EngineStats {
