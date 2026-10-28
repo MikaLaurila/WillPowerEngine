@@ -97,6 +97,84 @@ static void test_graphics_sample_cubic_spline(void) {
     WPE_TEST_ASSERT_NEAR(0.25, out[0], 1e-6);
 }
 
+/* ---- Crossfades ------------------------------------------------------------------------------------- */
+
+static float quat_alignment(WPE_Quat a, const float b[4]) {
+    return fabsf(a.x * b[0] + a.y * b[1] + a.z * b[2] + a.w * b[3]);
+}
+
+static void test_graphics_animation_crossfade(void) {
+    WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 0);
+    const WPE_AssetHandle handle = wpe_test_load_model(t.assets, "meshes/RiggedFigure.glb");
+    const WPE_Model* model = wpe_asset_model(t.assets, handle);
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_Entity root = WPE_ENTITY_NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, t.assets, handle,
+                                             &(WPE_InstantiateOptions){.animation = 0, .play = true}, &root));
+    WPE_Animator* animator = wpe_ecs_get_component(ecs, root, WPE_COMP_ANIMATOR);
+    const float duration = model->animations[0].duration;
+    WPE_TEST_ASSERT(duration > 1.2f);
+
+    /* A rotation channel whose two sample times below differ, to see the blend. */
+    const WPE_AnimationChannel* channel = NULL;
+    for (uint32_t c = 0; c < model->animations[0].channel_count && !channel; ++c) {
+        const WPE_AnimationChannel* candidate = &model->channels[model->animations[0].first_channel + c];
+        float a[4], b[4];
+        wpe_animation_sample_channel(candidate, 0.8f, a);
+        wpe_animation_sample_channel(candidate, 0.5f, b);
+        const WPE_Quat qa = {.x = a[0], .y = a[1], .z = a[2], .w = a[3]};
+        if (candidate->path == WPE_ANIM_ROTATION && quat_alignment(qa, b) < 0.999f) channel = candidate;
+    }
+    WPE_TEST_ASSERT(channel != NULL);
+    const WPE_Entity node = animator->node_entities[channel->node];
+
+    /* From 0.3 s into the animation, crossfade over 1 s into the same animation from its start. */
+    animator->time = 0.3f;
+    WPE_TEST_ASSERT_OK(wpe_animator_play(animator, 0, 1.0f, true));
+    WPE_TEST_ASSERT(animator->fade_duration > 0.0f && animator->time == 0.0f);
+    WPE_TEST_ASSERT_NEAR(0.3, animator->from_time, 1e-6);
+
+    /* Halfway: the old animation at 0.8 s and the new one at 0.5 s, half each. */
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.5f));
+    float from[4], to[4];
+    wpe_animation_sample_channel(channel, 0.8f, from);
+    wpe_animation_sample_channel(channel, 0.5f, to);
+    const WPE_Quat expected =
+        wpe_quat_slerp((WPE_Quat){.x = from[0], .y = from[1], .z = from[2], .w = from[3]},
+                       (WPE_Quat){.x = to[0], .y = to[1], .z = to[2], .w = to[3]}, 0.5f);
+    const WPE_Quat blended = ((WPE_Transform*)wpe_ecs_get_component(ecs, node, WPE_COMP_TRANSFORM))->rotation;
+    WPE_TEST_ASSERT_NEAR(1.0, quat_alignment(blended, expected.v), 1e-5);
+    WPE_TEST_ASSERT(quat_alignment(blended, to) < 0.9999f); /* Not the new pose alone yet. */
+
+    /* Done: the new animation alone. */
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.6f));
+    WPE_TEST_ASSERT_NEAR(0.0, animator->fade_duration, 0);
+    wpe_animation_sample_channel(channel, 1.1f, to);
+    const WPE_Quat after = ((WPE_Transform*)wpe_ecs_get_component(ecs, node, WPE_COMP_TRANSFORM))->rotation;
+    WPE_TEST_ASSERT_NEAR(1.0, quat_alignment(after, to), 1e-5);
+
+    /* A cut (no fade); a paused animation fades out where it stopped. */
+    WPE_TEST_ASSERT_OK(wpe_animator_play(animator, 0, 0.0f, false));
+    WPE_TEST_ASSERT(animator->fade_duration == 0.0f && animator->time == 0.0f && !animator->loop);
+    animator->playing = false;
+    animator->time = 0.4f;
+    WPE_TEST_ASSERT_OK(wpe_animator_play(animator, 0, 0.5f, true));
+    WPE_TEST_ASSERT_NEAR(0.0, animator->from_speed, 0);
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.25f));
+    WPE_TEST_ASSERT_NEAR(0.4, animator->from_time, 1e-6);
+
+    /* Arguments, and animations by name. */
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_animator_play(animator, 99, 0.0f, true));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_animator_play(animator, 0, -1.0f, true));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_animator_play(NULL, 0, 0.0f, true));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_model_find_animation(model, model->animations[0].name));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_MODEL_NONE, wpe_model_find_animation(model, "no such animation"));
+
+    wpe_ecs_destroy(ecs);
+    wpe_asset_release(t.assets, handle);
+    wpe_test_assets_destroy(&t);
+}
+
 /* ---- Instantiation and animation playback --------------------------------------------------------- */
 
 static void test_graphics_instantiate_rigged_figure(void) {
@@ -939,6 +1017,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_sample_linear_step_and_clamp),
     WPE_TEST_CASE(test_graphics_sample_rotation_slerps_shortest_path),
     WPE_TEST_CASE(test_graphics_sample_cubic_spline), WPE_TEST_CASE(test_graphics_instantiate_rigged_figure),
+    WPE_TEST_CASE(test_graphics_animation_crossfade),
     WPE_TEST_CASE(test_graphics_instantiate_validates_and_cleans_up),
     WPE_TEST_CASE(test_graphics_material_vertex_shader_skinning),
     WPE_TEST_CASE(test_graphics_shininess_range), WPE_TEST_CASE(test_graphics_scene_render_frustum_culling),

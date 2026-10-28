@@ -128,9 +128,11 @@ Entity handles are numbers. Passing a handle that isn't alive raises an error. V
 | `wpe.get_light(entity) -> table?` / `wpe.remove_light(entity)` | Read or remove a light. |
 | `wpe.LIGHT_DIRECTIONAL`, `wpe.LIGHT_POINT`, `wpe.LIGHT_SPOT` | Light type constants. |
 | `wpe.set_visible(entity, bool)` | Show or hide every mesh in the entity's subtree. |
-| `wpe.play_animation(entity, [index], [loop = true])` | Play an instantiated model's animation (1-based index). nil keeps the current one. |
+| `wpe.play_animation(entity, [animation], [loop = true], [fade = 0])` | Play an instantiated model's animation from its start: a 1-based index or the animation's name. nil resumes the current one where it is. With `fade` seconds it crossfades: the previous animation carries on underneath while the new one blends in, so a walk turns into a run without a jump. |
 | `wpe.stop_animation(entity)` | Pause playback. |
 | `wpe.animation_time(entity, [seconds]) -> seconds` | Get or set the playback position. |
+| `wpe.animation_speed(entity, [speed]) -> speed` | Get or set the playback rate (1 normal, 2 twice as fast, negative backwards). |
+| `wpe.get_animation(entity) -> {index, name, time, duration, speed, playing, loop, fading, names}` | What's playing. `playing` turns false when a non-looping animation ends; `names` lists the model's animations. |
 | `wpe.time() -> seconds` | Accumulated game time from updates. |
 | `wpe.frame() -> number` | Number of completed updates. |
 

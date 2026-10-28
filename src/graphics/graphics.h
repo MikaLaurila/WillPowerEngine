@@ -88,6 +88,15 @@ typedef struct WPE_Animator {
     bool loop;
     WPE_Entity* node_entities; /* Owned (freed by the remove hook): entity per model node. */
     uint32_t node_count;
+
+    /* Crossfade (wpe_animator_play with a fade): the previous animation keeps playing underneath
+     * while `animation` fades in over fade_duration seconds. Not fading while fade_duration is 0. */
+    uint32_t from_animation;
+    float from_time;
+    float from_speed;
+    bool from_loop;
+    float fade;          /* Seconds into the fade. */
+    float fade_duration; /* 0: no crossfade. */
 } WPE_Animator;
 
 /** How a billboard turns. */

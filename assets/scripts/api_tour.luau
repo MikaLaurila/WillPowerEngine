@@ -66,6 +66,15 @@ function Tour:on_start()
 	wpe.play_animation(self.figure, 1, true)
 	wpe.animation_time(self.figure, 0.25)
 	assert(near(wpe.animation_time(self.figure), 0.25))
+	-- By name, crossfading over 0.3 s; speed; what's playing.
+	local clip = wpe.get_animation(self.figure)
+	assert(clip.index == 1 and clip.playing and clip.loop and clip.duration > 0 and #clip.names >= 1)
+	wpe.play_animation(self.figure, clip.names[1], true, 0.3)
+	assert(wpe.get_animation(self.figure).fading and near(wpe.animation_time(self.figure), 0))
+	assert(wpe.animation_speed(self.figure, 1.5) == 1.5 and wpe.animation_speed(self.figure) == 1.5)
+	wpe.animation_speed(self.figure, 1)
+	assert(not pcall(wpe.play_animation, self.figure, "no such clip"))
+	assert(not pcall(wpe.play_animation, self.figure, 1, true, -1))
 
 	-- Scripts attaching scripts, and deferred destruction.
 	self.temp = wpe.spawn("tour_temp")

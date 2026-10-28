@@ -1,6 +1,7 @@
 #include "graphics/animation.h"
 
 #include <math.h>
+#include <string.h>
 
 #include "core/debug.h"
 
@@ -88,12 +89,12 @@ void wpe_animation_sample_channel(const WPE_AnimationChannel* channel, float tim
         out_value[c] = a[c] + (b[c] - a[c]) * s;
 }
 
-void wpe_animation_apply(WPE_Ecs* ecs, const WPE_Animator* animator) {
-    if (!ecs || !animator || !animator->model || animator->animation >= animator->model->animation_count)
-        return;
+/* Writes an animation's pose at `time` into the node transforms, blended over what they hold with
+ * `weight` (1: replaces it). */
+static void wpe__apply_animation(WPE_Ecs* ecs, const WPE_Animator* animator, uint32_t index, float time,
+                                 float weight) {
     const WPE_Model* model = animator->model;
-    const WPE_Animation* animation = &model->animations[animator->animation];
-
+    const WPE_Animation* animation = &model->animations[index];
     for (uint32_t c = 0; c < animation->channel_count; ++c) {
         const WPE_AnimationChannel* channel = &model->channels[animation->first_channel + c];
         if (channel->node >= animator->node_count) continue;
@@ -102,19 +103,61 @@ void wpe_animation_apply(WPE_Ecs* ecs, const WPE_Animator* animator) {
         if (!t) continue; /* Node entity was despawned or lost its transform. */
 
         float value[4];
-        wpe_animation_sample_channel(channel, animator->time, value);
+        wpe_animation_sample_channel(channel, time, value);
+        const WPE_Vec3 v = wpe_vec3(value[0], value[1], value[2]);
         switch (channel->path) {
         case WPE_ANIM_TRANSLATION:
-            t->position = wpe_vec3(value[0], value[1], value[2]);
+            t->position = weight >= 1.0f ? v : wpe_vec3_lerp(t->position, v, weight);
             break;
-        case WPE_ANIM_ROTATION:
-            t->rotation = (WPE_Quat){.x = value[0], .y = value[1], .z = value[2], .w = value[3]};
+        case WPE_ANIM_ROTATION: {
+            const WPE_Quat q = {.x = value[0], .y = value[1], .z = value[2], .w = value[3]};
+            t->rotation = weight >= 1.0f ? q : wpe_quat_slerp(t->rotation, q, weight);
             break;
+        }
         case WPE_ANIM_SCALE:
-            t->scale = wpe_vec3(value[0], value[1], value[2]);
+            t->scale = weight >= 1.0f ? v : wpe_vec3_lerp(t->scale, v, weight);
             break;
         }
     }
+}
+
+static bool wpe__fading(const WPE_Animator* animator) {
+    return animator->fade_duration > 0.0f && animator->from_animation < animator->model->animation_count;
+}
+
+void wpe_animation_apply(WPE_Ecs* ecs, const WPE_Animator* animator) {
+    if (!ecs || !animator || !animator->model || animator->animation >= animator->model->animation_count)
+        return;
+    if (!wpe__fading(animator)) {
+        wpe__apply_animation(ecs, animator, animator->animation, animator->time, 1.0f);
+        return;
+    }
+    /* The old animation in full, then the new one over it by its weight so far. */
+    const float weight = animator->fade / animator->fade_duration;
+    wpe__apply_animation(ecs, animator, animator->from_animation, animator->from_time, 1.0f);
+    wpe__apply_animation(ecs, animator, animator->animation, animator->time, weight < 1.0f ? weight : 1.0f);
+}
+
+/* Advances a playback time: looping wraps; otherwise it clamps at the end it runs toward, and
+ * `*out_ended` reports reaching it. */
+static float wpe__advance(float time, float dt, float speed, float duration, bool loop, bool* out_ended) {
+    *out_ended = false;
+    time += dt * speed;
+    if (!isfinite(time)) return 0.0f;
+    if (duration <= 0.0f) return 0.0f;
+    if (loop) {
+        time = fmodf(time, duration);
+        return time < 0.0f ? time + duration : time;
+    }
+    if (time >= duration && speed > 0.0f) {
+        *out_ended = true;
+        return duration;
+    }
+    if (time <= 0.0f && speed < 0.0f) {
+        *out_ended = true;
+        return 0.0f;
+    }
+    return time < 0.0f ? 0.0f : (time > duration ? duration : time);
 }
 
 WPE_Result wpe_animation_update(WPE_Ecs* ecs, float dt) {
@@ -124,26 +167,50 @@ WPE_Result wpe_animation_update(WPE_Ecs* ecs, float dt) {
         WPE_Animator* animator = wpe_ecs_iter_get(&it, WPE_COMP_ANIMATOR);
         if (!animator->playing || !animator->model || animator->animation >= animator->model->animation_count)
             continue;
-
-        const float duration = animator->model->animations[animator->animation].duration;
-        float time = animator->time + dt * animator->speed;
-        if (!isfinite(time)) time = 0.0f;
-        if (duration <= 0.0f) {
-            time = 0.0f;
-        } else if (animator->loop) {
-            time = fmodf(time, duration);
-            if (time < 0.0f) time += duration;
-        } else if (time >= duration && animator->speed > 0.0f) {
-            time = duration;
-            animator->playing = false;
-        } else if (time <= 0.0f && animator->speed < 0.0f) {
-            time = 0.0f;
-            animator->playing = false;
-        } else {
-            time = time < 0.0f ? 0.0f : (time > duration ? duration : time);
+        const WPE_Animation* animations = animator->model->animations;
+        bool ended = false;
+        animator->time = wpe__advance(animator->time, dt, animator->speed,
+                                      animations[animator->animation].duration, animator->loop, &ended);
+        if (ended) animator->playing = false;
+        if (wpe__fading(animator)) {
+            bool from_ended = false; /* The old animation holds its last pose once it ends. */
+            animator->from_time =
+                wpe__advance(animator->from_time, dt, animator->from_speed,
+                             animations[animator->from_animation].duration, animator->from_loop, &from_ended);
+            animator->fade += dt;
+            if (!(animator->fade < animator->fade_duration)) animator->fade_duration = 0.0f; /* Done. */
         }
-        animator->time = time;
         wpe_animation_apply(ecs, animator);
     }
     return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_animator_play(WPE_Animator* animator, uint32_t animation, float fade_seconds, bool loop) {
+    if (!animator || !animator->model) return WPE_RESULT_ERROR_NULL_ARG;
+    if (animation >= animator->model->animation_count || !isfinite(fade_seconds) || fade_seconds < 0.0f)
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    const bool from_valid = animator->animation < animator->model->animation_count;
+    if (fade_seconds > 0.0f && from_valid) {
+        animator->from_animation = animator->animation;
+        animator->from_time = animator->time;
+        /* A paused animation fades out where it stopped. */
+        animator->from_speed = animator->playing ? animator->speed : 0.0f;
+        animator->from_loop = animator->loop;
+        animator->fade = 0.0f;
+        animator->fade_duration = fade_seconds;
+    } else {
+        animator->fade_duration = 0.0f;
+    }
+    animator->animation = animation;
+    animator->time = animator->speed < 0.0f ? animator->model->animations[animation].duration : 0.0f;
+    animator->loop = loop;
+    animator->playing = true;
+    return WPE_RESULT_OK;
+}
+
+uint32_t wpe_model_find_animation(const WPE_Model* model, const char* name) {
+    if (!model || !name) return WPE_MODEL_NONE;
+    for (uint32_t i = 0; i < model->animation_count; ++i)
+        if (strcmp(model->animations[i].name, name) == 0) return i;
+    return WPE_MODEL_NONE;
 }

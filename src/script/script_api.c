@@ -13,6 +13,7 @@
 #include "core/alloc.h"
 #include "core/json.h"
 #include "core/log.h"
+#include "graphics/animation.h"
 #include "graphics/graphics.h"
 #include "platform/platform.h"
 #include "scene/scene.h"
@@ -449,20 +450,72 @@ static WPE_Animator* wpe__check_animator(lua_State* L, WPE_Entity entity) {
 
 static int wpe__api_play_animation(lua_State* L) {
     const WPE_Entity entity = wpe__check_entity(L, 1);
-    const int index = (int)luaL_optinteger(L, 2, 0); /* 1-based; 0 / nil keeps the current animation */
     const bool loop = lua_isnoneornil(L, 3) ? true : luaL_checkboolean(L, 3);
+    const double fade = luaL_optnumber(L, 4, 0.0);
+    if (!(fade >= 0.0 && isfinite(fade)))
+        luaL_errorL(L, "wpe.play_animation: fade must be 0 or more seconds");
     WPE_Animator* animator = wpe__check_animator(L, entity);
-    if (index != 0) {
-        if (index < 1 || (uint32_t)index > animator->model->animation_count) {
-            luaL_errorL(L, "animation index %d out of range (model has %u)", index,
+    if (lua_isnoneornil(L, 2)) { /* Resume the current animation. */
+        animator->loop = loop;
+        animator->playing = true;
+        return 0;
+    }
+    uint32_t index = WPE_MODEL_NONE;
+    if (lua_type(L, 2) == LUA_TSTRING) {
+        index = wpe_model_find_animation(animator->model, lua_tostring(L, 2));
+        if (index == WPE_MODEL_NONE)
+            luaL_errorL(L, "wpe.play_animation: the model has no animation '%s'", lua_tostring(L, 2));
+    } else {
+        const int number = (int)luaL_checkinteger(L, 2); /* 1-based */
+        if (number < 1 || (uint32_t)number > animator->model->animation_count) {
+            luaL_errorL(L, "animation index %d out of range (model has %u)", number,
                         animator->model->animation_count);
         }
-        animator->animation = (uint32_t)(index - 1);
-        animator->time = 0.0f;
+        index = (uint32_t)(number - 1);
     }
-    animator->loop = loop;
-    animator->playing = true;
+    wpe__raise_result(L, "play_animation", wpe_animator_play(animator, index, (float)fade, loop));
     return 0;
+}
+
+static int wpe__api_get_animation(lua_State* L) {
+    const WPE_Animator* animator = wpe__check_animator(L, wpe__check_entity(L, 1));
+    const WPE_Animator copy = *animator;
+    const bool valid = copy.animation < copy.model->animation_count;
+    lua_createtable(L, 0, 8);
+    lua_pushnumber(L, valid ? (double)copy.animation + 1.0 : 0.0);
+    lua_setfield(L, -2, "index");
+    lua_pushstring(L, valid ? copy.model->animations[copy.animation].name : "");
+    lua_setfield(L, -2, "name");
+    lua_pushnumber(L, copy.time);
+    lua_setfield(L, -2, "time");
+    lua_pushnumber(L, valid ? copy.model->animations[copy.animation].duration : 0.0);
+    lua_setfield(L, -2, "duration");
+    lua_pushnumber(L, copy.speed);
+    lua_setfield(L, -2, "speed");
+    lua_pushboolean(L, copy.playing);
+    lua_setfield(L, -2, "playing");
+    lua_pushboolean(L, copy.loop);
+    lua_setfield(L, -2, "loop");
+    lua_pushboolean(L, copy.fade_duration > 0.0f);
+    lua_setfield(L, -2, "fading");
+    lua_createtable(L, (int)copy.model->animation_count, 0);
+    for (uint32_t i = 0; i < copy.model->animation_count; ++i) {
+        lua_pushstring(L, copy.model->animations[i].name);
+        lua_rawseti(L, -2, (int)i + 1);
+    }
+    lua_setfield(L, -2, "names");
+    return 1;
+}
+
+static int wpe__api_animation_speed(lua_State* L) {
+    WPE_Animator* animator = wpe__check_animator(L, wpe__check_entity(L, 1));
+    if (!lua_isnoneornil(L, 2)) {
+        const double speed = luaL_checknumber(L, 2);
+        if (!isfinite(speed)) luaL_errorL(L, "wpe.animation_speed: speed must be finite");
+        animator->speed = (float)speed;
+    }
+    lua_pushnumber(L, animator->speed);
+    return 1;
 }
 
 static int wpe__api_stop_animation(lua_State* L) {
@@ -2216,6 +2269,8 @@ static const luaL_Reg wpe__api[] = {
     {"play_animation", wpe__api_play_animation},
     {"stop_animation", wpe__api_stop_animation},
     {"animation_time", wpe__api_animation_time},
+    {"get_animation", wpe__api_get_animation},
+    {"animation_speed", wpe__api_animation_speed},
     {"add_rigidbody", wpe__api_add_rigidbody},
     {"add_collider", wpe__api_add_collider},
     {"remove_rigidbody", wpe__api_remove_rigidbody},

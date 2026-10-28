@@ -36,9 +36,27 @@ WPE_Result wpe_animation_update(WPE_Ecs* ecs, float dt);
 
 /**
  * Applies an animator's pose at its current time without advancing it (useful after seeking).
+ * During a crossfade it is the blend of both animations.
  *
  * @thread_safety Thread owning the world
  */
 void wpe_animation_apply(WPE_Ecs* ecs, const WPE_Animator* animator);
+
+/**
+ * Starts an animation from its beginning. With `fade_seconds` > 0 it crossfades: the animation that
+ * was playing carries on underneath (at its own time and speed) while the new one's weight rises
+ * from 0 to 1 over that time. Nodes the new animation doesn't move keep the old one's pose. Starting
+ * another fade during one fades from the newer animation (the older one is dropped).
+ *
+ * @param animation Index into the model's animations.
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_INVALID_ARG (no such
+ *         animation, or a negative or non-finite fade).
+ *
+ * @thread_safety Thread owning the world
+ */
+WPE_Result wpe_animator_play(WPE_Animator* animator, uint32_t animation, float fade_seconds, bool loop);
+
+/** @return The index of the model's animation called `name`, or WPE_MODEL_NONE. @thread_safety Any thread */
+uint32_t wpe_model_find_animation(const WPE_Model* model, const char* name);
 
 #endif /* WPE_GRAPHICS_ANIMATION_H */

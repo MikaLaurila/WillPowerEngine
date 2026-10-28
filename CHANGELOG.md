@@ -69,6 +69,15 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (animation crossfades)
+- `wpe_animator_play(animator, animation, fade_seconds, loop)`: with a fade, the previous animation
+  keeps playing underneath while the new one's weight rises to 1 (rotations slerp, translations and
+  scales lerp). `wpe_model_find_animation` finds an animation by name.
+- Scripts: `wpe.play_animation(entity, index or name, loop, fade)`, `wpe.get_animation` (what's
+  playing, whether it ended, the model's animation names) and `wpe.animation_speed`.
+- Tests: a crossfade's pose halfway and after it ends, cuts, fading out of a paused animation,
+  arguments and names.
+
 ### Added (modules, timers, messages, saved data)
 - `require(path)` loads Luau modules from the game's files (`.luau` optional): each runs once in
   its own sandbox and every require returns its value. Circular requires raise. A changed module
