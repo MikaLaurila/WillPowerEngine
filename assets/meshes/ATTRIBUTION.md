@@ -7,5 +7,7 @@ These models are used for engine/editor import and rendering tests.
 - `damaged_helmet.glb` — Khronos glTF Sample Assets, CC BY 4.0.
 - `RiggedFigure.glb` — Khronos glTF Sample Assets (contributed by Cesium / Analytical Graphics, Inc.), CC BY 4.0
   (license confirmed by the project owner; the file itself embeds no copyright metadata).
+- `Beowulf.glb` — the project owner's own character (from another of their projects), added for
+  skinned animation tests: 24 animations, including single-pose clips.
 
 The original copyright and license metadata is embedded in each `.glb` asset.

@@ -175,6 +175,87 @@ static void test_graphics_animation_crossfade(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* The channel of `animation` that moves `node` along `path`, or NULL. */
+static const WPE_AnimationChannel* find_channel(const WPE_Model* model, uint32_t animation, uint32_t node,
+                                                WPE_AnimationPath path) {
+    const WPE_Animation* a = &model->animations[animation];
+    for (uint32_t c = 0; c < a->channel_count; ++c) {
+        const WPE_AnimationChannel* channel = &model->channels[a->first_channel + c];
+        if (channel->node == node && channel->path == path) return channel;
+    }
+    return NULL;
+}
+
+static void test_graphics_animation_crossfade_between_clips(void) {
+    /* Beowulf: 24 clips, some a single held pose (duration 0). */
+    WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 0);
+    const WPE_AssetHandle handle = wpe_test_load_model(t.assets, "meshes/Beowulf.glb");
+    const WPE_Model* model = wpe_asset_model(t.assets, handle);
+    WPE_TEST_ASSERT_EQ_UINT(24, model->animation_count);
+    const uint32_t run = wpe_model_find_animation(model, "Run");
+    const uint32_t idle = wpe_model_find_animation(model, "Idle");
+    const uint32_t slash = wpe_model_find_animation(model, "Slash0");
+    WPE_TEST_ASSERT(run != WPE_MODEL_NONE && idle != WPE_MODEL_NONE && slash != WPE_MODEL_NONE);
+    WPE_TEST_ASSERT_NEAR(0.0, model->animations[idle].duration, 0);
+    WPE_TEST_ASSERT(model->animations[run].duration > 0.5f);
+
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_Entity root = WPE_ENTITY_NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(
+        ecs, t.assets, handle, &(WPE_InstantiateOptions){.animation = run, .play = true}, &root));
+    WPE_Animator* animator = wpe_ecs_get_component(ecs, root, WPE_COMP_ANIMATOR);
+
+    /* A node both clips rotate, posed differently by them. */
+    const WPE_AnimationChannel* run_channel = NULL;
+    const WPE_AnimationChannel* idle_channel = NULL;
+    for (uint32_t node = 0; node < model->node_count && !run_channel; ++node) {
+        const WPE_AnimationChannel* a = find_channel(model, run, node, WPE_ANIM_ROTATION);
+        const WPE_AnimationChannel* b = find_channel(model, idle, node, WPE_ANIM_ROTATION);
+        if (!a || !b) continue;
+        float va[4], vb[4];
+        wpe_animation_sample_channel(a, 0.4f, va);
+        wpe_animation_sample_channel(b, 0.0f, vb);
+        if (quat_alignment((WPE_Quat){.x = va[0], .y = va[1], .z = va[2], .w = va[3]}, vb) < 0.999f) {
+            run_channel = a;
+            idle_channel = b;
+        }
+    }
+    WPE_TEST_ASSERT(run_channel != NULL);
+    const WPE_Entity node = animator->node_entities[run_channel->node];
+    const WPE_Transform* transform = wpe_ecs_get_component(ecs, node, WPE_COMP_TRANSFORM);
+
+    /* Running 0.2 s, then a 0.4 s fade into the held Idle pose: at 0.2 s into it, half of each. */
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.2f));
+    WPE_TEST_ASSERT_OK(wpe_animator_play(animator, idle, 0.4f, true));
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.2f));
+    float from[4], to[4];
+    wpe_animation_sample_channel(run_channel, 0.4f, from);
+    wpe_animation_sample_channel(idle_channel, 0.0f, to);
+    const WPE_Quat half = wpe_quat_slerp((WPE_Quat){.x = from[0], .y = from[1], .z = from[2], .w = from[3]},
+                                         (WPE_Quat){.x = to[0], .y = to[1], .z = to[2], .w = to[3]}, 0.5f);
+    WPE_TEST_ASSERT_NEAR(1.0, quat_alignment(transform->rotation, half.v), 1e-4);
+
+    /* After it, the held pose: time stays 0 and it keeps "playing". */
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.3f));
+    WPE_TEST_ASSERT_NEAR(0.0, animator->fade_duration, 0);
+    WPE_TEST_ASSERT_NEAR(0.0, animator->time, 0);
+    WPE_TEST_ASSERT(animator->playing);
+    WPE_TEST_ASSERT_NEAR(1.0, quat_alignment(transform->rotation, to), 1e-5);
+
+    /* A one-shot slash ends on its last frame and stops. */
+    WPE_TEST_ASSERT_OK(wpe_animator_play(animator, slash, 0.1f, false));
+    const float length = model->animations[slash].duration;
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, length * 0.5f));
+    WPE_TEST_ASSERT(animator->playing);
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, length));
+    WPE_TEST_ASSERT(!animator->playing);
+    WPE_TEST_ASSERT_NEAR(length, animator->time, 0);
+
+    wpe_ecs_destroy(ecs);
+    wpe_asset_release(t.assets, handle);
+    wpe_test_assets_destroy(&t);
+}
+
 /* ---- Instantiation and animation playback --------------------------------------------------------- */
 
 static void test_graphics_instantiate_rigged_figure(void) {
@@ -1018,6 +1099,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_sample_rotation_slerps_shortest_path),
     WPE_TEST_CASE(test_graphics_sample_cubic_spline), WPE_TEST_CASE(test_graphics_instantiate_rigged_figure),
     WPE_TEST_CASE(test_graphics_animation_crossfade),
+    WPE_TEST_CASE(test_graphics_animation_crossfade_between_clips),
     WPE_TEST_CASE(test_graphics_instantiate_validates_and_cleans_up),
     WPE_TEST_CASE(test_graphics_material_vertex_shader_skinning),
     WPE_TEST_CASE(test_graphics_shininess_range), WPE_TEST_CASE(test_graphics_scene_render_frustum_culling),

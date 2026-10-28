@@ -76,7 +76,8 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Scripts: `wpe.play_animation(entity, index or name, loop, fade)`, `wpe.get_animation` (what's
   playing, whether it ended, the model's animation names) and `wpe.animation_speed`.
 - Tests: a crossfade's pose halfway and after it ends, cuts, fading out of a paused animation,
-  arguments and names.
+  arguments and names. With `assets/meshes/Beowulf.glb` (the project owner's character, 24 clips):
+  Run fading into the single-pose Idle, and a one-shot Slash0 ending.
 
 ### Added (modules, timers, messages, saved data)
 - `require(path)` loads Luau modules from the game's files (`.luau` optional): each runs once in
