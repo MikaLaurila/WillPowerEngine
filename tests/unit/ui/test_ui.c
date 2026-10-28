@@ -494,6 +494,147 @@ static void test_ui_mouse_focus_and_clicks(void) {
     destroy_fixture(&f);
 }
 
+static uint32_t change_count(const Fixture* f) {
+    uint32_t count = 0;
+    wpe_ui_changes(f->ui, &count);
+    return count;
+}
+
+static const WPE_Toggle* toggle_of(const Fixture* f, WPE_Entity e) {
+    return wpe_ecs_get_component(f->ecs, e, WPE_COMP_TOGGLE);
+}
+
+static float slider_value(const Fixture* f, WPE_Entity e) {
+    return ((const WPE_Slider*)wpe_ecs_get_component(f->ecs, e, WPE_COMP_SLIDER))->value;
+}
+
+static void click_at(Fixture* f, float x, float y) {
+    push_mouse_move(x, y);
+    push_mouse_button(true, x, y);
+    frame(f, 0.016f);
+    push_mouse_button(false, x, y);
+    frame(f, 0.016f);
+}
+
+static void test_ui_toggles_and_sliders(void) {
+    Fixture f = make_fixture(true);
+    const WPE_Entity toggle = add_element(&f, WPE_ENTITY_NULL, fixed(10, 10, 20, 20));
+    const WPE_Button button = wpe_button_default();
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, toggle, WPE_COMP_BUTTON, &button, NULL));
+    const WPE_Toggle off = wpe_toggle_default();
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, toggle, WPE_COMP_TOGGLE, &off, NULL));
+    /* 106 wide with a 6-pixel handle: the handle's center travels 100 pixels, from x = 53 to 153. */
+    const WPE_Entity slider = add_element(&f, WPE_ENTITY_NULL, fixed(50, 10, 106, 10));
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, slider, WPE_COMP_BUTTON, &button, NULL));
+    WPE_Slider settings = wpe_slider_default();
+    settings.max = 10.0f;
+    settings.step = 1.0f;
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, slider, WPE_COMP_SLIDER, &settings, NULL));
+    wpe_input_begin_frame(f.input);
+    frame(&f, 0.016f);
+
+    /* A click flips the toggle and reports the change (and the click). */
+    push_mouse_move(20, 20);
+    push_mouse_button(true, 20, 20);
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT(!toggle_of(&f, toggle)->on);
+    push_mouse_button(false, 20, 20);
+    WPE_TEST_ASSERT_EQ_UINT(1, frame(&f, 0.016f));
+    WPE_TEST_ASSERT(toggle_of(&f, toggle)->on);
+    uint32_t count = 0;
+    WPE_TEST_ASSERT(change_count(&f) == 1 && wpe_ui_changes(f.ui, &count)[0] == toggle);
+    click_at(&f, 20, 20);
+    WPE_TEST_ASSERT(!toggle_of(&f, toggle)->on);
+    /* Return on the focused toggle flips it too. */
+    tap(&f, SDL_SCANCODE_RETURN);
+    WPE_TEST_ASSERT(toggle_of(&f, toggle)->on);
+
+    /* Pressing on the slider jumps there; dragging follows the mouse, even past the end. */
+    push_mouse_move(103, 15);
+    push_mouse_button(true, 103, 15);
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT_NEAR(5.0, slider_value(&f, slider), 0);
+    WPE_TEST_ASSERT_EQ_UINT(1, change_count(&f));
+    push_mouse_move(124, 60); /* 7.1 snaps to 7. */
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT_NEAR(7.0, slider_value(&f, slider), 0);
+    push_mouse_move(190, 60);
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT_NEAR(10.0, slider_value(&f, slider), 0);
+    push_mouse_move(191, 60);
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT_EQ_UINT(0, change_count(&f)); /* Unchanged: nothing reported. */
+    push_mouse_button(false, 191, 60);
+    frame(&f, 0.016f);
+    push_mouse_move(0, 60); /* Released: moving no longer slides it. */
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT_NEAR(10.0, slider_value(&f, slider), 0);
+
+    /* Focused, left and right step it (holding repeats), while up and down still move the focus. */
+    WPE_TEST_ASSERT(wpe_ui_focus(f.ui, slider));
+    tap(&f, SDL_SCANCODE_LEFT);
+    WPE_TEST_ASSERT_NEAR(9.0, slider_value(&f, slider), 0);
+    WPE_TEST_ASSERT_EQ_UINT(slider, wpe_ui_focused(f.ui));
+    push_key(SDL_SCANCODE_LEFT, true);
+    frame(&f, 0.016f);
+    frame(&f, 0.3f);
+    frame(&f, 0.15f);
+    push_key(SDL_SCANCODE_LEFT, false);
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT_NEAR(7.0, slider_value(&f, slider), 0);
+    tap(&f, SDL_SCANCODE_RIGHT);
+    WPE_TEST_ASSERT_NEAR(8.0, slider_value(&f, slider), 0);
+
+    /* Without a step, keys move 1/20 of the range. Values clamp and snap. */
+    ((WPE_Slider*)wpe_ecs_get_component(f.ecs, slider, WPE_COMP_SLIDER))->step = 0.0f;
+    tap(&f, SDL_SCANCODE_RIGHT);
+    WPE_TEST_ASSERT_NEAR(8.5, slider_value(&f, slider), 1e-5);
+    WPE_TEST_ASSERT_NEAR(10.0, wpe_slider_constrain(&settings, 12.0f), 0);
+    WPE_TEST_ASSERT_NEAR(0.0, wpe_slider_constrain(&settings, -3.0f), 0);
+    WPE_TEST_ASSERT_NEAR(3.0, wpe_slider_constrain(&settings, 3.4f), 0);
+    WPE_TEST_ASSERT_NEAR(0.0, wpe_slider_constrain(&settings, NAN), 0);
+    const WPE_Slider reversed = {.min = 1.0f, .max = -1.0f};
+    WPE_TEST_ASSERT_NEAR(-1.0, wpe_slider_constrain(&reversed, -5.0f), 0);
+
+    /* Without a button they don't react. */
+    WPE_TEST_ASSERT_OK(wpe_ecs_remove_component(f.ecs, toggle, WPE_COMP_BUTTON));
+    click_at(&f, 20, 20);
+    WPE_TEST_ASSERT(toggle_of(&f, toggle)->on);
+    destroy_fixture(&f);
+}
+
+static void test_ui_draws_toggles_and_sliders(void) {
+    Fixture f = make_fixture(false);
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));
+    const WPE_Entity toggle = add_element(&f, WPE_ENTITY_NULL, fixed(2, 2, 10, 10));
+    WPE_Toggle check = {.on = true, .mark_color = wpe_vec4(1, 0, 0, 1), .mark_inset = 2.0f};
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, toggle, WPE_COMP_TOGGLE, &check, NULL));
+    /* 40 x 9 at (2, 20): a 3-pixel track at y 23..25, the handle (4 wide) centered on x = 22. */
+    const WPE_Entity slider = add_element(&f, WPE_ENTITY_NULL, fixed(2, 20, 40, 9));
+    const WPE_Slider bar = {.value = 0.5f,
+                            .max = 1.0f,
+                            .track_color = wpe_vec4(0, 0, 1, 1),
+                            .fill_color = wpe_vec4(0, 1, 0, 1),
+                            .handle_color = wpe_vec4(1, 1, 1, 1),
+                            .handle_width = 4.0f};
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, slider, WPE_COMP_SLIDER, &bar, NULL));
+
+    const WPE_Framebuffer* fb = draw(&f, renderer);
+    WPE_TEST_ASSERT_EQ_UINT(36, count_color(fb, 0xFFFF0000u)); /* The 6 x 6 mark. */
+    WPE_TEST_ASSERT_EQ_UINT(36, count_color(fb, 0xFFFFFFFFu)); /* Handle: 4 x 9. */
+    WPE_TEST_ASSERT_EQ_UINT(54,
+                            count_color(fb, 0xFF00FF00u)); /* Fill: x 2..21, less the handle's 2 columns. */
+    WPE_TEST_ASSERT_EQ_UINT(54, count_color(fb, 0xFF0000FFu)); /* Track: x 22..41, likewise. */
+    ((WPE_Toggle*)wpe_ecs_get_component(f.ecs, toggle, WPE_COMP_TOGGLE))->on = false;
+    ((WPE_Slider*)wpe_ecs_get_component(f.ecs, slider, WPE_COMP_SLIDER))->value = 0.0f;
+    fb = draw(&f, renderer);
+    WPE_TEST_ASSERT_EQ_UINT(0, count_color(fb, 0xFFFF0000u));
+    WPE_TEST_ASSERT_EQ_UINT(0, count_color(fb, 0xFF00FF00u)); /* Nothing filled at the minimum. */
+    wpe_renderer_destroy(renderer);
+    destroy_fixture(&f);
+}
+
 static void test_ui_navigation_uses_project_actions(void) {
     Fixture f = make_fixture(true);
     WPE_InputActionDesc down = {.name = "ui_down", .binding_count = 1};
@@ -531,5 +672,6 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_ui_layout_anchors_and_visibility),
               WPE_TEST_CASE(test_ui_nine_slice_keeps_borders),
               WPE_TEST_CASE(test_ui_text_alignment_and_wrapping),
               WPE_TEST_CASE(test_ui_keyboard_navigation_and_clicks),
-              WPE_TEST_CASE(test_ui_mouse_focus_and_clicks),
+              WPE_TEST_CASE(test_ui_mouse_focus_and_clicks), WPE_TEST_CASE(test_ui_toggles_and_sliders),
+              WPE_TEST_CASE(test_ui_draws_toggles_and_sliders),
               WPE_TEST_CASE(test_ui_navigation_uses_project_actions), WPE_TEST_CASE(test_ui_create_validates))

@@ -284,6 +284,20 @@
       "transform": {"position": [-6, 0, -9]},
       "character": {"radius": 0.35, "height": 1.7, "offset": [0, 0.85, 0], "max_slope": 50, "step_height": 0.4,
                     "snap_distance": 0.25}
+    },
+    {
+      "id": 44,
+      "name": "tour toggle",
+      "ui": {"anchor_min": [0, 1], "anchor_max": [0, 1], "offset_min": [4, -40], "offset_max": [14, -30]},
+      "button": {},
+      "toggle": {"on": true, "mark_color": [0.9, 0.6, 0.2, 1], "mark_inset": 2}
+    },
+    {
+      "id": 45,
+      "name": "tour slider",
+      "ui": {"anchor_min": [0, 1], "anchor_max": [0, 1], "offset_min": [20, -40], "offset_max": [80, -32]},
+      "button": {},
+      "slider": {"value": 0.25, "min": 0, "max": 1, "step": 0.05, "fill_color": [0.9, 0.6, 0.2, 1], "handle_width": 4}
     }
   ]
 }

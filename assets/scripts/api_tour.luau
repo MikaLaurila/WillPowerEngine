@@ -131,6 +131,13 @@ function Tour:on_start()
 	assert(#wpe.overlap(ball, vector.create(20, 3, 20), { triggers = true }) == 0)
 	assert(not pcall(wpe.overlap, { shape = wpe.COLLIDER_MESH }, vector.create(0, 0, 0)))
 
+	-- UI toggles and sliders: values set by scripts (clamped and snapped) don't call on_change.
+	local toggle, slider = wpe.find("tour toggle"), wpe.find("tour slider")
+	assert(wpe.ui_value(toggle) == true and wpe.ui_value(toggle, false) == false)
+	assert(near(wpe.ui_value(slider), 0.25) and near(wpe.ui_value(slider, 0.62), 0.6))
+	assert(wpe.ui_value(slider, 7) == 1 and wpe.ui_value(slider, -1) == 0)
+	assert(not pcall(wpe.ui_value, self.entity))
+
 	-- Modules: loaded once, by path with or without ".luau".
 	local util = require("scripts/lib/util")
 	assert(require("scripts/lib/util.luau") == util, "a module loads once")

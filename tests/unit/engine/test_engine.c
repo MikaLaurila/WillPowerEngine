@@ -233,7 +233,9 @@ static void test_engine_scene_round_trip(void) {
                                      WPE_COMP_BUTTON,
                                      WPE_COMP_BILLBOARD,
                                      WPE_COMP_PARTICLES,
-                                     WPE_COMP_CHARACTER};
+                                     WPE_COMP_CHARACTER,
+                                     WPE_COMP_TOGGLE,
+                                     WPE_COMP_SLIDER};
     for (size_t i = 0; i < sizeof all / sizeof all[0]; ++i)
         WPE_TEST_ASSERT_MSG(count_of(&a, all[i]) > 0, "no component of type %u", all[i]);
     WPE_TEST_ASSERT_EQ_UINT(2, count_of(&a, WPE_COMP_CAMERA));
@@ -687,6 +689,7 @@ static void write_menu_game(void) {
                "  {\"id\": 1, \"name\": \"start\", \"ui\": {\"anchor_max\": [0, 0], \"offset_min\": [8, "
                "8],\n   \"offset_max\": [56, 24]},\n"
                "   \"sprite\": {\"color\": [1, 0, 0, 1]}, \"button\": {\"focused\": [1, 1, 1, 1]},\n"
+               "   \"toggle\": {\"mark_color\": [1, 1, 1, 0]},\n"
                "   \"script\": {\"path\": \"scripts/start.luau\"}},\n"
                "  {\"id\": 2, \"name\": \"label\", \"ui\": {\"anchor_min\": [0, 1], \"offset_min\": [0, "
                "-18], \"offset_max\": [0, -8]},\n"
@@ -694,10 +697,12 @@ static void write_menu_game(void) {
     write_text(ROOT "/menu/scripts/start.luau",
                "local S = {}\n"
                "function S:on_start() self.clicks = 0; self.label = wpe.find('label') end\n"
+               "-- It's a toggle too: on_change comes first, with the new value.\n"
+               "function S:on_change(on) self.on = on; assert(wpe.ui_value(self.entity) == on) end\n"
                "function S:on_click()\n"
                "  self.clicks += 1\n"
                "  assert(wpe.ui_focused() == self.entity)\n"
-               "  wpe.set_text(self.label, 'clicks ' .. self.clicks)\n"
+               "  wpe.set_text(self.label, 'clicks ' .. self.clicks .. ' ' .. tostring(self.on))\n"
                "end\n"
                "return S\n");
 }
@@ -748,7 +753,7 @@ static void test_engine_ui_clicks_reach_scripts(void) {
     button.button.down = false;
     send_event(engine, button);
     WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
-    WPE_TEST_ASSERT_EQ_STR("clicks 1",
+    WPE_TEST_ASSERT_EQ_STR("clicks 1 true",
                            ((const WPE_Text*)wpe_ecs_get_component(ecs, label, WPE_COMP_TEXT))->text);
 
     /* Return clicks the focused button. */
@@ -760,7 +765,7 @@ static void test_engine_ui_clicks_reach_scripts(void) {
     key.key.down = false;
     send_event(engine, key);
     WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
-    WPE_TEST_ASSERT_EQ_STR("clicks 2",
+    WPE_TEST_ASSERT_EQ_STR("clicks 2 false",
                            ((const WPE_Text*)wpe_ecs_get_component(ecs, label, WPE_COMP_TEXT))->text);
     WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(wpe_engine_scripts(engine)).errors);
 
@@ -768,7 +773,7 @@ static void test_engine_ui_clicks_reach_scripts(void) {
     wpe_engine_set_simulating(engine, false);
     send_event(engine, key);
     WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
-    WPE_TEST_ASSERT_EQ_STR("clicks 2",
+    WPE_TEST_ASSERT_EQ_STR("clicks 2 false",
                            ((const WPE_Text*)wpe_ecs_get_component(ecs, label, WPE_COMP_TEXT))->text);
     WPE_TEST_ASSERT(wpe_engine_draws_ui(engine));
     wpe_engine_set_draw_ui(engine, false);

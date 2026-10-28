@@ -421,6 +421,17 @@ static uint8_t wpe__channel(float value) {
 static WPE_Result wpe__simulate(WPE_Engine* engine, double dt) {
     /* The UI reacts to this frame's input first, so scripts see its clicks in this frame. */
     WPE_Result result = wpe_ui_update(engine->ui, engine->project.width, engine->project.height, (float)dt);
+    /* Changes first (a toggle's click flips it), each with the new value. */
+    uint32_t changes = 0;
+    const WPE_Entity* changed = wpe_ui_changes(engine->ui, &changes);
+    for (uint32_t i = 0; i < changes && result == WPE_RESULT_OK; ++i) {
+        const WPE_Toggle* toggle = wpe_ecs_get_component(engine->ecs, changed[i], WPE_COMP_TOGGLE);
+        const WPE_Slider* slider = wpe_ecs_get_component(engine->ecs, changed[i], WPE_COMP_SLIDER);
+        WPE_ScriptValue value = {.type = WPE_SCRIPT_VALUE_NIL};
+        if (slider) value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_NUMBER, .number = slider->value};
+        if (toggle) value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_BOOL, .boolean = toggle->on};
+        result = wpe_script_host_notify_value(engine->scripts, changed[i], "on_change", &value);
+    }
     uint32_t clicks = 0;
     const WPE_Entity* clicked = wpe_ui_clicks(engine->ui, &clicks);
     for (uint32_t i = 0; i < clicks && result == WPE_RESULT_OK; ++i)

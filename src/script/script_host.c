@@ -295,9 +295,31 @@ typedef struct wpe__CallOp {
     const char* method;
     bool has_arg;
     double arg;
+    const WPE_ScriptValue* value;         /* Optional argument instead of `arg` (on_change). */
     bool failed;                          /* out */
     char message[WPE__ERROR_MESSAGE_MAX]; /* out */
 } wpe__CallOp;
+
+/* Pushes a script value (nil for NIL). */
+static void wpe__push_script_value(lua_State* L, const WPE_ScriptValue* value) {
+    switch (value->type) {
+    case WPE_SCRIPT_VALUE_NUMBER:
+        lua_pushnumber(L, value->number);
+        return;
+    case WPE_SCRIPT_VALUE_BOOL:
+        lua_pushboolean(L, value->boolean);
+        return;
+    case WPE_SCRIPT_VALUE_STRING:
+        lua_pushstring(L, value->string ? value->string : "");
+        return;
+    case WPE_SCRIPT_VALUE_VECTOR:
+        lua_pushvector(L, value->vector.x, value->vector.y, value->vector.z);
+        return;
+    case WPE_SCRIPT_VALUE_NIL:
+        break;
+    }
+    lua_pushnil(L);
+}
 
 /* Protected: calls instance:method(arg) if the method exists. Script errors are captured in op. */
 static int wpe__op_call(lua_State* L) {
@@ -310,7 +332,10 @@ static int wpe__op_call(lua_State* L) {
     if (!lua_isfunction(L, -1)) return 0;
     lua_insert(L, -2); /* [handler, fn, instance] */
     int args = 1;
-    if (op->has_arg) {
+    if (op->value) {
+        wpe__push_script_value(L, op->value);
+        ++args;
+    } else if (op->has_arg) {
         lua_pushnumber(L, op->arg);
         ++args;
     }
@@ -341,26 +366,33 @@ static void wpe__instance_failed(WPE_ScriptHost* host, WPE_Entity entity, int in
     if (s && s->instance_ref == instance_ref) s->state |= WPE__SCRIPT_FAILED;
 }
 
+static bool wpe__invoke(WPE_ScriptHost* host, WPE_Entity entity, uint32_t script, wpe__CallOp* op);
+
 /* Calls a lifecycle method; on error logs, counts and marks the instance failed. Returns false on error. */
 static bool wpe__call_method(WPE_ScriptHost* host, WPE_Entity entity, int instance_ref, uint32_t script,
                              const char* method, bool has_arg, double arg) {
     wpe__CallOp op = {
         .host = host, .instance_ref = instance_ref, .method = method, .has_arg = has_arg, .arg = arg};
+    return wpe__invoke(host, entity, script, &op);
+}
+
+/* Runs a prepared call (see wpe__call_method). */
+static bool wpe__invoke(WPE_ScriptHost* host, WPE_Entity entity, uint32_t script, wpe__CallOp* op) {
     const int previous_instance = host->current_instance;
     const WPE_Entity previous_entity = host->current_entity;
-    host->current_instance = instance_ref;
+    host->current_instance = op->instance_ref;
     host->current_entity = entity;
-    if (lua_cpcall(host->L, wpe__op_call, &op) != 0) {
-        op.failed = true;
-        snprintf(op.message, sizeof op.message, "%s",
+    if (lua_cpcall(host->L, wpe__op_call, op) != 0) {
+        op->failed = true;
+        snprintf(op->message, sizeof op->message, "%s",
                  lua_tostring(host->L, -1) ? lua_tostring(host->L, -1) : "VM error");
         lua_pop(host->L, 1);
     }
     host->current_instance = previous_instance;
     host->current_entity = previous_entity;
     /* No lua_settop here: this may run nested inside a binding whose stack frame must survive. */
-    if (!op.failed) return true;
-    wpe__instance_failed(host, entity, instance_ref, script, method, op.message);
+    if (!op->failed) return true;
+    wpe__instance_failed(host, entity, op->instance_ref, script, op->method, op->message);
     return false;
 }
 
@@ -910,10 +942,17 @@ WPE_Result wpe_script_host_dispatch_physics(WPE_ScriptHost* host) {
 }
 
 WPE_Result wpe_script_host_notify(WPE_ScriptHost* host, WPE_Entity entity, const char* method) {
+    return wpe_script_host_notify_value(host, entity, method, NULL);
+}
+
+WPE_Result wpe_script_host_notify_value(WPE_ScriptHost* host, WPE_Entity entity, const char* method,
+                                        const WPE_ScriptValue* value) {
     if (!host || !method) return WPE_RESULT_ERROR_NULL_ARG;
     const WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
-    if (s && (s->state & WPE__SCRIPT_STARTED) && !(s->state & WPE__SCRIPT_FAILED))
-        wpe__call_method(host, entity, s->instance_ref, s->script, method, false, 0.0);
+    if (s && (s->state & WPE__SCRIPT_STARTED) && !(s->state & WPE__SCRIPT_FAILED)) {
+        wpe__CallOp op = {.host = host, .instance_ref = s->instance_ref, .method = method, .value = value};
+        wpe__invoke(host, entity, s->script, &op);
+    }
     wpe__flush_destroys(host);
     return WPE_RESULT_OK;
 }

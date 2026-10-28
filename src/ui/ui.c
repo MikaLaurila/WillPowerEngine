@@ -40,6 +40,8 @@ struct WPE_Ui {
     uint32_t root_capacity;
     WPE_Entity* clicks;
     uint32_t click_count, click_capacity;
+    WPE_Entity* changes; /* Toggles and sliders the player changed this update. */
+    uint32_t change_count, change_capacity;
     wpe__Line* lines; /* Scratch for text. */
     uint32_t line_capacity;
     WPE_Entity focus;
@@ -70,6 +72,28 @@ WPE_Button wpe_button_default(void) {
                         .focused_tint = wpe_vec4(1.25f, 1.25f, 1.25f, 1),
                         .pressed_tint = wpe_vec4(0.75f, 0.75f, 0.75f, 1),
                         .disabled_tint = wpe_vec4(0.6f, 0.6f, 0.6f, 0.6f)};
+}
+
+WPE_Toggle wpe_toggle_default(void) {
+    return (WPE_Toggle){.mark_color = wpe_vec4(1, 1, 1, 1), .mark_inset = 3.0f};
+}
+
+WPE_Slider wpe_slider_default(void) {
+    return (WPE_Slider){.max = 1.0f,
+                        .track_color = wpe_vec4(0.3f, 0.3f, 0.35f, 1),
+                        .fill_color = wpe_vec4(0.85f, 0.85f, 0.9f, 1),
+                        .handle_color = wpe_vec4(1, 1, 1, 1),
+                        .handle_width = 6.0f};
+}
+
+float wpe_slider_constrain(const WPE_Slider* slider, float value) {
+    if (!slider) return 0.0f;
+    const float lo = slider->min < slider->max ? slider->min : slider->max;
+    const float hi = slider->min < slider->max ? slider->max : slider->min;
+    if (!isfinite(value)) value = lo;
+    if (slider->step > 0.0f && isfinite(slider->step))
+        value = lo + roundf((value - lo) / slider->step) * slider->step;
+    return value < lo ? lo : value > hi ? hi : value;
 }
 
 /* ---- Hooks ---------------------------------------------------------------------------------------- */
@@ -150,6 +174,8 @@ WPE_Result wpe_ui_create(const WPE_UiDesc* desc, WPE_Ui** out_ui) {
           .on_remove = wpe__text_on_remove,
           .hook_user_data = desc->assets}},
         {WPE_COMP_BUTTON, {.name = "Button", .size = sizeof(WPE_Button), .alignment = alignof(WPE_Button)}},
+        {WPE_COMP_TOGGLE, {.name = "Toggle", .size = sizeof(WPE_Toggle), .alignment = alignof(WPE_Toggle)}},
+        {WPE_COMP_SLIDER, {.name = "Slider", .size = sizeof(WPE_Slider), .alignment = alignof(WPE_Slider)}},
     };
     for (size_t i = 0; i < sizeof components / sizeof components[0]; ++i) {
         const WPE_Result result =
@@ -191,6 +217,7 @@ void wpe_ui_destroy(WPE_Ui* ui) {
     wpe_free(ui->order);
     wpe_free(ui->roots);
     wpe_free(ui->clicks);
+    wpe_free(ui->changes);
     wpe_free(ui->lines);
     wpe_free(ui);
 }
@@ -386,12 +413,52 @@ static WPE_Entity wpe__neighbor(const WPE_Ui* ui, WPE_Entity from, wpe__Directio
 
 /* ---- Interaction ---------------------------------------------------------------------------------- */
 
+/* Records that the player changed a toggle or slider (once per update). */
+static void wpe__changed(WPE_Ui* ui, WPE_Entity entity) {
+    for (uint32_t i = 0; i < ui->change_count; ++i)
+        if (ui->changes[i] == entity) return;
+    if (!wpe__reserve((void**)&ui->changes, &ui->change_capacity, ui->change_count + 1,
+                      sizeof *ui->changes)) {
+        wpe_log_error("out of memory: a change of 0x%08x was not reported", entity);
+        return;
+    }
+    ui->changes[ui->change_count++] = entity;
+}
+
+/* Clicks a button; a toggle flips. */
 static void wpe__click(WPE_Ui* ui, WPE_Entity button) {
+    WPE_Toggle* toggle = wpe_ecs_get_component(ui->ecs, button, WPE_COMP_TOGGLE);
+    if (toggle) {
+        toggle->on = !toggle->on;
+        wpe__changed(ui, button);
+    }
     if (!wpe__reserve((void**)&ui->clicks, &ui->click_capacity, ui->click_count + 1, sizeof *ui->clicks)) {
         wpe_log_error("out of memory: a click on 0x%08x was dropped", button);
         return;
     }
     ui->clicks[ui->click_count++] = button;
+}
+
+/* Sets a slider's value as the player moved it, reporting a change. */
+static void wpe__slide_to(WPE_Ui* ui, WPE_Entity entity, WPE_Slider* slider, float value) {
+    value = wpe_slider_constrain(slider, value);
+    if (value == slider->value) return;
+    slider->value = value;
+    wpe__changed(ui, entity);
+}
+
+/* A slider's step for keys and the pad. */
+static float wpe__slider_step(const WPE_Slider* slider) {
+    return slider->step > 0.0f ? slider->step : fabsf(slider->max - slider->min) / 20.0f;
+}
+
+/* The slider value at a screen x: the handle's center follows the mouse. */
+static float wpe__slider_value_at(const WPE_Slider* slider, WPE_Rect rect, float x) {
+    const float half = slider->handle_width * 0.5f;
+    const float span = rect.width - slider->handle_width;
+    const float t = span > 0.0f ? (x - rect.x - half) / span : 0.0f;
+    const float clamped = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+    return slider->min + (slider->max - slider->min) * clamped;
 }
 
 /* A navigation input: the project's action of that name when there is one, else the defaults. */
@@ -459,6 +526,13 @@ static void wpe__navigate(WPE_Ui* ui, float dt) {
         ui->focus = wpe__first_focusable(ui);
         return;
     }
+    /* Left and right move a focused slider instead of the focus. */
+    WPE_Slider* slider = wpe_ecs_get_component(ui->ecs, ui->focus, WPE_COMP_SLIDER);
+    if (slider && (held == WPE__DIR_LEFT || held == WPE__DIR_RIGHT)) {
+        const float direction = (held == WPE__DIR_RIGHT) == (slider->max >= slider->min) ? 1.0f : -1.0f;
+        wpe__slide_to(ui, ui->focus, slider, slider->value + direction * wpe__slider_step(slider));
+        return;
+    }
     const WPE_Entity next = wpe__neighbor(ui, ui->focus, held);
     if (next != WPE_ENTITY_NULL) ui->focus = next;
 }
@@ -504,6 +578,7 @@ static WPE_Entity wpe__mouse_input(WPE_Ui* ui) {
 WPE_Result wpe_ui_update(WPE_Ui* ui, uint32_t width, uint32_t height, float dt) {
     if (!ui) return WPE_RESULT_ERROR_NULL_ARG;
     ui->click_count = 0;
+    ui->change_count = 0;
     const WPE_Result result = wpe_ui_layout(ui, width, height);
     if (result != WPE_RESULT_OK) return result;
     /* Buttons that were removed, hidden or disabled let go of the focus and of presses. */
@@ -515,6 +590,16 @@ WPE_Result wpe_ui_update(WPE_Ui* ui, uint32_t width, uint32_t height, float dt) 
     ui->pressed = WPE_ENTITY_NULL;
     if (!ui->input) return WPE_RESULT_OK;
     const WPE_Entity hovered = wpe__mouse_input(ui);
+    /* A slider pressed with the mouse follows it until the button is let go, even off the slider. */
+    WPE_Slider* dragged = ui->mouse_target != WPE_ENTITY_NULL
+                              ? wpe_ecs_get_component(ui->ecs, ui->mouse_target, WPE_COMP_SLIDER)
+                              : NULL;
+    if (dragged && wpe_input_mouse_down(ui->input, WPE_MOUSE_LEFT)) {
+        float x, y;
+        wpe_input_mouse_position(ui->input, &x, &y);
+        wpe__slide_to(ui, ui->mouse_target, dragged,
+                      wpe__slider_value_at(dragged, wpe__element(ui, ui->mouse_target)->rect, x));
+    }
     wpe__navigate(ui, dt);
     wpe__submit_input(ui);
     if (ui->submit_target != WPE_ENTITY_NULL) {
@@ -529,6 +614,11 @@ WPE_Result wpe_ui_update(WPE_Ui* ui, uint32_t width, uint32_t height, float dt) 
 const WPE_Entity* wpe_ui_clicks(const WPE_Ui* ui, uint32_t* out_count) {
     if (out_count) *out_count = ui ? ui->click_count : 0;
     return ui ? ui->clicks : NULL;
+}
+
+const WPE_Entity* wpe_ui_changes(const WPE_Ui* ui, uint32_t* out_count) {
+    if (out_count) *out_count = ui ? ui->change_count : 0;
+    return ui ? ui->changes : NULL;
 }
 
 /* ---- Text ----------------------------------------------------------------------------------------- */
@@ -664,6 +754,35 @@ static void wpe__draw_sprite(WPE_Ui* ui, const WPE_Sprite* sprite, WPE_Rect rect
     wpe__draw_image(ui->draw2d, sprite->texture, source, sprite->slice, rect, color);
 }
 
+static void wpe__fill(WPE_Ui* ui, WPE_Rect rect, WPE_Vec4 color, WPE_Vec4 tint) {
+    if (rect.width > 0.0f && rect.height > 0.0f && color.w > 0.0f)
+        wpe_draw2d_rect(ui->draw2d, rect, wpe__color(wpe__mul(color, tint)));
+}
+
+static void wpe__draw_mark(WPE_Ui* ui, const WPE_Toggle* toggle, WPE_Rect rect, WPE_Vec4 tint) {
+    const float inset = toggle->mark_inset > 0.0f ? toggle->mark_inset : 0.0f;
+    wpe__fill(
+        ui, (WPE_Rect){rect.x + inset, rect.y + inset, rect.width - 2.0f * inset, rect.height - 2.0f * inset},
+        toggle->mark_color, tint);
+}
+
+/* The track across the middle third (at least 2 pixels), filled up to the value, and the handle
+ * centered on it. Whole pixels keep the edges crisp. */
+static void wpe__draw_slider(WPE_Ui* ui, const WPE_Slider* slider, WPE_Rect rect, WPE_Vec4 tint) {
+    const float range = slider->max - slider->min;
+    const float t = range != 0.0f ? (slider->value - slider->min) / range : 0.0f;
+    const float fraction = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+    const float handle = slider->handle_width > 0.0f ? slider->handle_width : 0.0f;
+    const float center = floorf(rect.x + handle * 0.5f + (rect.width - handle) * fraction + 0.5f);
+    const float thickness = floorf(rect.height / 3.0f) > 2.0f ? floorf(rect.height / 3.0f) : 2.0f;
+    const float track_y = floorf(rect.y + (rect.height - thickness) * 0.5f + 0.5f);
+    wpe__fill(ui, (WPE_Rect){rect.x, track_y, rect.width, thickness}, slider->track_color, tint);
+    wpe__fill(ui, (WPE_Rect){rect.x, track_y, center - rect.x, thickness}, slider->fill_color, tint);
+    if (handle > 0.0f)
+        wpe__fill(ui, (WPE_Rect){floorf(center - handle * 0.5f + 0.5f), rect.y, handle, rect.height},
+                  slider->handle_color, tint);
+}
+
 WPE_Result wpe_ui_draw(WPE_Ui* ui, WPE_Renderer* renderer) {
     if (!ui || !renderer) return WPE_RESULT_ERROR_NULL_ARG;
     const WPE_Framebuffer* fb = wpe_renderer_framebuffer(renderer);
@@ -676,9 +795,13 @@ WPE_Result wpe_ui_draw(WPE_Ui* ui, WPE_Renderer* renderer) {
         if (!element->shown) continue;
         const WPE_Sprite* sprite = wpe_ecs_get_component(ui->ecs, e, WPE_COMP_SPRITE);
         const WPE_Text* text = wpe_ecs_get_component(ui->ecs, e, WPE_COMP_TEXT);
-        if (!sprite && !text) continue;
+        const WPE_Toggle* toggle = wpe_ecs_get_component(ui->ecs, e, WPE_COMP_TOGGLE);
+        const WPE_Slider* slider = wpe_ecs_get_component(ui->ecs, e, WPE_COMP_SLIDER);
+        if (!sprite && !text && !toggle && !slider) continue;
         const WPE_Vec4 tint = wpe__tint(ui, e);
         if (sprite) wpe__draw_sprite(ui, sprite, element->rect, wpe__color(wpe__mul(sprite->color, tint)));
+        if (toggle && toggle->on) wpe__draw_mark(ui, toggle, element->rect, tint);
+        if (slider) wpe__draw_slider(ui, slider, element->rect, tint);
         if (text) wpe__draw_text(ui, text, element->rect, wpe__color(wpe__mul(text->color, tint)));
     }
     return wpe_draw2d_submit(ui->draw2d, renderer);

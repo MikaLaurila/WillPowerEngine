@@ -330,6 +330,9 @@ The scene's UI elements (`ui`, `sprite`, `text` and `button` components, see [sc
 | `wpe.ui_rect(entity) -> x, y, width, height` | Where the element is on screen, from the last layout (this frame's, which runs before scripts; changes made since show next frame). |
 | `wpe.set_interactable(entity, interactable)` | Enables or disables a button. |
 | `wpe.ui_focus(entity or nil) -> boolean` / `wpe.ui_focused() -> entity?` | Moves the focus to a shown, interactable button (false if it can't take it), or clears it. |
+| `wpe.ui_value(entity, [value]) -> value` | A toggle's state (boolean) or a slider's value (number, clamped to its range and snapped to its step). Setting it from a script doesn't call `on_change`. |
+
+Toggles and sliders report the player's changes to their entity's script as `on_change(value)`, before `on_click`; a toggle's value is a boolean, a slider's a number. `scripts/volume_slider.luau` and `scripts/sound_toggle.luau` (on the title screen) set the music volume and mute the sound, and remember the settings with saved data.
 
 `assets/scripts/api_tour.luau` exercises every function above, as part of the master test scene that the scene test runs for 60 simulated seconds. `wpe.load_scene` and `wpe.quit` end a scene, so the engine tests cover those two instead.
 

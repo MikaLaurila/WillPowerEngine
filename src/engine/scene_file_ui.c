@@ -93,6 +93,37 @@ void wpe__save_ui_components(wpe__Saver* s, WPE_Entity e) {
         wpe__write_floats(w, "disabled", button->disabled_tint.v, 4);
         wpe_json_write_object_end(w);
     }
+    const WPE_Toggle* toggle = wpe_ecs_get_component(ecs, e, WPE_COMP_TOGGLE);
+    if (toggle) {
+        wpe_json_write_key(w, "toggle");
+        wpe_json_write_object_begin(w);
+        wpe_json_write_key(w, "on");
+        wpe_json_write_bool(w, toggle->on);
+        wpe__write_floats(w, "mark_color", toggle->mark_color.v, 4);
+        wpe_json_write_key(w, "mark_inset");
+        wpe_json_write_number(w, toggle->mark_inset);
+        wpe_json_write_object_end(w);
+    }
+    const WPE_Slider* slider = wpe_ecs_get_component(ecs, e, WPE_COMP_SLIDER);
+    if (slider) {
+        wpe_json_write_key(w, "slider");
+        wpe_json_write_object_begin(w);
+        const struct {
+            const char* key;
+            float value;
+        } numbers[] = {
+            {"value", slider->value}, {"min", slider->min}, {"max", slider->max}, {"step", slider->step}};
+        for (size_t i = 0; i < sizeof numbers / sizeof numbers[0]; ++i) {
+            wpe_json_write_key(w, numbers[i].key);
+            wpe_json_write_number(w, numbers[i].value);
+        }
+        wpe__write_floats(w, "track_color", slider->track_color.v, 4);
+        wpe__write_floats(w, "fill_color", slider->fill_color.v, 4);
+        wpe__write_floats(w, "handle_color", slider->handle_color.v, 4);
+        wpe_json_write_key(w, "handle_width");
+        wpe_json_write_number(w, slider->handle_width);
+        wpe_json_write_object_end(w);
+    }
 }
 
 void wpe__save_billboard(wpe__Saver* s, WPE_Entity e) {
@@ -391,4 +422,36 @@ bool wpe__load_button(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
         !wpe__read_ranged(l, v, "disabled", 4, 0.0, 2.0, button.disabled_tint.v))
         return false;
     return wpe__add(l, v, e, WPE_COMP_BUTTON, &button, "button");
+}
+
+bool wpe__load_toggle(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
+    WPE_Toggle toggle = wpe_toggle_default();
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "toggle", "on", "mark_color", "mark_inset") ||
+        !wpe__json_read_bool(&l->r, v, "on", &toggle.on) ||
+        !wpe__read_ranged(l, v, "mark_color", 4, 0.0, 1.0, toggle.mark_color.v) ||
+        !wpe__json_read_float(&l->r, v, "mark_inset", 0.0f, 1e4f, &toggle.mark_inset))
+        return false;
+    return wpe__add(l, v, e, WPE_COMP_TOGGLE, &toggle, "toggle");
+}
+
+bool wpe__load_slider(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
+    WPE_Slider slider = wpe_slider_default();
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "slider", "value", "min", "max", "step", "track_color",
+                                "fill_color", "handle_color", "handle_width") ||
+        !wpe__json_read_float(&l->r, v, "min", -1e9f, 1e9f, &slider.min) ||
+        !wpe__json_read_float(&l->r, v, "max", -1e9f, 1e9f, &slider.max) ||
+        !wpe__json_read_float(&l->r, v, "step", 0.0f, 1e9f, &slider.step) ||
+        !wpe__json_read_float(&l->r, v, "value", -1e9f, 1e9f, &slider.value) ||
+        !wpe__read_ranged(l, v, "track_color", 4, 0.0, 1.0, slider.track_color.v) ||
+        !wpe__read_ranged(l, v, "fill_color", 4, 0.0, 1.0, slider.fill_color.v) ||
+        !wpe__read_ranged(l, v, "handle_color", 4, 0.0, 1.0, slider.handle_color.v) ||
+        !wpe__json_read_float(&l->r, v, "handle_width", 0.0f, 1e4f, &slider.handle_width))
+        return false;
+    if (slider.min == slider.max)
+        return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE, "a slider's \"min\" and \"max\" must differ");
+    /* Kept as written when it's in range, so loading and saving round-trips. */
+    if (wpe_slider_constrain(&slider, slider.value) != slider.value)
+        return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE,
+                              "a slider's \"value\" must be within min..max (and on its step)");
+    return wpe__add(l, v, e, WPE_COMP_SLIDER, &slider, "slider");
 }

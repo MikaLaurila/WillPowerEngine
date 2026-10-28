@@ -1277,7 +1277,7 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
         if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "entity", "id", "name", "parent", "transform", "instance",
                                     "mesh", "camera", "light", "billboard", "particles", "animator",
                                     "rigidbody", "collider", "character", "audio_source", "ui", "sprite",
-                                    "text", "button", "script", "components", "prefab"))
+                                    "text", "button", "toggle", "slider", "script", "components", "prefab"))
             return false;
         uint32_t id = 0;
         if (!wpe__read_file_id(l, wpe_json_get(v, "id"), v, &id))
@@ -1350,6 +1350,8 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
         {"sprite", wpe__load_sprite},
         {"text", wpe__load_text},
         {"button", wpe__load_button},
+        {"toggle", wpe__load_toggle},
+        {"slider", wpe__load_slider},
         {"components", wpe__load_components},
     };
     for (uint32_t i = 0; i < count; ++i) {
@@ -1504,6 +1506,8 @@ static const struct {
     {"sprite", WPE_COMP_SPRITE, wpe__load_sprite},
     {"text", WPE_COMP_TEXT, wpe__load_text},
     {"button", WPE_COMP_BUTTON, wpe__load_button},
+    {"toggle", WPE_COMP_TOGGLE, wpe__load_toggle},
+    {"slider", WPE_COMP_SLIDER, wpe__load_slider},
     {"script", WPE_COMP_SCRIPT, wpe__load_script},
 };
 
@@ -1616,7 +1620,7 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
     if (!WPE__JSON_CHECK_OBJECT(&l.r, description, "entity", "id", "name", "parent", "transform", "instance",
                                 "mesh", "camera", "light", "billboard", "particles", "animator", "rigidbody",
                                 "collider", "character", "audio_source", "ui", "sprite", "text", "button",
-                                "script", "components", "prefab"))
+                                "toggle", "slider", "script", "components", "prefab"))
         return l.r.result;
     /* A prefab instance starts from its prefab; the description's parts then replace the root's. */
     const WPE_JsonValue* prefab = wpe_json_get(description, "prefab");
@@ -1632,7 +1636,7 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
     static const char* const order[] = {"name",      "transform", "parent",    "instance",     "mesh",
                                         "camera",    "light",     "billboard", "particles",    "animator",
                                         "rigidbody", "collider",  "character", "audio_source", "ui",
-                                        "sprite",    "text",      "button"};
+                                        "sprite",    "text",      "button",    "toggle",       "slider"};
     bool ok = true;
     for (size_t i = 0; ok && i < sizeof order / sizeof order[0]; ++i) {
         const WPE_JsonValue* value = wpe_json_get(description, order[i]);

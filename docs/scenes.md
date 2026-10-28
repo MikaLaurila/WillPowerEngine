@@ -70,6 +70,8 @@ Loading is **strict**. Unknown keys, wrong types, out-of-range values, dangling 
 | `sprite` | `image` (asset path of a PNG or JPEG, or null for a plain rectangle), `color` `[r, g, b, a]` (0..1, default white), `source` `[x, y, width, height]` (a region of the image in texels; zero size = all of it), `slice` `[left, top, right, bottom]` (nine-slice borders in texels; 0 = stretch the whole image). |
 | `text` | `text` (the string; `\n` breaks lines), `font` (asset path of a font sheet, or null for the project's font, which is the built-in one when the project names none), `color` `[r, g, b, a]`, `scale` (0.1..64, default 1), `align` (`"left"`, `"center"`, `"right"`), `valign` (`"top"`, `"middle"`, `"bottom"`), `wrap` (break lines at spaces to fit the width). |
 | `button` | `interactable` (default true), and the tints `normal`, `focused`, `pressed`, `disabled` (`[r, g, b, a]`, 0..2, multiplying everything the button and its descendants draw; defaults 1, 1.25, 0.75 and 0.6 with alpha 0.6). |
+| `toggle` | With a `button`: `on` (default false), `mark_color` `[r, g, b, a]` (the mark drawn while on; alpha 0 for none), `mark_inset` (pixels from the edge, default 3). See [Toggles and sliders](#ui). |
+| `slider` | With a `button`: `value`, `min` (0), `max` (1), `step` (0 = any value; the value must be in range and on a step), `track_color`, `fill_color`, `handle_color` `[r, g, b, a]`, `handle_width` (pixels, default 6; 0 for none). |
 | `script` | `path` (asset path of a Luau script) and `properties` (an object of numbers, booleans, strings and `[x, y, z]` vectors, set on the instance before `on_start`; see [scripting.md](scripting.md#script-properties)). |
 | `components` | Game-defined components by name, read and written by the game's `WPE_ComponentSerializer`s. |
 
@@ -156,6 +158,16 @@ With both anchors at the same point the element keeps its size (`offset_max - of
 - **Rebinding:** input actions named `ui_up`, `ui_down`, `ui_left`, `ui_right` or `ui_submit` in `project.json` replace that input's defaults.
 
 A click calls `on_click` on the button entity's script; scripts can also move the focus (`wpe.ui_focus`), see [scripting.md](scripting.md#ui). The UI reacts only while the game runs (not in the editor's edit mode).
+
+**Toggles and sliders.** Add a `toggle` or a `slider` to a button for an on/off switch or a value. Each change calls `on_change(value)` on the entity's script.
+
+- **Toggle:** every click flips it. While on, it draws a mark in its rectangle (a check box over the button's sprite).
+- **Slider:** draws a track across the middle of its rectangle, filled up to the value, with a handle there. Pressing on it jumps the value there, and dragging follows the mouse until the button is released. While it has the focus, left and right step it (by `step`, or by 1/20 of the range without one), and up and down still move the focus.
+
+```json
+{"id": 7, "name": "volume", "parent": 3, "ui": {"anchor_max": [1, 0], "offset_min": [58, 100], "offset_max": [-12, 110]},
+ "button": {}, "slider": {"value": 0.7, "step": 0.05}, "script": {"path": "scripts/volume_slider.luau"}}
+```
 
 ```json
 {"id": 1, "name": "menu", "ui": {"anchor_min": [0.5, 0.5], "anchor_max": [0.5, 0.5], "offset_min": [-70, -30], "offset_max": [70, 30]},

@@ -14,6 +14,10 @@
  * - WPE_COMP_TEXT (WPE_Text): bitmap-font text aligned in the rectangle, optionally word-wrapped.
  * - WPE_COMP_BUTTON (WPE_Button): makes the element focusable and clickable. The button's state
  *   tints everything it and its descendants draw.
+ * - WPE_COMP_TOGGLE (WPE_Toggle) and WPE_COMP_SLIDER (WPE_Slider): with a button on the same entity,
+ *   an on/off switch and a value dragged along a track. Their changes are collected like clicks
+ *   (wpe_ui_changes()); the engine passes them to scripts as on_change(value). Without a button they
+ *   are drawn but don't react.
  *
  * Order: elements are drawn parent first, then children in hierarchy order; top-level elements in
  * the order they were created (later ones on top). A scene without a camera is a pure 2D scene.
@@ -94,6 +98,26 @@ typedef struct WPE_Button {
     WPE_Vec4 normal_tint, focused_tint, pressed_tint, disabled_tint;
 } WPE_Button;
 
+/* A button that is on or off: each click flips it. While on, a mark fills the rectangle inset by
+ * mark_inset pixels (a check box); scripts can show their own instead and set the mark's alpha to 0. */
+typedef struct WPE_Toggle {
+    bool on;
+    WPE_Vec4 mark_color; /* RGBA (0..1); tinted like the button. */
+    float mark_inset;    /* Pixels from the rectangle's edge to the mark. */
+} WPE_Toggle;
+
+/* A button whose value the player drags along it, or steps with left/right while it has the focus. It
+ * draws a track across the middle of its rectangle, the part up to the value filled, and a handle at
+ * the value. */
+typedef struct WPE_Slider {
+    float value;
+    float min, max;
+    float step; /* Values snap to min + n * step (0: any value). Keys and the pad step by it, or by 1/20 of
+                   the range without one. */
+    WPE_Vec4 track_color, fill_color, handle_color; /* RGBA (0..1); tinted like the button. */
+    float handle_width;                             /* Pixels (0: no handle). */
+} WPE_Slider;
+
 typedef struct WPE_Ui WPE_Ui;
 
 typedef struct WPE_UiDesc {
@@ -109,6 +133,12 @@ WPE_UiRect wpe_ui_rect_default(void); /* Fills its parent (anchors at its corner
 WPE_Sprite wpe_sprite_default(void);  /* White, no image. */
 WPE_Text wpe_text_default(void);      /* Empty, white, scale 1, top-left, no wrapping. */
 WPE_Button wpe_button_default(void);  /* Interactable; focus brightens, press darkens, disabled dims. */
+WPE_Toggle wpe_toggle_default(void);  /* Off; a white mark inset 3 pixels. */
+WPE_Slider wpe_slider_default(void);  /* 0..1 at 0, no step; gray track, white fill and handle (6 px). */
+
+/** The value a slider gets when set to `value`: clamped to its range and snapped to its step.
+ * @thread_safety Any thread */
+float wpe_slider_constrain(const WPE_Slider* slider, float value);
 
 /**
  * Creates the UI of a world and registers its components there. One UI per world; destroy it before
@@ -147,6 +177,10 @@ WPE_Result wpe_ui_update(WPE_Ui* ui, uint32_t width, uint32_t height, float dt);
 /** @return The buttons clicked by the last wpe_ui_update(), in click order (borrowed until the next
  * update); *out_count receives their number. @thread_safety Main thread */
 const WPE_Entity* wpe_ui_clicks(const WPE_Ui* ui, uint32_t* out_count);
+
+/** @return The toggles and sliders whose value the player changed in the last wpe_ui_update(), each
+ * once, in order (borrowed until the next update). @thread_safety Main thread */
+const WPE_Entity* wpe_ui_changes(const WPE_Ui* ui, uint32_t* out_count);
 
 /**
  * Lays out the UI for the renderer's framebuffer and draws it into the recording frame (between

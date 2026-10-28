@@ -80,6 +80,8 @@ bool wpe__load_ui(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
 bool wpe__load_sprite(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
 bool wpe__load_text(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
 bool wpe__load_button(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
+bool wpe__load_toggle(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
+bool wpe__load_slider(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
 
 /* "billboard" (3D sprites; scene_file_ui.c). */
 void wpe__save_billboard(wpe__Saver* s, WPE_Entity e);

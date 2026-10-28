@@ -2225,6 +2225,29 @@ static int wpe__api_ui_focused(lua_State* L) {
     return 1;
 }
 
+/* wpe.ui_value(entity, [value]): a toggle's on (boolean) or a slider's value (number); setting it
+ * doesn't call on_change, which reports the player's changes. */
+static int wpe__api_ui_value(lua_State* L) {
+    const WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    WPE_Toggle* toggle = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_TOGGLE);
+    WPE_Slider* slider = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SLIDER);
+    if (!toggle && !slider) luaL_errorL(L, "wpe.ui_value: entity 0x%08x has no toggle or slider", entity);
+    if (toggle) {
+        if (!lua_isnoneornil(L, 2)) toggle->on = luaL_checkboolean(L, 2);
+        lua_pushboolean(L, toggle->on);
+        return 1;
+    }
+    if (!lua_isnoneornil(L, 2)) {
+        const float value = wpe_slider_constrain(slider, (float)luaL_checknumber(L, 2));
+        slider =
+            wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SLIDER); /* After the check, which may raise. */
+        slider->value = value;
+    }
+    lua_pushnumber(L, slider->value);
+    return 1;
+}
+
 /* ---- Time ------------------------------------------------------------------------------------------ */
 
 static int wpe__api_time(lua_State* L) {
@@ -2361,6 +2384,7 @@ static const luaL_Reg wpe__api[] = {
     {"set_interactable", wpe__api_set_interactable},
     {"ui_focus", wpe__api_ui_focus},
     {"ui_focused", wpe__api_ui_focused},
+    {"ui_value", wpe__api_ui_value},
     {"time", wpe__api_time},
     {"frame", wpe__api_frame},
     {NULL, NULL},

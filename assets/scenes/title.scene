@@ -80,8 +80,8 @@
       "ui": {
         "anchor_min": [0.5, 0.5],
         "anchor_max": [0.5, 0.5],
-        "offset_min": [-70, -12],
-        "offset_max": [70, 88],
+        "offset_min": [-70, -40],
+        "offset_max": [70, 102],
         "visible": true
       },
       "sprite": {
@@ -254,8 +254,8 @@
       "ui": {
         "anchor_min": [0, 1],
         "anchor_max": [1, 1],
-        "offset_min": [0, -16],
-        "offset_max": [0, -6],
+        "offset_min": [0, -12],
+        "offset_max": [0, -2],
         "visible": true
       },
       "text": {
@@ -264,6 +264,113 @@
         "color": [0.45, 0.5, 0.6, 1],
         "scale": 1,
         "align": "center",
+        "valign": "middle",
+        "wrap": false
+      }
+    },
+    {
+      "id": 11,
+      "name": "music label",
+      "parent": 3,
+      "ui": {
+        "anchor_min": [0, 0],
+        "anchor_max": [0, 0],
+        "offset_min": [12, 99],
+        "offset_max": [56, 111],
+        "visible": true
+      },
+      "text": {
+        "text": "Music",
+        "font": null,
+        "color": [0.75, 0.78, 0.85, 1],
+        "scale": 1,
+        "align": "left",
+        "valign": "middle",
+        "wrap": false
+      }
+    },
+    {
+      "id": 12,
+      "name": "music volume",
+      "parent": 3,
+      "ui": {
+        "anchor_min": [0, 0],
+        "anchor_max": [1, 0],
+        "offset_min": [58, 100],
+        "offset_max": [-12, 110],
+        "visible": true
+      },
+      "button": {
+        "interactable": true,
+        "normal": [1, 1, 1, 1],
+        "focused": [1.25, 1.25, 1.25, 1],
+        "pressed": [0.75, 0.75, 0.75, 1],
+        "disabled": [0.6, 0.6, 0.6, 0.6]
+      },
+      "slider": {
+        "value": 0.7,
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "track_color": [0.1, 0.11, 0.16, 1],
+        "fill_color": [0.93, 0.6, 0.22, 1],
+        "handle_color": [0.95, 0.95, 1, 1],
+        "handle_width": 4
+      },
+      "script": {
+        "path": "scripts/volume_slider.luau"
+      }
+    },
+    {
+      "id": 13,
+      "name": "sound toggle",
+      "parent": 3,
+      "ui": {
+        "anchor_min": [0, 0],
+        "anchor_max": [0, 0],
+        "offset_min": [12, 118],
+        "offset_max": [24, 130],
+        "visible": true
+      },
+      "sprite": {
+        "image": "ui/panel.png",
+        "color": [0.1, 0.11, 0.16, 1],
+        "source": [0, 0, 0, 0],
+        "slice": [4, 4, 4, 4]
+      },
+      "button": {
+        "interactable": true,
+        "normal": [1, 1, 1, 1],
+        "focused": [1.25, 1.25, 1.25, 1],
+        "pressed": [0.75, 0.75, 0.75, 1],
+        "disabled": [0.6, 0.6, 0.6, 0.6]
+      },
+      "toggle": {
+        "on": true,
+        "mark_color": [0.93, 0.6, 0.22, 1],
+        "mark_inset": 3
+      },
+      "script": {
+        "path": "scripts/sound_toggle.luau"
+      }
+    },
+    {
+      "id": 14,
+      "name": "sound label",
+      "parent": 3,
+      "ui": {
+        "anchor_min": [0, 0],
+        "anchor_max": [1, 0],
+        "offset_min": [30, 118],
+        "offset_max": [-12, 130],
+        "visible": true
+      },
+      "text": {
+        "text": "Sound on",
+        "font": null,
+        "color": [0.75, 0.78, 0.85, 1],
+        "scale": 1,
+        "align": "left",
         "valign": "middle",
         "wrap": false
       }

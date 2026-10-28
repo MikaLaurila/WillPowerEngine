@@ -69,6 +69,21 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (UI toggles and sliders)
+- `toggle` (component 21) and `slider` (22) turn a UI button into an on/off switch (clicks flip
+  it; a mark is drawn while on) or a value: a track, the part up to the value filled and a handle.
+  Pressing jumps the value there and dragging follows the mouse; focused, left/right step it
+  (`step`, or 1/20 of the range) while up/down still move the focus. Values clamp and snap
+  (`wpe_slider_constrain`).
+- Changes are collected like clicks (`wpe_ui_changes`); the engine calls the entity's script's
+  `on_change(value)` before `on_click` (`wpe_script_host_notify_value`). Scripts read and set values
+  with `wpe.ui_value`.
+- Scene files, editor ("+ Entity" toggle and slider, Add component), docs.
+- The title screen has a Music volume slider and a Sound on toggle, remembered with saved data
+  (`scripts/volume_slider.luau`, `scripts/sound_toggle.luau`).
+- Tests: mouse clicks and drags, keyboard stepping and repeats, steps and clamping, no button no
+  reaction, exact pixels drawn; `on_change` reaching a script with the value; scene round trip.
+
 ### Added (animation crossfades)
 - `wpe_animator_play(animator, animation, fade_seconds, loop)`: with a fade, the previous animation
   keeps playing underneath while the new one's weight rises to 1 (rotations slerp, translations and

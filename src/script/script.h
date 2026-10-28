@@ -222,6 +222,15 @@ WPE_Result wpe_script_host_dispatch_physics(WPE_ScriptHost* host);
 WPE_Result wpe_script_host_notify(WPE_ScriptHost* host, WPE_Entity entity, const char* method);
 
 /**
+ * Like wpe_script_host_notify(), passing one argument: `method(self, value)` (such as on_change). NULL
+ * passes nothing.
+ *
+ * @thread_safety Main thread
+ */
+WPE_Result wpe_script_host_notify_value(WPE_ScriptHost* host, WPE_Entity entity, const char* method,
+                                        const WPE_ScriptValue* value);
+
+/**
  * Recompiles every script file whose modification time changed since it was loaded.
  *
  * @return Number of scripts successfully reloaded.
