@@ -203,6 +203,20 @@ Drawn on top of the 3D scene after post-processing (HUDs, menus), in call order,
 | `wpe.get_billboard(entity) -> table?` | Every field (`image` is nil for a plain quad), or nil without a billboard. |
 | `wpe.remove_billboard(entity)` | Removes it (a no-op without one). |
 
+### Particles
+
+Particle emitters ([scenes.md](scenes.md#particles)). A settings table uses the scene-file names: `playing`, `loop`, `world_space`, `random_rotation`, `rate`, `duration`, `drag`, `spread` (**radians** here), `burst`, `max_particles`, the pairs `lifetime`, `speed`, `spin` (radians per second) and `size` as `{a, b}`, the vectors `direction` and `gravity`, and the colors `color_start`, `color_end` (`wpe.color`). The image, sheet, blending, lighting and shape are set in the scene or the editor.
+
+| Function | Description |
+|---|---|
+| `wpe.set_particles(entity, table)` | Changes the fields given, adding an emitter (with the defaults) if the entity has none. Live particles stay. |
+| `wpe.get_particles(entity) -> table?` | The settings above plus `count` (live particles), or nil. |
+| `wpe.emit_particles(entity, count) -> number` | Emits now, playing or not; returns how many fit under `max_particles`. |
+| `wpe.play_particles(entity)` | Starts over: no particles, a new cycle with its burst, playing. |
+| `wpe.stop_particles(entity, [clear = false])` | Stops emitting; `clear` also removes the live particles. |
+| `wpe.particle_count(entity) -> number` | Live particles. |
+| `wpe.remove_particles(entity)` | Removes the emitter. |
+
 ### UI
 
 The scene's UI elements (`ui`, `sprite`, `text` and `button` components, see [scenes.md](scenes.md#ui)) are retained: change them and they stay changed. Functions raise when the entity lacks the component they need.

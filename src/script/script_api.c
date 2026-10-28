@@ -1336,6 +1336,198 @@ static int wpe__api_remove_billboard(lua_State* L) {
     return 0;
 }
 
+/* ---- Particles ------------------------------------------------------------------------------------- */
+
+/* A {low, high} field (nil keeps the values); raises unless both are numbers with low <= high. */
+static void wpe__field_range(lua_State* L, int table, const char* key, float* io_low, float* io_high) {
+    lua_getfield(L, table, key);
+    if (!lua_isnil(L, -1)) {
+        luaL_checktype(L, -1, LUA_TTABLE);
+        lua_rawgeti(L, -1, 1);
+        lua_rawgeti(L, -2, 2);
+        if (!lua_isnumber(L, -2) || !lua_isnumber(L, -1)) luaL_errorL(L, "%s must be {low, high}", key);
+        const float low = (float)lua_tonumber(L, -2), high = (float)lua_tonumber(L, -1);
+        if (!(low <= high)) luaL_errorL(L, "%s must be {low, high} with low <= high", key);
+        *io_low = low;
+        *io_high = high;
+        lua_pop(L, 2);
+    }
+    lua_pop(L, 1);
+}
+
+static WPE_ParticleEmitter wpe__check_particles(lua_State* L, int table, WPE_ParticleEmitter base) {
+    luaL_checktype(L, table, LUA_TTABLE);
+    base.playing = wpe__field_bool(L, table, "playing", base.playing);
+    base.loop = wpe__field_bool(L, table, "loop", base.loop);
+    base.world_space = wpe__field_bool(L, table, "world_space", base.world_space);
+    base.random_rotation = wpe__field_bool(L, table, "random_rotation", base.random_rotation);
+    base.rate = wpe__field_number(L, table, "rate", base.rate);
+    base.duration = wpe__field_number(L, table, "duration", base.duration);
+    base.drag = wpe__field_number(L, table, "drag", base.drag);
+    base.spread = wpe__field_number(L, table, "spread", base.spread);
+    if (!(base.rate >= 0.0f && base.duration >= 0.0f && base.drag >= 0.0f))
+        luaL_errorL(L, "rate, duration and drag must not be negative");
+    if (!(base.spread >= 0.0f && base.spread <= WPE_PI)) luaL_errorL(L, "spread must be 0..pi radians");
+    base.burst = wpe__field_count(L, table, "burst", 0, 100000, base.burst);
+    base.max_particles = wpe__field_count(L, table, "max_particles", 1, 100000, base.max_particles);
+    wpe__field_range(L, table, "lifetime", &base.lifetime_min, &base.lifetime_max);
+    if (!(base.lifetime_min > 0.0f)) luaL_errorL(L, "lifetime must be positive");
+    wpe__field_range(L, table, "speed", &base.speed_min, &base.speed_max);
+    wpe__field_range(L, table, "spin", &base.spin_min, &base.spin_max);
+    float size_low = base.size_start, size_high = base.size_end;
+    lua_getfield(L, table, "size"); /* {start, end}: a size may shrink, so not a low-high range. */
+    if (!lua_isnil(L, -1)) {
+        luaL_checktype(L, -1, LUA_TTABLE);
+        lua_rawgeti(L, -1, 1);
+        lua_rawgeti(L, -2, 2);
+        size_low = (float)luaL_checknumber(L, -2);
+        size_high = (float)luaL_checknumber(L, -1);
+        if (!(size_low >= 0.0f && size_high >= 0.0f)) luaL_errorL(L, "size must not be negative");
+        lua_pop(L, 2);
+    }
+    lua_pop(L, 1);
+    base.size_start = size_low;
+    base.size_end = size_high;
+    const char* vectors[] = {"direction", "gravity"};
+    WPE_Vec3* targets[] = {&base.direction, &base.gravity};
+    for (int i = 0; i < 2; ++i) {
+        lua_getfield(L, table, vectors[i]);
+        if (!lua_isnil(L, -1)) *targets[i] = wpe__check_vec3(L, -1);
+        lua_pop(L, 1);
+    }
+    const char* colors[] = {"color_start", "color_end"};
+    WPE_Vec4* color_targets[] = {&base.color_start, &base.color_end};
+    for (int i = 0; i < 2; ++i) {
+        lua_getfield(L, table, colors[i]);
+        if (!lua_isnil(L, -1)) *color_targets[i] = wpe_color_to_vec4(wpe__opt_color(L, -1));
+        lua_pop(L, 1);
+    }
+    return base;
+}
+
+static WPE_ParticleEmitter* wpe__check_emitter(lua_State* L, WPE_Entity entity) {
+    WPE_ParticleEmitter* e = wpe_ecs_get_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_PARTICLES);
+    if (!e) luaL_errorL(L, "entity 0x%08x has no particle emitter", entity);
+    return e;
+}
+
+/* Changes (or adds) an entity's emitter; live particles stay. */
+static int wpe__api_set_particles(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_ParticleEmitter* existing = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_PARTICLES);
+    const WPE_ParticleEmitter settings =
+        wpe__check_particles(L, 2, existing ? *existing : wpe_particle_emitter_default());
+    WPE_ParticleEmitter* live = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_PARTICLES); /* Re-fetch. */
+    if (live) {
+        *live = settings; /* The runtime fields were copied from `live` itself, so they stay valid. */
+        return 0;
+    }
+    wpe__check_unrestricted(L, "set_particles");
+    wpe__raise_result(L, "set_particles",
+                      wpe_ecs_add_component(host->ecs, entity, WPE_COMP_PARTICLES, &settings, NULL));
+    return 0;
+}
+
+static int wpe__api_get_particles(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_ParticleEmitter* found =
+        wpe_ecs_get_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_PARTICLES);
+    if (!found) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const WPE_ParticleEmitter e = *found; /* Copy before pushing. */
+    lua_createtable(L, 0, 20);
+    const struct {
+        const char* key;
+        bool value;
+    } flags[] = {{"playing", e.playing},
+                 {"loop", e.loop},
+                 {"world_space", e.world_space},
+                 {"random_rotation", e.random_rotation}};
+    for (size_t i = 0; i < sizeof flags / sizeof flags[0]; ++i) {
+        lua_pushboolean(L, flags[i].value);
+        lua_setfield(L, -2, flags[i].key);
+    }
+    const struct {
+        const char* key;
+        double value;
+    } numbers[] = {{"rate", e.rate},     {"duration", e.duration}, {"drag", e.drag},
+                   {"spread", e.spread}, {"burst", e.burst},       {"max_particles", e.max_particles},
+                   {"count", e.count}};
+    for (size_t i = 0; i < sizeof numbers / sizeof numbers[0]; ++i) {
+        lua_pushnumber(L, numbers[i].value);
+        lua_setfield(L, -2, numbers[i].key);
+    }
+    const struct {
+        const char* key;
+        float low, high;
+    } ranges[] = {{"lifetime", e.lifetime_min, e.lifetime_max},
+                  {"speed", e.speed_min, e.speed_max},
+                  {"spin", e.spin_min, e.spin_max},
+                  {"size", e.size_start, e.size_end}};
+    for (size_t i = 0; i < sizeof ranges / sizeof ranges[0]; ++i) {
+        lua_createtable(L, 2, 0);
+        lua_pushnumber(L, ranges[i].low);
+        lua_rawseti(L, -2, 1);
+        lua_pushnumber(L, ranges[i].high);
+        lua_rawseti(L, -2, 2);
+        lua_setfield(L, -2, ranges[i].key);
+    }
+    wpe__push_vec3(L, e.direction);
+    lua_setfield(L, -2, "direction");
+    wpe__push_vec3(L, e.gravity);
+    lua_setfield(L, -2, "gravity");
+    lua_pushnumber(L, (double)wpe_color_from_vec4(e.color_start));
+    lua_setfield(L, -2, "color_start");
+    lua_pushnumber(L, (double)wpe_color_from_vec4(e.color_end));
+    lua_setfield(L, -2, "color_end");
+    return 1;
+}
+
+static int wpe__api_emit_particles(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const double count = luaL_checknumber(L, 2);
+    if (!(count >= 0.0 && count <= 100000.0) || count != floor(count))
+        luaL_errorL(L, "argument #2: a whole number of particles from 0 to 100000");
+    wpe__check_emitter(L, entity);
+    lua_pushnumber(L, wpe_particles_emit(wpe__script_host_from(L)->ecs, entity, (uint32_t)count));
+    return 1;
+}
+
+static int wpe__api_play_particles(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    wpe__check_emitter(L, entity);
+    wpe_particles_restart(wpe__script_host_from(L)->ecs, entity);
+    return 0;
+}
+
+static int wpe__api_stop_particles(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const bool clear = lua_isnoneornil(L, 2) ? false : luaL_checkboolean(L, 2);
+    WPE_ParticleEmitter* e = wpe__check_emitter(L, entity);
+    e->playing = false;
+    e->started = false;
+    if (clear) wpe_particles_clear(wpe__script_host_from(L)->ecs, entity);
+    return 0;
+}
+
+static int wpe__api_particle_count(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    lua_pushnumber(L, wpe__check_emitter(L, entity)->count);
+    return 1;
+}
+
+static int wpe__api_remove_particles(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "remove_particles");
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    if (wpe_ecs_has_component(host->ecs, entity, WPE_COMP_PARTICLES))
+        wpe__raise_result(L, "remove_particles",
+                          wpe_ecs_remove_component(host->ecs, entity, WPE_COMP_PARTICLES));
+    return 0;
+}
+
 /* ---- UI -------------------------------------------------------------------------------------------- */
 
 /* The entity's UI component of `type`; raises when it has none. */
@@ -1558,6 +1750,13 @@ static const luaL_Reg wpe__api[] = {
     {"set_billboard", wpe__api_set_billboard},
     {"get_billboard", wpe__api_get_billboard},
     {"remove_billboard", wpe__api_remove_billboard},
+    {"set_particles", wpe__api_set_particles},
+    {"get_particles", wpe__api_get_particles},
+    {"emit_particles", wpe__api_emit_particles},
+    {"play_particles", wpe__api_play_particles},
+    {"stop_particles", wpe__api_stop_particles},
+    {"particle_count", wpe__api_particle_count},
+    {"remove_particles", wpe__api_remove_particles},
     {"get_text", wpe__api_get_text},
     {"set_text", wpe__api_set_text},
     {"set_text_color", wpe__api_set_text_color},

@@ -267,6 +267,16 @@
       "name": "sign",
       "transform": {"position": [5, 1, -6], "euler": [0, -30, 0]},
       "billboard": {"size": [2, 1], "color": [0.2, 0.6, 1, 0.6], "mode": "fixed", "blend": "alpha", "rotation": 10}
+    },
+    {"id": 39, "name": "fire", "transform": {"position": [-1, 0, -6]}, "prefab": {"path": "prefabs/fire.prefab"}},
+    {"id": 40, "name": "smoke", "transform": {"position": [-1, 0.8, -6]}, "prefab": {"path": "prefabs/smoke.prefab"}},
+    {"id": 41, "name": "sparks", "transform": {"position": [4, 0.2, -4]}, "prefab": {"path": "prefabs/sparks.prefab"}},
+    {
+      "id": 42,
+      "name": "local fountain",
+      "transform": {"position": [6, 0.5, 0], "euler": [0, 0, -45]},
+      "particles": {"world_space": false, "shape": "box", "shape_size": [0.4, 0, 0.4], "rate": 30, "lit": true,
+                    "blend": "cutout", "columns": 4, "image": "sprites/coin.png", "seed": 7}
     }
   ]
 }

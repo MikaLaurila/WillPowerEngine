@@ -1,0 +1,18 @@
+{
+  "format": "wpe.prefab",
+  "version": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "sparks",
+      "transform": {},
+      "particles": {
+        "image": "sprites/glow.png", "blend": "additive",
+        "rate": 0, "burst": 30, "duration": 1, "loop": true, "max_particles": 64,
+        "lifetime": [0.4, 0.8], "speed": [3, 6], "direction": [0, 1, 0], "spread": 60,
+        "gravity": [0, -9.8, 0], "drag": 0.5, "size": [0.3, 0.08],
+        "color_start": [1, 0.9, 0.5, 1], "color_end": [1, 0.4, 0.1, 0]
+      }
+    }
+  ]
+}

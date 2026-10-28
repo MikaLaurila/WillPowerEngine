@@ -61,6 +61,27 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Engine: `wpe_engine_set_draw_scene`. UI: `wpe_ui_pick` can count every element (editors).
 - Tests: the 2D and 3D views (camera, UI, a scene without a camera, play mode), view settings.
 
+### Added (particles)
+- `WPE_ParticleEmitter` (`particles` in scenes, docs in `docs/scenes.md#particles`): emits and
+  simulates particles drawn through the billboard shader, one draw per emitter.
+  - Emission: rate, bursts, cycles with a duration (looping or once), a particle limit, point/sphere/
+    box shapes, a direction cone; world or local space; a seed for repeatable effects.
+  - Motion: lifetime and speed ranges, gravity, drag, spin and random rotation.
+  - Look: size and color over life, sprite sheets over life, cutout/alpha/additive (alpha sorted back
+    to front), optional lighting.
+  - Large emitters integrate on the job system with results identical to a single thread.
+- Scripts: `wpe.set_particles`, `get_particles`, `emit_particles`, `play_particles`,
+  `stop_particles`, `particle_count`, `remove_particles`.
+- Editor: the selected emitter plays in edit mode without changing the scene; **+ Entity** adds an
+  emitter; the inspector has choices for blend and shape.
+- Graphics: `wpe_particles_update`, `wpe_particles_emit`, `wpe_particles_restart`,
+  `wpe_particles_clear`, `wpe_particles_preview`; render stats count particles.
+- Assets: `prefabs/fire.prefab`, `smoke.prefab`, `sparks.prefab`; the master test scene has them and a
+  lit local-space emitter.
+- Tests: emission, bursts, cycles, limits, clearing, restarting and preview; motion, emission
+  direction and spaces; identical results with and without worker threads; drawing and culling; scene
+  round trips and rejected mistakes; the script API in the master test scene.
+
 ### Added (billboards)
 - `WPE_Billboard` (`billboard` in scenes, docs in `docs/scenes.md#billboards`): 3D sprites drawn by
   the scene renderer, depth tested and fogged.

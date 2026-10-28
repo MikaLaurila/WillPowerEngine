@@ -14,7 +14,8 @@
  *    the material and submits draws that render opaque geometry front-to-back and blended
  *    geometry back-to-front afterwards.
  * 4. Billboards (WPE_Billboard): turned toward the camera, culled, lit when asked, and drawn with the
- *    meshes (cut-outs as opaque geometry, blended ones in the back-to-front pass).
+ *    meshes (cut-outs as opaque geometry, blended ones in the back-to-front pass). Particle emitters
+ *    likewise, each as one draw of screen-facing quads.
  *
  * Usage per frame: wpe_renderer_begin_frame() → wpe_scene_render() → (2D, etc.) →
  * wpe_renderer_end_frame(). Per-frame data (palettes, shadow map) lives in the scene renderer
@@ -60,6 +61,8 @@ typedef struct WPE_SceneRenderStats {
     uint32_t lights;         /* Point/spot lights in the world. */
     uint32_t billboards_submitted;
     uint32_t billboards_culled;
+    uint32_t particles_drawn;          /* Particles of the emitters drawn (one draw per emitter). */
+    uint32_t particle_emitters_culled; /* Emitters whose particles were all outside the view. */
 } WPE_SceneRenderStats;
 
 typedef struct WPE_SceneRenderer WPE_SceneRenderer;

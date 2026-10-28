@@ -331,6 +331,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
     static const char* const billboard_modes[] = {"fixed", "axis_aligned", "axis_aligned_y",
                                                   "screen_aligned"};
     static const char* const billboard_blends[] = {"cutout", "alpha", "additive"};
+    static const char* const particle_shapes[] = {"point", "sphere", "box"};
     const struct {
         const char* component;
         const char* key;
@@ -347,6 +348,8 @@ static const char* const* wpe__choices(const char* component, const char* key, u
         {"text", "valign", valigns, 3},
         {"billboard", "mode", billboard_modes, 4},
         {"billboard", "blend", billboard_blends, 3},
+        {"particles", "blend", billboard_blends, 3},
+        {"particles", "shape", particle_shapes, 3},
     };
     for (size_t i = 0; i < sizeof table / sizeof table[0]; ++i) {
         if (strcmp(table[i].component, component) == 0 && strcmp(table[i].key, key) == 0) {
@@ -360,8 +363,8 @@ static const char* const* wpe__choices(const char* component, const char* key, u
 /* Optional asset references (null when there is none), by component and key. */
 static bool wpe__is_asset_key(const char* component, const char* key) {
     static const char* const table[][2] = {
-        {"mesh", "model"},   {"animator", "model"}, {"collider", "model"}, {"audio_source", "sound"},
-        {"sprite", "image"}, {"text", "font"},      {"billboard", "image"}};
+        {"mesh", "model"},   {"animator", "model"}, {"collider", "model"},  {"audio_source", "sound"},
+        {"sprite", "image"}, {"text", "font"},      {"billboard", "image"}, {"particles", "image"}};
     for (size_t i = 0; i < sizeof table / sizeof table[0]; ++i) {
         if (strcmp(table[i][0], component) == 0 && strcmp(table[i][1], key) == 0) return true;
     }
@@ -1381,6 +1384,35 @@ static void wpe__ui_create_billboard(WPE_EditorUi* ui, const char* name, const c
     wpe__ui_send(ui, w);
 }
 
+/* A particle emitter with the default settings, 6 units in front of the editor camera. */
+static void wpe__ui_create_emitter(WPE_EditorUi* ui) {
+    WPE_Vec3 position = wpe_vec3(0, 0, 0);
+    const WPE_Transform* cam =
+        wpe_ecs_get_component(wpe__ui_ecs(ui), wpe_editor_camera(ui->editor), WPE_COMP_TRANSFORM);
+    if (cam)
+        position = wpe_vec3_add(
+            cam->position, wpe_vec3_scale(wpe_quat_rotate_vec3(cam->rotation, wpe_vec3(0, 0, -1)), 6.0f));
+    WPE_JsonWriter* w = wpe__ui_begin("create_entity");
+    if (!w) return;
+    wpe_json_write_key(w, "entity");
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "name");
+    wpe_json_write_string(w, "particles");
+    wpe_json_write_key(w, "transform");
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "position");
+    wpe_json_write_array_begin(w, true);
+    for (int i = 0; i < 3; ++i)
+        wpe_json_write_number(w, roundf(position.v[i] * 10.0f) / 10.0f);
+    wpe_json_write_array_end(w);
+    wpe_json_write_object_end(w);
+    wpe_json_write_key(w, "particles");
+    wpe_json_write_object_begin(w);
+    wpe_json_write_object_end(w);
+    wpe_json_write_object_end(w);
+    wpe__ui_send(ui, w);
+}
+
 /* Adds a UI element: "panel", "text", "button" (with a label inside) or an image's sprite (`image` set,
  * at the image's size). One undo step; it ends selected, and the editor switches to the 2D view. In the 3D
  * view an image becomes a billboard instead. */
@@ -1600,6 +1632,10 @@ static void wpe__ui_hierarchy(WPE_EditorUi* ui) {
             wpe__ui_create_billboard(ui, "billboard", NULL, 1.0f);
         if (igIsItemHovered(0))
             igSetTooltip("A 3D sprite; drop an image from Assets into the 3D view for one");
+        if (igMenuItem_Bool("Particle emitter", NULL, false, true)) wpe__ui_create_emitter(ui);
+        if (igIsItemHovered(0))
+            igSetTooltip(
+                "A fountain to tune; prefabs/fire, smoke and sparks in Assets are ready-made effects");
         igSeparator();
         igTextDisabled("UI (inside the selected UI element)");
         if (igMenuItem_Bool("Panel", NULL, false, true)) wpe__ui_create_element(ui, "panel", NULL);
@@ -1788,9 +1824,9 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
         igButton("Add box collider fitted to meshes", (ImVec2_c){-1.0f, 0}))
         wpe__ui_entity_command(ui, "fit_collider", entity);
     /* Adding a component: those needing an asset take the path typed here. */
-    static const char* const addable[] = {"transform", "mesh",     "camera",       "light", "billboard",
-                                          "rigidbody", "collider", "audio_source", "ui",    "sprite",
-                                          "text",      "button",   "script"};
+    static const char* const addable[] = {"transform", "mesh",      "camera",   "light",        "billboard",
+                                          "particles", "rigidbody", "collider", "audio_source", "ui",
+                                          "sprite",    "text",      "button",   "script"};
     igSetNextItemWidth(-1.0f);
     igInputText("##asset_path", ui->add_path, sizeof ui->add_path, 0, NULL, NULL);
     if (igIsItemHovered(0))
@@ -1810,7 +1846,8 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
                 strcmp(addable[i], "mesh") == 0           ? "model"
                 : strcmp(addable[i], "audio_source") == 0 ? "sound"
                 : strcmp(addable[i], "script") == 0       ? "path"
-                : (strcmp(addable[i], "sprite") == 0 || strcmp(addable[i], "billboard") == 0) &&
+                : (strcmp(addable[i], "sprite") == 0 || strcmp(addable[i], "billboard") == 0 ||
+                   strcmp(addable[i], "particles") == 0) &&
                         wpe__is_image_path(ui->add_path)
                     ? "image"
                     : NULL;

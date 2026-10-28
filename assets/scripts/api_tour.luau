@@ -198,6 +198,28 @@ function Tour:on_start()
 	self.coin = coin
 	self.coin_frames = {}
 
+	-- Particles: read and change an emitter, emit on demand, stop and restart, add and remove.
+	local fire = wpe.find("fire")
+	local p = wpe.get_particles(fire)
+	assert(p.rate == 40 and p.max_particles == 128 and p.playing and p.loop and p.world_space)
+	assert(near(p.lifetime[1], 0.5) and near(p.lifetime[2], 0.9) and near(p.size[1], 0.5) and near(p.size[2], 0.1))
+	assert(near(p.spread, math.rad(12)) and p.direction == vector.create(0, 1, 0))
+	wpe.set_particles(fire, { rate = 60, size = { 0.6, 0.1 } })
+	assert(wpe.get_particles(fire).rate == 60)
+	assert(not pcall(wpe.set_particles, fire, { lifetime = { 2, 1 } })) -- low above high
+	assert(not pcall(wpe.set_particles, fire, { spread = 4 })) -- more than pi
+	assert(wpe.emit_particles(fire, 5) == 5)
+	assert(wpe.particle_count(fire) >= 5)
+	wpe.stop_particles(fire, true)
+	assert(wpe.particle_count(fire) == 0 and not wpe.get_particles(fire).playing)
+	wpe.play_particles(fire)
+	assert(wpe.get_particles(fire).playing)
+	self.puff = wpe.spawn("tour_puff")
+	wpe.set_particles(self.puff, { rate = 0, burst = 10, duration = 0.5, loop = false })
+	assert(wpe.get_particles(self.puff).burst == 10)
+	assert(not pcall(wpe.emit_particles, self.child, 1)) -- no emitter
+	self.fire = fire
+
 	-- UI: the scene's HUD (a nine-sliced panel with wrapped text and a button). The UI was laid out at the
 	-- start of this frame, so rectangles are known and buttons can take the focus.
 	local hud, hud_text, button = wpe.find("hud"), wpe.find("hud text"), wpe.find("hud button")
@@ -245,6 +267,15 @@ function Tour:on_update(dt)
 		wpe.play_music("music/ambient.wav", 0, true)
 	elseif self.updates == 2 then
 		assert(select(2, wpe.ui_rect(self.hud)) == 18, "the moved HUD should be laid out again")
+	elseif self.updates == 3 then
+		-- The puff's single burst went out at its first update; it emits nothing more.
+		assert(wpe.particle_count(self.puff) == 10, "the burst should be out")
+	elseif self.updates == 60 then
+		assert(wpe.particle_count(self.puff) == 0, "the puff's particles should have expired")
+		assert(not wpe.get_particles(self.puff).playing)
+		assert(wpe.particle_count(self.fire) > 10, "the fire should be burning")
+		wpe.remove_particles(self.puff)
+		assert(wpe.get_particles(self.puff) == nil)
 	elseif self.updates == 120 then
 		local shown = 0
 		for _ in self.coin_frames do
@@ -275,6 +306,7 @@ function Tour:on_destroy()
 	wpe.destroy(self.pillar)
 	wpe.destroy(self.speaker)
 	wpe.destroy(self.marker)
+	wpe.destroy(self.puff)
 end
 
 return Tour

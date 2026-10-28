@@ -408,6 +408,21 @@ static void wpe__editor_apply_view(WPE_Editor* editor) {
     wpe_engine_set_draw_ui(engine, editor->view.view_2d);
 }
 
+/* Edit mode plays the selected particle emitter (and only it), from the start of its cycle when it becomes
+ * selected, without changing its settings. */
+static WPE_Result wpe__editor_preview_particles(WPE_Editor* editor, double dt) {
+    WPE_Ecs* ecs = wpe_engine_ecs(editor->engine);
+    const WPE_Entity selection = wpe_editor_selection(editor);
+    const WPE_Entity wanted =
+        wpe_ecs_has_component(ecs, selection, WPE_COMP_PARTICLES) ? selection : WPE_ENTITY_NULL;
+    if (wanted != editor->previewed) {
+        wpe_particles_clear(ecs, editor->previewed); /* No-op for an entity that is gone. */
+        wpe_particles_clear(ecs, wanted);
+        editor->previewed = wanted;
+    }
+    return wanted != WPE_ENTITY_NULL ? wpe_particles_preview(ecs, wanted, (float)dt) : WPE_RESULT_OK;
+}
+
 WPE_Result wpe_editor_frame(WPE_Editor* editor, double dt) {
     if (!editor) return WPE_RESULT_ERROR_NULL_ARG;
     const bool editing = editor->mode == WPE_EDITOR_EDIT;
@@ -422,6 +437,7 @@ WPE_Result wpe_editor_frame(WPE_Editor* editor, double dt) {
     /* Edits don't step physics: bring bodies to the edited poses and scales (debug drawing shows them,
      * and play starts from them). */
     WPE_Result result = editing ? wpe_physics_sync(wpe_engine_physics(editor->engine)) : WPE_RESULT_OK;
+    if (result == WPE_RESULT_OK && editing) result = wpe__editor_preview_particles(editor, dt);
     wpe_engine_set_debug_draw(
         editor->engine, &(WPE_EngineDebugDraw){.physics = editor->view.physics,
                                                .grid = editor->view.grid && editing && !editor->view.view_2d,

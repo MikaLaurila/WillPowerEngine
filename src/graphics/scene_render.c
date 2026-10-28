@@ -2,6 +2,7 @@
 #include "graphics/scene_render.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/alloc.h"
@@ -457,22 +458,88 @@ typedef struct wpe__BillboardPass {
     const WPE_Mat4* shadow_matrix;
 } wpe__BillboardPass;
 
-/* The texture coordinates of the billboard's current frame: (u0, v0) top-left, (u1, v1) bottom-right. */
-static void wpe__billboard_uvs(const WPE_Billboard* b, float* u0, float* v0, float* u1, float* v1) {
-    const float tw = b->texture ? (float)b->texture->levels[0].width : 1.0f;
-    const float th = b->texture ? (float)b->texture->levels[0].height : 1.0f;
-    WPE_Rect r = b->source;
-    if (!(r.width > 0.0f) || !(r.height > 0.0f)) r = (WPE_Rect){0.0f, 0.0f, tw, th};
-    const uint32_t columns = b->columns ? b->columns : 1, rows = b->rows ? b->rows : 1;
+/* The texture coordinates of one frame of a sprite sheet: (u0, v0) top-left, (u1, v1) bottom-right. The
+ * sheet is a columns x rows grid over `source` (zero size = the whole texture). */
+static void wpe__sheet_uvs(const WPE_Texture* texture, WPE_Rect source, uint32_t columns, uint32_t rows,
+                           uint32_t frame_count, uint32_t frame, float* u0, float* v0, float* u1, float* v1) {
+    const float tw = texture ? (float)texture->levels[0].width : 1.0f;
+    const float th = texture ? (float)texture->levels[0].height : 1.0f;
+    if (!(source.width > 0.0f) || !(source.height > 0.0f)) source = (WPE_Rect){0.0f, 0.0f, tw, th};
+    columns = columns ? columns : 1;
+    rows = rows ? rows : 1;
     const uint32_t grid = columns * rows;
-    const uint32_t count = b->frame_count && b->frame_count < grid ? b->frame_count : grid;
-    const uint32_t frame = b->frame < count ? b->frame : count - 1;
-    const float cw = r.width / (float)columns, ch = r.height / (float)rows;
+    const uint32_t count = frame_count && frame_count < grid ? frame_count : grid;
+    frame = frame < count ? frame : count - 1;
+    const float cw = source.width / (float)columns, ch = source.height / (float)rows;
     const uint32_t column = frame % columns, row = frame / columns; /* Whole cells. */
-    *u0 = (r.x + (float)column * cw) / tw;
-    *v0 = (r.y + (float)row * ch) / th;
+    *u0 = (source.x + (float)column * cw) / tw;
+    *v0 = (source.y + (float)row * ch) / th;
     *u1 = *u0 + cw / tw;
     *v1 = *v0 + ch / th;
+}
+
+static void wpe__grow_box(WPE_Aabb* box, WPE_Vec3 p) {
+    box->min = wpe_vec3(fminf(box->min.x, p.x), fminf(box->min.y, p.y), fminf(box->min.z, p.z));
+    box->max = wpe_vec3(fmaxf(box->max.x, p.x), fmaxf(box->max.y, p.y), fmaxf(box->max.z, p.z));
+}
+
+/* Submits quads (4 vertices and 6 indices each, living in the frame arena) through the billboard shader:
+ * cut-outs with the opaque geometry, blended ones back to front with the other transparent geometry. */
+static WPE_Result wpe__submit_quads(WPE_SceneRenderer* sr, WPE_Renderer* renderer,
+                                    const wpe__BillboardPass* pass, const WPE_Texture* texture,
+                                    WPE_BillboardBlend blend, bool lit, WPE_Aabb box,
+                                    const wpe__BillboardVertex* vertices, const uint32_t* indices,
+                                    uint32_t quads) {
+    const WPE_Vec3 center = wpe_vec3_scale(wpe_vec3_add(box.min, box.max), 0.5f);
+    wpe__BillboardUniforms uniforms = {
+        .view_projection = *pass->view_projection,
+        .camera_position = pass->camera_position,
+        .texture = texture,
+        .fog = pass->settings->fog,
+        .cutout = blend == WPE_BILLBOARD_CUTOUT,
+        .additive = blend == WPE_BILLBOARD_ADDITIVE,
+        .lit = lit,
+    };
+    if (lit) {
+        uniforms.ambient = pass->settings->ambient;
+        uniforms.has_sun = pass->sun->present;
+        uniforms.sun_direction = pass->sun->direction;
+        uniforms.sun_color = pass->sun->present ? pass->sun->color : wpe_vec3(0, 0, 0);
+        uniforms.sun_shadow = sr->has_shadow ? &sr->shadow : NULL;
+        uniforms.shadow_matrix = *pass->shadow_matrix;
+        uniforms.light_count =
+            wpe__select_lights(pass->lights, pass->light_count, center,
+                               wpe_vec3_length(wpe_vec3_sub(box.max, center)), uniforms.lights);
+    }
+    WPE_RenderState state = wpe_render_state_default();
+    state.cull = WPE_CULL_NONE;
+    bool transparent = false;
+    if (blend == WPE_BILLBOARD_ADDITIVE) {
+        state.blend = WPE_BLEND_ADDITIVE;
+        state.depth_write = false;
+        transparent = true;
+    } else if (blend == WPE_BILLBOARD_ALPHA) {
+        if (pass->settings->dither_transparency) {
+            state.blend = WPE_BLEND_ALPHA_DITHER;
+        } else {
+            state.blend = WPE_BLEND_ALPHA;
+            state.depth_write = false;
+            transparent = true;
+        }
+    }
+    const uint32_t depth_key = wpe__depth_key(-wpe_mat4_transform_point(pass->view, center).z);
+    const uint64_t sort_key = transparent ? (UINT64_C(1) << 63) | ((uint64_t)(UINT32_MAX - depth_key) << 30)
+                                          : (uint64_t)depth_key << 30;
+    return wpe_renderer_submit(renderer, &(WPE_DrawDesc){.program = wpe__shader_billboard(),
+                                                         .uniforms = &uniforms,
+                                                         .uniforms_size = sizeof uniforms,
+                                                         .vertices = vertices,
+                                                         .vertex_stride = sizeof *vertices,
+                                                         .vertex_count = quads * 4,
+                                                         .indices = indices,
+                                                         .index_count = quads * 6,
+                                                         .state = state,
+                                                         .sort_key = sort_key});
 }
 
 static WPE_Result wpe__render_billboards(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const WPE_Ecs* ecs,
@@ -489,12 +556,8 @@ static WPE_Result wpe__render_billboards(WPE_SceneRenderer* sr, WPE_Renderer* re
         if (!b->visible || !wpe_billboard_corners(b, &t->world, &pass->camera_world, corners, &normal))
             continue;
         WPE_Aabb box = {.min = corners[0], .max = corners[0]};
-        for (int c = 1; c < 4; ++c) {
-            box.min = wpe_vec3(fminf(box.min.x, corners[c].x), fminf(box.min.y, corners[c].y),
-                               fminf(box.min.z, corners[c].z));
-            box.max = wpe_vec3(fmaxf(box.max.x, corners[c].x), fmaxf(box.max.y, corners[c].y),
-                               fmaxf(box.max.z, corners[c].z));
-        }
+        for (int c = 1; c < 4; ++c)
+            wpe__grow_box(&box, corners[c]);
         if (pass->settings->frustum_culling && !wpe__aabb_visible(&frustum, &box)) {
             ++stats->billboards_culled;
             continue;
@@ -503,7 +566,8 @@ static WPE_Result wpe__render_billboards(WPE_SceneRenderer* sr, WPE_Renderer* re
         wpe__BillboardVertex* vertices = wpe_arena_alloc(&sr->frame, 4 * sizeof *vertices, 0);
         if (!vertices) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
         float u0, v0, u1, v1;
-        wpe__billboard_uvs(b, &u0, &v0, &u1, &v1);
+        wpe__sheet_uvs(b->texture, b->source, b->columns, b->rows, b->frame_count, b->frame, &u0, &v0, &u1,
+                       &v1);
         const float us[4] = {u0, u1, u1, u0}, vs[4] = {v1, v1, v0, v0};
         for (int c = 0; c < 4; ++c) {
             vertices[c] =
@@ -511,61 +575,107 @@ static WPE_Result wpe__render_billboards(WPE_SceneRenderer* sr, WPE_Renderer* re
             for (int i = 0; i < 4; ++i)
                 vertices[c].color[i] = b->color.v[i];
         }
-
-        const WPE_Vec3 center = wpe_vec3_scale(wpe_vec3_add(box.min, box.max), 0.5f);
-        wpe__BillboardUniforms uniforms = {
-            .view_projection = *pass->view_projection,
-            .camera_position = pass->camera_position,
-            .texture = b->texture,
-            .fog = pass->settings->fog,
-            .cutout = b->blend == WPE_BILLBOARD_CUTOUT,
-            .additive = b->blend == WPE_BILLBOARD_ADDITIVE,
-            .lit = b->lit,
-        };
-        if (b->lit) {
-            uniforms.ambient = pass->settings->ambient;
-            uniforms.has_sun = pass->sun->present;
-            uniforms.sun_direction = pass->sun->direction;
-            uniforms.sun_color = pass->sun->present ? pass->sun->color : wpe_vec3(0, 0, 0);
-            uniforms.sun_shadow = sr->has_shadow ? &sr->shadow : NULL;
-            uniforms.shadow_matrix = *pass->shadow_matrix;
-            uniforms.light_count =
-                wpe__select_lights(pass->lights, pass->light_count, center,
-                                   wpe_vec3_length(wpe_vec3_sub(box.max, center)), uniforms.lights);
-        }
-
-        /* Cut-outs are opaque; blended billboards go back to front with the other transparent geometry. */
-        WPE_RenderState state = wpe_render_state_default();
-        state.cull = WPE_CULL_NONE;
-        bool transparent = false;
-        if (b->blend == WPE_BILLBOARD_ADDITIVE) {
-            state.blend = WPE_BLEND_ADDITIVE;
-            state.depth_write = false;
-            transparent = true;
-        } else if (b->blend == WPE_BILLBOARD_ALPHA) {
-            if (pass->settings->dither_transparency) {
-                state.blend = WPE_BLEND_ALPHA_DITHER;
-            } else {
-                state.blend = WPE_BLEND_ALPHA;
-                state.depth_write = false;
-                transparent = true;
-            }
-        }
-        const uint32_t depth_key = wpe__depth_key(-wpe_mat4_transform_point(pass->view, center).z);
-        const uint64_t sort_key = transparent
-                                      ? (UINT64_C(1) << 63) | ((uint64_t)(UINT32_MAX - depth_key) << 30)
-                                      : (uint64_t)depth_key << 30;
-        result = wpe_renderer_submit(renderer, &(WPE_DrawDesc){.program = wpe__shader_billboard(),
-                                                               .uniforms = &uniforms,
-                                                               .uniforms_size = sizeof uniforms,
-                                                               .vertices = vertices,
-                                                               .vertex_stride = sizeof *vertices,
-                                                               .vertex_count = 4,
-                                                               .indices = indices,
-                                                               .index_count = 6,
-                                                               .state = state,
-                                                               .sort_key = sort_key});
+        result =
+            wpe__submit_quads(sr, renderer, pass, b->texture, b->blend, b->lit, box, vertices, indices, 1);
         if (result == WPE_RESULT_OK) ++stats->billboards_submitted;
+    }
+    return result;
+}
+
+/* ---- Particles ------------------------------------------------------------------------------------ */
+
+typedef struct wpe__ParticleDepth {
+    float depth;
+    uint32_t index;
+} wpe__ParticleDepth;
+
+static int wpe__compare_far_first(const void* a, const void* b) {
+    const float x = ((const wpe__ParticleDepth*)a)->depth, y = ((const wpe__ParticleDepth*)b)->depth;
+    if (x != y) return x < y ? 1 : -1;
+    const uint32_t i = ((const wpe__ParticleDepth*)a)->index, j = ((const wpe__ParticleDepth*)b)->index;
+    return (i > j) - (i < j); /* Equal depths keep emission order, so sorting is deterministic. */
+}
+
+/* One draw per emitter: every live particle as a screen-facing quad, sized, colored and framed by its age.
+ * Alpha-blended emitters sort their particles back to front within the draw. */
+static WPE_Result wpe__render_particles(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const WPE_Ecs* ecs,
+                                        const wpe__BillboardPass* pass, WPE_SceneRenderStats* stats) {
+    const wpe__Frustum frustum = wpe__frustum_from_matrix(pass->view_projection);
+    const WPE_Vec3 right = wpe_vec3_normalize(
+        wpe_vec3(pass->camera_world.m[0][0], pass->camera_world.m[0][1], pass->camera_world.m[0][2]));
+    const WPE_Vec3 up = wpe_vec3_normalize(
+        wpe_vec3(pass->camera_world.m[1][0], pass->camera_world.m[1][1], pass->camera_world.m[1][2]));
+    const WPE_Vec3 normal = wpe_vec3_cross(right, up);
+    WPE_Result result = WPE_RESULT_OK;
+    WPE_EcsIter it = wpe_ecs_query((WPE_Ecs*)ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_PARTICLES)});
+    while (wpe_ecs_iter_next(&it) && result == WPE_RESULT_OK) {
+        const WPE_ParticleEmitter* e = wpe_ecs_iter_get(&it, WPE_COMP_PARTICLES);
+        const uint32_t n = e->count;
+        if (n == 0) continue;
+        const WPE_Transform* t = wpe_ecs_get_component(ecs, it.entity, WPE_COMP_TRANSFORM);
+        const WPE_Mat4 world = t ? t->world : wpe_mat4_identity();
+        /* World positions, and the bounds they and their largest quad fill. */
+        WPE_Vec3* positions = wpe_arena_alloc(&sr->frame, (size_t)n * sizeof *positions, 0);
+        if (!positions) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        const float reach = fmaxf(e->size_start, e->size_end) * 0.70710678f;
+        WPE_Aabb box = {.min = wpe_vec3(INFINITY, INFINITY, INFINITY),
+                        .max = wpe_vec3(-INFINITY, -INFINITY, -INFINITY)};
+        for (uint32_t i = 0; i < n; ++i) {
+            positions[i] = e->world_space ? e->particles[i].position
+                                          : wpe_mat4_transform_point(&world, e->particles[i].position);
+            wpe__grow_box(&box, positions[i]);
+        }
+        box.min = wpe_vec3_sub(box.min, wpe_vec3(reach, reach, reach));
+        box.max = wpe_vec3_add(box.max, wpe_vec3(reach, reach, reach));
+        if (pass->settings->frustum_culling && !wpe__aabb_visible(&frustum, &box)) {
+            ++stats->particle_emitters_culled;
+            continue;
+        }
+        /* Drawing order: emission order, or farthest first for alpha blending. */
+        wpe__ParticleDepth* order = wpe_arena_alloc(&sr->frame, (size_t)n * sizeof *order, 0);
+        wpe__BillboardVertex* vertices = wpe_arena_alloc(&sr->frame, (size_t)n * 4 * sizeof *vertices, 0);
+        uint32_t* indices = wpe_arena_alloc(&sr->frame, (size_t)n * 6 * sizeof *indices, 0);
+        if (!order || !vertices || !indices) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        for (uint32_t i = 0; i < n; ++i)
+            order[i] = (wpe__ParticleDepth){.depth = -wpe_mat4_transform_point(pass->view, positions[i]).z,
+                                            .index = i};
+        if (e->blend == WPE_BILLBOARD_ALPHA && !pass->settings->dither_transparency)
+            qsort(order, n, sizeof *order, wpe__compare_far_first);
+
+        const uint32_t grid = (e->columns ? e->columns : 1) * (e->rows ? e->rows : 1);
+        const uint32_t frames = e->frame_count && e->frame_count < grid ? e->frame_count : grid;
+        for (uint32_t k = 0; k < n; ++k) {
+            const WPE_Particle* p = &e->particles[order[k].index];
+            const float life = fminf(fmaxf(p->age / p->lifetime, 0.0f), 1.0f);
+            const float half = (e->size_start + (e->size_end - e->size_start) * life) * 0.5f;
+            const float c = cosf(p->rotation), s = sinf(p->rotation);
+            const WPE_Vec3 r =
+                wpe_vec3_scale(wpe_vec3_add(wpe_vec3_scale(right, c), wpe_vec3_scale(up, s)), half);
+            const WPE_Vec3 u =
+                wpe_vec3_scale(wpe_vec3_sub(wpe_vec3_scale(up, c), wpe_vec3_scale(right, s)), half);
+            float u0, v0, u1, v1;
+            const uint32_t frame = (uint32_t)(life * (float)frames);
+            wpe__sheet_uvs(e->texture, (WPE_Rect){0}, e->columns, e->rows, e->frame_count, frame, &u0, &v0,
+                           &u1, &v1);
+            const WPE_Vec3 at = positions[order[k].index];
+            const WPE_Vec3 corners[4] = {
+                wpe_vec3_sub(wpe_vec3_sub(at, r), u), wpe_vec3_sub(wpe_vec3_add(at, r), u),
+                wpe_vec3_add(wpe_vec3_add(at, r), u), wpe_vec3_add(wpe_vec3_sub(at, r), u)};
+            const float us[4] = {u0, u1, u1, u0}, vs[4] = {v1, v1, v0, v0};
+            wpe__BillboardVertex* quad = &vertices[(size_t)k * 4];
+            for (int v = 0; v < 4; ++v) {
+                quad[v] =
+                    (wpe__BillboardVertex){.position = corners[v], .normal = normal, .u = us[v], .v = vs[v]};
+                for (int i = 0; i < 4; ++i)
+                    quad[v].color[i] = e->color_start.v[i] + (e->color_end.v[i] - e->color_start.v[i]) * life;
+            }
+            const uint32_t base = k * 4;
+            const uint32_t quad_indices[6] = {base, base + 1, base + 2, base, base + 2, base + 3};
+            memcpy(&indices[(size_t)k * 6], quad_indices, sizeof quad_indices);
+        }
+        result =
+            wpe__submit_quads(sr, renderer, pass, e->texture, e->blend, e->lit, box, vertices, indices, n);
+        if (result == WPE_RESULT_OK) stats->particles_drawn += n;
     }
     return result;
 }
@@ -701,7 +811,8 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             if (result == WPE_RESULT_OK) ++stats.primitives_submitted;
         }
     }
-    if (result == WPE_RESULT_OK && wpe_ecs_component_count(ecs, WPE_COMP_BILLBOARD) > 0) {
+    if (result == WPE_RESULT_OK && (wpe_ecs_component_count(ecs, WPE_COMP_BILLBOARD) > 0 ||
+                                    wpe_ecs_component_count(ecs, WPE_COMP_PARTICLES) > 0)) {
         wpe__BillboardPass pass = {.view = &view,
                                    .view_projection = &view_projection,
                                    .camera_position = camera_position,
@@ -710,8 +821,10 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
                                    .lights = lights,
                                    .light_count = light_count,
                                    .shadow_matrix = &shadow_matrix};
-        if (wpe__camera_rigid_world(camera_transform, &pass.camera_world))
+        if (wpe__camera_rigid_world(camera_transform, &pass.camera_world)) {
             result = wpe__render_billboards(sr, renderer, ecs, &pass, &stats);
+            if (result == WPE_RESULT_OK) result = wpe__render_particles(sr, renderer, ecs, &pass, &stats);
+        }
     }
     if (out_stats) *out_stats = stats;
     return result;

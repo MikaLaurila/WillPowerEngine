@@ -443,6 +443,199 @@ static void test_graphics_billboard_draws_frames_and_blends(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* ---- Particles -------------------------------------------------------------------------------------- */
+
+static WPE_Entity spawn_emitter(WPE_Ecs* ecs, WPE_Vec3 position, const WPE_ParticleEmitter* settings) {
+    const WPE_Entity e = wpe_ecs_spawn(ecs);
+    WPE_Transform t = wpe_transform_identity();
+    t.position = position;
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, e, WPE_COMP_TRANSFORM, &t, NULL));
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, e, WPE_COMP_PARTICLES, settings, NULL));
+    WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
+    return e;
+}
+
+static const WPE_ParticleEmitter* emitter_of(WPE_Ecs* ecs, WPE_Entity e) {
+    return wpe_ecs_get_component(ecs, e, WPE_COMP_PARTICLES);
+}
+
+static void test_graphics_particles_emit_and_expire(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_ParticleEmitter settings = wpe_particle_emitter_default();
+    settings.rate = 10.0f;
+    const WPE_Entity steady = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+    /* A one-shot: a burst of 4, half a second of emission, no loop. */
+    settings.rate = 0.0f;
+    settings.burst = 4;
+    settings.duration = 0.5f;
+    settings.loop = false;
+    const WPE_Entity once = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+    settings.loop = true;
+    const WPE_Entity cycles = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+    settings.max_particles = 3;
+    settings.burst = 10;
+    const WPE_Entity capped = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+
+    WPE_TEST_ASSERT_OK(wpe_particles_update(ecs, NULL, 0.25f));
+    WPE_TEST_ASSERT_EQ_UINT(2, emitter_of(ecs, steady)->count); /* 2.5 owed: 2 now, half carried over. */
+    WPE_TEST_ASSERT_EQ_UINT(4, emitter_of(ecs, once)->count);
+    WPE_TEST_ASSERT_EQ_UINT(4, emitter_of(ecs, cycles)->count);
+    WPE_TEST_ASSERT_EQ_UINT(3, emitter_of(ecs, capped)->count); /* At most max_particles. */
+    WPE_TEST_ASSERT_OK(wpe_particles_update(ecs, NULL, 0.3f));
+    WPE_TEST_ASSERT_EQ_UINT(5, emitter_of(ecs, steady)->count);
+    /* At 0.55 seconds the one-shot stopped (its particles live on) and the loop burst again. */
+    WPE_TEST_ASSERT(!emitter_of(ecs, once)->playing);
+    WPE_TEST_ASSERT_EQ_UINT(4, emitter_of(ecs, once)->count);
+    WPE_TEST_ASSERT_EQ_UINT(8, emitter_of(ecs, cycles)->count);
+    /* A second later the first particles (1 second of life) are gone. */
+    WPE_TEST_ASSERT_OK(wpe_particles_update(ecs, NULL, 0.5f));
+    WPE_TEST_ASSERT_OK(wpe_particles_update(ecs, NULL, 0.5f));
+    WPE_TEST_ASSERT_EQ_UINT(0, emitter_of(ecs, once)->count);
+    WPE_TEST_ASSERT_EQ_UINT(10, emitter_of(ecs, steady)->count); /* A steady state of rate x lifetime. */
+
+    /* Emitting on demand, clearing, restarting. */
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_particles_emit(ecs, once, 2));
+    WPE_TEST_ASSERT_EQ_UINT(2, emitter_of(ecs, once)->count);
+    wpe_particles_clear(ecs, once);
+    WPE_TEST_ASSERT(emitter_of(ecs, once)->count == 0 && !emitter_of(ecs, once)->playing);
+    wpe_particles_restart(ecs, once);
+    WPE_TEST_ASSERT_OK(wpe_particles_update(ecs, NULL, 0.1f));
+    WPE_TEST_ASSERT(emitter_of(ecs, once)->playing && emitter_of(ecs, once)->count == 4);
+    /* The editor's preview plays a stopped emitter without changing its settings. */
+    wpe_particles_clear(ecs, once);
+    ((WPE_ParticleEmitter*)wpe_ecs_get_component(ecs, once, WPE_COMP_PARTICLES))->playing = false;
+    WPE_TEST_ASSERT_OK(wpe_particles_preview(ecs, once, 0.1f));
+    WPE_TEST_ASSERT_EQ_UINT(4, emitter_of(ecs, once)->count);
+    WPE_TEST_ASSERT(!emitter_of(ecs, once)->playing && !emitter_of(ecs, once)->loop);
+    /* An emitter copied from a live one shares none of its particles. */
+    const WPE_Entity copy = spawn_emitter(ecs, wpe_vec3(0, 0, 0), emitter_of(ecs, steady));
+    WPE_TEST_ASSERT(emitter_of(ecs, copy)->count == 0 && emitter_of(ecs, copy)->particles == NULL);
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
+static void test_graphics_particles_move(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_ParticleEmitter settings = wpe_particle_emitter_default();
+    settings.rate = 0.0f;
+    settings.speed_min = settings.speed_max = 2.0f;
+    settings.spread = 0.0f;
+    settings.direction = wpe_vec3(0, 1, 0);
+    /* World space, from an emitter at (5, 0, 0) turned a quarter about Z: "up" leaves along -X. */
+    const WPE_Entity turned = wpe_ecs_spawn(ecs);
+    WPE_Transform tr = wpe_transform_identity();
+    tr.position = wpe_vec3(5, 0, 0);
+    tr.rotation = wpe_quat_from_axis_angle(wpe_vec3(0, 0, 1), WPE_PI * 0.5f);
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, turned, WPE_COMP_TRANSFORM, &tr, NULL));
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, turned, WPE_COMP_PARTICLES, &settings, NULL));
+    WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_particles_emit(ecs, turned, 1));
+    const WPE_Particle* p = &emitter_of(ecs, turned)->particles[0];
+    assert_vec3(wpe_vec3(5, 0, 0), p->position);
+    assert_vec3(wpe_vec3(-2, 0, 0), p->velocity);
+    /* Gravity and drag: velocity first, then position, per step. */
+    ((WPE_ParticleEmitter*)wpe_ecs_get_component(ecs, turned, WPE_COMP_PARTICLES))->gravity =
+        wpe_vec3(0, -10, 0);
+    WPE_TEST_ASSERT_OK(wpe_particles_update(ecs, NULL, 0.1f));
+    p = &emitter_of(ecs, turned)->particles[0];
+    assert_vec3(wpe_vec3(-2, -1, 0), p->velocity);
+    assert_vec3(wpe_vec3(4.8f, -0.1f, 0), p->position);
+
+    /* Local space: particles keep their place relative to the emitter, so moving it moves them. */
+    settings.world_space = false;
+    const WPE_Entity local = spawn_emitter(ecs, wpe_vec3(0, 3, 0), &settings);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_particles_emit(ecs, local, 1));
+    assert_vec3(wpe_vec3(0, 0, 0), emitter_of(ecs, local)->particles[0].position);
+    assert_vec3(wpe_vec3(0, 2, 0), emitter_of(ecs, local)->particles[0].velocity);
+    /* Spawn shapes keep to their volume. */
+    settings.shape = WPE_PARTICLES_BOX;
+    settings.shape_size = wpe_vec3(2, 0, 4);
+    const WPE_Entity box = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+    WPE_TEST_ASSERT_EQ_UINT(100, wpe_particles_emit(ecs, box, 100));
+    for (uint32_t i = 0; i < 100; ++i) {
+        const WPE_Vec3 at = emitter_of(ecs, box)->particles[i].position;
+        WPE_TEST_ASSERT(fabsf(at.x) <= 1.0f && at.y == 0.0f && fabsf(at.z) <= 2.0f);
+    }
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
+/* The same seed gives the same particles, and worker threads change nothing. */
+static void test_graphics_particles_are_deterministic(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_JobSystem* jobs = NULL;
+    WPE_TEST_ASSERT_OK(wpe_jobs_create(4, &jobs));
+    WPE_ParticleEmitter settings = wpe_particle_emitter_default();
+    settings.max_particles = 20000;
+    settings.rate = 20000.0f;
+    settings.burst = 10000;
+    settings.lifetime_min = 0.2f;
+    settings.lifetime_max = 2.0f;
+    settings.spread = 1.0f;
+    settings.gravity = wpe_vec3(0, -9.8f, 0);
+    settings.drag = 0.3f;
+    settings.seed = 42;
+    WPE_Ecs* a = make_world(t.assets);
+    WPE_Ecs* b = make_world(t.assets);
+    const WPE_Entity ea = spawn_emitter(a, wpe_vec3(1, 2, 3), &settings);
+    const WPE_Entity eb = spawn_emitter(b, wpe_vec3(1, 2, 3), &settings);
+    for (int step = 0; step < 10; ++step) {
+        WPE_TEST_ASSERT_OK(wpe_particles_update(a, NULL, 1.0f / 30.0f));
+        WPE_TEST_ASSERT_OK(wpe_particles_update(b, jobs, 1.0f / 30.0f));
+    }
+    const WPE_ParticleEmitter* pa = emitter_of(a, ea);
+    const WPE_ParticleEmitter* pb = emitter_of(b, eb);
+    WPE_TEST_ASSERT(pa->count > 10000);
+    WPE_TEST_ASSERT_EQ_UINT(pa->count, pb->count);
+    WPE_TEST_ASSERT(memcmp(pa->particles, pb->particles, (size_t)pa->count * sizeof *pa->particles) == 0);
+    wpe_ecs_destroy(a);
+    wpe_ecs_destroy(b);
+    wpe_jobs_destroy(jobs);
+    wpe_test_assets_destroy(&t);
+}
+
+static void test_graphics_particles_draw(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 0, 5), wpe_quat_identity());
+    WPE_ParticleEmitter settings = wpe_particle_emitter_default();
+    settings.rate = 0.0f;
+    settings.speed_min = settings.speed_max = 0.0f;
+    settings.size_start = settings.size_end = 1.0f;
+    settings.color_start = settings.color_end = wpe_vec4(1, 0, 0, 1);
+    settings.shape = WPE_PARTICLES_SPHERE;
+    settings.shape_size = wpe_vec3(1, 1, 1);
+    const WPE_Entity e = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+    WPE_TEST_ASSERT_EQ_UINT(50, wpe_particles_emit(ecs, e, 50));
+
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_SceneRenderStats stats;
+    /* Alpha blended (sorted back to front): every particle in one draw, red over black. */
+    const WPE_Framebuffer* fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(50, stats.particles_drawn);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_renderer_stats(renderer).draws);
+    WPE_TEST_ASSERT(count_color(fb, 0xFFFF0000u) > 100);
+    /* Cutout and additive draw the same particles. */
+    ((WPE_ParticleEmitter*)wpe_ecs_get_component(ecs, e, WPE_COMP_PARTICLES))->blend = WPE_BILLBOARD_ADDITIVE;
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT(stats.particles_drawn == 50 && count_color(fb, 0xFFFF0000u) > 100);
+    /* Out of view: the whole emitter is culled. */
+    ((WPE_Transform*)wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM))->rotation =
+        wpe_quat_from_axis_angle(wpe_vec3(0, 1, 0), WPE_PI);
+    render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT(stats.particles_drawn == 0 && stats.particle_emitters_culled == 1);
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
 static void test_graphics_scene_render_frustum_culling(void) {
     WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 32);
     const WPE_AssetHandle model = wpe_test_load_model(t.assets, "meshes/damaged_helmet.glb");
@@ -643,5 +836,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_shininess_range), WPE_TEST_CASE(test_graphics_scene_render_frustum_culling),
     WPE_TEST_CASE(test_graphics_billboard_corners), WPE_TEST_CASE(test_graphics_billboard_animation),
     WPE_TEST_CASE(test_graphics_billboard_draws_frames_and_blends),
+    WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
+    WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),
     WPE_TEST_CASE(test_graphics_camera_matrices_validation),
     WPE_TEST_CASE(test_graphics_draw2d_text_is_pixel_exact), WPE_TEST_CASE(test_graphics_debug_lines))

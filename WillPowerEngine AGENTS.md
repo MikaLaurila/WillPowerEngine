@@ -355,7 +355,7 @@ Implemented in `src/graphics/billboard.c` (component in `graphics/graphics.h`). 
 - A billboard is a quad built on the CPU each frame for the camera (`wpe_billboard_corners`) and drawn by `wpe_scene_render` with its own shader: depth tested and fogged like meshes, unlit by default, optionally lit (ambient, point/spot lights, the sun with its shadow, half-Lambert so quads facing away stay readable).
 - Blending decides sorting: cutouts are opaque (no sort), alpha and additive go back to front with transparent meshes.
 - Sprite-sheet frames advance in the simulation (`wpe_billboard_update`); scripts and scenes can set the frame directly.
-- They are the building block for particles (next): a particle system should batch many quads per draw through the same shader rather than one entity per particle.
+- Particles (`graphics/particles.c`) build on them: an emitter component owns its particles, simulates them in the engine's simulation (after transforms; integration chunked on the job system, spawning and compaction serial, so the result is the same with any thread count) and draws them as one batch of quads per emitter through the billboard shader. Particles are not entities.
 - NOTE(limitation): no shadow casting, no mipmaps (nearest sampling).
 
 ### 4.6.1 UI

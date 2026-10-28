@@ -15,6 +15,9 @@
  *   with sprite-sheet frames, cutout/alpha/additive blending and optional lighting. Drawn by
  *   wpe_scene_render(); its image reference is held from the add hook to the remove hook.
  *   NOTE(limitation): billboards do not cast shadows, and their images are sampled without mipmaps.
+ * - WPE_COMP_PARTICLES (WPE_ParticleEmitter): emits and simulates particles (wpe_particles_update()),
+ *   drawn by wpe_scene_render() as screen-facing quads through the billboard shader, one draw per
+ *   emitter. Its particle array is owned by the component (freed by its remove hook).
  *
  * Asset lifetime: mesh renderers and animators reference their model by asset handle
  * (`model_asset`). Their add hook takes a reference and resolves the cached `model` pointer; their
@@ -34,6 +37,7 @@
 #include "assets/model.h"
 #include "ecs/ecs.h"
 #include "graphics/draw2d.h"
+#include "jobs/jobs.h"
 #include "scene/scene.h"
 
 typedef struct WPE_MeshRenderer {
@@ -143,6 +147,102 @@ bool wpe_billboard_corners(const WPE_Billboard* billboard, const WPE_Mat4* world
  * world */
 void wpe_billboard_update(WPE_Ecs* ecs, float dt);
 
+/** Where new particles appear, around the emitter's origin in its own space. */
+typedef enum WPE_ParticleShape {
+    WPE_PARTICLES_POINT = 0, /* At the origin. */
+    WPE_PARTICLES_SPHERE,    /* Anywhere inside a sphere of radius shape_size.x. */
+    WPE_PARTICLES_BOX,       /* Anywhere inside a box of full extents shape_size. */
+} WPE_ParticleShape;
+
+/** One live particle (in world space, or the emitter's space when not world_space). */
+typedef struct WPE_Particle {
+    WPE_Vec3 position;
+    WPE_Vec3 velocity;
+    float age, lifetime;  /* Seconds. */
+    float rotation, spin; /* Radians, radians per second. */
+} WPE_Particle;
+
+/**
+ * Emits and simulates particles drawn as screen-facing quads, many per draw. The settings are plain
+ * fields; the runtime state at the end belongs to the module (read-only).
+ */
+typedef struct WPE_ParticleEmitter {
+    /* Look. */
+    WPE_AssetHandle image;      /* WPE_ASSET_IMAGE, or WPE_ASSET_NONE for plain squares. */
+    const WPE_Texture* texture; /* Resolved from `image` by the add hook (read-only). */
+    uint32_t columns, rows,
+        frame_count; /* A sprite sheet played over each particle's life (0 frames = all). */
+    WPE_BillboardBlend blend;
+    bool lit;
+    WPE_Vec4 color_start, color_end; /* RGBA (0..1) over each particle's life. */
+    float size_start, size_end;      /* World units over each particle's life. */
+    /* Emission. */
+    bool playing;           /* Emitting (particles already out live on when it stops). */
+    float duration;         /* Seconds of emission per cycle (0 = endless). */
+    bool loop;              /* Start a new cycle (and its burst) after `duration`, else stop playing. */
+    float rate;             /* Particles per second while playing. */
+    uint32_t burst;         /* Particles emitted at once when a cycle starts. */
+    uint32_t max_particles; /* At most this many alive (1..100000); new ones are dropped beyond it. */
+    bool world_space;       /* Particles stay where they were emitted; else they move with the emitter. */
+    uint32_t seed;          /* Random seed (0 = from the entity), so a scene plays the same every time. */
+    WPE_ParticleShape shape;
+    WPE_Vec3 shape_size;
+    /* Motion. */
+    float lifetime_min, lifetime_max; /* Seconds. */
+    float speed_min, speed_max;       /* Initial speed, world units per second. */
+    WPE_Vec3 direction;               /* Emission direction in the emitter's space. */
+    float spread;                     /* Half-angle (radians) of the cone around `direction`. */
+    WPE_Vec3 gravity;                 /* Acceleration in world space (units per second squared). */
+    float drag;                       /* Fraction of velocity lost per second (0..). */
+    float spin_min, spin_max;         /* Radians per second. */
+    bool random_rotation;             /* Start each particle at a random angle. */
+    /* Runtime state (read-only; reset by the add hook, freed by the remove hook). */
+    WPE_Particle* particles;
+    uint32_t count, capacity;
+    float time;        /* Into the current cycle. */
+    float accumulator; /* Fraction of a particle owed by `rate`. */
+    uint64_t random;
+    bool started; /* The current cycle's burst has been emitted. */
+} WPE_ParticleEmitter;
+
+/** @return A small endless fountain: 20 white particles a second rising in a 15-degree cone for one second,
+ * shrinking and fading out, alpha blended in world space. @thread_safety Any thread */
+WPE_ParticleEmitter wpe_particle_emitter_default(void);
+
+/**
+ * Advances every emitter by `dt`: cycles, bursts and steady emission, then motion, aging and removal of
+ * expired particles. Large emitters are integrated on the job system; results do not depend on it.
+ *
+ * @param jobs Optional (NULL = this thread).
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_OUT_OF_MEMORY (an emitter could
+ *         not grow to max_particles; logged).
+ *
+ * @thread_safety Thread owning the world (and the job system)
+ */
+WPE_Result wpe_particles_update(WPE_Ecs* ecs, WPE_JobSystem* jobs, float dt);
+
+/** Emits `count` particles now (within max_particles), whether or not the emitter plays. @return The number
+ * emitted. @thread_safety Thread owning the world */
+uint32_t wpe_particles_emit(WPE_Ecs* ecs, WPE_Entity entity, uint32_t count);
+
+/** Starts the emitter over: no particles, a fresh cycle with its burst, playing. @thread_safety Thread owning
+ * the world */
+void wpe_particles_restart(WPE_Ecs* ecs, WPE_Entity entity);
+
+/** Removes every live particle and starts the cycle over (its burst comes again); the settings stay, playing
+ * included. @thread_safety Thread owning the world */
+void wpe_particles_clear(WPE_Ecs* ecs, WPE_Entity entity);
+
+/**
+ * Advances one emitter as if it played and looped, then puts `playing` and `loop` back: the editor shows a
+ * selected emitter this way without changing the scene.
+ *
+ * @return As wpe_particles_update().
+ *
+ * @thread_safety Thread owning the world
+ */
+WPE_Result wpe_particles_preview(WPE_Ecs* ecs, WPE_Entity entity, float dt);
+
 /** @return A perspective camera with a 60 degree vertical FOV, near 0.1, far 500. @thread_safety Any thread
  */
 WPE_Camera wpe_camera_default(void);
@@ -152,8 +252,8 @@ WPE_Camera wpe_camera_default(void);
 WPE_Light wpe_light_default(WPE_LightType type);
 
 /**
- * Registers WPE_COMP_MESH, WPE_COMP_CAMERA, WPE_COMP_LIGHT, WPE_COMP_ANIMATOR and WPE_COMP_BILLBOARD. Scene
- * components
+ * Registers WPE_COMP_MESH, WPE_COMP_CAMERA, WPE_COMP_LIGHT, WPE_COMP_ANIMATOR, WPE_COMP_BILLBOARD and
+ * WPE_COMP_PARTICLES. Scene components
  * must be registered too (wpe_scene_register_components()).
  *
  * @param assets Borrowed; must outlive the world (component hooks release model references).

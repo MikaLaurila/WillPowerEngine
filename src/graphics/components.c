@@ -4,7 +4,7 @@
 #include "core/alloc.h"
 #include "core/debug.h"
 #include "core/log.h"
-#include "graphics/graphics.h"
+#include "graphics/billboard_internal.h"
 
 /* ---- Hooks ---------------------------------------------------------------------------------------- */
 
@@ -116,6 +116,13 @@ WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs, WPE_AssetManager* asse
           .alignment = alignof(WPE_Billboard),
           .on_add = wpe__billboard_on_add,
           .on_remove = wpe__billboard_on_remove,
+          .hook_user_data = assets}},
+        {WPE_COMP_PARTICLES,
+         {.name = "ParticleEmitter",
+          .size = sizeof(WPE_ParticleEmitter),
+          .alignment = alignof(WPE_ParticleEmitter),
+          .on_add = wpe__particles_on_add,
+          .on_remove = wpe__particles_on_remove,
           .hook_user_data = assets}},
     };
     for (size_t i = 0; i < sizeof components / sizeof components[0]; ++i) {

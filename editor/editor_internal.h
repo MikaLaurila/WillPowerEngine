@@ -35,6 +35,7 @@ struct WPE_Editor {
     WPE_Entity camera;       /* Editor helper camera (excluded from saves). */
     WPE_Entity scene_camera; /* The camera the scene renders from in play mode and saves. */
     WPE_Entity selection;
+    WPE_Entity previewed; /* The particle emitter played in edit mode (the selection, when it has one). */
     WPE_EditorMode mode;
     bool dirty;
     bool dirty_before_change; /* Restored when a change is aborted. */

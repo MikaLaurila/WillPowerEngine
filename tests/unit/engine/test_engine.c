@@ -231,7 +231,8 @@ static void test_engine_scene_round_trip(void) {
                                      WPE_COMP_SPRITE,
                                      WPE_COMP_TEXT,
                                      WPE_COMP_BUTTON,
-                                     WPE_COMP_BILLBOARD};
+                                     WPE_COMP_BILLBOARD,
+                                     WPE_COMP_PARTICLES};
     for (size_t i = 0; i < sizeof all / sizeof all[0]; ++i)
         WPE_TEST_ASSERT_MSG(count_of(&a, all[i]) > 0, "no component of type %u", all[i]);
     WPE_TEST_ASSERT_EQ_UINT(2, count_of(&a, WPE_COMP_CAMERA));
@@ -338,6 +339,13 @@ static void test_engine_scene_rejects_mistakes_and_rolls_back(void) {
         "{\"id\": 2, \"billboard\": {\"size\": [-1, 1]}}",
         "{\"id\": 2, \"billboard\": {\"image\": \"sprites/missing.png\"}}",
         "{\"id\": 2, \"billboard\": {\"fps\": -1}}",
+        "{\"id\": 2, \"particles\": {\"lifetime\": [2, 1]}}",
+        "{\"id\": 2, \"particles\": {\"shape\": \"cone\"}}",
+        "{\"id\": 2, \"particles\": {\"max_particles\": 0}}",
+        "{\"id\": 2, \"particles\": {\"spread\": 200}}",
+        "{\"id\": 2, \"particles\": {\"columns\": 2, \"frame_count\": 3}}",
+        "{\"id\": 2, \"particles\": {\"rate\": -1}}",
+        "{\"id\": 2, \"particles\": {\"size\": [1]}}",
     };
     World w = make_world();
     const WPE_SceneContext ctx = context_of(&w);

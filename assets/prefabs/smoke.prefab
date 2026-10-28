@@ -1,0 +1,19 @@
+{
+  "format": "wpe.prefab",
+  "version": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "smoke",
+      "transform": {},
+      "particles": {
+        "image": "sprites/glow.png", "blend": "alpha",
+        "rate": 8, "max_particles": 64,
+        "shape": "sphere", "shape_size": [0.2, 0.2, 0.2],
+        "lifetime": [2, 3], "speed": [0.3, 0.6], "direction": [0, 1, 0], "spread": 20,
+        "drag": 0.3, "size": [0.4, 1.6], "spin": [-30, 30], "random_rotation": true,
+        "color_start": [0.35, 0.35, 0.38, 0.9], "color_end": [0.55, 0.55, 0.58, 0]
+      }
+    }
+  ]
+}

@@ -85,6 +85,10 @@ bool wpe__load_button(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
 void wpe__save_billboard(wpe__Saver* s, WPE_Entity e);
 bool wpe__load_billboard(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
 
+/* "particles" (scene_file_ui.c). */
+void wpe__save_particles(wpe__Saver* s, WPE_Entity e);
+bool wpe__load_particles(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v);
+
 /* Writes a whole file at an OS path through a temporary file, so it is replaced completely or not at all. */
 WPE_Result wpe__write_file_atomic(const char* os_path, const char* text, size_t size);
 

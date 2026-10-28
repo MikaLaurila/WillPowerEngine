@@ -1,6 +1,7 @@
 /**
  * @file billboard_internal.h
- * @brief Private: the billboard shader shared by billboard.c and scene_render.c. Not a public API.
+ * @brief Private: the billboard shader shared by billboard.c, particles.c and scene_render.c, and the
+ * particle hooks. Not a public API.
  */
 #ifndef WPE_GRAPHICS_BILLBOARD_INTERNAL_H
 #define WPE_GRAPHICS_BILLBOARD_INTERNAL_H
@@ -35,7 +36,12 @@ typedef struct wpe__BillboardUniforms {
 } wpe__BillboardUniforms;
 
 /* The billboard program (static storage): vertices are wpe__BillboardVertex, uniforms
- * wpe__BillboardUniforms. */
+ * wpe__BillboardUniforms. Particles draw through it too. */
 const WPE_ShaderProgram* wpe__shader_billboard(void);
+
+/* Particle emitter hooks (particles.c), registered by wpe_graphics_register_components(); `user_data` is the
+ * asset manager. */
+void wpe__particles_on_add(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data);
+void wpe__particles_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data);
 
 #endif /* WPE_GRAPHICS_BILLBOARD_INTERNAL_H */

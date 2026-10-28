@@ -5,6 +5,7 @@ add_library(wpe_graphics STATIC
     debug_lines.c
     draw2d.c
     material_shader.c
+    particles.c
     postfx.c
     scene_render.c)
 add_library(wpe::graphics ALIAS wpe_graphics)

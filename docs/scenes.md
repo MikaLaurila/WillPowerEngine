@@ -60,6 +60,7 @@ Loading is **strict**. Unknown keys, wrong types, out-of-range values, dangling 
 | `camera` | `fov` (vertical, degrees, default 60), `near` (0.1), `far` (500), `orthographic` (false), `ortho_height` (visible height of orthographic cameras, 10). Cameras look down their local −Z axis. |
 | `light` | `type` (`"directional"`, `"point"`, `"spot"`), `color` `[r, g, b]`, `intensity`, `range`, `inner_cone` and `outer_cone` (spot half-angles in degrees), `cast_shadows` (the main directional light). Lights shine along local −Z. |
 | `billboard` | A 3D sprite: a textured quad at the entity (see [Billboards](#billboards)). `image` (asset path, or null for a plain quad), `size` `[width, height]` (world units, default `[1, 1]`, times the entity's scale), `pivot` `[x, y]` (the point at the entity: `[0.5, 0.5]` centered, `[0.5, 0]` standing on it), `rotation` (degrees, in the quad's plane), `color` `[r, g, b, a]`, `source` `[x, y, width, height]` (a region of the image in texels), `columns`, `rows`, `frame_count` (0 = the whole grid), `frame` (from 0), `fps` (0 = still), `loop` (default true), `mode` (`"fixed"`, `"axis_aligned"`, `"axis_aligned_y"`, `"screen_aligned"`, the default), `blend` (`"cutout"`, the default, `"alpha"`, `"additive"`), `lit` (default false), `visible`. |
+| `particles` | A particle emitter (see [Particles](#particles)). |
 | `animator` | `model`, `animation` (index), `time`, `speed`, `playing`, `loop`, `nodes` (one entity id or null per model node). Usually created by `instance`. |
 | `rigidbody` | `type` (`"static"`, `"kinematic"`, `"dynamic"`), `linear_damping`, `angular_damping`, `gravity_scale`, `lock_rotation`, `continuous`, `initial_velocity` `[x, y, z]`. |
 | `collider` | `shape` (`"box"`, `"sphere"`, `"capsule"`, `"convex"`, `"mesh"`), `size` (box: full extents; sphere: `[radius, …]`; capsule: `[radius, height, …]` with height ≥ 2 × radius), `offset`, `density`, `friction`, `restitution`, `trigger`; convex and mesh colliders also take `model` and `mesh`. Without a rigid body a collider is static level geometry. |
@@ -93,6 +94,38 @@ NOTE(limitation): billboards don't cast shadows yet, and their images are sample
  "billboard": {"image": "sprites/tree.png", "size": [2, 3], "pivot": [0.5, 0], "mode": "axis_aligned_y", "lit": true}},
 {"id": 10, "name": "coin", "transform": {"position": [3, 1.5, -3]},
  "billboard": {"image": "sprites/coin.png", "size": [0.8, 0.8], "columns": 4, "fps": 8, "blend": "alpha"}}
+```
+
+## Particles
+
+A `particles` component emits particles from its entity and simulates them: screen-facing quads, many per draw, shaded like billboards (depth tested, fogged, the same blending and optional lighting). `prefabs/fire.prefab`, `smoke.prefab` and `sparks.prefab` are ready-made effects to place and tweak.
+
+| Key | Meaning (default) |
+|---|---|
+| `image` | Asset path, or null for plain squares. With `columns`, `rows` and `frame_count` (0 = the whole grid) it is a sprite sheet played over each particle's life. |
+| `blend`, `lit` | As for billboards (`"alpha"`, false). Alpha-blended particles are sorted back to front within the emitter. |
+| `color_start`, `color_end` | RGBA (0..1) from birth to death (white to transparent white). |
+| `size` | `[start, end]` in world units over each particle's life (`[0.2, 0.05]`). |
+| `playing` | Emitting now (true). Particles already out live on when it stops. |
+| `rate` | Particles per second while playing (20). |
+| `burst` | Particles emitted at once when a cycle starts (0). |
+| `duration`, `loop` | Seconds of emission per cycle (0 = endless); `loop` starts the next cycle (and burst), otherwise the emitter stops (true). |
+| `max_particles` | At most this many alive at once, 1..100000 (256). |
+| `world_space` | Particles stay where they were emitted (true); false: they move and turn with the emitter. |
+| `seed` | Random seed (0 = from the entity): a scene plays the same every time. |
+| `shape`, `shape_size` | Where particles appear: `"point"`, `"sphere"` (radius `shape_size[0]`) or `"box"` (full extents), in the emitter's space. |
+| `lifetime`, `speed` | `[low, high]` ranges in seconds and world units per second (`[1, 1]`, `[1, 2]`). |
+| `direction`, `spread` | Emission direction in the emitter's space (`[0, 1, 0]`) and the half-angle of the cone around it in degrees (15). |
+| `gravity`, `drag` | World-space acceleration (`[0, 0, 0]`) and the fraction of velocity lost per second (0). |
+| `spin`, `random_rotation` | Spin range in degrees per second (`[0, 0]`) and a random starting angle (false). |
+
+The simulation runs while the game plays (after transforms each frame); large emitters are spread over the worker threads with the same result. In the editor, the selected emitter plays in edit mode so it can be tuned without pressing Play.
+
+```json
+{"id": 12, "name": "campfire", "transform": {"position": [0, 0, -4]}, "prefab": {"path": "prefabs/fire.prefab"}},
+{"id": 13, "name": "dust", "transform": {"position": [2, 0, 0]},
+ "particles": {"rate": 0, "burst": 20, "duration": 1, "loop": false, "speed": [0.5, 1.5], "spread": 80,
+               "size": [0.3, 0.8], "color_start": [0.6, 0.5, 0.4, 0.6], "color_end": [0.6, 0.5, 0.4, 0]}}
 ```
 
 ## UI

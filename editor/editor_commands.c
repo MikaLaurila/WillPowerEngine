@@ -63,13 +63,14 @@ static const char* wpe__string_arg(const wpe__Call* call, const char* key) {
 /* ---- Queries ---------------------------------------------------------------------------------------- */
 
 static const char* const wpe__component_keys[] = {
-    "transform", "mesh",         "camera", "light",  "billboard", "animator", "rigidbody",
-    "collider",  "audio_source", "ui",     "sprite", "text",      "button",   "script"};
+    "transform", "mesh",         "camera", "light",  "billboard", "particles", "animator", "rigidbody",
+    "collider",  "audio_source", "ui",     "sprite", "text",      "button",    "script"};
 static const WPE_ComponentType wpe__component_types[] = {WPE_COMP_TRANSFORM,
                                                          WPE_COMP_MESH,
                                                          WPE_COMP_CAMERA,
                                                          WPE_COMP_LIGHT,
                                                          WPE_COMP_BILLBOARD,
+                                                         WPE_COMP_PARTICLES,
                                                          WPE_COMP_ANIMATOR,
                                                          WPE_COMP_PHYSICS_RIGIDBODY,
                                                          WPE_COMP_PHYSICS_COLLIDER,

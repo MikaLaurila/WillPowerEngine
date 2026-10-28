@@ -132,6 +132,74 @@ void wpe__save_billboard(wpe__Saver* s, WPE_Entity e) {
     wpe_json_write_object_end(w);
 }
 
+static const char* const wpe__particle_shapes[] = {"point", "sphere", "box"};
+static_assert(WPE__COUNT(wpe__particle_shapes) == WPE_PARTICLES_BOX + 1, "particle shape names");
+
+static void wpe__write_pair_of(WPE_JsonWriter* w, const char* key, float a, float b) {
+    const float values[2] = {a, b};
+    wpe__write_floats(w, key, values, 2);
+}
+
+void wpe__save_particles(wpe__Saver* s, WPE_Entity e) {
+    const WPE_ParticleEmitter* p = wpe_ecs_get_component(s->context->ecs, e, WPE_COMP_PARTICLES);
+    if (!p) return;
+    WPE_JsonWriter* w = s->w;
+    wpe_json_write_key(w, "particles");
+    wpe_json_write_object_begin(w);
+    wpe__write_asset(s, "image", p->image);
+    const struct {
+        const char* key;
+        uint32_t value;
+    } counts[] = {{"columns", p->columns},
+                  {"rows", p->rows},
+                  {"frame_count", p->frame_count},
+                  {"max_particles", p->max_particles},
+                  {"burst", p->burst},
+                  {"seed", p->seed}};
+    for (size_t i = 0; i < sizeof counts / sizeof counts[0]; ++i) {
+        wpe_json_write_key(w, counts[i].key);
+        wpe_json_write_integer(w, counts[i].value);
+    }
+    wpe_json_write_key(w, "blend");
+    wpe_json_write_string(w, wpe__billboard_blends[p->blend]);
+    const struct {
+        const char* key;
+        bool value;
+    } flags[] = {{"lit", p->lit},
+                 {"playing", p->playing},
+                 {"loop", p->loop},
+                 {"world_space", p->world_space},
+                 {"random_rotation", p->random_rotation}};
+    for (size_t i = 0; i < sizeof flags / sizeof flags[0]; ++i) {
+        wpe_json_write_key(w, flags[i].key);
+        wpe_json_write_bool(w, flags[i].value);
+    }
+    wpe__write_floats(w, "color_start", p->color_start.v, 4);
+    wpe__write_floats(w, "color_end", p->color_end.v, 4);
+    wpe__write_pair_of(w, "size", p->size_start, p->size_end);
+    wpe_json_write_key(w, "duration");
+    wpe_json_write_number(w, p->duration);
+    wpe_json_write_key(w, "rate");
+    wpe_json_write_number(w, p->rate);
+    wpe_json_write_key(w, "shape");
+    wpe_json_write_string(w, wpe__particle_shapes[p->shape]);
+    wpe__write_floats(w, "shape_size", p->shape_size.v, 3);
+    wpe__write_pair_of(w, "lifetime", p->lifetime_min, p->lifetime_max);
+    wpe__write_pair_of(w, "speed", p->speed_min, p->speed_max);
+    wpe__write_floats(w, "direction", p->direction.v, 3);
+    wpe_json_write_key(w, "spread");
+    wpe_json_write_rounded(w, (double)p->spread * WPE__DEGREES_PER_RADIAN, 6);
+    wpe__write_floats(w, "gravity", p->gravity.v, 3);
+    wpe_json_write_key(w, "drag");
+    wpe_json_write_number(w, p->drag);
+    wpe_json_write_key(w, "spin");
+    wpe_json_write_array_begin(w, true);
+    wpe_json_write_rounded(w, (double)p->spin_min * WPE__DEGREES_PER_RADIAN, 6);
+    wpe_json_write_rounded(w, (double)p->spin_max * WPE__DEGREES_PER_RADIAN, 6);
+    wpe_json_write_array_end(w);
+    wpe_json_write_object_end(w);
+}
+
 /* ---- Loading -------------------------------------------------------------------------------------- */
 
 /* Optional array of `count` numbers in [min, max]. */
@@ -242,6 +310,73 @@ bool wpe__load_billboard(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     if (!wpe__read_asset(l, v, "image", WPE_ASSET_IMAGE, &b.image)) return false;
     const bool ok = wpe__add(l, v, e, WPE_COMP_BILLBOARD, &b, "billboard");
     wpe_asset_release(l->context->assets, b.image); /* The component holds its own reference. */
+    return ok;
+}
+
+/* An optional [low, high] pair within [min, max] with low <= high. */
+static bool wpe__read_range(wpe__Loader* l, const WPE_JsonValue* object, const char* key, double min,
+                            double max, float* io_low, float* io_high) {
+    float pair[2] = {*io_low, *io_high};
+    if (!wpe__read_ranged(l, object, key, 2, min, max, pair)) return false;
+    if (pair[0] > pair[1])
+        return wpe__json_fail(&l->r, wpe_json_get(object, key), WPE_RESULT_ERROR_PARSE,
+                              "\"%s\" is [low, high]: the first must not exceed the second", key);
+    *io_low = pair[0];
+    *io_high = pair[1];
+    return true;
+}
+
+bool wpe__load_particles(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
+    WPE_ParticleEmitter p = wpe_particle_emitter_default();
+    uint32_t blend = p.blend, shape = p.shape;
+    float size[2] = {p.size_start, p.size_end}, spin[2] = {0, 0};
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "particles", "image", "columns", "rows", "frame_count", "blend",
+                                "lit", "color_start", "color_end", "size", "playing", "duration", "loop",
+                                "rate", "burst", "max_particles", "world_space", "seed", "shape",
+                                "shape_size", "lifetime", "speed", "direction", "spread", "gravity", "drag",
+                                "spin", "random_rotation") ||
+        !wpe__json_read_uint(&l->r, v, "columns", 1, 256, &p.columns) ||
+        !wpe__json_read_uint(&l->r, v, "rows", 1, 256, &p.rows) ||
+        !wpe__json_read_uint(&l->r, v, "frame_count", 0, 65536, &p.frame_count) ||
+        !wpe__json_read_enum(&l->r, v, "blend", wpe__billboard_blends, WPE__COUNT(wpe__billboard_blends),
+                             &blend) ||
+        !wpe__json_read_bool(&l->r, v, "lit", &p.lit) ||
+        !wpe__read_ranged(l, v, "color_start", 4, 0.0, 1.0, p.color_start.v) ||
+        !wpe__read_ranged(l, v, "color_end", 4, 0.0, 1.0, p.color_end.v) ||
+        !wpe__read_ranged(l, v, "size", 2, 0.0, 1e4, size) ||
+        !wpe__json_read_bool(&l->r, v, "playing", &p.playing) ||
+        !wpe__json_read_float(&l->r, v, "duration", 0.0, 1e6, &p.duration) ||
+        !wpe__json_read_bool(&l->r, v, "loop", &p.loop) ||
+        !wpe__json_read_float(&l->r, v, "rate", 0.0, 1e6, &p.rate) ||
+        !wpe__json_read_uint(&l->r, v, "burst", 0, 100000, &p.burst) ||
+        !wpe__json_read_uint(&l->r, v, "max_particles", 1, 100000, &p.max_particles) ||
+        !wpe__json_read_bool(&l->r, v, "world_space", &p.world_space) ||
+        !wpe__json_read_uint(&l->r, v, "seed", 0, UINT32_MAX, &p.seed) ||
+        !wpe__json_read_enum(&l->r, v, "shape", wpe__particle_shapes, WPE__COUNT(wpe__particle_shapes),
+                             &shape) ||
+        !wpe__read_ranged(l, v, "shape_size", 3, 0.0, 1e6, p.shape_size.v) ||
+        !wpe__read_range(l, v, "lifetime", 0.001, 1e4, &p.lifetime_min, &p.lifetime_max) ||
+        !wpe__read_range(l, v, "speed", -1e4, 1e4, &p.speed_min, &p.speed_max) ||
+        !wpe__json_read_vec3(&l->r, v, "direction", &p.direction) ||
+        !wpe__json_read_degrees(&l->r, v, "spread", 0.0, 180.0, &p.spread) ||
+        !wpe__json_read_vec3(&l->r, v, "gravity", &p.gravity) ||
+        !wpe__json_read_float(&l->r, v, "drag", 0.0, 1e3, &p.drag) ||
+        !wpe__read_range(l, v, "spin", -1e6, 1e6, &spin[0], &spin[1]) ||
+        !wpe__json_read_bool(&l->r, v, "random_rotation", &p.random_rotation))
+        return false;
+    if (p.frame_count > p.columns * p.rows)
+        return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE,
+                              "\"frame_count\" (%u) is more than the %u x %u grid holds", p.frame_count,
+                              p.columns, p.rows);
+    p.size_start = size[0];
+    p.size_end = size[1];
+    p.spin_min = (float)(spin[0] / WPE__DEGREES_PER_RADIAN);
+    p.spin_max = (float)(spin[1] / WPE__DEGREES_PER_RADIAN);
+    p.blend = (WPE_BillboardBlend)blend;
+    p.shape = (WPE_ParticleShape)shape;
+    if (!wpe__read_asset(l, v, "image", WPE_ASSET_IMAGE, &p.image)) return false;
+    const bool ok = wpe__add(l, v, e, WPE_COMP_PARTICLES, &p, "particles");
+    wpe_asset_release(l->context->assets, p.image); /* The component holds its own reference. */
     return ok;
 }
 
