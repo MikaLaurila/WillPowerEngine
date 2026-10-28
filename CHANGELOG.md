@@ -56,6 +56,8 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - **+ Entity** adds a UI panel, text or button (with its label), inside the selected UI element;
   images in Assets become sprites at their size (double-click or drag). The inspector adds `ui`,
   `sprite`, `text` and `button` components, with choices for text alignment.
+- The inspector edits empty asset fields (a text's font, a sprite's image, a mesh's model...): type a
+  path to set one; clearing a path removes the asset.
 - Engine: `wpe_engine_set_draw_scene`. UI: `wpe_ui_pick` can count every element (editors).
 - Tests: the 2D and 3D views (camera, UI, a scene without a camera, play mode), view settings.
 

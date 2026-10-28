@@ -348,6 +348,17 @@ static const char* const* wpe__choices(const char* component, const char* key, u
     return NULL;
 }
 
+/* Optional asset references (null when there is none), by component and key. */
+static bool wpe__is_asset_key(const char* component, const char* key) {
+    static const char* const table[][2] = {{"mesh", "model"},     {"animator", "model"},
+                                           {"collider", "model"}, {"audio_source", "sound"},
+                                           {"sprite", "image"},   {"text", "font"}};
+    for (size_t i = 0; i < sizeof table / sizeof table[0]; ++i) {
+        if (strcmp(table[i][0], component) == 0 && strcmp(table[i][1], key) == 0) return true;
+    }
+    return false;
+}
+
 /* Tracks edit gestures: a widget becoming active starts a new undo step. */
 static void wpe__note_activation(WPE_EditorUi* ui) {
     if (igIsItemActivated()) ++ui->edit_serial;
@@ -406,7 +417,9 @@ static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char*
             /* Applied on Enter or when the field loses focus, not per keystroke. */
             igInputText(key, buffer, sizeof buffer, 0, NULL, NULL);
             if (igIsItemDeactivatedAfterEdit()) {
-                *edit = (wpe__Edit){.target = v, .type = WPE_JSON_STRING};
+                /* Clearing an optional asset path removes the asset (null). */
+                const bool none = !buffer[0] && wpe__is_asset_key(component, key);
+                *edit = (wpe__Edit){.target = v, .type = none ? WPE_JSON_NULL : WPE_JSON_STRING};
                 snprintf(edit->string, sizeof edit->string, "%s", buffer);
                 ++ui->edit_serial;
                 changed = true;
@@ -457,7 +470,19 @@ static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char*
         }
         break;
     case WPE_JSON_NULL:
-        igTextDisabled("%s: none", key);
+        if (wpe__is_asset_key(component, key)) {
+            /* No asset yet: typing a path sets one. */
+            char buffer[WPE__UI_PATH] = "";
+            igInputTextWithHint(key, "none (asset path)", buffer, sizeof buffer, 0, NULL, NULL);
+            if (igIsItemDeactivatedAfterEdit() && buffer[0]) {
+                *edit = (wpe__Edit){.target = v, .type = WPE_JSON_STRING};
+                snprintf(edit->string, sizeof edit->string, "%s", buffer);
+                ++ui->edit_serial;
+                changed = true;
+            }
+        } else {
+            igTextDisabled("%s: none", key);
+        }
         break;
     }
     return changed;
