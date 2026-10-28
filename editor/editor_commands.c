@@ -331,6 +331,10 @@ static WPE_Result wpe__write_view(WPE_JsonWriter* w, const WPE_EditorView* view)
     wpe_json_write_number(w, view->snap_rotate);
     wpe_json_write_key(w, "snap_scale");
     wpe_json_write_number(w, view->snap_scale);
+    wpe_json_write_key(w, "mode");
+    wpe_json_write_string(w, view->view_2d ? "2d" : "3d");
+    wpe_json_write_key(w, "snap_ui");
+    wpe_json_write_number(w, view->snap_ui);
     wpe_json_write_object_end(w);
     return WPE_RESULT_OK;
 }
@@ -362,7 +366,8 @@ static WPE_Result wpe__read_view_key(wpe__Call* call, const char* key, const WPE
     } numbers[] = {{"grid_spacing", &view->grid_spacing, 0.01, 1000.0},
                    {"snap_move", &view->snap_move, 0.001, 1000.0},
                    {"snap_rotate", &view->snap_rotate, 0.1, 180.0},
-                   {"snap_scale", &view->snap_scale, 0.001, 100.0}};
+                   {"snap_scale", &view->snap_scale, 0.001, 100.0},
+                   {"snap_ui", &view->snap_ui, 1.0, 256.0}};
     for (size_t i = 0; i < sizeof numbers / sizeof numbers[0]; ++i) {
         if (strcmp(key, numbers[i].key) != 0) continue;
         const double number = wpe_json_number(v, 0.0);
@@ -389,10 +394,16 @@ static WPE_Result wpe__read_view_key(wpe__Call* call, const char* key, const WPE
         }
         return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"gizmo_space\" is \"world\" or \"local\"");
     }
+    if (strcmp(key, "mode") == 0) {
+        if (text && (strcmp(text, "2d") == 0 || strcmp(text, "3d") == 0)) {
+            view->view_2d = strcmp(text, "2d") == 0;
+            return WPE_RESULT_OK;
+        }
+        return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"mode\" is \"2d\" or \"3d\"");
+    }
     return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
                      "unknown view setting \"%s\" (grid, grid_spacing, physics, lights, gizmo, gizmo_space, "
-                     "hot_reload, snap, "
-                     "snap_move, snap_rotate, snap_scale)",
+                     "hot_reload, snap, snap_move, snap_rotate, snap_scale, mode, snap_ui)",
                      key);
 }
 
@@ -854,8 +865,7 @@ static const struct {
     {"set_environment", wpe__cmd_set_environment, "{value: {...}} (merged) -> the environment"},
     {"get_view", wpe__cmd_get_view,
      "{} -> {grid, grid_spacing, physics, lights, gizmo, gizmo_space, hot_reload, snap, snap_move, "
-     "snap_rotate, "
-     "snap_scale}"},
+     "snap_rotate, snap_scale, mode: \"2d\"|\"3d\", snap_ui}"},
     {"set_view", wpe__cmd_set_view, "{value: {...}} (merged; not saved or undone) -> the view"},
     {"new_scene", wpe__cmd_new_scene, "{discard = false} (refused with unsaved changes unless discard)"},
     {"load_scene", wpe__cmd_load_scene,

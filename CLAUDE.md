@@ -173,7 +173,8 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - The model (`editor.c`) holds an embedded `WPE_Engine` with the simulation off in edit mode, plus a never-saved editor camera.
   - Undo/redo and play/stop use whole-scene snapshots. Failed commands drop their undo step; a `coalesce` key merges drags.
   - Every change, the UI's included, is a JSON command (`editor_commands.c`, scene-file schema with live ids), so a new UI feature needs a command.
-  - View settings (`WPE_EditorView`: grid, physics shapes, light icons, gizmo mode and world/local space, hot reload) live in the model behind `get_view`/`set_view`. They are not part of the scene, so they are never saved or undone; the UI reads them and changes them by command.
+  - The 2D view (`view_2d`, `set_view {"mode": "2d"}`) renders edit mode from the game's camera with the UI, and the viewport picks, moves and resizes UI elements; the 3D view uses the editor camera and hides the UI (`wpe__editor_apply_view` sets the engine's camera, `draw_ui` and `draw_scene` each edit-mode frame).
+  - View settings (`WPE_EditorView`: grid, physics shapes, light icons, 2D view, gizmo mode and world/local space, hot reload) live in the model behind `get_view`/`set_view`. They are not part of the scene, so they are never saved or undone; the UI reads them and changes them by command.
   - Each edit-mode frame of `wpe_editor_frame` syncs physics and applies the debug drawing. With hot reload on, it also checks scripts for changes.
   - `new_scene`, `load_scene` and `quit` refuse while the scene has unsaved changes, unless they carry `"discard": true` (tests and agent scripts must pass it). The UI routes these actions through `wpe__ui_guard` and its prompt, and the window's close button calls `wpe_editor_ui_request_quit`.
   - The UI is cimgui with two renderers in `ui_backend.c`:

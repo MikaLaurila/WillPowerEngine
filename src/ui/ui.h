@@ -167,14 +167,15 @@ bool wpe_ui_focus(WPE_Ui* ui, WPE_Entity button);
 WPE_Entity wpe_ui_focused(const WPE_Ui* ui);
 
 /**
- * The topmost element drawn at a point (framebuffer pixels) by the last layout, counting elements
- * with a sprite or a button (text alone does not catch the mouse).
+ * The topmost shown element at a point (framebuffer pixels) in the last layout.
  *
+ * @param any_element true: every element counts (editors); false: only elements with a sprite or a button,
+ *        the ones that catch the mouse (text alone does not).
  * @return The element, or WPE_ENTITY_NULL.
  *
  * @thread_safety Main thread
  */
-WPE_Entity wpe_ui_pick(const WPE_Ui* ui, float x, float y);
+WPE_Entity wpe_ui_pick(const WPE_Ui* ui, float x, float y, bool any_element);
 
 /**
  * Replaces the string of an entity's text.

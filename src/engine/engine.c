@@ -54,6 +54,7 @@ struct WPE_Engine {
     bool embedded;        /* The host forwards events and shows the framebuffer. */
     bool simulating;      /* Scripts, physics, animation and audio run (false: edit mode). */
     bool draw_ui;         /* The UI is drawn over the scene (the editor's 3D view hides it). */
+    bool draw_scene;      /* The 3D scene is rendered (the editor's 2D view of a scene without a camera). */
     bool mouse_captured;  /* As applied to the window. */
     double audio_backlog; /* Device-less mixing: frames owed to the mixer (fractional). */
     float* audio_mix;
@@ -239,6 +240,7 @@ WPE_Result wpe_engine_create(const WPE_EngineDesc* desc, WPE_Engine** out_engine
     engine->embedded = desc->embedded;
     engine->simulating = true;
     engine->draw_ui = true;
+    engine->draw_scene = true;
 
     WPE_Result result = wpe__mount(engine, desc);
     if (result == WPE_RESULT_OK) result = wpe__create_graphics(engine, desc);
@@ -531,7 +533,7 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
         engine->simulating ? wpe__simulate(engine, dt) : wpe_scene_update_transforms(engine->ecs);
     const WPE_Entity camera = wpe_engine_camera(engine);
     if (result == WPE_RESULT_OK && engine->simulating) result = wpe__mix_audio(engine, camera, dt);
-    if (result == WPE_RESULT_OK) result = wpe__render(engine, camera);
+    if (result == WPE_RESULT_OK) result = wpe__render(engine, engine->draw_scene ? camera : WPE_ENTITY_NULL);
     if (engine->embedded) wpe_input_begin_frame(engine->input); /* Events for the next frame follow. */
 
     /* Scene switches requested by scripts happen between frames. */
@@ -650,6 +652,14 @@ void wpe_engine_set_draw_ui(WPE_Engine* engine, bool draw_ui) {
 
 bool wpe_engine_draws_ui(const WPE_Engine* engine) {
     return engine && engine->draw_ui;
+}
+
+void wpe_engine_set_draw_scene(WPE_Engine* engine, bool draw_scene) {
+    if (wpe_check(engine != NULL)) engine->draw_scene = draw_scene;
+}
+
+bool wpe_engine_draws_scene(const WPE_Engine* engine) {
+    return engine && engine->draw_scene;
 }
 
 WPE_ScriptHost* wpe_engine_scripts(const WPE_Engine* engine) {

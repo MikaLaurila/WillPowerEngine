@@ -506,6 +506,73 @@ static void test_editor_snap_settings(void) {
     wpe_editor_destroy(editor);
 }
 
+static WPE_Color pixel(WPE_Editor* editor, uint32_t x, uint32_t y) {
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(wpe_editor_engine(editor)));
+    return fb->color[y * fb->width + x];
+}
+
+static WPE_Entity id_of(WPE_Editor* editor, const char* name);
+
+static void test_editor_2d_view_shows_the_game_and_its_ui(void) {
+    WPE_Editor* editor = open_editor();
+    WPE_Engine* engine = wpe_editor_engine(editor);
+    WPE_TEST_ASSERT(!wpe_editor_view(editor).view_2d);
+    WPE_TEST_ASSERT_NEAR(8.0, wpe_editor_view(editor).snap_ui, 0);
+    /* An 8x8 green square in the top-left corner. */
+    run_ok(editor,
+           "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"hud\", \"ui\": {\"anchor_max\": [0, 0], "
+           "\"offset_max\": [8, 8]}, \"sprite\": {\"color\": [0, 1, 0, 1]}}}");
+    WPE_JsonDocument* list = run(editor, "{\"cmd\": \"list_entities\"}", true);
+    bool listed = false;
+    for (uint32_t i = 0; i < wpe_json_count(result_of(list)); ++i) {
+        const WPE_JsonValue* components = wpe_json_get(wpe_json_at(result_of(list), i), "components");
+        for (uint32_t c = 0; c < wpe_json_count(components); ++c)
+            listed = listed || strcmp(wpe_json_string(wpe_json_at(components, c)), "sprite") == 0;
+    }
+    wpe_json_free(list);
+    WPE_TEST_ASSERT(listed);
+
+    /* The 3D view: the editor camera, without the UI. */
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 60.0));
+    WPE_TEST_ASSERT(!wpe_engine_draws_ui(engine));
+    WPE_TEST_ASSERT_EQ_UINT(wpe_editor_camera(editor), wpe_engine_camera(engine));
+    WPE_TEST_ASSERT(pixel(editor, 2, 2) != 0xFF00FF00u);
+
+    /* The 2D view: the scene's camera and the UI over it; never saved or undone. */
+    WPE_JsonDocument* view =
+        run(editor, "{\"cmd\": \"set_view\", \"value\": {\"mode\": \"2d\", \"snap_ui\": 4}}", true);
+    WPE_TEST_ASSERT_EQ_STR("2d", wpe_json_string(wpe_json_get(result_of(view), "mode")));
+    wpe_json_free(view);
+    WPE_TEST_ASSERT(wpe_editor_view(editor).view_2d);
+    WPE_TEST_ASSERT_NEAR(4.0, wpe_editor_view(editor).snap_ui, 0);
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 60.0));
+    WPE_TEST_ASSERT(wpe_engine_draws_ui(engine) && wpe_engine_draws_scene(engine));
+    WPE_TEST_ASSERT_EQ_UINT(id_of(editor, "camera"), wpe_engine_camera(engine));
+    WPE_TEST_ASSERT_EQ_UINT(0xFF00FF00u, pixel(editor, 2, 2));
+    wpe_json_free(run(editor, "{\"cmd\": \"set_view\", \"value\": {\"mode\": \"4d\"}}", false));
+    wpe_json_free(run(editor, "{\"cmd\": \"set_view\", \"value\": {\"snap_ui\": 0}}", false));
+
+    /* A scene without a camera is a 2D scene: the clear color under the UI. */
+    char command[96];
+    snprintf(command, sizeof command, "{\"cmd\": \"delete_entity\", \"id\": %u}", id_of(editor, "camera"));
+    run_ok(editor, command);
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 60.0));
+    WPE_TEST_ASSERT(!wpe_engine_draws_scene(engine));
+    WPE_TEST_ASSERT_EQ_UINT(0xFF00FF00u, pixel(editor, 2, 2));
+    WPE_TEST_ASSERT_EQ_UINT(pixel(editor, 32, 24), pixel(editor, 60, 44)); /* The box isn't drawn. */
+
+    /* Play mode shows the game, UI included, whichever view is chosen. */
+    run_ok(editor, "{\"cmd\": \"set_view\", \"value\": {\"mode\": \"3d\"}}");
+    run_ok(editor, "{\"cmd\": \"play\"}");
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 60.0));
+    WPE_TEST_ASSERT(wpe_engine_draws_ui(engine) && wpe_engine_draws_scene(engine));
+    WPE_TEST_ASSERT_EQ_UINT(0xFF00FF00u, pixel(editor, 2, 2));
+    run_ok(editor, "{\"cmd\": \"stop\"}");
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 60.0));
+    WPE_TEST_ASSERT(!wpe_engine_draws_ui(engine));
+    wpe_editor_destroy(editor);
+}
+
 /* The id of the first listed entity named `name`. */
 static WPE_Entity id_of(WPE_Editor* editor, const char* name) {
     WPE_JsonDocument* list = run(editor, "{\"cmd\": \"list_entities\"}", true);
@@ -621,7 +688,9 @@ static void test_editor_prefab_commands(void) {
 }
 
 WPE_TEST_MAIN(WPE_TEST_CASE(test_editor_coalesces_continuous_edits),
-              WPE_TEST_CASE(test_editor_prefab_commands), WPE_TEST_CASE(test_editor_guards_unsaved_changes),
+              WPE_TEST_CASE(test_editor_prefab_commands),
+              WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
+              WPE_TEST_CASE(test_editor_guards_unsaved_changes),
               WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
               WPE_TEST_CASE(test_editor_view_settings_and_overlays),
               WPE_TEST_CASE(test_editor_physics_follows_edits),

@@ -60,6 +60,11 @@ typedef struct WPE_EditorView {
     float snap_move;   /* Move step in world units (default 0.5): world positions land on its multiples. */
     float snap_rotate; /* Rotation step in degrees (default 15). */
     float snap_scale;  /* Scale step (default 0.1): scales land on its multiples. */
+    /* The 2D view (edit mode): what the game shows, from the scene's camera (or only the clear color without
+     * one) with its UI, whose elements are picked, moved and resized by their rectangles. Off (the default):
+     * the 3D view from the editor camera, without the UI. Play mode always shows the game. */
+    bool view_2d;
+    float snap_ui; /* UI offset step in pixels (default 8): snapped offsets land on its multiples. */
 } WPE_EditorView;
 
 /**

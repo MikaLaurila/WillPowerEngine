@@ -313,13 +313,13 @@ static bool wpe__contains(WPE_Rect r, float x, float y) {
     return x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height;
 }
 
-WPE_Entity wpe_ui_pick(const WPE_Ui* ui, float x, float y) {
+WPE_Entity wpe_ui_pick(const WPE_Ui* ui, float x, float y, bool any_element) {
     if (!ui) return WPE_ENTITY_NULL;
     for (uint32_t i = ui->order_count; i-- > 0;) {
         const WPE_Entity e = ui->order[i];
         const WPE_UiRect* element = wpe__element(ui, e);
         if (!element || !element->shown || !wpe__contains(element->rect, x, y)) continue;
-        if (wpe_ecs_has_component(ui->ecs, e, WPE_COMP_SPRITE) ||
+        if (any_element || wpe_ecs_has_component(ui->ecs, e, WPE_COMP_SPRITE) ||
             wpe_ecs_has_component(ui->ecs, e, WPE_COMP_BUTTON))
             return e;
     }
@@ -489,7 +489,7 @@ static WPE_Entity wpe__mouse_input(WPE_Ui* ui) {
     float x, y, dx, dy;
     wpe_input_mouse_position(ui->input, &x, &y);
     wpe_input_mouse_delta(ui->input, &dx, &dy);
-    WPE_Entity hovered = wpe__owning_button(ui, wpe_ui_pick(ui, x, y));
+    WPE_Entity hovered = wpe__owning_button(ui, wpe_ui_pick(ui, x, y, false));
     if (hovered != WPE_ENTITY_NULL && !wpe__focusable(ui, hovered)) hovered = WPE_ENTITY_NULL;
     const bool pressed = wpe_input_mouse_pressed(ui->input, WPE_MOUSE_LEFT);
     if (hovered != WPE_ENTITY_NULL && (dx != 0.0f || dy != 0.0f || pressed)) ui->focus = hovered;

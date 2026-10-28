@@ -47,6 +47,18 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   wrapping against plain 2D drawing), keyboard and mouse navigation with clicks, action rebinding;
   UI scene round trips and rejected mistakes; engine clicks reaching scripts in a 2D scene.
 
+### Added (editor: 2D view)
+- A 2D view (toolbar **2D**, View menu, `set_view {"mode": "2d"}`): edit mode shows what the game
+  shows, the scene's camera (or only the clear color without one) with the UI on top. UI elements
+  have outlines; click to select, drag to move, drag the eight handles to resize; anchors are marked.
+  Drags change offsets in whole pixels, or in steps of the new `snap_ui` (8 px) when snapping. The
+  3D view hides the UI.
+- **+ Entity** adds a UI panel, text or button (with its label), inside the selected UI element;
+  images in Assets become sprites at their size (double-click or drag). The inspector adds `ui`,
+  `sprite`, `text` and `button` components, with choices for text alignment.
+- Engine: `wpe_engine_set_draw_scene`. UI: `wpe_ui_pick` can count every element (editors).
+- Tests: the 2D and 3D views (camera, UI, a scene without a camera, play mode), view settings.
+
 ### Changed
 - The editor's ImGui backend functions are renamed `wpe_ui_backend_*` (the `wpe_ui_` prefix now
   belongs to the UI module).

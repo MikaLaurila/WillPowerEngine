@@ -74,6 +74,13 @@ struct WPE_EditorUi {
     float gizmo_tangent_x, gizmo_tangent_y; /* Rotate: screen direction of a positive rotation. */
     WPE_Vec3 gizmo_start_center;            /* The entity's world position when the drag started. */
 
+    /* 2D view: a UI element being dragged (its edges, as WPE__EDGE_* bits, or 0) and where it started. */
+    WPE_Entity canvas_entity;
+    int canvas_edges;
+    uint32_t canvas_drag;
+    WPE_UiRect canvas_start;
+    float canvas_mouse_x, canvas_mouse_y;
+
     /* Inspector edits. */
     uint32_t edit_serial; /* Bumped when a widget becomes active: one undo step per edit gesture. */
     char add_path[WPE__UI_PATH];
@@ -319,6 +326,8 @@ static const char* const* wpe__choices(const char* component, const char* key, u
     static const char* const buses[] = {"effects", "music"};
     static const char* const fogs[] = {"none", "linear", "exponential"};
     static const char* const effects[] = {"ssao", "chromatic_aberration", "ps1", "vignette", "color_adjust"};
+    static const char* const aligns[] = {"left", "center", "right"};
+    static const char* const valigns[] = {"top", "middle", "bottom"};
     const struct {
         const char* component;
         const char* key;
@@ -328,6 +337,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
         {"light", "type", lights, 3},     {"rigidbody", "type", bodies, 3},
         {"collider", "shape", shapes, 5}, {"audio_source", "bus", buses, 2},
         {"environment", "mode", fogs, 3}, {"environment", "effect", effects, 5},
+        {"text", "align", aligns, 3},     {"text", "valign", valigns, 3},
     };
     for (size_t i = 0; i < sizeof table / sizeof table[0]; ++i) {
         if (strcmp(table[i].component, component) == 0 && strcmp(table[i].key, key) == 0) {
@@ -979,6 +989,216 @@ static WPE_Entity wpe__ui_light_icons(WPE_EditorUi* ui, ImDrawList* draw) {
     return hovered;
 }
 
+/* ---- 2D view ---------------------------------------------------------------------------------------- */
+
+/* What a 2D drag changes: the element's edges, or all of it. */
+enum {
+    WPE__EDGE_LEFT = 1,
+    WPE__EDGE_RIGHT = 2,
+    WPE__EDGE_TOP = 4,
+    WPE__EDGE_BOTTOM = 8,
+    WPE__EDGE_MOVE = 16,
+};
+
+/* Framebuffer pixels to the viewport on screen. */
+static ImVec2_c wpe__fb_to_screen(const WPE_EditorUi* ui, float x, float y) {
+    return (ImVec2_c){ui->image_x + x * ui->image_w / (float)ui->view_width,
+                      ui->image_y + y * ui->image_h / (float)ui->view_height};
+}
+
+/* The rectangle a UI element is placed in: its parent element's, or the screen's. */
+static WPE_Rect wpe__ui_parent_rect(const WPE_EditorUi* ui, WPE_Entity entity) {
+    WPE_Ecs* ecs = wpe__ui_ecs(ui);
+    const WPE_UiRect* parent = wpe_ecs_get_component(ecs, wpe_scene_get_parent(ecs, entity), WPE_COMP_UI);
+    return parent ? parent->rect : (WPE_Rect){0, 0, (float)ui->view_width, (float)ui->view_height};
+}
+
+static void wpe__write_pair(WPE_JsonWriter* w, const char* key, WPE_Vec2 v) {
+    wpe_json_write_key(w, key);
+    wpe_json_write_array_begin(w, true);
+    wpe_json_write_number(w, v.x);
+    wpe_json_write_number(w, v.y);
+    wpe_json_write_array_end(w);
+}
+
+/* Replaces an element's "ui" component; drags share one undo step through `coalesce`. */
+static void wpe__send_ui_rect(WPE_EditorUi* ui, WPE_Entity entity, const WPE_UiRect* r,
+                              const char* coalesce) {
+    WPE_JsonWriter* w = wpe__ui_begin("set_component");
+    if (!w) return;
+    wpe_json_write_key(w, "id");
+    wpe_json_write_integer(w, entity);
+    wpe_json_write_key(w, "component");
+    wpe_json_write_string(w, "ui");
+    wpe_json_write_key(w, "value");
+    wpe_json_write_object_begin(w);
+    wpe__write_pair(w, "anchor_min", r->anchor_min);
+    wpe__write_pair(w, "anchor_max", r->anchor_max);
+    wpe__write_pair(w, "offset_min", r->offset_min);
+    wpe__write_pair(w, "offset_max", r->offset_max);
+    wpe_json_write_key(w, "visible");
+    wpe_json_write_bool(w, r->visible);
+    wpe_json_write_object_end(w);
+    wpe_json_write_key(w, "coalesce");
+    wpe_json_write_string(w, coalesce);
+    wpe__ui_send(ui, w);
+}
+
+/* A small diamond marking an anchor. */
+static void wpe__draw_anchor(ImDrawList* draw, ImVec2_c p, uint32_t color) {
+    const ImVec2_c points[4] = {{p.x, p.y - 5}, {p.x + 5, p.y}, {p.x, p.y + 5}, {p.x - 5, p.y}};
+    ImDrawList_AddConvexPolyFilled(draw, points, 4, WPE__COL(15, 15, 18, 200));
+    ImDrawList_AddPolyline(draw, points, 4, color, 1.5f, ImDrawFlags_Closed);
+}
+
+/* Starts dragging an element: `edges` are WPE__EDGE_* bits. */
+static void wpe__canvas_begin(WPE_EditorUi* ui, WPE_Entity entity, const WPE_UiRect* element, int edges) {
+    const ImVec2_c mouse = igGetMousePos();
+    ui->canvas_entity = entity;
+    ui->canvas_edges = edges;
+    ui->canvas_start = *element;
+    ui->canvas_mouse_x = mouse.x;
+    ui->canvas_mouse_y = mouse.y;
+    ++ui->canvas_drag;
+}
+
+/* The 2D view's overlay in edit mode: an outline around every shown UI element, and the selected element
+ * with its anchors and handles. Clicking picks an element (and dragging moves it); the handles resize it.
+ * Returns whether the mouse went to the overlay this frame. */
+static bool wpe__ui_canvas(WPE_EditorUi* ui, ImDrawList* draw) {
+    WPE_Ecs* ecs = wpe__ui_ecs(ui);
+    if (wpe_editor_mode(ui->editor) != WPE_EDITOR_EDIT || ui->view_width == 0 || ui->view_height == 0) {
+        ui->canvas_edges = 0;
+        return false;
+    }
+    ImDrawList_PushClipRect(draw, (ImVec2_c){ui->image_x, ui->image_y},
+                            (ImVec2_c){ui->image_x + ui->image_w, ui->image_y + ui->image_h}, true);
+    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_UI)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_UiRect* element = wpe_ecs_iter_get(&it, WPE_COMP_UI);
+        if (!element->shown) continue;
+        const WPE_Rect r = element->rect;
+        ImDrawList_AddRect(draw, wpe__fb_to_screen(ui, r.x, r.y),
+                           wpe__fb_to_screen(ui, r.x + r.width, r.y + r.height), WPE__COL(255, 255, 255, 45),
+                           0.0f, 1.0f, 0);
+    }
+    /* The selected element: its rectangle, its anchors in the parent, and eight handles. */
+    const WPE_Entity selection = wpe_editor_selection(ui->editor);
+    const WPE_UiRect* selected = wpe_ecs_get_component(ecs, selection, WPE_COMP_UI);
+    const ImVec2_c mouse = igGetMousePos();
+    int hover = 0;
+    if (selected) {
+        const WPE_Rect r = selected->rect;
+        const ImVec2_c a = wpe__fb_to_screen(ui, r.x, r.y),
+                       b = wpe__fb_to_screen(ui, r.x + r.width, r.y + r.height);
+        const uint32_t accent = WPE__COL(237, 153, 56, 255);
+        const WPE_Rect p = wpe__ui_parent_rect(ui, selection);
+        const ImVec2_c anchor_min = wpe__fb_to_screen(ui, p.x + p.width * selected->anchor_min.x,
+                                                      p.y + p.height * selected->anchor_min.y);
+        const ImVec2_c anchor_max = wpe__fb_to_screen(ui, p.x + p.width * selected->anchor_max.x,
+                                                      p.y + p.height * selected->anchor_max.y);
+        wpe__draw_anchor(draw, anchor_min, WPE__COL(120, 200, 255, 255));
+        if (anchor_max.x != anchor_min.x || anchor_max.y != anchor_min.y)
+            wpe__draw_anchor(draw, anchor_max, WPE__COL(120, 200, 255, 255));
+        ImDrawList_AddRect(draw, a, b, accent, 0.0f, 2.0f, 0);
+        const struct {
+            float x, y;
+            int edges;
+        } handles[] = {
+            {a.x, a.y, WPE__EDGE_LEFT | WPE__EDGE_TOP},    {b.x, a.y, WPE__EDGE_RIGHT | WPE__EDGE_TOP},
+            {a.x, b.y, WPE__EDGE_LEFT | WPE__EDGE_BOTTOM}, {b.x, b.y, WPE__EDGE_RIGHT | WPE__EDGE_BOTTOM},
+            {(a.x + b.x) * 0.5f, a.y, WPE__EDGE_TOP},      {(a.x + b.x) * 0.5f, b.y, WPE__EDGE_BOTTOM},
+            {a.x, (a.y + b.y) * 0.5f, WPE__EDGE_LEFT},     {b.x, (a.y + b.y) * 0.5f, WPE__EDGE_RIGHT},
+        };
+        for (size_t i = 0; i < sizeof handles / sizeof handles[0]; ++i) {
+            const bool hot = fabsf(mouse.x - handles[i].x) <= 6.0f && fabsf(mouse.y - handles[i].y) <= 6.0f;
+            if (hot && !hover) hover = handles[i].edges;
+            const int active = ui->canvas_edges ? ui->canvas_edges : hover;
+            const uint32_t fill = active == handles[i].edges ? WPE__COL(250, 220, 60, 255) : accent;
+            ImDrawList_AddRectFilled(draw, (ImVec2_c){handles[i].x - 4, handles[i].y - 4},
+                                     (ImVec2_c){handles[i].x + 4, handles[i].y + 4}, fill, 0, 0);
+        }
+    }
+    ImDrawList_PopClipRect(draw);
+    if (!ui->view_hovered) hover = 0;
+    const int shape = ui->canvas_edges ? ui->canvas_edges : hover;
+    if (shape == (WPE__EDGE_LEFT | WPE__EDGE_TOP) || shape == (WPE__EDGE_RIGHT | WPE__EDGE_BOTTOM)) {
+        igSetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
+    } else if (shape == (WPE__EDGE_RIGHT | WPE__EDGE_TOP) || shape == (WPE__EDGE_LEFT | WPE__EDGE_BOTTOM)) {
+        igSetMouseCursor(ImGuiMouseCursor_ResizeNESW);
+    } else if (shape == WPE__EDGE_LEFT || shape == WPE__EDGE_RIGHT) {
+        igSetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    } else if (shape == WPE__EDGE_TOP || shape == WPE__EDGE_BOTTOM) {
+        igSetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    } else if (shape == WPE__EDGE_MOVE) {
+        igSetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    }
+
+    /* A click: on a handle resizes the selection; elsewhere it picks the element there, which can then be
+     * dragged right away. */
+    if (ui->canvas_edges == 0 && ui->view_hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
+        if (hover) {
+            wpe__canvas_begin(ui, selection, selected, hover);
+            return true;
+        }
+        const float fx = (mouse.x - ui->image_x) * (float)ui->view_width / ui->image_w;
+        const float fy = (mouse.y - ui->image_y) * (float)ui->view_height / ui->image_h;
+        const WPE_Entity picked = wpe_ui_pick(wpe_engine_ui(wpe_editor_engine(ui->editor)), fx, fy, true);
+        if (picked == WPE_ENTITY_NULL) {
+            WPE_JsonWriter* w = wpe__ui_begin("select");
+            if (w) {
+                wpe_json_write_key(w, "id");
+                wpe_json_write_null(w);
+                wpe__ui_send(ui, w);
+            }
+            return true;
+        }
+        if (picked != selection) wpe__ui_entity_command(ui, "select", picked);
+        const WPE_UiRect* element = wpe_ecs_get_component(ecs, picked, WPE_COMP_UI);
+        if (element) wpe__canvas_begin(ui, picked, element, WPE__EDGE_MOVE);
+        return true;
+    }
+    if (ui->canvas_edges == 0) return false;
+    if (!igIsMouseDown_Nil(ImGuiMouseButton_Left) ||
+        !wpe_ecs_has_component(ecs, ui->canvas_entity, WPE_COMP_UI)) {
+        ui->canvas_edges = 0;
+        return true;
+    }
+    /* Offsets follow the mouse in framebuffer pixels: whole pixels, or steps when snapping (Ctrl inverts
+     * the View menu's setting). */
+    const WPE_EditorView view = wpe_editor_view(ui->editor);
+    const float step = view.snap != igGetIO_Nil()->KeyCtrl ? view.snap_ui : 1.0f;
+    const float dx = (mouse.x - ui->canvas_mouse_x) * (float)ui->view_width / ui->image_w;
+    const float dy = (mouse.y - ui->canvas_mouse_y) * (float)ui->view_height / ui->image_h;
+    if (dx == 0.0f && dy == 0.0f) return true; /* Not moved (yet): a click only selects. */
+    const WPE_UiRect start = ui->canvas_start;
+    WPE_UiRect moved = start;
+    const int edges = ui->canvas_edges;
+    if (edges == WPE__EDGE_MOVE) {
+        const float shift_x = wpe__snap(start.offset_min.x + dx, step) - start.offset_min.x;
+        const float shift_y = wpe__snap(start.offset_min.y + dy, step) - start.offset_min.y;
+        moved.offset_min = (WPE_Vec2){.x = start.offset_min.x + shift_x, .y = start.offset_min.y + shift_y};
+        moved.offset_max = (WPE_Vec2){.x = start.offset_max.x + shift_x, .y = start.offset_max.y + shift_y};
+    } else {
+        if (edges & WPE__EDGE_LEFT) moved.offset_min.x = wpe__snap(start.offset_min.x + dx, step);
+        if (edges & WPE__EDGE_RIGHT) moved.offset_max.x = wpe__snap(start.offset_max.x + dx, step);
+        if (edges & WPE__EDGE_TOP) moved.offset_min.y = wpe__snap(start.offset_min.y + dy, step);
+        if (edges & WPE__EDGE_BOTTOM) moved.offset_max.y = wpe__snap(start.offset_max.y + dy, step);
+    }
+    char coalesce[32];
+    snprintf(coalesce, sizeof coalesce, "ui2d-%u", ui->canvas_drag);
+    wpe__send_ui_rect(ui, ui->canvas_entity, &moved, coalesce);
+    const WPE_UiRect* now = wpe_ecs_get_component(ecs, ui->canvas_entity, WPE_COMP_UI);
+    if (now) {
+        char label[48];
+        snprintf(label, sizeof label, "%.0f, %.0f  %.0f x %.0f", (double)now->rect.x, (double)now->rect.y,
+                 (double)now->rect.width, (double)now->rect.height);
+        ImDrawList_AddText_Vec2(draw, (ImVec2_c){mouse.x + 14, mouse.y + 4}, WPE__COL(255, 255, 255, 230),
+                                label, NULL);
+    }
+    return true;
+}
+
 /* ---- Panels ----------------------------------------------------------------------------------------- */
 
 /* Places a model or prefab 6 units in front of the editor camera. */
@@ -1017,6 +1237,145 @@ static void wpe__ui_create_model(WPE_EditorUi* ui, const char* path) {
     wpe_json_write_object_end(w);
     wpe_json_write_object_end(w);
     wpe__ui_send(ui, w);
+}
+
+/* ---- New UI elements -------------------------------------------------------------------------------- */
+
+static bool wpe__is_image_path(const char* path) {
+    const size_t n = strlen(path);
+    return (n > 4 && (strcmp(path + n - 4, ".png") == 0 || strcmp(path + n - 4, ".jpg") == 0)) ||
+           (n > 5 && strcmp(path + n - 5, ".jpeg") == 0);
+}
+
+/* "ui": a width x height rectangle centered in its parent. */
+static void wpe__write_centered_ui(WPE_JsonWriter* w, float width, float height) {
+    const float hw = floorf(width * 0.5f), hh = floorf(height * 0.5f);
+    wpe_json_write_key(w, "ui");
+    wpe_json_write_object_begin(w);
+    wpe__write_pair(w, "anchor_min", (WPE_Vec2){.x = 0.5f, .y = 0.5f});
+    wpe__write_pair(w, "anchor_max", (WPE_Vec2){.x = 0.5f, .y = 0.5f});
+    wpe__write_pair(w, "offset_min", (WPE_Vec2){.x = -hw, .y = -hh});
+    wpe__write_pair(w, "offset_max", (WPE_Vec2){.x = width - hw, .y = height - hh});
+    wpe_json_write_object_end(w);
+}
+
+static void wpe__write_color(WPE_JsonWriter* w, const char* key, float r, float g, float b, float a) {
+    wpe_json_write_key(w, key);
+    wpe_json_write_array_begin(w, true);
+    const float c[4] = {r, g, b, a};
+    for (int i = 0; i < 4; ++i)
+        wpe_json_write_number(w, c[i]);
+    wpe_json_write_array_end(w);
+}
+
+/* Starts a create_entity of a UI element: its name, and the selected UI element as its parent (so menus
+ * are built by selecting the panel first). The caller writes the components and ends the entity object. */
+static WPE_JsonWriter* wpe__begin_ui_element(WPE_EditorUi* ui, const char* name, WPE_Entity parent) {
+    WPE_JsonWriter* w = wpe__ui_begin("create_entity");
+    if (!w) return NULL;
+    char coalesce[32];
+    snprintf(coalesce, sizeof coalesce, "add-ui-%u", ui->canvas_drag);
+    wpe_json_write_key(w, "coalesce");
+    wpe_json_write_string(w, coalesce);
+    wpe_json_write_key(w, "entity");
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "name");
+    wpe_json_write_string(w, name);
+    if (wpe_ecs_has_component(wpe__ui_ecs(ui), parent, WPE_COMP_UI)) {
+        wpe_json_write_key(w, "parent");
+        wpe_json_write_integer(w, parent);
+    }
+    return w;
+}
+
+/* Adds a UI element: "panel", "text", "button" (with a label inside) or an image's sprite (`image` set,
+ * at the image's size). One undo step; it ends selected, and the editor switches to the 2D view. */
+static void wpe__ui_create_element(WPE_EditorUi* ui, const char* kind, const char* image) {
+    ++ui->canvas_drag; /* A fresh undo step key for this element (and the button's label). */
+    const WPE_Entity parent = wpe_editor_selection(ui->editor);
+    WPE_JsonWriter* w = NULL;
+    if (image) {
+        WPE_AssetManager* assets = wpe_engine_assets(wpe_editor_engine(ui->editor));
+        WPE_AssetHandle handle = WPE_ASSET_NONE;
+        if (wpe_asset_load(assets, WPE_ASSET_IMAGE, image, &handle) != WPE_RESULT_OK) return; /* Logged. */
+        const WPE_Texture* texture = wpe_asset_image(assets, handle);
+        const float width = texture ? (float)texture->levels[0].width : 64.0f;
+        const float height = texture ? (float)texture->levels[0].height : 64.0f;
+        const char* slash = strrchr(image, '/');
+        char name[64];
+        snprintf(name, sizeof name, "%s", slash ? slash + 1 : image);
+        char* dot = strrchr(name, '.');
+        if (dot) *dot = '\0';
+        w = wpe__begin_ui_element(ui, name, parent);
+        if (w) {
+            wpe__write_centered_ui(w, width, height);
+            wpe_json_write_key(w, "sprite");
+            wpe_json_write_object_begin(w);
+            wpe_json_write_key(w, "image");
+            wpe_json_write_string(w, image);
+            wpe_json_write_object_end(w);
+        }
+        wpe_asset_release(assets, handle);
+    } else if (strcmp(kind, "text") == 0) {
+        w = wpe__begin_ui_element(ui, "text", parent);
+        if (w) {
+            wpe__write_centered_ui(w, 120, 16);
+            wpe_json_write_key(w, "text");
+            wpe_json_write_object_begin(w);
+            wpe_json_write_key(w, "text");
+            wpe_json_write_string(w, "Text");
+            wpe_json_write_key(w, "align");
+            wpe_json_write_string(w, "center");
+            wpe_json_write_key(w, "valign");
+            wpe_json_write_string(w, "middle");
+            wpe_json_write_object_end(w);
+        }
+    } else {
+        const bool button = strcmp(kind, "button") == 0;
+        w = wpe__begin_ui_element(ui, button ? "button" : "panel", parent);
+        if (w) {
+            wpe__write_centered_ui(w, button ? 100 : 160, button ? 24 : 100);
+            wpe_json_write_key(w, "sprite");
+            wpe_json_write_object_begin(w);
+            if (button) {
+                wpe__write_color(w, "color", 0.93f, 0.6f, 0.22f, 1);
+            } else {
+                wpe__write_color(w, "color", 0.17f, 0.19f, 0.27f, 0.95f);
+            }
+            wpe_json_write_object_end(w);
+            if (button) {
+                wpe_json_write_key(w, "button");
+                wpe_json_write_object_begin(w);
+                wpe_json_write_object_end(w);
+            }
+        }
+    }
+    if (!w) return;
+    wpe_json_write_object_end(w); /* entity */
+    if (wpe__ui_send(ui, w) != WPE_RESULT_OK) return;
+    if (strcmp(kind, "button") == 0) {
+        /* Its label fills it; the button stays selected. */
+        const WPE_Entity created = wpe_editor_selection(ui->editor);
+        WPE_JsonWriter* label = wpe__begin_ui_element(ui, "label", created);
+        if (label) {
+            wpe_json_write_key(label, "ui");
+            wpe_json_write_object_begin(label);
+            wpe_json_write_object_end(label);
+            wpe_json_write_key(label, "text");
+            wpe_json_write_object_begin(label);
+            wpe_json_write_key(label, "text");
+            wpe_json_write_string(label, "Button");
+            wpe__write_color(label, "color", 0.08f, 0.08f, 0.1f, 1);
+            wpe_json_write_key(label, "align");
+            wpe_json_write_string(label, "center");
+            wpe_json_write_key(label, "valign");
+            wpe_json_write_string(label, "middle");
+            wpe_json_write_object_end(label);
+            wpe_json_write_object_end(label); /* entity */
+            if (wpe__ui_send(ui, label) == WPE_RESULT_OK) wpe__ui_entity_command(ui, "select", created);
+        }
+    }
+    if (!wpe_editor_view(ui->editor).view_2d) wpe__ui_set_view(ui, "mode", "2d", 0, false);
 }
 
 static void wpe__ui_set_parent(WPE_EditorUi* ui, WPE_Entity child, WPE_Entity parent) {
@@ -1121,19 +1480,28 @@ static void wpe__ui_hierarchy(WPE_EditorUi* ui) {
         igEnd();
         return;
     }
-    if (igButton("+ Entity", (ImVec2_c){0, 0})) {
-        WPE_JsonWriter* w = wpe__ui_begin("create_entity");
-        if (w) {
-            wpe_json_write_key(w, "entity");
-            wpe_json_write_object_begin(w);
-            wpe_json_write_key(w, "name");
-            wpe_json_write_string(w, "entity");
-            wpe_json_write_key(w, "transform");
-            wpe_json_write_object_begin(w);
-            wpe_json_write_object_end(w);
-            wpe_json_write_object_end(w);
-            wpe__ui_send(ui, w);
+    if (igButton("+ Entity", (ImVec2_c){0, 0})) igOpenPopup_Str("add_entity", 0);
+    if (igBeginPopup("add_entity", 0)) {
+        if (igMenuItem_Bool("Empty", NULL, false, true)) {
+            WPE_JsonWriter* w = wpe__ui_begin("create_entity");
+            if (w) {
+                wpe_json_write_key(w, "entity");
+                wpe_json_write_object_begin(w);
+                wpe_json_write_key(w, "name");
+                wpe_json_write_string(w, "entity");
+                wpe_json_write_key(w, "transform");
+                wpe_json_write_object_begin(w);
+                wpe_json_write_object_end(w);
+                wpe_json_write_object_end(w);
+                wpe__ui_send(ui, w);
+            }
         }
+        igSeparator();
+        igTextDisabled("UI (inside the selected UI element)");
+        if (igMenuItem_Bool("Panel", NULL, false, true)) wpe__ui_create_element(ui, "panel", NULL);
+        if (igMenuItem_Bool("Text", NULL, false, true)) wpe__ui_create_element(ui, "text", NULL);
+        if (igMenuItem_Bool("Button", NULL, false, true)) wpe__ui_create_element(ui, "button", NULL);
+        igEndPopup();
     }
     igSeparator();
     WPE_Ecs* ecs = wpe__ui_ecs(ui);
@@ -1306,11 +1674,12 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
 
     igSeparator();
     /* Adding a component: those needing an asset take the path typed here. */
-    static const char* const addable[] = {"transform", "mesh",     "camera",       "light",
-                                          "rigidbody", "collider", "audio_source", "script"};
+    static const char* const addable[] = {"transform",    "mesh", "camera", "light", "rigidbody", "collider",
+                                          "audio_source", "ui",   "sprite", "text",  "button",    "script"};
     igSetNextItemWidth(-1.0f);
     igInputText("##asset_path", ui->add_path, sizeof ui->add_path, 0, NULL, NULL);
-    if (igIsItemHovered(0)) igSetTooltip("Asset path for mesh (model), audio_source (sound) or script");
+    if (igIsItemHovered(0))
+        igSetTooltip("Asset path for mesh (model), audio_source (sound), sprite (image) or script");
     if (igBeginCombo("##add", "Add component", 0)) {
         for (size_t i = 0; i < sizeof addable / sizeof addable[0]; ++i) {
             if (!igSelectable_Bool(addable[i], false, 0, (ImVec2_c){0, 0})) continue;
@@ -1325,10 +1694,16 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
             const char* path_key = strcmp(addable[i], "mesh") == 0           ? "model"
                                    : strcmp(addable[i], "audio_source") == 0 ? "sound"
                                    : strcmp(addable[i], "script") == 0       ? "path"
-                                                                             : NULL;
+                                   : strcmp(addable[i], "sprite") == 0 && wpe__is_image_path(ui->add_path)
+                                       ? "image"
+                                       : NULL;
             if (path_key && ui->add_path[0]) {
                 wpe_json_write_key(w, path_key);
                 wpe_json_write_string(w, ui->add_path);
+            }
+            if (strcmp(addable[i], "text") == 0) { /* Something to see. */
+                wpe_json_write_key(w, "text");
+                wpe_json_write_string(w, "Text");
             }
             wpe_json_write_object_end(w);
             wpe__ui_send(ui, w);
@@ -1412,7 +1787,8 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
     igSameLine(0, -1);
     igSetNextItemWidth(-1.0f);
     igInputText("##filter", ui->asset_filter, sizeof ui->asset_filter, 0, NULL, NULL);
-    igTextDisabled("Double-click: open a scene / add a model or prefab. Drag them into the viewport.");
+    igTextDisabled("Double-click: open a scene / add a model, prefab or image (a UI sprite). Drag them into "
+                   "the viewport.");
     igBeginChild_Str("##asset_list", (ImVec2_c){0, 0}, 0, 0);
     for (uint32_t i = 0; i < ui->asset_count; ++i) {
         const char* path = ui->assets[i];
@@ -1420,6 +1796,7 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
         const bool model = wpe__has_suffix(path, ".glb") || wpe__has_suffix(path, ".gltf") ||
                            wpe__has_suffix(path, ".prim") || wpe_prefab_is_path(path);
         const bool scene = wpe__has_suffix(path, ".scene");
+        const bool image = wpe__is_image_path(path);
         igSelectable_Bool(path, strcmp(path, wpe_editor_scene_path(ui->editor)) == 0,
                           ImGuiSelectableFlags_AllowDoubleClick, (ImVec2_c){0, 0});
         if (igIsItemHovered(0) && igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
@@ -1427,9 +1804,11 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
                 wpe__ui_guard(ui, WPE__PENDING_LOAD, path);
             } else if (model) {
                 wpe__ui_create_model(ui, path);
+            } else if (image) {
+                wpe__ui_create_element(ui, "image", path);
             }
         }
-        if (model && igBeginDragDropSource(0)) {
+        if ((model || image) && igBeginDragDropSource(0)) {
             igSetDragDropPayload(WPE__ASSET_PAYLOAD, path, strlen(path) + 1, 0);
             igText("%s", path);
             igEndDragDropSource();
@@ -1501,13 +1880,24 @@ static void wpe__ui_viewport(WPE_EditorUi* ui) {
     ui->view_focused = igIsWindowFocused(0);
     if (igBeginDragDropTarget()) {
         const ImGuiPayload* payload = igAcceptDragDropPayload(WPE__ASSET_PAYLOAD, 0);
-        if (payload && payload->DataSize > 1) wpe__ui_create_model(ui, payload->Data);
+        if (payload && payload->DataSize > 1) {
+            if (wpe__is_image_path(payload->Data)) {
+                wpe__ui_create_element(ui, "image", payload->Data);
+            } else {
+                wpe__ui_create_model(ui, payload->Data);
+            }
+        }
         igEndDragDropTarget();
     }
     ImDrawList* draw = igGetWindowDrawList();
-    const WPE_Entity light = wpe__ui_light_icons(ui, draw);
-    const bool gizmo = wpe__ui_gizmo(ui, draw);
-    if (!gizmo && ui->view_hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) &&
+    const bool view_2d = wpe_editor_view(ui->editor).view_2d;
+    /* The 2D view edits UI rectangles; the 3D view has the light icons and the transform gizmo. */
+    const bool canvas = view_2d && wpe__ui_canvas(ui, draw);
+    const WPE_Entity light = view_2d ? WPE_ENTITY_NULL : wpe__ui_light_icons(ui, draw);
+    const bool gizmo = !view_2d && wpe__ui_gizmo(ui, draw);
+    if (!view_2d) ui->canvas_edges = 0;
+    if (!canvas && !view_2d && !gizmo && ui->view_hovered &&
+        igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) &&
         wpe_editor_mode(ui->editor) == WPE_EDITOR_EDIT) {
         /* Icons are drawn over the scene, so they are picked before it. */
         const ImVec2_c mouse = igGetMousePos();
@@ -1524,8 +1914,9 @@ static void wpe__ui_viewport(WPE_EditorUi* ui) {
         }
     }
     static const char* const modes[] = {"EDIT", "PLAY", "PAUSED"};
+    const WPE_EditorMode mode = wpe_editor_mode(ui->editor);
     ImDrawList_AddText_Vec2(draw, (ImVec2_c){ui->image_x + 6, ui->image_y + 4}, WPE__COL(255, 255, 255, 200),
-                            modes[wpe_editor_mode(ui->editor)], NULL);
+                            mode == WPE_EDITOR_EDIT && view_2d ? "EDIT 2D" : modes[mode], NULL);
     igEnd();
 }
 
@@ -1566,6 +1957,9 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
     }
     if (igBeginMenu("View", true)) {
         const WPE_EditorView view = wpe_editor_view(ui->editor);
+        if (igMenuItem_Bool("2D view (UI)", NULL, view.view_2d, true))
+            wpe__ui_set_view(ui, "mode", view.view_2d ? "3d" : "2d", 0, false);
+        igSeparator();
         if (igMenuItem_Bool("Grid", "G", view.grid, true)) wpe__ui_set_view(ui, "grid", NULL, 0, !view.grid);
         float spacing = view.grid_spacing;
         igSetNextItemWidth(120.0f);
@@ -1587,7 +1981,8 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
             const char* format;
         } steps[] = {{"Move step", "snap_move", view.snap_move, 0.05f, 0.001f, 1000.0f, "%.3g"},
                      {"Rotate step", "snap_rotate", view.snap_rotate, 0.5f, 0.1f, 180.0f, "%.3g deg"},
-                     {"Scale step", "snap_scale", view.snap_scale, 0.01f, 0.001f, 100.0f, "%.3g"}};
+                     {"Scale step", "snap_scale", view.snap_scale, 0.01f, 0.001f, 100.0f, "%.3g"},
+                     {"UI step", "snap_ui", view.snap_ui, 0.25f, 1.0f, 256.0f, "%.0f px"}};
         for (size_t i = 0; i < sizeof steps / sizeof steps[0]; ++i) {
             float value = steps[i].value;
             igSetNextItemWidth(120.0f);
@@ -1625,6 +2020,10 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
     if (igMenuItem_Bool("Snap", NULL, view.snap, true)) wpe__ui_set_view(ui, "snap", NULL, 0, !view.snap);
     if (igIsItemHovered(0))
         igSetTooltip("Snap gizmo drags to steps (View menu); hold Ctrl while dragging to invert");
+    if (igMenuItem_Bool("2D", NULL, view.view_2d, true))
+        wpe__ui_set_view(ui, "mode", view.view_2d ? "3d" : "2d", 0, false);
+    if (igIsItemHovered(0))
+        igSetTooltip("2D view: the game's camera and its UI, whose elements you pick, move and resize here");
     igSeparator();
     const char* path = wpe_editor_scene_path(ui->editor);
     igTextDisabled("%s%s", path[0] ? path : "(unsaved scene)", wpe_editor_dirty(ui->editor) ? " *" : "");
@@ -1715,7 +2114,7 @@ static void wpe__ui_shortcuts(WPE_EditorUi* ui) {
         wpe__ui_entity_command(ui, "delete_entity", selection);
     if (!ui->flying && !io->KeyCtrl) {
         const WPE_EditorView view = wpe_editor_view(ui->editor);
-        if (igIsKeyPressed_Bool(ImGuiKey_F, false) && selection) wpe__ui_simple(ui, "focus");
+        if (igIsKeyPressed_Bool(ImGuiKey_F, false) && selection && !view.view_2d) wpe__ui_simple(ui, "focus");
         if (igIsKeyPressed_Bool(ImGuiKey_W, false)) wpe__ui_set_view(ui, "gizmo", "move", 0, false);
         if (igIsKeyPressed_Bool(ImGuiKey_E, false)) wpe__ui_set_view(ui, "gizmo", "rotate", 0, false);
         if (igIsKeyPressed_Bool(ImGuiKey_R, false)) wpe__ui_set_view(ui, "gizmo", "scale", 0, false);
@@ -1911,7 +2310,12 @@ WPE_Result wpe_editor_ui_frame(WPE_EditorUi* ui, WPE_Renderer* renderer, float d
     const bool gpu = wpe_ui_backend_is_gpu(ui->backend);
     if (!gpu && !renderer) return WPE_RESULT_ERROR_NULL_ARG;
     if (wpe_editor_mode(ui->editor) == WPE_EDITOR_EDIT) {
-        wpe__ui_camera(ui, dt);
+        /* The 2D view shows the game's camera: the editor camera stays where it is. */
+        if (wpe_editor_view(ui->editor).view_2d) {
+            ui->flying = false;
+        } else {
+            wpe__ui_camera(ui, dt);
+        }
     } else {
         ui->camera_initialized = false; /* The editor camera is recreated when play stops. */
     }

@@ -192,6 +192,12 @@ WPE_EngineDebugDraw wpe_engine_debug_draw(const WPE_Engine* engine);
 void wpe_engine_set_draw_ui(WPE_Engine* engine, bool draw_ui);
 bool wpe_engine_draws_ui(const WPE_Engine* engine);
 
+/** Whether the 3D scene is rendered from the camera (default true). Off, frames show the clear color with the
+ * UI and 2D drawing on top, as a scene without a camera does (the editor's 2D view of such a scene).
+ * @thread_safety Main thread only */
+void wpe_engine_set_draw_scene(WPE_Engine* engine, bool draw_scene);
+bool wpe_engine_draws_scene(const WPE_Engine* engine);
+
 /** Per-frame statistics of the last frame. */
 typedef struct WPE_EngineStats {
     uint64_t frames;

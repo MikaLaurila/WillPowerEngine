@@ -341,7 +341,8 @@ WPE_Result wpe_editor_create(const WPE_EditorDesc* desc, WPE_Editor** out_editor
                                     .hot_reload = true,
                                     .snap_move = 0.5f,
                                     .snap_rotate = 15.0f,
-                                    .snap_scale = 0.1f};
+                                    .snap_scale = 0.1f,
+                                    .snap_ui = 8.0f};
     editor->log_mutex = SDL_CreateMutex();
     WPE_Result result = editor->log_mutex ? WPE_RESULT_OK : WPE_RESULT_ERROR_OUT_OF_MEMORY;
     if (result == WPE_RESULT_OK) result = wpe_log_add_sink(wpe__editor_log_sink, editor, &editor->log_sink);
@@ -378,9 +379,39 @@ void wpe_editor_destroy(WPE_Editor* editor) {
     wpe_free(editor);
 }
 
+/* The camera the game renders from: the scene's, else the first camera that isn't the editor's. */
+static WPE_Entity wpe__editor_game_camera(const WPE_Editor* editor) {
+    WPE_Ecs* ecs = wpe_engine_ecs(editor->engine);
+    if (editor->scene_camera != editor->camera &&
+        wpe_ecs_has_component(ecs, editor->scene_camera, WPE_COMP_CAMERA))
+        return editor->scene_camera;
+    WPE_EcsIter it = wpe_ecs_query(
+        ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_CAMERA) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    while (wpe_ecs_iter_next(&it)) {
+        if (it.entity != editor->camera) return it.entity;
+    }
+    return WPE_ENTITY_NULL;
+}
+
+/* What the engine draws: in edit mode, the 3D view (editor camera, no UI) or the 2D view (the game's
+ * camera, or none, with the UI); while playing, the game as it is. */
+static void wpe__editor_apply_view(WPE_Editor* editor) {
+    WPE_Engine* engine = editor->engine;
+    if (editor->mode != WPE_EDITOR_EDIT) {
+        wpe_engine_set_draw_ui(engine, true);
+        wpe_engine_set_draw_scene(engine, true);
+        return;
+    }
+    const WPE_Entity game = wpe__editor_game_camera(editor);
+    wpe_engine_set_camera(engine, editor->view.view_2d ? game : editor->camera);
+    wpe_engine_set_draw_scene(engine, !editor->view.view_2d || game != WPE_ENTITY_NULL);
+    wpe_engine_set_draw_ui(engine, editor->view.view_2d);
+}
+
 WPE_Result wpe_editor_frame(WPE_Editor* editor, double dt) {
     if (!editor) return WPE_RESULT_ERROR_NULL_ARG;
     const bool editing = editor->mode == WPE_EDITOR_EDIT;
+    wpe__editor_apply_view(editor);
     if (editor->view.hot_reload) {
         editor->since_reload += dt;
         if (editor->since_reload >= WPE__EDITOR_RELOAD_SECONDS) {
@@ -391,10 +422,10 @@ WPE_Result wpe_editor_frame(WPE_Editor* editor, double dt) {
     /* Edits don't step physics: bring bodies to the edited poses and scales (debug drawing shows them,
      * and play starts from them). */
     WPE_Result result = editing ? wpe_physics_sync(wpe_engine_physics(editor->engine)) : WPE_RESULT_OK;
-    wpe_engine_set_debug_draw(editor->engine,
-                              &(WPE_EngineDebugDraw){.physics = editor->view.physics,
-                                                     .grid = editor->view.grid && editing,
-                                                     .grid_spacing = editor->view.grid_spacing});
+    wpe_engine_set_debug_draw(
+        editor->engine, &(WPE_EngineDebugDraw){.physics = editor->view.physics,
+                                               .grid = editor->view.grid && editing && !editor->view.view_2d,
+                                               .grid_spacing = editor->view.grid_spacing});
     const WPE_Result frame = wpe_engine_frame(editor->engine, dt);
     if (result == WPE_RESULT_OK) result = frame;
     /* A game that quits (wpe.quit) in play mode returns the editor to edit mode. */

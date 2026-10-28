@@ -153,14 +153,17 @@ static void test_ui_pick_follows_drawing_order(void) {
     WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, caption, WPE_COMP_TEXT, &text, NULL));
     WPE_TEST_ASSERT_OK(wpe_ui_layout(f.ui, SCREEN_W, SCREEN_H));
 
-    WPE_TEST_ASSERT_EQ_UINT(child, wpe_ui_pick(f.ui, 15, 15)); /* Children over their parent. */
-    WPE_TEST_ASSERT_EQ_UINT(back, wpe_ui_pick(f.ui, 5, 40));
-    WPE_TEST_ASSERT_EQ_UINT(front, wpe_ui_pick(f.ui, 60, 60)); /* Later top-level elements on top. */
-    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_ui_pick(f.ui, 150, 50));
-    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_ui_pick(f.ui, 100, 10)); /* Right edge is outside. */
+    WPE_TEST_ASSERT_EQ_UINT(child, wpe_ui_pick(f.ui, 15, 15, false)); /* Children over their parent. */
+    WPE_TEST_ASSERT_EQ_UINT(back, wpe_ui_pick(f.ui, 5, 40, false));
+    WPE_TEST_ASSERT_EQ_UINT(caption,
+                            wpe_ui_pick(f.ui, 5, 5, true)); /* Editors pick text-only elements too. */
+    WPE_TEST_ASSERT_EQ_UINT(back, wpe_ui_pick(f.ui, 5, 5, false));
+    WPE_TEST_ASSERT_EQ_UINT(front, wpe_ui_pick(f.ui, 60, 60, false)); /* Later top-level elements on top. */
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_ui_pick(f.ui, 150, 50, false));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_ui_pick(f.ui, 100, 10, false)); /* Right edge is outside. */
     ((WPE_UiRect*)wpe_ecs_get_component(f.ecs, front, WPE_COMP_UI))->visible = false;
     WPE_TEST_ASSERT_OK(wpe_ui_layout(f.ui, SCREEN_W, SCREEN_H));
-    WPE_TEST_ASSERT_EQ_UINT(back, wpe_ui_pick(f.ui, 60, 60));
+    WPE_TEST_ASSERT_EQ_UINT(back, wpe_ui_pick(f.ui, 60, 60, false));
     destroy_fixture(&f);
 }
 
