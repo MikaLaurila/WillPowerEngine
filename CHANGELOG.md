@@ -69,6 +69,24 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (character controller and shape queries)
+- Character controllers (`WPE_CharacterController`, component 20, `"character"` in scenes and the
+  editor): an upright capsule moved by `wpe_character_move` (Box3D's mover). It slides along walls,
+  walks up slopes up to `max_slope` and steps up to `step_height`, follows the ground down
+  (`snap_distance`) without sliding downhill, stops at ceilings, pushes dynamic bodies and enters
+  triggers through its kinematic body. Its capsule shows in the physics view (cyan).
+- Shape casts (`wpe_physics_shape_cast`: box, sphere, capsule) and overlaps (`wpe_physics_overlap`).
+- **BREAKING:** `wpe_physics_raycast` takes a `WPE_QueryFilter` (NULL as before): ignore an entity,
+  or include triggers. All queries share it.
+- Scripts: `wpe.shape_cast`, `wpe.overlap`, options for `wpe.raycast` (`ignore`, `triggers`),
+  `wpe.add_character`, `wpe.move_character`, `wpe.get_character`, `wpe.remove_character`.
+- Demo: `scenes/character.scene` with `scripts/hero.luau` (ramps, stairs, a ledge, a low ceiling,
+  crates and a trigger). `game.luau` takes a `help` property for the scene's control lines.
+- Fixed: the master test scene's ball-at-rest check never ran (two branches tested the same frame).
+- Tests: queries and filters; characters landing, walking, sliding along walls, on walkable and
+  steep slopes, on stairs and against a taller ledge, under a ceiling, pushing crates (and stopped by
+  a pinned one), entering triggers, and the component's lifecycle.
+
 ### Added (declared script properties)
 - Scripts declare their properties with defaults (`Spinner.properties = {speed = 1.2}`): every
   instance starts with them, hot reload adds newly declared ones, and a value equal to its default is

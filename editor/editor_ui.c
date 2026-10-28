@@ -2080,9 +2080,9 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
         igButton("Add box collider fitted to meshes", (ImVec2_c){-1.0f, 0}))
         wpe__ui_entity_command(ui, "fit_collider", entity);
     /* Adding a component: those needing an asset take the path typed here. */
-    static const char* const addable[] = {"transform", "mesh",      "camera",   "light",        "billboard",
-                                          "particles", "rigidbody", "collider", "audio_source", "ui",
-                                          "sprite",    "text",      "button",   "script"};
+    static const char* const addable[] = {"transform", "mesh",      "camera",   "light",     "billboard",
+                                          "particles", "rigidbody", "collider", "character", "audio_source",
+                                          "ui",        "sprite",    "text",     "button",    "script"};
     igSetNextItemWidth(-1.0f);
     igInputText("##asset_path", ui->add_path, sizeof ui->add_path, 0, NULL, NULL);
     if (igIsItemHovered(0))

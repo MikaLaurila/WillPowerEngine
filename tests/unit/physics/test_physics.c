@@ -228,19 +228,24 @@ static void test_physics_raycast(void) {
     zone.is_trigger = true;
     add_collider(f.ecs, trigger, zone);
     /* Bodies only exist after a step. */
-    WPE_TEST_ASSERT(!wpe_physics_raycast(f.physics, wpe_vec3(0, 10, 0), wpe_vec3(0, -1, 0), 100.0f, NULL));
+    WPE_TEST_ASSERT(
+        !wpe_physics_raycast(f.physics, wpe_vec3(0, 10, 0), wpe_vec3(0, -1, 0), 100.0f, NULL, NULL));
     WPE_TEST_ASSERT_OK(wpe_physics_step(f.physics, DT));
 
     WPE_RaycastHit hit = {0};
-    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(1, 10, 0), wpe_vec3(0, -3, 0), 100.0f, &hit));
+    WPE_TEST_ASSERT(
+        wpe_physics_raycast(f.physics, wpe_vec3(1, 10, 0), wpe_vec3(0, -3, 0), 100.0f, NULL, &hit));
     WPE_TEST_ASSERT_EQ_UINT(ground, hit.entity); /* The trigger is ignored. */
     WPE_TEST_ASSERT_NEAR(10.0, hit.distance, 1e-3);
     WPE_TEST_ASSERT_NEAR(0.0, hit.point.y, 1e-3);
     WPE_TEST_ASSERT_NEAR(1.0, hit.normal.y, 1e-3);
 
-    WPE_TEST_ASSERT(!wpe_physics_raycast(f.physics, wpe_vec3(0, 10, 0), wpe_vec3(0, -1, 0), 5.0f, &hit));
-    WPE_TEST_ASSERT(!wpe_physics_raycast(f.physics, wpe_vec3(0, 10, 0), wpe_vec3(0, 1, 0), 100.0f, &hit));
-    WPE_TEST_ASSERT(!wpe_physics_raycast(f.physics, wpe_vec3(0, 10, 0), wpe_vec3(0, 0, 0), 100.0f, &hit));
+    WPE_TEST_ASSERT(
+        !wpe_physics_raycast(f.physics, wpe_vec3(0, 10, 0), wpe_vec3(0, -1, 0), 5.0f, NULL, &hit));
+    WPE_TEST_ASSERT(
+        !wpe_physics_raycast(f.physics, wpe_vec3(0, 10, 0), wpe_vec3(0, 1, 0), 100.0f, NULL, &hit));
+    WPE_TEST_ASSERT(
+        !wpe_physics_raycast(f.physics, wpe_vec3(0, 10, 0), wpe_vec3(0, 0, 0), 100.0f, NULL, &hit));
     destroy_world(&f);
 }
 
@@ -448,7 +453,7 @@ static void test_physics_mesh_and_convex_colliders(void) {
     WPE_TEST_ASSERT_EQ_UINT(3, wpe_physics_stats(f.physics).bodies);       /* ...but its rigid body exists. */
 
     WPE_RaycastHit hit;
-    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(7, 5, 3), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(7, 5, 3), wpe_vec3(0, -1, 0), 10.0f, NULL, &hit));
     WPE_TEST_ASSERT_EQ_UINT(ground, hit.entity);
     WPE_TEST_ASSERT_NEAR(5.0, hit.distance, 1e-3);
     destroy_world(&f);
@@ -538,12 +543,13 @@ static void test_physics_create_bodies_and_initial_velocity(void) {
     WPE_Vec3 velocity;
     WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_physics_get_velocity(f.physics, ball, &velocity));
     WPE_RaycastHit hit;
-    WPE_TEST_ASSERT(!wpe_physics_raycast(f.physics, wpe_vec3(0, 2, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    WPE_TEST_ASSERT(
+        !wpe_physics_raycast(f.physics, wpe_vec3(0, 2, 0), wpe_vec3(0, -1, 0), 10.0f, NULL, &hit));
     /* ...creating them makes the body usable immediately, already moving at its initial velocity. */
     WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
     WPE_TEST_ASSERT_OK(wpe_physics_get_velocity(f.physics, ball, &velocity));
     WPE_TEST_ASSERT_NEAR(3.0, velocity.x, 1e-6);
-    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(0, 2, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(0, 2, 0), wpe_vec3(0, -1, 0), 10.0f, NULL, &hit));
     WPE_TEST_ASSERT_EQ_UINT(ground, hit.entity);
     WPE_TEST_ASSERT_EQ_UINT(2, wpe_physics_stats(f.physics).bodies);
     WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics)); /* Nothing left to create. */
@@ -585,15 +591,16 @@ static void test_physics_sync_follows_edits(void) {
     add_collider(f.ecs, wall, wpe_collider_default(WPE_COLLIDER_BOX)); /* 1 x 1 x 1. */
     WPE_TEST_ASSERT_OK(wpe_physics_sync(f.physics));
     WPE_RaycastHit hit;
-    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(0, 5, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(0, 5, 0), wpe_vec3(0, -1, 0), 10.0f, NULL, &hit));
     WPE_TEST_ASSERT_NEAR(0.5, hit.point.y, 1e-4);
 
     /* Moved and scaled: the body follows and the shape is rebuilt for the new size. */
     transform_of(f.ecs, wall)->position = wpe_vec3(4, 0, 0);
     transform_of(f.ecs, wall)->scale = wpe_vec3(1, 3, 1);
     WPE_TEST_ASSERT_OK(wpe_physics_sync(f.physics));
-    WPE_TEST_ASSERT(!wpe_physics_raycast(f.physics, wpe_vec3(0, 5, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
-    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(4, 5, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    WPE_TEST_ASSERT(
+        !wpe_physics_raycast(f.physics, wpe_vec3(0, 5, 0), wpe_vec3(0, -1, 0), 10.0f, NULL, &hit));
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(4, 5, 0), wpe_vec3(0, -1, 0), 10.0f, NULL, &hit));
     WPE_TEST_ASSERT_NEAR(1.5, hit.point.y, 1e-4);
 
     /* Kinematic bodies are placed too (an edit, not a move with velocity), and new colliders appear. */
@@ -603,7 +610,8 @@ static void test_physics_sync_follows_edits(void) {
     WPE_TEST_ASSERT_OK(wpe_physics_sync(f.physics));
     transform_of(f.ecs, platform)->position = wpe_vec3(-4, 2, 0);
     WPE_TEST_ASSERT_OK(wpe_physics_sync(f.physics));
-    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(-4, 5, 0), wpe_vec3(0, -1, 0), 10.0f, &hit));
+    WPE_TEST_ASSERT(
+        wpe_physics_raycast(f.physics, wpe_vec3(-4, 5, 0), wpe_vec3(0, -1, 0), 10.0f, NULL, &hit));
     WPE_TEST_ASSERT_EQ_UINT(platform, hit.entity);
     WPE_TEST_ASSERT_NEAR(2.5, hit.point.y, 1e-4);
     WPE_Vec3 velocity;
@@ -665,7 +673,404 @@ static void test_physics_debug_draw(void) {
     destroy_world(&f);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_physics_create_validates_world),
+/* ---- Queries ---------------------------------------------------------------------------------------- */
+
+static WPE_Entity spawn_static(WPE_Ecs* ecs, WPE_Vec3 position, WPE_Collider collider) {
+    const WPE_Entity e = spawn_at(ecs, position);
+    add_collider(ecs, e, collider);
+    return e;
+}
+
+static bool contains(const WPE_Entity* entities, uint32_t count, WPE_Entity e) {
+    for (uint32_t i = 0; i < count; ++i)
+        if (entities[i] == e) return true;
+    return false;
+}
+
+static void test_physics_shape_casts_overlaps_and_filters(void) {
+    Fixture f = make_world(GRAVITY);
+    const WPE_Entity ground = spawn_ground(f.ecs);
+    WPE_Collider box = wpe_collider_default(WPE_COLLIDER_BOX);
+    box.size = wpe_vec3(2.0f, 2.0f, 2.0f);
+    const WPE_Entity wall = spawn_static(f.ecs, wpe_vec3(5.0f, 1.0f, 0.0f), box); /* x 4..6, y 0..2 */
+    WPE_Collider sphere = wpe_collider_default(WPE_COLLIDER_SPHERE);
+    sphere.is_trigger = true;
+    const WPE_Entity trigger = spawn_static(f.ecs, wpe_vec3(-5.0f, 1.0f, 0.0f), sphere); /* radius 1 */
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+
+    /* Rays: filters skip an entity, or see triggers. */
+    WPE_RaycastHit hit;
+    WPE_TEST_ASSERT(
+        wpe_physics_raycast(f.physics, wpe_vec3(5, 10, 0), wpe_vec3(0, -1, 0), 20.0f, NULL, &hit));
+    WPE_TEST_ASSERT_EQ_UINT(wall, hit.entity);
+    WPE_TEST_ASSERT_NEAR(2.0, hit.point.y, 1e-3);
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(5, 10, 0), wpe_vec3(0, -1, 0), 20.0f,
+                                        &(WPE_QueryFilter){.ignore = wall}, &hit));
+    WPE_TEST_ASSERT_EQ_UINT(ground, hit.entity);
+    WPE_TEST_ASSERT(
+        wpe_physics_raycast(f.physics, wpe_vec3(-5, 10, 0), wpe_vec3(0, -1, 0), 20.0f, NULL, &hit));
+    WPE_TEST_ASSERT_EQ_UINT(ground, hit.entity);
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(-5, 10, 0), wpe_vec3(0, -1, 0), 20.0f,
+                                        &(WPE_QueryFilter){.include_triggers = true}, &hit));
+    WPE_TEST_ASSERT_EQ_UINT(trigger, hit.entity);
+    WPE_TEST_ASSERT_NEAR(2.0, hit.point.y, 1e-3);
+
+    /* Shape casts stop where the swept shape first touches: the wall's face is at x = 4. */
+    const WPE_QueryShape ball = {
+        .shape = WPE_COLLIDER_SPHERE, .size = {{0.5f, 0, 0}}, .rotation = wpe_quat_identity()};
+    WPE_TEST_ASSERT(
+        wpe_physics_shape_cast(f.physics, &ball, wpe_vec3(0, 1, 0), wpe_vec3(2, 0, 0), 10.0f, NULL, &hit));
+    WPE_TEST_ASSERT_EQ_UINT(wall, hit.entity);
+    WPE_TEST_ASSERT_NEAR(3.5, hit.distance, 1e-2);
+    WPE_TEST_ASSERT_NEAR(-1.0, hit.normal.x, 1e-3);
+    WPE_TEST_ASSERT_NEAR(4.0, hit.point.x, 1e-2);
+    WPE_TEST_ASSERT(
+        !wpe_physics_shape_cast(f.physics, &ball, wpe_vec3(0, 1, 0), wpe_vec3(1, 0, 0), 3.0f, NULL, &hit));
+    /* A box turned 45 degrees leads with its edge; a capsule lying along X with its cap. */
+    const WPE_QueryShape turned = {.shape = WPE_COLLIDER_BOX,
+                                   .size = {{1, 1, 1}},
+                                   .rotation = wpe_quat_from_axis_angle(wpe_vec3(0, 1, 0), WPE_PI / 4.0f)};
+    WPE_TEST_ASSERT(
+        wpe_physics_shape_cast(f.physics, &turned, wpe_vec3(0, 1, 0), wpe_vec3(1, 0, 0), 10.0f, NULL, &hit));
+    WPE_TEST_ASSERT_NEAR(4.0 - 0.5 * 1.41421356, hit.distance, 1e-2);
+    const WPE_QueryShape lying = {.shape = WPE_COLLIDER_CAPSULE,
+                                  .size = {{0.25f, 2.0f, 0}},
+                                  .rotation = wpe_quat_from_axis_angle(wpe_vec3(0, 0, 1), WPE_PI / 2.0f)};
+    WPE_TEST_ASSERT(
+        wpe_physics_shape_cast(f.physics, &lying, wpe_vec3(0, 1, 0), wpe_vec3(1, 0, 0), 10.0f, NULL, &hit));
+    WPE_TEST_ASSERT_NEAR(3.0, hit.distance, 1e-2);
+    /* Starting inside something hits it at once. */
+    WPE_TEST_ASSERT(
+        wpe_physics_shape_cast(f.physics, &ball, wpe_vec3(5, 1, 0), wpe_vec3(0, 1, 0), 10.0f, NULL, &hit));
+    WPE_TEST_ASSERT_EQ_UINT(wall, hit.entity);
+    WPE_TEST_ASSERT_NEAR(0.0, hit.distance, 1e-3);
+
+    /* Overlaps list each entity once; triggers only when asked; the count can exceed the capacity. */
+    const WPE_QueryShape big = {
+        .shape = WPE_COLLIDER_SPHERE, .size = {{1.5f, 0, 0}}, .rotation = wpe_quat_identity()};
+    WPE_Entity found[8];
+    uint32_t count = wpe_physics_overlap(f.physics, &big, wpe_vec3(5, 1, 0), NULL, found, 8);
+    WPE_TEST_ASSERT_EQ_UINT(2, count);
+    WPE_TEST_ASSERT(contains(found, count, wall) && contains(found, count, ground));
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_physics_overlap(f.physics, &big, wpe_vec3(5, 1, 0), NULL, found, 1));
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_physics_overlap(f.physics, &big, wpe_vec3(5, 1, 0), NULL, NULL, 0));
+    count = wpe_physics_overlap(f.physics, &big, wpe_vec3(5, 1, 0), &(WPE_QueryFilter){.ignore = ground},
+                                found, 8);
+    WPE_TEST_ASSERT(count == 1 && found[0] == wall);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_physics_overlap(f.physics, &ball, wpe_vec3(-5, 1.2f, 0), NULL, found, 8));
+    count = wpe_physics_overlap(f.physics, &ball, wpe_vec3(-5, 1.2f, 0),
+                                &(WPE_QueryFilter){.include_triggers = true}, found, 8);
+    WPE_TEST_ASSERT(count == 1 && found[0] == trigger);
+
+    /* Shapes that can't be queried. */
+    const WPE_QueryShape flat = {.shape = WPE_COLLIDER_SPHERE, .rotation = wpe_quat_identity()};
+    WPE_TEST_ASSERT(
+        !wpe_physics_shape_cast(f.physics, &flat, wpe_vec3(0, 1, 0), wpe_vec3(1, 0, 0), 10.0f, NULL, &hit));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_physics_overlap(f.physics, &flat, wpe_vec3(5, 1, 0), NULL, found, 8));
+    const WPE_QueryShape mesh = {
+        .shape = WPE_COLLIDER_MESH, .size = {{1, 1, 1}}, .rotation = wpe_quat_identity()};
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_physics_overlap(f.physics, &mesh, wpe_vec3(5, 1, 0), NULL, found, 8));
+    destroy_world(&f);
+}
+
+/* ---- Character controllers --------------------------------------------------------------------------- */
+
+static WPE_Entity spawn_character(Fixture* f, WPE_Vec3 feet) {
+    const WPE_Entity e = spawn_at(f->ecs, feet);
+    const WPE_CharacterController c = wpe_character_default();
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f->ecs, e, WPE_COMP_CHARACTER, &c, NULL));
+    return e;
+}
+
+static const WPE_CharacterController* character_of(const Fixture* f, WPE_Entity e) {
+    const WPE_CharacterController* c = wpe_ecs_get_component(f->ecs, e, WPE_COMP_CHARACTER);
+    WPE_TEST_ASSERT(c != NULL);
+    return c;
+}
+
+/* Moves a character the way a game does: gravity added each frame, the returned velocity kept, and
+ * a horizontal walking velocity imposed. Steps the world after each move when `step` is set. */
+static WPE_Vec3 walk(Fixture* f, WPE_Entity e, WPE_Vec3 velocity, WPE_Vec3 horizontal, float seconds,
+                     bool step) {
+    const int frames = (int)(seconds / DT + 0.5f);
+    for (int i = 0; i < frames; ++i) {
+        velocity = wpe_vec3(horizontal.x, velocity.y - 9.81f * DT, horizontal.z);
+        WPE_TEST_ASSERT_OK(wpe_character_move(f->physics, e, velocity, DT, &velocity));
+        if (step) WPE_TEST_ASSERT_OK(wpe_physics_step(f->physics, DT));
+    }
+    return velocity;
+}
+
+static void test_physics_character_lands_walks_and_slides(void) {
+    Fixture f = make_world(GRAVITY);
+    const WPE_Entity ground = spawn_ground(f.ecs);
+    WPE_Collider box = wpe_collider_default(WPE_COLLIDER_BOX);
+    box.size = wpe_vec3(1.0f, 4.0f, 20.0f);
+    spawn_static(f.ecs, wpe_vec3(6.0f, 2.0f, 0.0f), box); /* A wall with its face at x = 5.5. */
+    const WPE_Entity e = spawn_character(&f, wpe_vec3(0.0f, 2.0f, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    WPE_TEST_ASSERT(!character_of(&f, e)->grounded);
+
+    /* Falls and lands: the downward speed is gone, and it stands on the ground. */
+    WPE_Vec3 v = walk(&f, e, wpe_vec3(0, 0, 0), wpe_vec3(0, 0, 0), 1.0f, false);
+    WPE_TEST_ASSERT_NEAR(0.0, transform_of(f.ecs, e)->position.y, 0.02);
+    WPE_TEST_ASSERT(character_of(&f, e)->grounded);
+    WPE_TEST_ASSERT_EQ_UINT(ground, character_of(&f, e)->ground);
+    WPE_TEST_ASSERT_NEAR(1.0, character_of(&f, e)->ground_normal.y, 1e-3);
+    WPE_TEST_ASSERT_NEAR(0.0, v.y, 1e-4);
+
+    /* Walks at its speed, staying on the ground. */
+    v = walk(&f, e, v, wpe_vec3(3, 0, 0), 1.0f, false);
+    WPE_TEST_ASSERT_NEAR(3.0, transform_of(f.ecs, e)->position.x, 0.05);
+    WPE_TEST_ASSERT_NEAR(0.0, transform_of(f.ecs, e)->position.y, 0.02);
+    WPE_TEST_ASSERT(character_of(&f, e)->grounded);
+
+    /* Into the wall at an angle: stopped in X (radius 0.4 from the face), sliding on in Z. */
+    v = walk(&f, e, v, wpe_vec3(3, 0, 3), 1.0f, false);
+    WPE_TEST_ASSERT_NEAR(5.1, transform_of(f.ecs, e)->position.x, 0.02);
+    WPE_TEST_ASSERT(transform_of(f.ecs, e)->position.z > 2.5f);
+    WPE_TEST_ASSERT_NEAR(0.0, v.x, 1e-3);
+    WPE_TEST_ASSERT_NEAR(3.0, v.z, 1e-3);
+    WPE_TEST_ASSERT(character_of(&f, e)->grounded);
+
+    /* Bad arguments. */
+    wpe_log_set_stderr_enabled(false);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_character_move(f.physics, e, wpe_vec3(NAN, 0, 0), DT, NULL));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_character_move(f.physics, e, v, 0.0f, NULL));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_character_move(f.physics, ground, v, DT, NULL));
+    wpe_log_set_stderr_enabled(true);
+    destroy_world(&f);
+}
+
+/* A static ramp rising toward +X at `degrees`, its surface crossing y = 0 near x = 3. */
+static void spawn_ramp(Fixture* f, float degrees) {
+    const float angle = degrees * (WPE_PI / 180.0f);
+    WPE_Collider box = wpe_collider_default(WPE_COLLIDER_BOX);
+    box.size = wpe_vec3(12.0f, 1.0f, 6.0f);
+    const WPE_Vec3 surface_up = wpe_vec3(-sinf(angle), cosf(angle), 0.0f);
+    const WPE_Vec3 along = wpe_vec3(cosf(angle), sinf(angle), 0.0f);
+    /* Center: from the point (3, 0, 0) on the surface, half the length up the ramp and half the thickness in.
+     */
+    const WPE_Vec3 center =
+        wpe_vec3_add(wpe_vec3(3.0f, 0.0f, 0.0f),
+                     wpe_vec3_sub(wpe_vec3_scale(along, 6.0f), wpe_vec3_scale(surface_up, 0.5f)));
+    const WPE_Entity ramp = spawn_static(f->ecs, center, box);
+    transform_of(f->ecs, ramp)->rotation = wpe_quat_from_axis_angle(wpe_vec3(0, 0, 1), angle);
+}
+
+static void test_physics_character_slopes(void) {
+    /* Walkable: it walks up the slope, and standing on it doesn't slide down. */
+    Fixture f = make_world(GRAVITY);
+    spawn_ground(f.ecs);
+    spawn_ramp(&f, 30.0f);
+    WPE_Entity e = spawn_character(&f, wpe_vec3(0.0f, 0.5f, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    WPE_Vec3 v = walk(&f, e, wpe_vec3(0, 0, 0), wpe_vec3(0, 0, 0), 0.5f, false);
+    v = walk(&f, e, v, wpe_vec3(3, 0, 0), 2.0f, false);
+    const WPE_Vec3 up_slope = transform_of(f.ecs, e)->position;
+    WPE_TEST_ASSERT(up_slope.y > 1.0f);
+    WPE_TEST_ASSERT(character_of(&f, e)->grounded);
+    WPE_TEST_ASSERT_NEAR(cos(30.0 * WPE_PI / 180.0), character_of(&f, e)->ground_normal.y, 1e-2);
+    walk(&f, e, v, wpe_vec3(0, 0, 0), 1.0f, false);
+    WPE_TEST_ASSERT_NEAR(up_slope.x, transform_of(f.ecs, e)->position.x, 0.01);
+    WPE_TEST_ASSERT_NEAR(up_slope.y, transform_of(f.ecs, e)->position.y, 0.01);
+
+    /* Walking back down keeps it on the slope (snapping), every frame. */
+    for (int i = 0; i < 30; ++i) {
+        v = wpe_vec3(-3.0f, v.y - 9.81f * DT, 0.0f);
+        WPE_TEST_ASSERT_OK(wpe_character_move(f.physics, e, v, DT, &v));
+        WPE_TEST_ASSERT(character_of(&f, e)->grounded);
+    }
+    WPE_TEST_ASSERT(transform_of(f.ecs, e)->position.y < up_slope.y - 0.5f);
+    destroy_world(&f);
+
+    /* Too steep: it can't walk up, and isn't standing on it. */
+    f = make_world(GRAVITY);
+    spawn_ground(f.ecs);
+    spawn_ramp(&f, 60.0f);
+    e = spawn_character(&f, wpe_vec3(0.0f, 0.5f, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    v = walk(&f, e, wpe_vec3(0, 0, 0), wpe_vec3(0, 0, 0), 0.5f, false);
+    v = walk(&f, e, v, wpe_vec3(3, 0, 0), 2.0f, false);
+    WPE_TEST_ASSERT(transform_of(f.ecs, e)->position.y < 0.05f);
+    WPE_TEST_ASSERT(transform_of(f.ecs, e)->position.x < 3.0f);
+    WPE_TEST_ASSERT(character_of(&f, e)->grounded); /* On the flat ground in front of it. */
+    WPE_TEST_ASSERT_NEAR(1.0, character_of(&f, e)->ground_normal.y, 1e-3);
+    WPE_TEST_ASSERT(v.y <= 0.0f);
+    destroy_world(&f);
+}
+
+/* Five static steps 0.2 tall and 0.5 deep, rising toward +X from x = 2, the last a 4-deep landing. */
+static void spawn_stairs(Fixture* f) {
+    for (int i = 0; i < 5; ++i) {
+        const float depth = i < 4 ? 0.5f : 4.0f;
+        WPE_Collider box = wpe_collider_default(WPE_COLLIDER_BOX);
+        box.size = wpe_vec3(depth, 0.2f * (float)(i + 1), 4.0f);
+        spawn_static(f->ecs, wpe_vec3(2.0f + 0.5f * (float)i + depth * 0.5f, 0.1f * (float)(i + 1), 0.0f),
+                     box);
+    }
+}
+
+static void test_physics_character_steps(void) {
+    /* Climbs stairs to the top, standing on each step. */
+    Fixture f = make_world(GRAVITY);
+    spawn_ground(f.ecs);
+    spawn_stairs(&f);
+    WPE_Entity e = spawn_character(&f, wpe_vec3(0.0f, 0.0f, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    WPE_Vec3 v = walk(&f, e, wpe_vec3(0, 0, 0), wpe_vec3(0, 0, 0), 0.2f, false);
+    walk(&f, e, v, wpe_vec3(2, 0, 0), 2.5f, false);
+    WPE_TEST_ASSERT(transform_of(f.ecs, e)->position.x > 4.3f);
+    WPE_TEST_ASSERT_NEAR(1.0, transform_of(f.ecs, e)->position.y, 0.02);
+    WPE_TEST_ASSERT(character_of(&f, e)->grounded);
+    destroy_world(&f);
+
+    /* Without step_height they stop it. */
+    f = make_world(GRAVITY);
+    spawn_ground(f.ecs);
+    spawn_stairs(&f);
+    e = spawn_character(&f, wpe_vec3(0.0f, 0.0f, 0.0f));
+    ((WPE_CharacterController*)wpe_ecs_get_component(f.ecs, e, WPE_COMP_CHARACTER))->step_height = 0.0f;
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    v = walk(&f, e, wpe_vec3(0, 0, 0), wpe_vec3(0, 0, 0), 0.2f, false);
+    walk(&f, e, v, wpe_vec3(2, 0, 0), 2.5f, false);
+    WPE_TEST_ASSERT(transform_of(f.ecs, e)->position.x < 1.7f); /* The rounded bottom against the edge. */
+    WPE_TEST_ASSERT_NEAR(0.0, transform_of(f.ecs, e)->position.y, 0.02);
+    destroy_world(&f);
+
+    /* A ledge taller than step_height stops it too. */
+    f = make_world(GRAVITY);
+    spawn_ground(f.ecs);
+    WPE_Collider ledge = wpe_collider_default(WPE_COLLIDER_BOX);
+    ledge.size = wpe_vec3(1.0f, 0.5f, 4.0f);
+    spawn_static(f.ecs, wpe_vec3(2.5f, 0.25f, 0.0f), ledge);
+    e = spawn_character(&f, wpe_vec3(0.0f, 0.0f, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    v = walk(&f, e, wpe_vec3(0, 0, 0), wpe_vec3(0, 0, 0), 0.2f, false);
+    walk(&f, e, v, wpe_vec3(2, 0, 0), 2.0f, false);
+    WPE_TEST_ASSERT_NEAR(1.6, transform_of(f.ecs, e)->position.x, 0.02);
+    WPE_TEST_ASSERT_NEAR(0.0, transform_of(f.ecs, e)->position.y, 0.02);
+    destroy_world(&f);
+}
+
+static void test_physics_character_jumps_into_a_ceiling(void) {
+    Fixture f = make_world(GRAVITY);
+    spawn_ground(f.ecs);
+    WPE_Collider slab = wpe_collider_default(WPE_COLLIDER_BOX);
+    slab.size = wpe_vec3(10.0f, 0.5f, 10.0f);
+    spawn_static(f.ecs, wpe_vec3(0.0f, 2.75f, 0.0f), slab); /* Its underside at y = 2.5. */
+    const WPE_Entity e = spawn_character(&f, wpe_vec3(0.0f, 0.0f, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    WPE_Vec3 v = walk(&f, e, wpe_vec3(0, 0, 0), wpe_vec3(0, 0, 0), 0.2f, false);
+    WPE_TEST_ASSERT(character_of(&f, e)->grounded);
+    /* A jump: the head (1.8 up) stops at the slab, and the upward speed is gone at once. */
+    v.y = 8.0f;
+    float highest = 0.0f;
+    bool bumped = false;
+    for (int i = 0; i < 60; ++i) {
+        const float before = v.y;
+        WPE_TEST_ASSERT_OK(wpe_character_move(f.physics, e, v, DT, &v));
+        const float y = transform_of(f.ecs, e)->position.y;
+        highest = y > highest ? y : highest;
+        if (before > 0.0f && v.y == 0.0f) bumped = true;
+        v.y -= 9.81f * DT;
+    }
+    WPE_TEST_ASSERT(bumped);
+    WPE_TEST_ASSERT(highest > 0.6f && highest < 0.71f);
+    WPE_TEST_ASSERT(character_of(&f, e)->grounded); /* Back down. */
+    WPE_TEST_ASSERT_NEAR(0.0, transform_of(f.ecs, e)->position.y, 0.02);
+    destroy_world(&f);
+}
+
+static void test_physics_character_pushes_bodies_and_enters_triggers(void) {
+    Fixture f = make_world(GRAVITY);
+    spawn_ground(f.ecs);
+    const WPE_Entity crate =
+        spawn_dynamic(f.ecs, wpe_vec3(3.0f, 0.5f, 0.0f), wpe_collider_default(WPE_COLLIDER_BOX));
+    WPE_Collider zone = wpe_collider_default(WPE_COLLIDER_BOX);
+    zone.size = wpe_vec3(1.0f, 2.0f, 1.0f);
+    zone.is_trigger = true;
+    const WPE_Entity trigger = spawn_static(f.ecs, wpe_vec3(0.0f, 1.0f, -3.0f), zone);
+    const WPE_Entity e = spawn_character(&f, wpe_vec3(0.0f, 0.0f, 0.0f));
+    run(&f, 0.5f); /* Creates the bodies; the crate settles. */
+
+    /* Rays from inside the capsule hit it, unless told to ignore it. */
+    WPE_RaycastHit hit;
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(0, 1, 0), wpe_vec3(0, -1, 0), 5.0f, NULL, &hit));
+    WPE_TEST_ASSERT_EQ_UINT(e, hit.entity);
+    WPE_TEST_ASSERT(wpe_physics_raycast(f.physics, wpe_vec3(0, 1, 0), wpe_vec3(0, -1, 0), 5.0f,
+                                        &(WPE_QueryFilter){.ignore = e}, &hit));
+    WPE_TEST_ASSERT(hit.entity != e);
+
+    /* Walking into the crate pushes it along. */
+    walk(&f, e, wpe_vec3(0, 0, 0), wpe_vec3(2, 0, 0), 2.0f, true);
+    WPE_TEST_ASSERT(transform_of(f.ecs, crate)->position.x > 4.0f);
+    WPE_TEST_ASSERT(transform_of(f.ecs, e)->position.x > 2.5f);
+
+    /* A crate pinned against a wall stops it (sunk in no deeper than a few centimeters). */
+    WPE_Collider block = wpe_collider_default(WPE_COLLIDER_BOX);
+    block.size = wpe_vec3(1.0f, 3.0f, 6.0f);
+    spawn_static(f.ecs, wpe_vec3(transform_of(f.ecs, crate)->position.x + 1.5f, 1.5f, 0.0f), block);
+    walk(&f, e, wpe_vec3(0, 0, 0), wpe_vec3(2, 0, 0), 3.0f, true);
+    const float crate_face = transform_of(f.ecs, crate)->position.x - 0.5f;
+    WPE_TEST_ASSERT(transform_of(f.ecs, e)->position.x + 0.4f < crate_face + 0.08f);
+
+    /* Walking through the trigger enters it (the character isn't blocked). */
+    transform_of(f.ecs, e)->position = wpe_vec3(0.0f, 0.0f, 0.0f);
+    run(&f, DT);
+    bool entered = false;
+    const int frames = (int)(2.0f / DT);
+    WPE_Vec3 v = wpe_vec3(0, 0, 0);
+    for (int i = 0; i < frames && !entered; ++i) {
+        v = wpe_vec3(0.0f, v.y - 9.81f * DT, -2.0f);
+        WPE_TEST_ASSERT_OK(wpe_character_move(f.physics, e, v, DT, &v));
+        WPE_TEST_ASSERT_OK(wpe_physics_step(f.physics, DT));
+        entered = has_event(&f, WPE_PHYSICS_TRIGGER_ENTER, trigger, e);
+    }
+    WPE_TEST_ASSERT(entered);
+    destroy_world(&f);
+}
+
+static void test_physics_character_component_lifecycle(void) {
+    Fixture f = make_world(GRAVITY);
+    const WPE_Entity e = spawn_character(&f, wpe_vec3(0.0f, 0.0f, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_physics_stats(f.physics).bodies);
+    /* A copy gets its own body. */
+    const WPE_Entity copy = spawn_at(f.ecs, wpe_vec3(3.0f, 0.0f, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, copy, WPE_COMP_CHARACTER, character_of(&f, e), NULL));
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_physics_stats(f.physics).bodies);
+    /* Invalid settings are reported and leave it without a body until refreshed. */
+    WPE_CharacterController* c = wpe_ecs_get_component(f.ecs, copy, WPE_COMP_CHARACTER);
+    c->radius = 0.0f;
+    wpe_log_set_stderr_enabled(false);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_physics_refresh(f.physics, copy));
+    wpe_log_set_stderr_enabled(true);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_physics_stats(f.physics).bodies);
+    c = wpe_ecs_get_component(f.ecs, copy, WPE_COMP_CHARACTER);
+    c->radius = 0.3f;
+    WPE_TEST_ASSERT_OK(wpe_physics_refresh(f.physics, copy));
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_physics_stats(f.physics).bodies);
+    /* Removing the component, or despawning, releases the body. */
+    WPE_TEST_ASSERT_OK(wpe_ecs_remove_component(f.ecs, e, WPE_COMP_CHARACTER));
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_physics_stats(f.physics).bodies);
+    WPE_TEST_ASSERT_OK(wpe_ecs_despawn(f.ecs, copy));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_physics_stats(f.physics).bodies);
+    /* And physics can go with characters still in the world. */
+    spawn_character(&f, wpe_vec3(0.0f, 0.0f, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    destroy_world(&f);
+}
+
+WPE_TEST_MAIN(WPE_TEST_CASE(test_physics_shape_casts_overlaps_and_filters),
+              WPE_TEST_CASE(test_physics_character_lands_walks_and_slides),
+              WPE_TEST_CASE(test_physics_character_slopes), WPE_TEST_CASE(test_physics_character_steps),
+              WPE_TEST_CASE(test_physics_character_jumps_into_a_ceiling),
+              WPE_TEST_CASE(test_physics_character_pushes_bodies_and_enters_triggers),
+              WPE_TEST_CASE(test_physics_character_component_lifecycle),
+              WPE_TEST_CASE(test_physics_create_validates_world),
               WPE_TEST_CASE(test_physics_create_bodies_and_initial_velocity),
               WPE_TEST_CASE(test_physics_box_falls_and_comes_to_rest),
               WPE_TEST_CASE(test_physics_restitution_bounces), WPE_TEST_CASE(test_physics_contact_events),

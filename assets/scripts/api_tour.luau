@@ -105,6 +105,35 @@ function Tour:on_start()
 	local hit = wpe.raycast(vector.create(20, 5, 20), vector.create(0, -1, 0), 10)
 	assert(hit and near(hit.distance, 5, 1e-3) and hit.normal.y > 0.99 and wpe.get_name(hit.entity) == "ground")
 	assert(wpe.raycast(vector.create(20, 5, 20), vector.create(0, 1, 0)) == nil)
+	local ground = hit.entity
+	assert(wpe.raycast(vector.create(20, 5, 20), vector.create(0, -1, 0), 10, { ignore = ground }) == nil)
+	assert(wpe.raycast(vector.create(20, 5, 20), vector.create(0, -1, 0), 10, { triggers = true }).entity == ground)
+
+	-- Shape casts and overlaps.
+	local ball = { shape = wpe.COLLIDER_SPHERE, radius = 0.5 }
+	hit = wpe.shape_cast(ball, vector.create(20, 5, 20), vector.create(0, -1, 0), 10)
+	assert(hit and hit.entity == ground and near(hit.distance, 4.5, 1e-2) and hit.normal.y > 0.99)
+	local slab = { shape = wpe.COLLIDER_BOX, size = vector.create(2, 0.2, 2), rotation = vector.create(0, 0.5, 0) }
+	assert(near(wpe.shape_cast(slab, vector.create(20, 5, 20), vector.create(0, -1, 0)).distance, 4.9, 1e-2))
+	local rod = { shape = wpe.COLLIDER_CAPSULE, radius = 0.2, height = 1 }
+	assert(wpe.shape_cast(rod, vector.create(20, 5, 20), vector.create(0, 1, 0), 10, { ignore = ground }) == nil)
+	local touching = wpe.overlap(ball, vector.create(20, 0.2, 20))
+	assert(#touching == 1 and touching[1] == ground)
+	assert(#wpe.overlap(ball, vector.create(20, 3, 20), { triggers = true }) == 0)
+	assert(not pcall(wpe.overlap, { shape = wpe.COLLIDER_MESH }, vector.create(0, 0, 0)))
+
+	-- A character controller, walked in a circle at the fixed rate.
+	self.walker = wpe.spawn("tour_walker")
+	wpe.set_position(self.walker, vector.create(-12, 0.5, 12))
+	wpe.add_character(self.walker, { radius = 0.3, height = 1.6, offset = vector.create(0, 0.8, 0), max_slope = 40, step_height = 0.25, snap_distance = 0.2 })
+	local character = wpe.get_character(self.walker)
+	assert(not character.grounded and near(character.radius, 0.3) and near(character.max_slope, 40))
+	assert(near(character.step_height, 0.25) and near(character.snap_distance, 0.2))
+	assert(vnear(character.offset, vector.create(0, 0.8, 0)) and character.ground == nil)
+	self.walker_velocity = vector.create(0, 0, 0)
+	self.walker_start = wpe.get_position(self.walker)
+	assert(not pcall(wpe.add_character, self.walker, { radius = -1 }))
+	assert(not pcall(wpe.move_character, self.ball, vector.create(0, 0, 0), 0.1)) -- not a character
 
 	-- Audio.
 	local voice = wpe.play_sound("sounds/chime.wav", {
@@ -282,8 +311,14 @@ function Tour:on_update(dt)
 			shown += 1
 		end
 		assert(shown >= 3, "the coin's sprite sheet should animate")
-	elseif self.updates == 120 then
+	elseif self.updates == 130 then
 		assert(wpe.get_position(self.ball).y < 0.55, "the ball should rest on the ground")
+		local walker = wpe.get_character(self.walker)
+		assert(walker.grounded and walker.ground_normal.y > 0.99, "the walker should be on the ground")
+		assert(vector.magnitude(wpe.get_position(self.walker) - self.walker_start) > 0.5, "the walker should walk")
+	elseif self.updates == 140 then
+		wpe.remove_character(self.walker)
+		assert(not pcall(wpe.get_character, self.walker))
 	end
 	self.coin_frames[wpe.get_billboard(self.coin).frame] = true
 	assert(wpe.time() >= 0 and wpe.frame() >= 0)
@@ -294,6 +329,13 @@ end
 function Tour:on_fixed_update(dt)
 	self.fixed += 1
 	wpe.rotate(self.entity, vector.create(0, 1, 0), dt)
+	if self.updates < 140 then
+		local t = self.fixed * dt
+		local v = vector.create(math.cos(t) * 1.5, self.walker_velocity.y - 9.81 * dt, math.sin(t) * 1.5)
+		local grounded
+		self.walker_velocity, grounded = wpe.move_character(self.walker, v, dt)
+		assert(type(grounded) == "boolean")
+	end
 	-- Report progress through the entity name so the host side can check both callbacks ran.
 	wpe.set_name(self.entity, string.format("tour:%d:%d", self.updates, self.fixed))
 end
@@ -304,6 +346,7 @@ function Tour:on_destroy()
 	wpe.destroy(self.figure)
 	wpe.destroy(self.ball)
 	wpe.destroy(self.pillar)
+	wpe.destroy(self.walker)
 	wpe.destroy(self.speaker)
 	wpe.destroy(self.marker)
 	wpe.destroy(self.puff)

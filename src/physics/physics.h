@@ -7,6 +7,8 @@
  *   body. Its colliders are the WPE_Collider on the same entity.
  * - WPE_COMP_PHYSICS_COLLIDER (WPE_Collider): shape, material and trigger flag. A collider on an
  *   entity without a rigid body gets an implicit static body (level geometry).
+ * - WPE_COMP_CHARACTER (WPE_CharacterController): a capsule moved by wpe_character_move(), with a
+ *   kinematic body that follows the entity like a kinematic rigid body.
  *
  * One collider per entity. Colliders do not combine across the hierarchy: a collider on a child
  * of a rigid body entity gets its own body (an implicit static one unless the child also has a
@@ -114,6 +116,45 @@ typedef struct WPE_RaycastHit {
     float distance;
 } WPE_RaycastHit;
 
+/** Which colliders a query sees. A zero-initialized filter (or NULL) sees every solid collider. */
+typedef struct WPE_QueryFilter {
+    WPE_Entity ignore;     /* Its collider and character capsule are skipped (WPE_ENTITY_NULL: none). */
+    bool include_triggers; /* Trigger colliders count too. */
+} WPE_QueryFilter;
+
+/** A shape for shape casts and overlap tests. */
+typedef struct WPE_QueryShape {
+    WPE_ColliderShape shape; /* BOX, SPHERE or CAPSULE, with `size` as in WPE_Collider */
+    WPE_Vec3 size;
+    WPE_Quat rotation; /* A capsule stands along its local Y. */
+} WPE_QueryShape;
+
+/**
+ * A kinematic character: an upright capsule (along world +Y, whatever the entity's rotation and
+ * scale) moved by wpe_character_move(), which slides along walls, walks up walkable slopes and
+ * steps, stays on the ground and stops at ceilings. The physics world gives it a kinematic body, so
+ * it pushes dynamic bodies and enters triggers. The entity shouldn't also have a rigid body or
+ * collider.
+ */
+typedef struct WPE_CharacterController {
+    float radius;    /* Capsule radius (default 0.4). */
+    float height;    /* Total capsule height (default 1.8); at most 2 * radius makes it a sphere. */
+    WPE_Vec3 offset; /* Capsule center from the entity's origin (default {0, 0.9, 0}: origin at the feet). */
+    float max_slope; /* Steepest walkable ground, in degrees (default 45). */
+    float step_height;   /* Tallest step (ledge) it walks up onto from the ground (default 0.3). */
+    float snap_distance; /* Walking down slopes and steps keeps contact up to this drop (default 0.3). */
+
+    /* State after the latest wpe_character_move() (read only). */
+    bool grounded;
+    WPE_Vec3 ground_normal; /* {0, 1, 0} in the air. */
+    WPE_Entity ground;      /* What it stands on, or WPE_ENTITY_NULL. */
+
+    /* Private (managed by the physics world). */
+    uint64_t wpe__body;
+    uint8_t wpe__state;
+    bool wpe__target_move;
+} WPE_CharacterController;
+
 typedef struct WPE_PhysicsDesc {
     WPE_Ecs* ecs;             /* Borrowed; scene components must be registered. */
     WPE_AssetManager* assets; /* Optional, borrowed: needed for convex and mesh colliders. */
@@ -210,15 +251,73 @@ void wpe_physics_set_gravity(WPE_Physics* physics, WPE_Vec3 gravity);
 WPE_Vec3 wpe_physics_gravity(const WPE_Physics* physics);
 
 /**
- * Casts a ray against all non-trigger colliders and reports the closest hit.
+ * Casts a ray and reports the closest hit.
  *
  * @param direction Need not be normalized; zero vectors never hit.
+ * @param filter What the ray sees (NULL: every solid collider).
  * @return true when something was hit within max_distance.
  *
  * @thread_safety Owning thread
  */
 bool wpe_physics_raycast(const WPE_Physics* physics, WPE_Vec3 origin, WPE_Vec3 direction, float max_distance,
-                         WPE_RaycastHit* out_hit);
+                         const WPE_QueryFilter* filter, WPE_RaycastHit* out_hit);
+
+/**
+ * Sweeps a shape from `origin` along `direction` and reports the first collider it touches. A shape
+ * that starts overlapping something hits it at distance 0.
+ *
+ * @param shape A box, sphere or capsule (others never hit).
+ * @param filter What the shape sees (NULL: every solid collider).
+ * @return true when something was hit within max_distance; `point` and `normal` are where the swept
+ *         shape first touches, `distance` how far its center travelled.
+ *
+ * @thread_safety Owning thread
+ */
+bool wpe_physics_shape_cast(const WPE_Physics* physics, const WPE_QueryShape* shape, WPE_Vec3 origin,
+                            WPE_Vec3 direction, float max_distance, const WPE_QueryFilter* filter,
+                            WPE_RaycastHit* out_hit);
+
+/**
+ * Finds the entities whose colliders (or character capsules) overlap a shape centered at `center`.
+ *
+ * @param out_entities Receives up to `capacity` entities, each once, in no particular order (may be
+ *                     NULL when `capacity` is 0).
+ * @return The number of overlapping entities, which may exceed `capacity`.
+ *
+ * @thread_safety Owning thread
+ */
+uint32_t wpe_physics_overlap(const WPE_Physics* physics, const WPE_QueryShape* shape, WPE_Vec3 center,
+                             const WPE_QueryFilter* filter, WPE_Entity* out_entities, uint32_t capacity);
+
+/** @return A character controller with the defaults listed in WPE_CharacterController. @thread_safety Any
+ * thread */
+WPE_CharacterController wpe_character_default(void);
+
+/**
+ * Moves a character for one frame of `velocity` (world units per second, over `dt` seconds):
+ * - It slides along what it touches and stops at ceilings; triggers don't block it.
+ * - Ground no steeper than `max_slope` is walkable: standing there, a velocity pointing down doesn't
+ *   slide it downhill, and walking off a slope or a step keeps it on the ground for drops up to
+ *   `snap_distance` (unless the velocity points up, as in a jump).
+ * - On the ground, a ledge up to `step_height` tall (stairs, a curb) is stepped onto, when its top
+ *   is walkable and not a dynamic body (those are pushed instead).
+ * - Dynamic bodies are solid, and the character's body pushes them at the next physics step.
+ *
+ * The entity's position changes at once (rotation and scale are kept), and the controller's
+ * `grounded`, `ground_normal` and `ground` describe the result.
+ *
+ * Gravity is up to the caller: add it to the velocity each frame. The returned velocity has the
+ * parts that ran into something removed (falling onto the ground zeroes the downward speed, running
+ * into a wall the speed into it), ready to be the next frame's velocity.
+ *
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_NOT_FOUND (no character
+ *         controller or transform); WPE_RESULT_ERROR_INVALID_ARG (non-finite velocity, dt <= 0, or a
+ *         controller with a non-positive radius or height).
+ *
+ * @thread_safety Owning thread
+ */
+WPE_Result wpe_character_move(WPE_Physics* physics, WPE_Entity entity, WPE_Vec3 velocity, float dt,
+                              WPE_Vec3* out_velocity);
 
 /* Body control. These fail with WPE_RESULT_ERROR_NOT_FOUND when the entity has no simulated
  * rigid body yet (bodies are created at the next step); forces apply to dynamic bodies only. */

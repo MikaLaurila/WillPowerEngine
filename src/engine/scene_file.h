@@ -194,7 +194,7 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
 
 /**
  * Sets one part of an entity from its scene-file description: "name", "parent", "transform",
- * "mesh", "camera", "light", "animator", "rigidbody", "collider", "audio_source", "script", or a
+ * "mesh", "camera", "light", "animator", "rigidbody", "collider", "character", "audio_source", "script", or a
  * game component's serializer name. An existing component is replaced as a whole (fields not given
  * take their defaults), so read the entity first to change single fields.
  *

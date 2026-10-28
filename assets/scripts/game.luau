@@ -2,7 +2,8 @@
 -- to quit), scene switching (switch_scene), and a heads-up display showing the controls and every
 -- connected gamepad's live state (handy for testing controllers).
 local Game = {}
-Game.properties = { next_scene = "scenes/test_full.scene", title = "WillPowerEngine" }
+-- help: the scene's control lines, separated by ";" (empty: the ball demo's).
+Game.properties = { next_scene = "scenes/test_full.scene", title = "WillPowerEngine", help = "" }
 
 local BUTTONS = {
 	"south", "east", "west", "north", "back", "guide", "start", "left_stick", "right_stick",
@@ -70,9 +71,12 @@ function Game:draw_hud()
 		local lines = {
 			"WASD/stick move  Space/A jump  F,LMB/RT throw",
 			"Shift/LT boost  T/Y rumble  R/Back reset",
-			"Tab/Start next scene  F1 help",
-			wpe.is_mouse_captured() and "Esc: release mouse" or "Click: mouse look  Esc: quit",
 		}
+		if self.help ~= "" then
+			lines = string.split(self.help, ";")
+		end
+		table.insert(lines, "Tab/Start next scene  F1 help")
+		table.insert(lines, wpe.is_mouse_captured() and "Esc: release mouse" or "Click: mouse look  Esc: quit")
 		for _, line in lines do
 			wpe.draw_text(2, y, line, dim)
 			y += 8

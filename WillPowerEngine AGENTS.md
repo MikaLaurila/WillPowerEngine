@@ -291,6 +291,12 @@ return MyEntity
 - Physics steps at the fixed rate. Each step creates missing bodies, follows game-code moves of entities, simulates, writes dynamic and kinematic poses back into the parent-relative Transform, and collects contact and trigger events.
 - Settings and world scale are read when a body or shape is created; `wpe_physics_refresh()` rebuilds them.
 - Box3D allocates through `wpe_alloc`, and its assertions go through the engine's assert handler.
+- Queries: rays, shape casts (box, sphere, capsule) and overlaps, all through a `WPE_QueryFilter` (ignore an entity, include triggers). Box3D's queries report triggers too, so every callback filters.
+- `WPE_CharacterController` (component 20) is a kinematic capsule moved by `wpe_character_move()`, built on Box3D's mover tools (`b3World_CollideMover` → `b3SolvePlanes` → `b3World_CastMover`). Engine rules on top:
+  - Steep planes get a vertical companion plane, and velocity is clipped against those first, so a character can't climb or skid up slopes steeper than `max_slope`.
+  - On walkable ground a downward velocity is dropped and the character snaps down instead, so it doesn't slide downhill.
+  - Dynamic bodies are soft (it may sink in `WPE__PUSH_DEPTH`, and sweeps ignore them), so its kinematic body pushes them.
+  - Steps: a held-back grounded move is retried lifted by `step_height` and set down again; an edge under the capsule counts as ground when the surface inside it is walkable.
 - NOTE: limitation. The solver is single-threaded, because Box3D's task API needs asynchronous tasks that the job system doesn't provide yet. Colliders don't combine across the hierarchy into compound bodies.
 
 **Script host responsibilities:**

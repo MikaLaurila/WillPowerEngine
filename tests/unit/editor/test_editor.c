@@ -343,7 +343,7 @@ static void test_editor_view_settings_and_overlays(void) {
 
 static bool raycast_down(WPE_Editor* editor, float x, WPE_RaycastHit* hit) {
     return wpe_physics_raycast(wpe_engine_physics(wpe_editor_engine(editor)), wpe_vec3(x, 10, 0),
-                               wpe_vec3(0, -1, 0), 20.0f, hit);
+                               wpe_vec3(0, -1, 0), 20.0f, NULL, hit);
 }
 
 /* Edit mode doesn't simulate, but physics follows edits: moves, rescales and new colliders. */

@@ -133,10 +133,39 @@ Available when the host was created with a physics world (otherwise these raise 
 | `wpe.apply_force(entity, v)` | Apply a force (newtons) for the next step. Dynamic bodies only. |
 | `wpe.apply_impulse(entity, v)` | Change the momentum immediately (velocity change = impulse / mass). Dynamic bodies only. |
 | `wpe.get_velocity(entity)` / `wpe.set_velocity(entity, v)` | Linear velocity (m/s). Setting it works for dynamic and kinematic bodies. |
-| `wpe.raycast(origin, direction, [max_distance = 1000]) -> {entity, point, normal, distance}?` | Closest hit with a non-trigger collider, or nil. |
+| `wpe.raycast(origin, direction, [max_distance = 1000], [options]) -> {entity, point, normal, distance}?` | Closest hit, or nil. Options: `{ignore = entity, triggers = false}`: skip an entity's collider and character capsule (such as your own), or see trigger colliders too. |
+| `wpe.shape_cast(shape, origin, direction, [max_distance = 1000], [options]) -> hit?` | Sweeps a shape and reports the first collider it touches, like `raycast`. `distance` is how far the shape's center travelled; a shape that starts inside something hits it at distance 0. |
+| `wpe.overlap(shape, center, [options]) -> {entity, ...}` | The entities whose colliders (or character capsules) overlap the shape, each once (at most 64). |
 | `wpe.get_gravity()` / `wpe.set_gravity(v)` | World gravity (m/s²). |
 
+Query shapes are tables: `{shape = wpe.COLLIDER_SPHERE, radius}`, `{shape = wpe.COLLIDER_CAPSULE, radius, height}` (standing along local Y) or `{shape = wpe.COLLIDER_BOX, size}`, with an optional `rotation` (Euler angles in radians).
+
 Moving a dynamic body's entity with `wpe.set_position`/`wpe.set_rotation` teleports it. Changing a collider or rigid body after creation means calling `wpe.add_collider`/`wpe.add_rigidbody` again; changing the entity's scale needs the same.
+
+#### Character controllers
+
+A character controller is an upright capsule moved by your script rather than by forces: it slides along walls, walks up slopes and stairs, stays on the ground walking down them, stops at ceilings and pushes crates. Its kinematic body lets triggers and dynamic bodies see it. The capsule stands along world Y whatever the entity's rotation, so turning the entity to face its way is free. The entity shouldn't also have a rigid body or collider.
+
+| Function | Description |
+|---|---|
+| `wpe.add_character(entity, [{radius = 0.4, height = 1.8, offset = (0, 0.9, 0), max_slope = 45, step_height = 0.3, snap_distance = 0.3}])` | Add or update the controller. `offset` is the capsule's center from the entity's origin (the default puts the origin at the feet); `max_slope` is the steepest walkable ground in degrees; `step_height` the tallest step walked up onto; `snap_distance` how far it follows the ground down slopes and steps. |
+| `wpe.move_character(entity, velocity, dt) -> velocity, grounded` | Moves for `dt` seconds at `velocity` and returns what is left of it: the parts that ran into something are gone (landing zeroes the fall, a wall the speed into it, a ceiling the rise). Keep the returned velocity for the next frame. |
+| `wpe.get_character(entity) -> {grounded, ground_normal, ground?, radius, height, offset, max_slope, step_height, snap_distance}` | The settings, and what the latest move found under it (`ground` is the entity it stands on). |
+| `wpe.remove_character(entity)` | Remove the controller. |
+
+Gravity is the script's to apply: add it to the velocity each frame. A velocity pointing up (a jump) leaves the ground; one pointing down on walkable ground doesn't slide it downhill. Call `move_character` from `on_fixed_update` for frame-rate-independent movement:
+
+```lua
+function Hero:on_fixed_update(dt)
+	local v = vector.create(wish.x * self.speed, self.velocity.y - 18 * dt, wish.z * self.speed)
+	if jump and wpe.get_character(self.entity).grounded then
+		v = vector.create(v.x, 6.5, v.z)
+	end
+	self.velocity = wpe.move_character(self.entity, v, dt)
+end
+```
+
+`scripts/hero.luau` with `scenes/character.scene` is a complete example.
 
 ### Audio
 

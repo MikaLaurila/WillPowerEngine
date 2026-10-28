@@ -277,6 +277,13 @@
       "transform": {"position": [6, 0.5, 0], "euler": [0, 0, -45]},
       "particles": {"world_space": false, "shape": "box", "shape_size": [0.4, 0, 0.4], "rate": 30, "lit": true,
                     "blend": "cutout", "columns": 4, "image": "sprites/coin.png", "seed": 7}
+    },
+    {
+      "id": 43,
+      "name": "bystander",
+      "transform": {"position": [-6, 0, -9]},
+      "character": {"radius": 0.35, "height": 1.7, "offset": [0, 0.85, 0], "max_slope": 50, "step_height": 0.4,
+                    "snap_distance": 0.25}
     }
   ]
 }

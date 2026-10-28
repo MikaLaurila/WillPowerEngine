@@ -638,25 +638,190 @@ static int wpe__api_get_velocity(lua_State* L) {
     return 1;
 }
 
+/* Optional query options {ignore = entity, triggers = bool} at `index`. */
+static WPE_QueryFilter wpe__check_query_filter(lua_State* L, int index) {
+    WPE_QueryFilter filter = {.ignore = WPE_ENTITY_NULL};
+    if (lua_isnoneornil(L, index)) return filter;
+    luaL_checktype(L, index, LUA_TTABLE);
+    lua_getfield(L, index, "ignore");
+    if (!lua_isnil(L, -1)) filter.ignore = wpe__check_handle(L, -1);
+    lua_pop(L, 1);
+    filter.include_triggers = wpe__field_bool(L, index, "triggers", false);
+    return filter;
+}
+
+/* A query shape {shape = wpe.COLLIDER_BOX|SPHERE|CAPSULE, size, radius, height, rotation (Euler)}. */
+static WPE_QueryShape wpe__check_query_shape(lua_State* L, int index) {
+    luaL_checktype(L, index, LUA_TTABLE);
+    WPE_QueryShape shape = {
+        .shape = WPE_COLLIDER_SPHERE, .size = wpe_vec3(0.5f, 1.0f, 0.5f), .rotation = wpe_quat_identity()};
+    const float type = wpe__field_number(L, index, "shape", (float)shape.shape);
+    if (!(type == WPE_COLLIDER_BOX || type == WPE_COLLIDER_SPHERE || type == WPE_COLLIDER_CAPSULE))
+        luaL_errorL(L, "query shape must be wpe.COLLIDER_BOX, wpe.COLLIDER_SPHERE or wpe.COLLIDER_CAPSULE");
+    shape.shape = (WPE_ColliderShape)type;
+    if (shape.shape == WPE_COLLIDER_BOX) shape.size = wpe_vec3(1.0f, 1.0f, 1.0f);
+    lua_getfield(L, index, "size");
+    if (!lua_isnil(L, -1)) shape.size = wpe__check_vec3(L, -1);
+    lua_pop(L, 1);
+    shape.size.x = wpe__field_number(L, index, "radius", shape.size.x);
+    shape.size.y = wpe__field_number(L, index, "height", shape.size.y);
+    lua_getfield(L, index, "rotation");
+    if (!lua_isnil(L, -1)) shape.rotation = wpe_quat_from_euler_xyz(wpe__check_vec3(L, -1));
+    lua_pop(L, 1);
+    const bool positive = shape.shape == WPE_COLLIDER_BOX
+                              ? shape.size.x > 0.0f && shape.size.y > 0.0f && shape.size.z > 0.0f
+                              : shape.size.x > 0.0f;
+    if (!positive || !(isfinite(shape.size.x) && isfinite(shape.size.y) && isfinite(shape.size.z)))
+        luaL_errorL(L, "query shape needs a positive size (box) or radius (sphere, capsule)");
+    return shape;
+}
+
+static void wpe__push_hit(lua_State* L, const WPE_RaycastHit* hit) {
+    lua_createtable(L, 0, 4);
+    lua_pushnumber(L, (double)hit->entity);
+    lua_setfield(L, -2, "entity");
+    wpe__push_vec3(L, hit->point);
+    lua_setfield(L, -2, "point");
+    wpe__push_vec3(L, hit->normal);
+    lua_setfield(L, -2, "normal");
+    lua_pushnumber(L, hit->distance);
+    lua_setfield(L, -2, "distance");
+}
+
+static int wpe__api_shape_cast(lua_State* L) {
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_QueryShape shape = wpe__check_query_shape(L, 1);
+    const WPE_Vec3 origin = wpe__check_vec3(L, 2);
+    const WPE_Vec3 direction = wpe__check_vec3(L, 3);
+    const float max_distance = (float)luaL_optnumber(L, 4, 1000.0);
+    const WPE_QueryFilter filter = wpe__check_query_filter(L, 5);
+    WPE_RaycastHit hit;
+    if (!wpe_physics_shape_cast(physics, &shape, origin, direction, max_distance, &filter, &hit)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    wpe__push_hit(L, &hit);
+    return 1;
+}
+
+static int wpe__api_overlap(lua_State* L) {
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_QueryShape shape = wpe__check_query_shape(L, 1);
+    const WPE_Vec3 center = wpe__check_vec3(L, 2);
+    const WPE_QueryFilter filter = wpe__check_query_filter(L, 3);
+    WPE_Entity entities[64];
+    uint32_t count = wpe_physics_overlap(physics, &shape, center, &filter, entities, 64);
+    if (count > 64) count = 64; /* NOTE(limitation): at most 64 entities are listed. */
+    lua_createtable(L, (int)count, 0);
+    for (uint32_t i = 0; i < count; ++i) {
+        lua_pushnumber(L, (double)entities[i]);
+        lua_rawseti(L, -2, (int)i + 1);
+    }
+    return 1;
+}
+
+static int wpe__api_add_character(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "add_character");
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_CharacterController* existing = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_CHARACTER);
+    WPE_CharacterController c = existing ? *existing : wpe_character_default();
+    if (!lua_isnoneornil(L, 2)) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        c.radius = wpe__field_number(L, 2, "radius", c.radius);
+        c.height = wpe__field_number(L, 2, "height", c.height);
+        lua_getfield(L, 2, "offset");
+        if (!lua_isnil(L, -1)) c.offset = wpe__check_vec3(L, -1);
+        lua_pop(L, 1);
+        c.max_slope = wpe__field_number(L, 2, "max_slope", c.max_slope);
+        c.step_height = wpe__field_number(L, 2, "step_height", c.step_height);
+        c.snap_distance = wpe__field_number(L, 2, "snap_distance", c.snap_distance);
+    }
+    if (!(c.radius > 0.0f && c.height > 0.0f && c.max_slope >= 0.0f && c.max_slope <= 90.0f &&
+          c.step_height >= 0.0f && c.snap_distance >= 0.0f))
+        luaL_errorL(L, "wpe.add_character: radius and height must be positive, max_slope 0..90, and "
+                       "step_height and snap_distance >= 0");
+    if (!wpe_ecs_has_component(host->ecs, entity, WPE_COMP_TRANSFORM))
+        luaL_errorL(L, "wpe.add_character: entity 0x%08x has no Transform", entity);
+    WPE_CharacterController* stored = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_CHARACTER);
+    if (stored) {
+        *stored = c;
+    } else {
+        wpe__raise_result(L, "add_character",
+                          wpe_ecs_add_component(host->ecs, entity, WPE_COMP_CHARACTER, &c, NULL));
+    }
+    wpe__raise_result(L, "add_character", wpe_physics_refresh(physics, entity));
+    return 0;
+}
+
+static int wpe__api_remove_character(lua_State* L) {
+    return wpe__api_remove_physics(L, "remove_character", WPE_COMP_CHARACTER);
+}
+
+static const WPE_CharacterController* wpe__check_character(lua_State* L, const char* function,
+                                                           WPE_Entity entity) {
+    const WPE_CharacterController* c =
+        wpe_ecs_get_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_CHARACTER);
+    if (!c) luaL_errorL(L, "wpe.%s: entity 0x%08x has no character controller", function, entity);
+    return c;
+}
+
+static int wpe__api_move_character(lua_State* L) {
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_Vec3 velocity = wpe__check_vec3(L, 2);
+    const double dt = luaL_checknumber(L, 3);
+    wpe__check_character(L, "move_character", entity);
+    if (!(dt > 0.0 && dt <= 1.0) || !(isfinite(velocity.x) && isfinite(velocity.y) && isfinite(velocity.z)))
+        luaL_errorL(L, "wpe.move_character: velocity must be finite and dt in (0, 1]");
+    WPE_Vec3 clipped;
+    wpe__raise_result(L, "move_character",
+                      wpe_character_move(physics, entity, velocity, (float)dt, &clipped));
+    wpe__push_vec3(L, clipped);
+    lua_pushboolean(L, wpe__check_character(L, "move_character", entity)->grounded);
+    return 2;
+}
+
+static int wpe__api_get_character(lua_State* L) {
+    wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_CharacterController copy = *wpe__check_character(L, "get_character", entity);
+    lua_createtable(L, 0, 8);
+    lua_pushboolean(L, copy.grounded);
+    lua_setfield(L, -2, "grounded");
+    wpe__push_vec3(L, copy.ground_normal);
+    lua_setfield(L, -2, "ground_normal");
+    if (copy.ground != WPE_ENTITY_NULL) {
+        lua_pushnumber(L, (double)copy.ground);
+        lua_setfield(L, -2, "ground");
+    }
+    lua_pushnumber(L, copy.radius);
+    lua_setfield(L, -2, "radius");
+    lua_pushnumber(L, copy.height);
+    lua_setfield(L, -2, "height");
+    wpe__push_vec3(L, copy.offset);
+    lua_setfield(L, -2, "offset");
+    lua_pushnumber(L, copy.max_slope);
+    lua_setfield(L, -2, "max_slope");
+    lua_pushnumber(L, copy.step_height);
+    lua_setfield(L, -2, "step_height");
+    lua_pushnumber(L, copy.snap_distance);
+    lua_setfield(L, -2, "snap_distance");
+    return 1;
+}
+
 static int wpe__api_raycast(lua_State* L) {
     WPE_Physics* physics = wpe__physics(L);
     const WPE_Vec3 origin = wpe__check_vec3(L, 1);
     const WPE_Vec3 direction = wpe__check_vec3(L, 2);
     const float max_distance = (float)luaL_optnumber(L, 3, 1000.0);
+    const WPE_QueryFilter filter = wpe__check_query_filter(L, 4);
     WPE_RaycastHit hit;
-    if (!wpe_physics_raycast(physics, origin, direction, max_distance, &hit)) {
+    if (!wpe_physics_raycast(physics, origin, direction, max_distance, &filter, &hit)) {
         lua_pushnil(L);
         return 1;
     }
-    lua_createtable(L, 0, 4);
-    lua_pushnumber(L, (double)hit.entity);
-    lua_setfield(L, -2, "entity");
-    wpe__push_vec3(L, hit.point);
-    lua_setfield(L, -2, "point");
-    wpe__push_vec3(L, hit.normal);
-    lua_setfield(L, -2, "normal");
-    lua_pushnumber(L, hit.distance);
-    lua_setfield(L, -2, "distance");
+    wpe__push_hit(L, &hit);
     return 1;
 }
 
@@ -1703,6 +1868,12 @@ static const luaL_Reg wpe__api[] = {
     {"set_velocity", wpe__api_set_velocity},
     {"get_velocity", wpe__api_get_velocity},
     {"raycast", wpe__api_raycast},
+    {"shape_cast", wpe__api_shape_cast},
+    {"overlap", wpe__api_overlap},
+    {"add_character", wpe__api_add_character},
+    {"remove_character", wpe__api_remove_character},
+    {"move_character", wpe__api_move_character},
+    {"get_character", wpe__api_get_character},
     {"set_gravity", wpe__api_set_gravity},
     {"get_gravity", wpe__api_get_gravity},
     {"play_sound", wpe__api_play_sound},

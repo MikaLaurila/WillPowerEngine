@@ -1,0 +1,163 @@
+{
+  "format": "wpe.scene",
+  "version": 1,
+  "environment": {
+    "clear_color": [0.42, 0.52, 0.64],
+    "ambient": [0.22, 0.23, 0.27],
+    "fog": {"mode": "linear", "color": [0.42, 0.52, 0.64], "start": 25, "end": 60},
+    "shadows": {"enabled": true, "map_size": 1024, "distance": 24}
+  },
+  "camera": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "camera",
+      "transform": {"position": [0, 3, 10]},
+      "camera": {"fov": 65, "far": 120},
+      "script": {"path": "scripts/follow_camera.luau", "properties": {"target": "hero"}}
+    },
+    {
+      "id": 2,
+      "name": "sun",
+      "transform": {"position": [0, 10, 0], "euler": [-50, 35, 0]},
+      "light": {"type": "directional", "color": [1, 0.96, 0.88], "intensity": 0.85, "cast_shadows": true}
+    },
+    {
+      "id": 3,
+      "name": "ground",
+      "mesh": {"model": "meshes/ground.prim"},
+      "collider": {"shape": "box", "size": [60, 1, 60], "offset": [0, -0.5, 0], "friction": 0.8}
+    },
+    {
+      "id": 4,
+      "name": "game",
+      "script": {"path": "scripts/game.luau",
+                 "properties": {"next_scene": "scenes/demo.scene", "title": "Character controller",
+                                "help": "WASD/stick move  Space/A jump;Shift/LT run  R/Back reset"}}
+    },
+    {
+      "id": 5,
+      "name": "hero",
+      "transform": {"position": [0, 0, 4]},
+      "character": {"radius": 0.35, "height": 1.7, "offset": [0, 0.85, 0]},
+      "script": {"path": "scripts/hero.luau"}
+    },
+    {"id": 6, "name": "body", "parent": 5, "transform": {"position": [0, 0.85, 0]}, "mesh": {"model": "meshes/hero.prim"}},
+    {
+      "id": 7,
+      "name": "visor",
+      "parent": 5,
+      "transform": {"position": [0, 1.4, -0.22], "scale": [0.4, 0.12, 0.1]},
+      "mesh": {"model": "meshes/box.prim"}
+    },
+    {
+      "id": 8,
+      "name": "gentle ramp (25 degrees)",
+      "transform": {"position": [-6, 1.09, -2], "euler": [25, 0, 0]},
+      "mesh": {"model": "meshes/ramp.prim"},
+      "collider": {"shape": "box", "size": [4, 0.4, 6]}
+    },
+    {
+      "id": 9,
+      "name": "ramp landing",
+      "transform": {"position": [-6, 1.27, -6.72], "scale": [4, 0.8467, 4]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 10,
+      "name": "steep ramp (55 degrees)",
+      "transform": {"position": [6, 2.34, -2], "euler": [55, 0, 0]},
+      "mesh": {"model": "meshes/ramp.prim"},
+      "collider": {"shape": "box", "size": [4, 0.4, 6]}
+    },
+    {
+      "id": 11,
+      "name": "step 1",
+      "transform": {"position": [0, 0.1, -3.25], "scale": [3, 0.0667, 0.5]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 12,
+      "name": "step 2",
+      "transform": {"position": [0, 0.2, -3.75], "scale": [3, 0.1333, 0.5]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 13,
+      "name": "step 3",
+      "transform": {"position": [0, 0.3, -4.25], "scale": [3, 0.2, 0.5]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 14,
+      "name": "step 4",
+      "transform": {"position": [0, 0.4, -4.75], "scale": [3, 0.2667, 0.5]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 15,
+      "name": "step 5",
+      "transform": {"position": [0, 0.5, -5.25], "scale": [3, 0.3333, 0.5]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 16,
+      "name": "stairs landing",
+      "transform": {"position": [0, 0.6, -7], "scale": [3, 0.4, 3]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 17,
+      "name": "too tall to step (0.6)",
+      "transform": {"position": [-3, 0.3, 1], "scale": [1.5, 0.2, 1.5]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 18,
+      "name": "low ceiling",
+      "transform": {"position": [6, 2.25, 4], "scale": [3, 0.1667, 4]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 19,
+      "name": "crate 1",
+      "transform": {"position": [3, 0.5, 2]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "rigidbody": {"type": "dynamic"},
+      "collider": {"shape": "box", "size": [1, 1, 1], "density": 0.5}
+    },
+    {
+      "id": 20,
+      "name": "crate 2",
+      "transform": {"position": [3.2, 1.5, 2.1]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "rigidbody": {"type": "dynamic"},
+      "collider": {"shape": "box", "size": [1, 1, 1], "density": 0.5}
+    },
+    {
+      "id": 21,
+      "name": "crate 3",
+      "transform": {"position": [-1.5, 0.5, 7]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "rigidbody": {"type": "dynamic"},
+      "collider": {"shape": "box", "size": [1, 1, 1], "density": 0.5}
+    },
+    {
+      "id": 22,
+      "name": "chime zone",
+      "transform": {"position": [-4, 0.02, 6]},
+      "mesh": {"model": "meshes/zone.prim"},
+      "collider": {"shape": "box", "size": [4, 2, 4], "offset": [0, 1, 0], "trigger": true},
+      "script": {"path": "scripts/trigger_zone.luau"}
+    }
+  ]
+}
