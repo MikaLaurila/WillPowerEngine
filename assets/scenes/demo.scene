@@ -2,134 +2,656 @@
   "format": "wpe.scene",
   "version": 1,
   "environment": {
-    "clear_color": [0.36, 0.45, 0.58],
-    "ambient": [0.2, 0.21, 0.25],
-    "fog": {"mode": "linear", "color": [0.36, 0.45, 0.58], "start": 22, "end": 55},
-    "shadows": {"enabled": true, "map_size": 1024, "distance": 24},
+    "clear_color": [0.360000014, 0.449999988, 0.579999983],
+    "ambient": [0.200000003, 0.209999993, 0.25],
+    "fog": {
+      "mode": "linear",
+      "color": [0.360000014, 0.449999988, 0.579999983],
+      "start": 22,
+      "end": 55,
+      "density": 0.0199999996
+    },
+    "shadows": {
+      "enabled": true,
+      "map_size": 1024,
+      "distance": 24,
+      "caster_extension": 50,
+      "bias": 0.00150000001
+    },
+    "dither_transparency": false,
+    "frustum_culling": true,
+    "subdivision": {
+      "levels": 3,
+      "edge_pixels": 24
+    },
+    "default_sun": {
+      "enabled": true,
+      "direction": [-0.324442863, -0.811107159, -0.486664325],
+      "color": [0.850000024, 0.850000024, 0.800000012]
+    },
+    "gravity": [0, -9.81000042, 0],
+    "music": {
+      "path": "music/ambient.wav",
+      "fade": 2
+    },
     "postfx": [
-      {"effect": "vignette", "strength": 0.35, "radius": 0.75},
-      {"effect": "color_adjust", "brightness": 0, "contrast": 1.05, "saturation": 1.1}
-    ],
-    "music": {"path": "music/ambient.wav", "fade": 2}
+      {
+        "effect": "vignette",
+        "enabled": true,
+        "strength": 0.349999994,
+        "radius": 0.75
+      },
+      {
+        "effect": "color_adjust",
+        "enabled": true,
+        "brightness": 0,
+        "contrast": 1.04999995,
+        "saturation": 1.10000002
+      }
+    ]
   },
   "camera": 1,
   "entities": [
     {
       "id": 1,
       "name": "camera",
-      "transform": {"position": [0, 4, 8]},
-      "camera": {"fov": 65, "near": 0.1, "far": 120},
-      "script": {"path": "scripts/follow_camera.luau", "properties": {"target": "player", "distance": 6.5}}
+      "transform": {
+        "position": [0, 4, 8],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "camera": {
+        "fov": 65,
+        "near": 0.100000001,
+        "far": 120,
+        "orthographic": false,
+        "ortho_height": 10
+      },
+      "script": {
+        "path": "scripts/follow_camera.luau",
+        "properties": {
+          "target": "player",
+          "distance": 6.5
+        }
+      }
     },
     {
       "id": 2,
       "name": "sun",
-      "transform": {"position": [0, 10, 0], "euler": [-52, 35, 0]},
-      "light": {"type": "directional", "color": [1, 0.96, 0.88], "intensity": 0.85, "cast_shadows": true}
+      "transform": {
+        "position": [0, 10, 0],
+        "rotation": [-0.418081999, 0.270272583, 0.131820738, 0.857195139],
+        "scale": [1, 1, 1]
+      },
+      "light": {
+        "type": "directional",
+        "color": [1, 0.959999979, 0.879999995],
+        "intensity": 0.850000024,
+        "range": 10,
+        "inner_cone": 20,
+        "outer_cone": 30,
+        "cast_shadows": true
+      }
     },
     {
       "id": 3,
       "name": "ground",
-      "mesh": {"model": "meshes/ground.prim"},
-      "transform": {"position": [0, 0, 0]},
-      "collider": {"shape": "box", "size": [60, 1, 60], "offset": [0, -0.5, 0], "friction": 0.8}
+      "transform": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "mesh": {
+        "model": "meshes/ground.prim",
+        "mesh": 0,
+        "visible": true
+      },
+      "collider": {
+        "shape": "box",
+        "size": [60, 1, 60],
+        "offset": [0, -0.5, 0],
+        "density": 1,
+        "friction": 0.800000012,
+        "restitution": 0,
+        "trigger": false
+      }
     },
     {
       "id": 4,
       "name": "player",
-      "transform": {"position": [0, 1, 2]},
-      "mesh": {"model": "meshes/player.prim"},
-      "rigidbody": {"type": "dynamic", "lock_rotation": true, "linear_damping": 0.05, "continuous": true},
-      "collider": {"shape": "sphere", "size": [0.5, 0.5, 0.5], "friction": 0.3, "density": 2},
-      "script": {"path": "scripts/player.luau", "properties": {"speed": 6, "jump_speed": 6.5, "player": 1}}
+      "transform": {
+        "position": [0, 1, 2],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "prefab": {
+        "path": "prefabs/player.prefab"
+      }
     },
     {
       "id": 5,
       "name": "game",
-      "script": {"path": "scripts/game.luau",
-                 "properties": {"next_scene": "scenes/test_full.scene", "title": "WillPowerEngine demo"}}
+      "script": {
+        "path": "scripts/game.luau",
+        "properties": {
+          "next_scene": "scenes/test_full.scene",
+          "title": "WillPowerEngine demo"
+        }
+      }
     },
     {
       "id": 6,
       "name": "ramp",
-      "transform": {"position": [7, 0.9, -3], "euler": [-14, 0, 0]},
-      "mesh": {"model": "meshes/ramp.prim"},
-      "collider": {"shape": "box", "size": [4, 0.4, 6]}
+      "transform": {
+        "position": [7, 0.899999976, -3],
+        "rotation": [-0.121869348, 0, 0, 0.992546141],
+        "scale": [1, 1, 1]
+      },
+      "mesh": {
+        "model": "meshes/ramp.prim",
+        "mesh": 0,
+        "visible": true
+      },
+      "collider": {
+        "shape": "box",
+        "size": [4, 0.400000006, 6],
+        "offset": [0, 0, 0],
+        "density": 1,
+        "friction": 0.600000024,
+        "restitution": 0,
+        "trigger": false
+      }
     },
     {
       "id": 7,
       "name": "pillar",
-      "transform": {"position": [-6, 1.5, 3]},
-      "mesh": {"model": "meshes/pillar.prim"},
-      "collider": {"shape": "box", "size": [1, 3, 1]}
+      "transform": {
+        "position": [-6, 1.5, 3],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "mesh": {
+        "model": "meshes/pillar.prim",
+        "mesh": 0,
+        "visible": true
+      },
+      "collider": {
+        "shape": "box",
+        "size": [1, 3, 1],
+        "offset": [0, 0, 0],
+        "density": 1,
+        "friction": 0.600000024,
+        "restitution": 0,
+        "trigger": false
+      }
     },
     {
       "id": 8,
       "name": "pillar",
-      "transform": {"position": [-8, 1.5, -6]},
-      "mesh": {"model": "meshes/pillar.prim"},
-      "collider": {"shape": "box", "size": [1, 3, 1]}
+      "transform": {
+        "position": [-8, 1.5, -6],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "mesh": {
+        "model": "meshes/pillar.prim",
+        "mesh": 0,
+        "visible": true
+      },
+      "collider": {
+        "shape": "box",
+        "size": [1, 3, 1],
+        "offset": [0, 0, 0],
+        "density": 1,
+        "friction": 0.600000024,
+        "restitution": 0,
+        "trigger": false
+      }
     },
     {
       "id": 9,
       "name": "crate",
-      "transform": {"position": [3, 0.5, -1], "euler": [0, 20, 0]},
-      "prefab": {"path": "prefabs/crate.prefab"}
+      "transform": {
+        "position": [3, 0.5, -1],
+        "rotation": [0, 0.173648179, 0, 0.98480773],
+        "scale": [1, 1, 1]
+      },
+      "prefab": {
+        "path": "prefabs/crate.prefab"
+      }
     },
     {
       "id": 10,
       "name": "crate",
-      "transform": {"position": [3.2, 1.5, -1.1], "euler": [0, -10, 0]},
-      "prefab": {"path": "prefabs/crate.prefab"}
+      "transform": {
+        "position": [3.20000005, 1.5, -1.10000002],
+        "rotation": [0, -0.087155737, 0, 0.99619472],
+        "scale": [1, 1, 1]
+      },
+      "prefab": {
+        "path": "prefabs/crate.prefab"
+      }
     },
     {
       "id": 11,
       "name": "crate",
-      "transform": {"position": [4.2, 0.5, -0.6], "euler": [0, 45, 0]},
-      "prefab": {"path": "prefabs/crate.prefab"}
+      "transform": {
+        "position": [4.19999981, 0.5, -0.600000024],
+        "rotation": [0, 0.382683456, 0, 0.923879504],
+        "scale": [1, 1, 1]
+      },
+      "prefab": {
+        "path": "prefabs/crate.prefab"
+      }
     },
     {
       "id": 12,
       "name": "ball",
-      "transform": {"position": [-2, 0.5, -3]},
-      "mesh": {"model": "meshes/ball.prim"},
-      "rigidbody": {"type": "dynamic", "angular_damping": 0.4},
-      "collider": {"shape": "sphere", "size": [0.5, 0.5, 0.5], "restitution": 0.5, "density": 0.4}
+      "transform": {
+        "position": [-2, 0.5, -3],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "mesh": {
+        "model": "meshes/ball.prim",
+        "mesh": 0,
+        "visible": true
+      },
+      "rigidbody": {
+        "type": "dynamic",
+        "linear_damping": 0,
+        "angular_damping": 0.400000006,
+        "gravity_scale": 1,
+        "lock_rotation": false,
+        "continuous": false,
+        "initial_velocity": [0, 0, 0]
+      },
+      "collider": {
+        "shape": "sphere",
+        "size": [0.5, 0.5, 0.5],
+        "offset": [0, 0, 0],
+        "density": 0.400000006,
+        "friction": 0.600000024,
+        "restitution": 0.5,
+        "trigger": false
+      }
     },
     {
       "id": 13,
       "name": "helmet",
-      "transform": {"position": [-4, 1.6, -4]},
-      "instance": {"model": "meshes/damaged_helmet.glb"},
-      "rigidbody": {"type": "kinematic"},
-      "collider": {"shape": "sphere", "size": [0.9, 0.9, 0.9]},
-      "script": {"path": "scripts/spinner.luau", "properties": {"speed": 0.8}}
+      "transform": {
+        "position": [-4, 1.60000002, -4],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "rigidbody": {
+        "type": "kinematic",
+        "linear_damping": 0,
+        "angular_damping": 0,
+        "gravity_scale": 1,
+        "lock_rotation": false,
+        "continuous": false,
+        "initial_velocity": [0, 0, 0]
+      },
+      "collider": {
+        "shape": "sphere",
+        "size": [0.899999976, 0.899999976, 0.899999976],
+        "offset": [0, 0, 0],
+        "density": 1,
+        "friction": 0.600000024,
+        "restitution": 0,
+        "trigger": false
+      },
+      "script": {
+        "path": "scripts/spinner.luau",
+        "properties": {
+          "speed": 0.80000000000000004
+        }
+      }
     },
     {
       "id": 14,
-      "name": "figure",
-      "transform": {"position": [5, 0, 4], "euler": [0, -40, 0]},
-      "instance": {"model": "meshes/RiggedFigure.glb", "animation": 0, "play": true}
+      "name": "model",
+      "parent": 13,
+      "transform": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      }
     },
     {
       "id": 15,
-      "name": "zone",
-      "transform": {"position": [-3, 0.02, 5]},
-      "mesh": {"model": "meshes/zone.prim"},
-      "collider": {"shape": "box", "size": [4, 2, 4], "offset": [0, 1, 0], "trigger": true},
-      "script": {"path": "scripts/trigger_zone.luau", "properties": {"pitch": 1.2}}
+      "name": "node_damagedHelmet_-6514",
+      "parent": 14,
+      "transform": {
+        "position": [0, 0, 0],
+        "rotation": [0.707106829, 0, 0, 0.707106829],
+        "scale": [1, 1, 1]
+      },
+      "mesh": {
+        "model": "meshes/damaged_helmet.glb",
+        "mesh": 0,
+        "visible": true
+      }
     },
     {
       "id": 16,
-      "name": "orbit light",
-      "transform": {"position": [0, 1, 0]},
-      "script": {"path": "scripts/orbit_light.luau", "properties": {"radius": 9, "speed": 0.35, "height": 1.5}}
+      "name": "figure",
+      "transform": {
+        "position": [5, 0, 4],
+        "rotation": [0, -0.342020124, 0, 0.939692616],
+        "scale": [1, 1, 1]
+      }
     },
     {
       "id": 17,
+      "name": "model",
+      "parent": 16,
+      "transform": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "animator": {
+        "model": "meshes/RiggedFigure.glb",
+        "animation": 0,
+        "time": 0,
+        "speed": 1,
+        "playing": true,
+        "loop": true,
+        "nodes": [18, 19, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 20]
+      }
+    },
+    {
+      "id": 18,
+      "name": "Z_UP",
+      "parent": 17,
+      "transform": {
+        "position": [0, 0, 0],
+        "rotation": [-0.707106829, 0, 0, 0.707106829],
+        "scale": [1, 1, 1]
+      }
+    },
+    {
+      "id": 19,
+      "name": "Proxy",
+      "parent": 18,
+      "transform": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "mesh": {
+        "model": "meshes/RiggedFigure.glb",
+        "mesh": 0,
+        "skin": 0,
+        "joints": [21, 30, 31, 38, 39, 35, 32, 36, 33, 37, 34, 26, 22, 27, 23, 28, 24, 29, 25],
+        "visible": true
+      }
+    },
+    {
+      "id": 20,
+      "name": "Armature",
+      "parent": 18,
+      "transform": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      }
+    },
+    {
+      "id": 21,
+      "name": "torso_joint_1",
+      "parent": 20,
+      "transform": {
+        "position": [2.79396994e-09, -1.41566005e-07, 0.686000228],
+        "rotation": [0.0379294045, 0.00291342847, -0.000110584522, -0.999276221],
+        "scale": [1, 1, 1.00000012]
+      }
+    },
+    {
+      "id": 22,
+      "name": "leg_joint_R_1",
+      "parent": 21,
+      "transform": {
+        "position": [-0.0684571713, 0.00446085306, -0.0714711472],
+        "rotation": [-0.0233987477, -0.654263675, 0.754464865, 0.0466302149],
+        "scale": [1, 1.00000024, 0.99999994]
+      }
+    },
+    {
+      "id": 23,
+      "name": "leg_joint_R_2",
+      "parent": 22,
+      "transform": {
+        "position": [0, 0.266112089, 1.49012003e-08],
+        "rotation": [0.216061473, 0.0810800865, -0.0100799929, -0.972955227],
+        "scale": [1.00000012, 1, 1]
+      }
+    },
+    {
+      "id": 24,
+      "name": "leg_joint_R_3",
+      "parent": 23,
+      "transform": {
+        "position": [-7.45057971e-09, 0.2758241, -3.72528985e-09],
+        "rotation": [0.847167075, -0.0320482813, -0.0248403829, -0.529777229],
+        "scale": [0.99999994, 1, 1]
+      }
+    },
+    {
+      "id": 25,
+      "name": "leg_joint_R_5",
+      "parent": 24,
+      "transform": {
+        "position": [-0.00145853299, -0.0661987364, 0.0278568007],
+        "rotation": [-0.0341432616, -0.319177985, 0.946171343, -0.0414683297],
+        "scale": [0.99999994, 0.999999762, 0.999999166]
+      }
+    },
+    {
+      "id": 26,
+      "name": "leg_joint_L_1",
+      "parent": 21,
+      "transform": {
+        "position": [0.0676192716, 0.00446109101, -0.0722646117],
+        "rotation": [0.210880786, -0.624330819, 0.724772036, -0.201111794],
+        "scale": [1.00000012, 1.00000024, 1.00000012]
+      }
+    },
+    {
+      "id": 27,
+      "name": "leg_joint_L_2",
+      "parent": 26,
+      "transform": {
+        "position": [0, 0.266112208, 0],
+        "rotation": [0.211154372, -0.298432469, -0.046885971, -0.929598629],
+        "scale": [1.00000012, 1.00000012, 0.99999994]
+      }
+    },
+    {
+      "id": 28,
+      "name": "leg_joint_L_3",
+      "parent": 27,
+      "transform": {
+        "position": [0, 0.27582401, 0],
+        "rotation": [0.847768724, -0.00228158012, -0.0063387081, -0.530323267],
+        "scale": [1, 1, 1.00000012]
+      }
+    },
+    {
+      "id": 29,
+      "name": "leg_joint_L_5",
+      "parent": 28,
+      "transform": {
+        "position": [-0.00234649284, -0.0661733076, 0.0278567597],
+        "rotation": [0.0245320778, -0.319996566, 0.944600165, 0.0687815025],
+        "scale": [1, 1.00000072, 1.00000095]
+      }
+    },
+    {
+      "id": 30,
+      "name": "torso_joint_2",
+      "parent": 21,
+      "transform": {
+        "position": [0.000999980955, -4.84287987e-08, 0.171490595],
+        "rotation": [-0.73807472, -0.00196715072, 0.0021518853, -0.674712658],
+        "scale": [1.00000012, 0.99999994, 1]
+      }
+    },
+    {
+      "id": 31,
+      "name": "torso_joint_3",
+      "parent": 30,
+      "transform": {
+        "position": [0, 0.218017697, 3.72528985e-09],
+        "rotation": [0.637858927, -4.25871727e-10, -3.52718715e-10, -0.770153284],
+        "scale": [1, 1.00000012, 1]
+      }
+    },
+    {
+      "id": 32,
+      "name": "arm_joint_R_1",
+      "parent": 31,
+      "transform": {
+        "position": [-0.0880005509, -0.000199287999, -0.000977396965],
+        "rotation": [0.276430786, 0.051863797, -0.665187418, -0.691680491],
+        "scale": [1, 0.99999994, 0.99999994]
+      }
+    },
+    {
+      "id": 33,
+      "name": "arm_joint_R_2",
+      "parent": 32,
+      "transform": {
+        "position": [-7.45057971e-09, 0.244525596, -5.96045986e-08],
+        "rotation": [-0.228006288, 0.909647882, -0.148023382, -0.314074904],
+        "scale": [0.99999994, 0.999999583, 0.999999821]
+      }
+    },
+    {
+      "id": 34,
+      "name": "arm_joint_R_3",
+      "parent": 33,
+      "transform": {
+        "position": [-5.96045986e-08, 0.185516804, 0],
+        "rotation": [-0.0785488933, 0.14253509, -0.0141022662, -0.986567259],
+        "scale": [1.00000012, 1, 0.99999994]
+      }
+    },
+    {
+      "id": 35,
+      "name": "arm_joint_L_1",
+      "parent": 31,
+      "transform": {
+        "position": [0.0880005509, -0.000199287999, -0.000977396965],
+        "rotation": [0.678942204, 0.68794477, -0.240677893, -0.0885639712],
+        "scale": [1.00000012, 1.00000048, 1]
+      }
+    },
+    {
+      "id": 36,
+      "name": "arm_joint_L_2",
+      "parent": 35,
+      "transform": {
+        "position": [1.86265003e-09, 0.244525909, -5.96045986e-08],
+        "rotation": [0.00240006181, -0.139811546, -0.271831244, -0.952131748],
+        "scale": [1, 1, 1]
+      }
+    },
+    {
+      "id": 37,
+      "name": "arm_joint_L_3",
+      "parent": 36,
+      "transform": {
+        "position": [0, 0.1855167, 0],
+        "rotation": [-0.057290636, -0.028227292, -0.0555599257, -0.996410608],
+        "scale": [1, 1.00000012, 1.00000012]
+      }
+    },
+    {
+      "id": 38,
+      "name": "neck_joint_1",
+      "parent": 31,
+      "transform": {
+        "position": [0, 7.45057989e-08, 0.0525597297],
+        "rotation": [-0.635452151, -1.03678537e-15, -8.51266947e-16, -0.772140265],
+        "scale": [1, 1, 1]
+      }
+    },
+    {
+      "id": 39,
+      "name": "neck_joint_2",
+      "parent": 38,
+      "transform": {
+        "position": [0, 0.066505909, 0],
+        "rotation": [4.21579077e-10, 0.999984443, -0.00558399223, -7.54966791e-08],
+        "scale": [1, 1.00000012, 1]
+      }
+    },
+    {
+      "id": 40,
+      "name": "zone",
+      "transform": {
+        "position": [-3, 0.0199999996, 5],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "mesh": {
+        "model": "meshes/zone.prim",
+        "mesh": 0,
+        "visible": true
+      },
+      "collider": {
+        "shape": "box",
+        "size": [4, 2, 4],
+        "offset": [0, 1, 0],
+        "density": 1,
+        "friction": 0.600000024,
+        "restitution": 0,
+        "trigger": true
+      },
+      "script": {
+        "path": "scripts/trigger_zone.luau",
+        "properties": {
+          "pitch": 1.2
+        }
+      }
+    },
+    {
+      "id": 41,
+      "name": "orbit light",
+      "transform": {
+        "position": [0, 1, 0],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "script": {
+        "path": "scripts/orbit_light.luau",
+        "properties": {
+          "radius": 9,
+          "speed": 0.34999999999999998,
+          "height": 1.5
+        }
+      }
+    },
+    {
+      "id": 42,
       "name": "spot",
-      "transform": {"position": [-4, 5, -4], "euler": [-90, 0, 0]},
-      "light": {"type": "spot", "color": [1, 0.8, 0.5], "intensity": 2.5, "range": 9, "inner_cone": 18, "outer_cone": 28}
+      "transform": {
+        "position": [-4, 5, -4],
+        "rotation": [-0.707106769, 0, 0, 0.707106769],
+        "scale": [1, 1, 1]
+      },
+      "light": {
+        "type": "spot",
+        "color": [1, 0.800000012, 0.5],
+        "intensity": 2.5,
+        "range": 9,
+        "inner_cone": 18,
+        "outer_cone": 28,
+        "cast_shadows": false
+      }
     }
   ]
 }

@@ -5,10 +5,34 @@
     {
       "id": 1,
       "name": "crate",
-      "transform": {},
-      "mesh": {"model": "meshes/crate.prim"},
-      "rigidbody": {"type": "dynamic"},
-      "collider": {"shape": "box", "size": [1, 1, 1], "density": 0.6}
+      "transform": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0, 1],
+        "scale": [1, 1, 1]
+      },
+      "mesh": {
+        "model": "meshes/crate.prim",
+        "mesh": 0,
+        "visible": true
+      },
+      "rigidbody": {
+        "type": "dynamic",
+        "linear_damping": 0,
+        "angular_damping": 0,
+        "gravity_scale": 1,
+        "lock_rotation": false,
+        "continuous": false,
+        "initial_velocity": [0, 0, 0]
+      },
+      "collider": {
+        "shape": "box",
+        "size": [1, 1, 1],
+        "offset": [0, 0, 0],
+        "density": 0.600000024,
+        "friction": 0.600000024,
+        "restitution": 0,
+        "trigger": false
+      }
     }
   ]
 }
