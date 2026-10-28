@@ -1,0 +1,79 @@
+{
+  "format": "wpe.project",
+  "version": 1,
+  "name": "First-person game",
+  "start_scene": "scenes/main.scene",
+  "font": "",
+  "display": {
+    "width": 320,
+    "height": 240,
+    "scale": 3,
+    "vsync": true,
+    "resizable": true,
+    "fullscreen": false
+  },
+  "simulation": {
+    "fixed_rate": 60,
+    "max_steps": 8
+  },
+  "assets": {
+    "max_texture_size": 0
+  },
+  "audio": {
+    "master": 1,
+    "effects": 1,
+    "music": 1
+  },
+  "scripting": {
+    "memory_limit_mb": 64,
+    "time_limit_ms": 250
+  },
+  "prefabs": {},
+  "input": {
+    "keyboard_player": 1,
+    "stick_deadzone": 0.2,
+    "stick_outer": 0.95,
+    "trigger_deadzone": 0.1,
+    "press_threshold": 0.5,
+    "actions": {
+      "move_x": [
+        {"key": "d"},
+        {"key": "a", "scale": -1},
+        {"key": "right"},
+        {"key": "left", "scale": -1},
+        {"pad_axis": "left_x"}
+      ],
+      "move_y": [
+        {"key": "w"},
+        {"key": "s", "scale": -1},
+        {"key": "up"},
+        {"key": "down", "scale": -1},
+        {"pad_axis": "left_y", "scale": -1}
+      ],
+      "look_x": [
+        {"pad_axis": "right_x"}
+      ],
+      "look_y": [
+        {"pad_axis": "right_y"}
+      ],
+      "jump": [
+        {"key": "space"},
+        {"pad_button": "south"}
+      ],
+      "sprint": [
+        {"key": "lshift"},
+        {"pad_axis": "left_trigger"},
+        {"pad_button": "left_stick"}
+      ],
+      "use": [
+        {"key": "e"},
+        {"mouse_button": "left"},
+        {"pad_axis": "right_trigger"},
+        {"pad_button": "west"}
+      ],
+      "release_mouse": [
+        {"key": "escape"}
+      ]
+    }
+  }
+}

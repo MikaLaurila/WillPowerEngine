@@ -50,6 +50,7 @@ WPE_UPDATE_GOLDEN=1 ctest --test-dir build -R golden    # regenerate golden PNGs
 ctest --test-dir build -L integration                             # the master test scene for 60 simulated seconds (every scripting API)
 ./build/bin/wpe_editor assets                                     # the editor (window + command server on 127.0.0.1:47800)
 ./build/bin/wpe_editor my_game --init                         # a new project (wpe_project_create), then the editor
+./build/bin/wpe_editor my_fps --init --template first_person  # from a template (templates/<name>/; no args lists them)
 ./build/bin/wpe_editor assets --command '{"cmd": "help"}'         # editor commands headless (--run file.jsonl for batches)
 ./build/bin/wpe_editor assets --command '{"cmd": "screenshot", "target": "editor", "path": "out.png"}'   # see the whole editor
 ./build/bin/wpe_editor --send '{"cmd": "status"}'                 # a command to a running editor
@@ -156,6 +157,7 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - Scene and project files are strict JSON (`core/json.h`), read through the private helpers in `engine/json_read.h`. Unknown keys are errors.
   - Scene loads are atomic. Saving is lossless and stable: roots are ordered by `wpe_ecs_spawn_serial`, rotations are kept as written, and degrees are written rounded to 6 digits. The scene round-trip test asserts that a load-save cycle reproduces the text exactly.
   - `assets/` is the sample project (`project.json`, `scenes/`).
+  - **Templates**: each `templates/<name>/` is a complete project (playable with `wpe_runtime --project templates/<name>`). `cmake/WpeEmbedTemplates.cmake` turns them into `templates_data.h` at build time, and `wpe_project_create` copies one, renaming the project through `wpe_project_parse`/`wpe_project_write`. The `engine_templates` test plays each for 20 s and drives template-specific checks (keys through `wpe_engine_handle_event`; set script state with `wpe_script_host_run`).
   - Export embeds a `.pak` in a copy of `wpe_runtime` (trailer magic `WPE_EMBD`). `wpe_runtime` is a GUI program on Windows that links statically.
   - Executables of `runtime/` and `tools/` build into `build/bin`.
   - **Prefabs** (`engine/prefab.{h,c}`, format in `docs/scenes.md#prefabs`):

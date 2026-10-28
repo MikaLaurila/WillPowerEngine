@@ -1,0 +1,221 @@
+{
+  "format": "wpe.scene",
+  "version": 1,
+  "environment": {
+    "clear_color": [0.62, 0.72, 0.84],
+    "ambient": [0.26, 0.27, 0.31],
+    "fog": {"mode": "linear", "color": [0.62, 0.72, 0.84], "start": 18, "end": 50},
+    "sky": {"mode": "gradient", "zenith": [0.22, 0.38, 0.7], "horizon": [0.62, 0.72, 0.84], "ground": [0.36, 0.38, 0.4],
+            "curve": 0.6, "sun_size": 2.5, "sun_color": [1, 0.95, 0.82], "sun_glow": 0.35},
+    "shadows": {"enabled": true, "map_size": 1024, "distance": 24}
+  },
+  "camera": 2,
+  "entities": [
+    {
+      "id": 1,
+      "name": "player",
+      "transform": {"position": [0, 0, 9]},
+      "character": {"radius": 0.35, "height": 1.8, "offset": [0, 0.9, 0]},
+      "script": {"path": "scripts/player.luau"}
+    },
+    {
+      "id": 2,
+      "name": "head",
+      "parent": 1,
+      "transform": {"position": [0, 1.6, 0]},
+      "camera": {"fov": 75, "near": 0.05, "far": 80}
+    },
+    {
+      "id": 3,
+      "name": "sun",
+      "transform": {"euler": [-50, 35, 0]},
+      "light": {"type": "directional", "color": [1, 0.96, 0.88], "intensity": 0.85, "cast_shadows": true}
+    },
+    {
+      "id": 4,
+      "name": "ground",
+      "mesh": {"model": "meshes/ground.prim"},
+      "collider": {"shape": "box", "size": [40, 1, 40], "offset": [0, -0.5, 0], "friction": 0.8}
+    },
+    {
+      "id": 5,
+      "name": "wall north",
+      "transform": {"position": [0, 1.5, -20.5], "scale": [42, 3, 1]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 6,
+      "name": "wall south",
+      "transform": {"position": [0, 1.5, 20.5], "scale": [42, 3, 1]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 7,
+      "name": "wall east",
+      "transform": {"position": [20.5, 1.5, 0], "scale": [1, 3, 40]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 8,
+      "name": "wall west",
+      "transform": {"position": [-20.5, 1.5, 0], "scale": [1, 3, 40]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 9,
+      "name": "step 1",
+      "transform": {"position": [0, 0.1, 1.8], "scale": [3, 0.2, 0.4]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 10,
+      "name": "step 2",
+      "transform": {"position": [0, 0.2, 1.4], "scale": [3, 0.4, 0.4]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 11,
+      "name": "step 3",
+      "transform": {"position": [0, 0.3, 1], "scale": [3, 0.6, 0.4]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 12,
+      "name": "step 4",
+      "transform": {"position": [0, 0.4, 0.6], "scale": [3, 0.8, 0.4]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 13,
+      "name": "step 5",
+      "transform": {"position": [0, 0.5, 0.2], "scale": [3, 1, 0.4]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 14,
+      "name": "step 6",
+      "transform": {"position": [0, 0.6, -0.2], "scale": [3, 1.2, 0.4]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 15,
+      "name": "step 7",
+      "transform": {"position": [0, 0.7, -0.6], "scale": [3, 1.4, 0.4]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 16,
+      "name": "step 8",
+      "transform": {"position": [0, 0.8, -1], "scale": [3, 1.6, 0.4]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 17,
+      "name": "platform",
+      "transform": {"position": [0, 0.8, -4.2], "scale": [10, 1.6, 6]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 18,
+      "name": "ramp (20 degrees)",
+      "transform": {"position": [7.147, 0.659, -4.2], "euler": [0, 0, -20], "scale": [4.678, 0.3, 3]},
+      "mesh": {"model": "meshes/accent.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 19,
+      "name": "jump box low",
+      "transform": {"position": [-6, 0.35, 0], "scale": [2, 0.7, 2]},
+      "mesh": {"model": "meshes/accent.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 20,
+      "name": "jump box high",
+      "transform": {"position": [-6, 0.6, -2.5], "scale": [2, 1.2, 3]},
+      "mesh": {"model": "meshes/accent.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 21,
+      "name": "pillar",
+      "transform": {"position": [-12, 1.5, -12], "scale": [1, 3, 1]},
+      "mesh": {"model": "meshes/accent.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 22,
+      "name": "pillar",
+      "transform": {"position": [12, 1.5, -12], "scale": [1, 3, 1]},
+      "mesh": {"model": "meshes/accent.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 23,
+      "name": "pillar",
+      "transform": {"position": [-12, 1.5, 12], "scale": [1, 3, 1]},
+      "mesh": {"model": "meshes/accent.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 24,
+      "name": "pillar",
+      "transform": {"position": [12, 1.5, 12], "scale": [1, 3, 1]},
+      "mesh": {"model": "meshes/accent.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 25,
+      "name": "crate",
+      "transform": {"position": [4, 0.5, 5]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "rigidbody": {"type": "dynamic"},
+      "collider": {"shape": "box", "friction": 0.6}
+    },
+    {
+      "id": 26,
+      "name": "crate",
+      "transform": {"position": [5.2, 0.5, 5.3]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "rigidbody": {"type": "dynamic"},
+      "collider": {"shape": "box", "friction": 0.6}
+    },
+    {
+      "id": 27,
+      "name": "crate",
+      "transform": {"position": [4.6, 1.5, 5.1]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "rigidbody": {"type": "dynamic"},
+      "collider": {"shape": "box", "friction": 0.6}
+    },
+    {
+      "id": 28,
+      "name": "crate",
+      "transform": {"position": [-2, 2.1, -5]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "rigidbody": {"type": "dynamic"},
+      "collider": {"shape": "box", "friction": 0.6}
+    },
+    {
+      "id": 29,
+      "name": "crate",
+      "transform": {"position": [2.5, 2.1, -6]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "rigidbody": {"type": "dynamic"},
+      "collider": {"shape": "box", "friction": 0.6}
+    }
+  ]
+}

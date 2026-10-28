@@ -69,6 +69,22 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (project templates: first person)
+- Project templates: each directory of `templates/` is a complete, runnable project, embedded into
+  the engine at build time (`cmake/WpeEmbedTemplates.cmake`). `wpe_editor <dir> --init --template
+  <name>` creates a game from one (the usage text lists them); the project gets its name in
+  `project.json`. `empty` (the former starter project) stays the default.
+- **BREAKING** (C API): `wpe_project_create(dir, name, template_name)` takes the template (NULL: the
+  default); `wpe_project_template_count` and `wpe_project_template_name` list them.
+- `first_person` template: a character controller with an eye-height camera, mouse look (click to
+  capture, Escape to release) and right-stick look, walking, sprinting and jumping, a crosshair, and
+  a "use" ray that pushes the crate in sight; a walled test level with stairs, a ramp, a jumping
+  route onto a platform, pillars and crates.
+- Script API: `wpe.get_rigidbody(entity)` returns a body's settings (its type tells pushable crates
+  from walls).
+- Tests: every template creates a project equal to its source files that plays for 20 seconds
+  without a script error; the first-person template walks up the stairs, jumps and pushes a crate.
+
 ### Added (post effects from scripts; shockwave and radial blur)
 - Scripts change the scene's post effects while the game runs: `wpe.get_postfx`, `wpe.set_postfx`
   (by index or effect name), `wpe.add_postfx`, `wpe.remove_postfx` (`WPE_ScriptApp.postfx`).

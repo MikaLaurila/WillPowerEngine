@@ -5,6 +5,7 @@
 ```bash
 ./build/bin/wpe_editor assets                                   # the window (and the command server)
 ./build/bin/wpe_editor my_game --init                           # a new project (see runtime.md), then the window
+./build/bin/wpe_editor my_fps --init --template first_person   # ... from a game template
 ./build/bin/wpe_editor assets --command '{"cmd": "list_entities"}'   # one-shot, headless
 ./build/bin/wpe_editor assets --run commands.jsonl              # a batch, headless
 ./build/bin/wpe_editor --send '{"cmd": "status"}'               # talk to a running editor

@@ -591,6 +591,32 @@ static int wpe__api_add_rigidbody(lua_State* L) {
     return 0;
 }
 
+static int wpe__api_get_rigidbody(lua_State* L) {
+    wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_RigidBody* found =
+        wpe_ecs_get_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_PHYSICS_RIGIDBODY);
+    if (!found) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const WPE_RigidBody body = *found; /* Copy before pushing: pushes may run the GC but not move ECS data. */
+    lua_createtable(L, 0, 6);
+    lua_pushnumber(L, body.type);
+    lua_setfield(L, -2, "type");
+    lua_pushnumber(L, body.linear_damping);
+    lua_setfield(L, -2, "linear_damping");
+    lua_pushnumber(L, body.angular_damping);
+    lua_setfield(L, -2, "angular_damping");
+    lua_pushnumber(L, body.gravity_scale);
+    lua_setfield(L, -2, "gravity_scale");
+    lua_pushboolean(L, body.lock_rotation);
+    lua_setfield(L, -2, "lock_rotation");
+    lua_pushboolean(L, body.continuous);
+    lua_setfield(L, -2, "continuous");
+    return 1;
+}
+
 static int wpe__api_add_collider(lua_State* L) {
     WPE_ScriptHost* host = wpe__check_unrestricted(L, "add_collider");
     WPE_Physics* physics = wpe__physics(L);
@@ -2451,6 +2477,7 @@ static const luaL_Reg wpe__api[] = {
     {"remove_collider", wpe__api_remove_collider},
     {"apply_force", wpe__api_apply_force},
     {"apply_impulse", wpe__api_apply_impulse},
+    {"get_rigidbody", wpe__api_get_rigidbody},
     {"set_velocity", wpe__api_set_velocity},
     {"get_velocity", wpe__api_get_velocity},
     {"raycast", wpe__api_raycast},

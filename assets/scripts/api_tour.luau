@@ -98,6 +98,8 @@ function Tour:on_start()
 	assert(vnear(wpe.get_velocity(self.ball), vector.create(0, 1, 0)))
 	wpe.apply_impulse(self.ball, vector.create(0.1, 0, 0))
 	wpe.apply_force(self.ball, vector.create(0, 0, 1))
+	local body = wpe.get_rigidbody(self.ball)
+	assert(body.type == wpe.BODY_DYNAMIC and body.continuous and not body.lock_rotation and near(body.linear_damping, 0.1))
 
 	self.pillar = wpe.spawn("tour_pillar")
 	wpe.set_position(self.pillar, vector.create(-8, 1, -8))
@@ -105,6 +107,7 @@ function Tour:on_start()
 	wpe.add_collider(self.pillar, { shape = wpe.COLLIDER_CAPSULE, radius = 0.3, height = 2, offset = vector.create(0, 0, 0) })
 	wpe.remove_collider(self.pillar)
 	wpe.remove_rigidbody(self.pillar)
+	assert(wpe.get_rigidbody(self.pillar) == nil)
 	-- Without a rigid body a collider is static level geometry; this one is a trigger hull from a prefab.
 	wpe.add_collider(self.pillar, { shape = wpe.COLLIDER_CONVEX, model = "box", mesh = 1, trigger = true })
 

@@ -15,8 +15,9 @@
  *   wpe_editor --send '<json>' [--send '<json>' ...] [--port <n>]
  *       Sends commands to a running editor and prints the replies.
  *
- *   --init [--name <title>] with a project directory creates a new project there first (the directory
- *       must be new or empty), then opens it as above. The name defaults to the directory's.
+ *   --init [--template <name>] [--name <title>] with a project directory creates a new project there first
+ *       (the directory must be new or empty) from a built-in template (default: empty), then opens it as
+ *       above. The name defaults to the directory's.
  */
 #define WPE_LOG_MODULE "editor"
 #include <stdio.h>
@@ -48,15 +49,21 @@ typedef struct Options {
     bool server;
     bool init;
     const char* name;
+    const char* template_name;
 } Options;
 
 static int usage(void) {
-    fprintf(stderr, "usage:\n"
-                    "  wpe_editor <project-dir> [--scene <path>] [--port <n> | --no-server]\n"
-                    "  wpe_editor <new-project-dir> --init [--name <title>] [any of the above]\n"
-                    "  wpe_editor <project-dir> --run <commands-file> [--scene <path>]\n"
-                    "  wpe_editor <project-dir> --command '<json>' [--command '<json>' ...]\n"
-                    "  wpe_editor --send '<json>' [--send '<json>' ...] [--port <n>]\n");
+    fprintf(stderr,
+            "usage:\n"
+            "  wpe_editor <project-dir> [--scene <path>] [--port <n> | --no-server]\n"
+            "  wpe_editor <new-project-dir> --init [--template <name>] [--name <title>] [any of the above]\n"
+            "  wpe_editor <project-dir> --run <commands-file> [--scene <path>]\n"
+            "  wpe_editor <project-dir> --command '<json>' [--command '<json>' ...]\n"
+            "  wpe_editor --send '<json>' [--send '<json>' ...] [--port <n>]\n"
+            "templates:");
+    for (uint32_t i = 0; i < wpe_project_template_count(); ++i)
+        fprintf(stderr, "%s %s", i ? "," : "", wpe_project_template_name(i));
+    fputc('\n', stderr);
     return EXIT_FAILURE;
 }
 
@@ -72,6 +79,8 @@ static bool parse_options(int argc, char** argv, Options* o) {
             o->init = true;
         } else if (value && strcmp(arg, "--name") == 0) {
             o->name = argv[++i];
+        } else if (value && strcmp(arg, "--template") == 0) {
+            o->template_name = argv[++i];
         } else if (value && strcmp(arg, "--scene") == 0) {
             o->scene = argv[++i];
         } else if (value && strcmp(arg, "--run") == 0) {
@@ -94,7 +103,7 @@ static bool parse_options(int argc, char** argv, Options* o) {
         }
     }
     if (o->send_count > 0) return !o->project && !o->run && o->command_count == 0 && !o->init;
-    if (o->name && !o->init) return false;
+    if ((o->name || o->template_name) && !o->init) return false;
     return o->project != NULL && !(o->run && o->command_count > 0);
 }
 
@@ -384,7 +393,7 @@ static bool init_project(const Options* o) {
         memcpy(name, o->project + start, length);
         name[length] = '\0';
     }
-    const WPE_Result result = wpe_project_create(o->project, name[0] ? name : "New game");
+    const WPE_Result result = wpe_project_create(o->project, name[0] ? name : "New game", o->template_name);
     if (result != WPE_RESULT_OK)
         fprintf(stderr, "cannot create the project: %s\n", wpe_result_to_string(result));
     return result == WPE_RESULT_OK;

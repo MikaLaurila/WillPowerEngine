@@ -16,15 +16,17 @@ assets/
 ```bash
 ./build/bin/wpe_editor my_game --init                     # create my_game/ and open it in the editor
 ./build/bin/wpe_editor my_game --init --name "My Game"    # ... with a window title other than the folder's
+./build/bin/wpe_editor my_fps --init --template first_person   # start from a game template
 ```
 
-`--init` creates the project in a new or empty directory (it never overwrites files):
+`--init` creates the project in a new or empty directory (it never overwrites files) from a template. Each template is a complete game to build on:
 
-- `project.json`: the default settings, `move_x` / `move_y` / `jump` input actions (WASD, arrows, left stick; Space, A), starting in `scenes/main.scene`;
-- `scenes/main.scene`: a camera, a sun with shadows, a ground with a collider, and a cube;
-- `meshes/ground.prim`, `meshes/cube.prim`, and `scripts/spin.luau`, which spins the cube.
+| Template | What you get |
+|---|---|
+| `empty` (the default) | A camera, a sun with shadows, a ground with a collider and a cube spun by `scripts/spin.luau`; `move_x` / `move_y` / `jump` input actions (WASD, arrows, left stick; Space, A). |
+| `first_person` | `scripts/player.luau` on a character controller with the camera at eye height (the child `head`): mouse look (click to capture, Escape to release) and right-stick look, walking (WASD, left stick), sprinting (Shift, left trigger), jumping (Space, A), a crosshair, and "use" (E, left click, right trigger) that pushes the crate in sight. The level has stairs, a ramp, a jumping route onto a platform and crates to push. Speeds, jump height, gravity, look sensitivity and reach are the script's properties, in the editor's inspector. |
 
-Text uses the engine's built-in font until the project names its own. It works with the editor's other options, for example `--init --command '...'` for an agent setting up a project headless. From C: `wpe_project_create()`.
+Running `wpe_editor` without arguments lists the templates. They live in the engine's source tree under `templates/<name>/`, as ordinary projects (`wpe_runtime --project templates/first_person` plays one), and are compiled into the engine, so a new file there is in the next build. Text uses the engine's built-in font until the project names its own. `--init` works with the editor's other options, for example `--init --command '...'` for an agent setting up a project headless. From C: `wpe_project_create(dir, name, template)`.
 
 ## Running a game
 

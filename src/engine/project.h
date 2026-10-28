@@ -104,17 +104,29 @@ WPE_Result wpe_project_load(const WPE_Vfs* vfs, WPE_ProjectSettings* out);
  */
 WPE_Result wpe_project_write(const WPE_ProjectSettings* settings, WPE_JsonWriter* writer);
 
+/** The template new projects start from when none is named: a camera, a sun, a ground and a spinning cube. */
+#define WPE_PROJECT_DEFAULT_TEMPLATE "empty"
+
+/** @return How many project templates are built in. @thread_safety Any thread */
+uint32_t wpe_project_template_count(void);
+
+/** @return The name of template `index` (static storage), or NULL past the end. Templates are the
+ *          directories of templates/ in the engine's source tree, embedded at build time. @thread_safety Any
+ *          thread */
+const char* wpe_project_template_name(uint32_t index);
+
 /**
- * Creates a new project in an OS directory (made if missing): project.json (the default settings, the
- * given name, move_x / move_y / jump input actions, starting in scenes/main.scene) and a starter scene
- * with a camera, a sun, a ground and a cube spun by scripts/spin.luau. Text uses the built-in font.
+ * Creates a new project in an OS directory (made if missing) from a built-in template: the template's
+ * files, with the project's name set in project.json.
  *
+ * @param template_name A template's name; NULL means WPE_PROJECT_DEFAULT_TEMPLATE.
  * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_INVALID_ARG (an empty or too long
- *         name, or a too long path); WPE_RESULT_ERROR_ALREADY_EXISTS (the directory has files: nothing is
- *         overwritten); WPE_RESULT_ERROR_IO. Errors are logged.
+ *         name, or a too long path); WPE_RESULT_ERROR_NOT_FOUND (no such template);
+ *         WPE_RESULT_ERROR_ALREADY_EXISTS (the directory has files: nothing is overwritten);
+ *         WPE_RESULT_ERROR_IO. Errors are logged.
  *
  * @thread_safety Any thread
  */
-WPE_Result wpe_project_create(const char* os_directory, const char* name);
+WPE_Result wpe_project_create(const char* os_directory, const char* name, const char* template_name);
 
 #endif /* WPE_ENGINE_PROJECT_H */

@@ -807,10 +807,13 @@ static void remove_new_project(const char* directory) {
 /* A new project runs as it is: its scene loads, the cube's script spins it, and nothing is overwritten. */
 static void test_engine_creates_new_projects(void) {
     remove_new_project(ROOT "/new_game"); /* Left by an earlier run. */
-    WPE_TEST_ASSERT_OK(wpe_project_create(ROOT "/new_game", "New Game"));
+    WPE_TEST_ASSERT_OK(wpe_project_create(ROOT "/new_game", "New Game", NULL));
     quiet(true);
-    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_ALREADY_EXISTS, wpe_project_create(ROOT "/new_game", "Again"));
-    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_project_create(ROOT "/unnamed", ""));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_ALREADY_EXISTS,
+                           wpe_project_create(ROOT "/new_game", "Again", NULL));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_project_create(ROOT "/unnamed", "", NULL));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND,
+                           wpe_project_create(ROOT "/unnamed", "X", "no_such_template"));
     quiet(false);
     WPE_TEST_ASSERT(!wpe_directory_exists(ROOT "/unnamed"));
 

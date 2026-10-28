@@ -189,6 +189,7 @@ Available when the host was created with a physics world (otherwise these raise 
 | Function | Description |
 |---|---|
 | `wpe.add_rigidbody(entity, [{type, linear_damping, angular_damping, gravity_scale, lock_rotation, continuous, velocity}])` | Add or update a rigid body (default: dynamic). The body is created immediately from the entity's current world transform, moving at `velocity` (e.g. a projectile). `lock_rotation` keeps it upright (characters); `continuous` prevents fast bodies tunneling through other moving bodies. |
+| `wpe.get_rigidbody(entity) -> {type, linear_damping, angular_damping, gravity_scale, lock_rotation, continuous}?` | The entity's rigid body settings, or nil without one (for example, to push only dynamic bodies). |
 | `wpe.BODY_STATIC`, `wpe.BODY_KINEMATIC`, `wpe.BODY_DYNAMIC` | Body types. Dynamic bodies are simulated and write their pose back into the Transform. Kinematic bodies follow their Transform (moving it pushes dynamic bodies) or a velocity set with `wpe.set_velocity`. |
 | `wpe.add_collider(entity, [{shape, size, radius, height, offset, density, friction, restitution, trigger, model, mesh}])` | Add or update the entity's collider (one per entity; default: a 1×1×1 box). The entity's world scale is applied when the shape is built. Without a rigid body it is static level geometry. `trigger = true` reports overlaps instead of colliding. |
 | `wpe.COLLIDER_BOX` (`size`), `wpe.COLLIDER_SPHERE` (`radius`), `wpe.COLLIDER_CAPSULE` (`radius`, `height` along local Y) | Primitive shapes. |

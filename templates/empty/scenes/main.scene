@@ -1,0 +1,16 @@
+{
+  "format": "wpe.scene",
+  "version": 1,
+  "environment": {"clear_color": [0.38, 0.5, 0.66], "ambient": [0.3, 0.32, 0.36]},
+  "camera": 1,
+  "entities": [
+    {"id": 1, "name": "camera", "transform": {"position": [0, 3, 8], "euler": [-18, 0, 0]},
+     "camera": {}},
+    {"id": 2, "name": "sun", "transform": {"euler": [-50, 35, 0]},
+     "light": {"type": "directional", "intensity": 0.9, "cast_shadows": true}},
+    {"id": 3, "name": "ground", "transform": {}, "mesh": {"model": "meshes/ground.prim"},
+     "collider": {"shape": "box", "size": [20, 1, 20], "offset": [0, -0.5, 0]}},
+    {"id": 4, "name": "cube", "transform": {"position": [0, 1, 0]}, "mesh": {"model": "meshes/cube.prim"},
+     "script": {"path": "scripts/spin.luau", "properties": {"speed": 1}}}
+  ]
+}
