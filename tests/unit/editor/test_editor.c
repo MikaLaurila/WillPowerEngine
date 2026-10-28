@@ -300,15 +300,20 @@ static uint32_t frame_changes(WPE_Editor* editor, WPE_Color* previous) {
 static void test_editor_view_settings_and_overlays(void) {
     WPE_Editor* editor = open_editor();
     const WPE_EditorView defaults = wpe_editor_view(editor);
-    WPE_TEST_ASSERT(defaults.grid && !defaults.physics && defaults.hot_reload && !defaults.gizmo_local);
+    WPE_TEST_ASSERT(defaults.grid && !defaults.physics && defaults.lights && defaults.hot_reload &&
+                    !defaults.gizmo_local);
     WPE_TEST_ASSERT_EQ_INT(WPE_EDITOR_GIZMO_MOVE, defaults.gizmo);
     /* Merged: keys left out keep their values. */
     WPE_JsonDocument* view =
-        run(editor, "{\"cmd\": \"set_view\", \"value\": {\"gizmo\": \"rotate\", \"gizmo_space\": \"local\"}}",
+        run(editor,
+            "{\"cmd\": \"set_view\", \"value\": {\"gizmo\": \"rotate\", \"gizmo_space\": "
+            "\"local\", \"lights\": false}}",
             true);
     WPE_TEST_ASSERT_EQ_STR("local", wpe_json_string(wpe_json_get(result_of(view), "gizmo_space")));
+    WPE_TEST_ASSERT(!wpe_json_bool(wpe_json_get(result_of(view), "lights"), true));
     wpe_json_free(view);
-    WPE_TEST_ASSERT(wpe_editor_view(editor).grid && wpe_editor_view(editor).gizmo_local);
+    WPE_TEST_ASSERT(wpe_editor_view(editor).grid && wpe_editor_view(editor).gizmo_local &&
+                    !wpe_editor_view(editor).lights);
     WPE_TEST_ASSERT_EQ_INT(WPE_EDITOR_GIZMO_ROTATE, wpe_editor_view(editor).gizmo);
     /* All or nothing, and never an undo step or unsaved change. */
     wpe_json_free(

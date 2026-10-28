@@ -26,6 +26,16 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   functions, edit mode, editor commands (undo/redo, coalescing, scenes, play mode, screenshots),
   and a command-line test that drives the editor like an agent.
 
+### Added (editor: light icons)
+- An icon at every light in the viewport in edit mode, in the light's color: a bulb for point lights,
+  a cone showing a spot light's direction and angle, and a sun with an arrow for directional lights.
+  Clicking an icon selects its light. View > Light icons (L) and `set_view` `lights` switch them.
+
+### Fixed (editor)
+- The fly camera no longer snaps to another direction when the right mouse button is pressed again
+  after turning more than 90 degrees from where it started: the yaw and pitch it resumes from now come
+  from the view direction instead of Euler angles, whose yaw only reads back within ±90 degrees.
+
 ### Added (prefabs)
 - Prefab files (`.prefab`): reusable entity trees in the scene schema, placed in scenes as linked
   instances (`"prefab": {path, ids, overrides}`, docs in `docs/scenes.md#prefabs`). Editing a prefab

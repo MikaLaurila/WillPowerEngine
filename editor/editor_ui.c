@@ -567,10 +567,12 @@ static void wpe__ui_camera(WPE_EditorUi* ui, float dt) {
         ui->camera_initialized = true;
     }
     if (!ui->flying) {
-        /* Commands (camera, focus) may have turned the camera: flying starts from where it looks. */
-        const WPE_Vec3 euler = wpe_quat_to_euler_xyz(t->rotation);
-        ui->pitch = euler.x;
-        ui->yaw = euler.y;
+        /* Commands (camera, focus) may have turned the camera: flying starts from where it looks. The angles
+         * come from the view direction, not Euler angles, whose middle (Y) angle can't pass +-90 degrees. */
+        const WPE_Vec3 forward = wpe_quat_rotate_vec3(t->rotation, wpe_vec3(0, 0, -1));
+        const float up = forward.y < -1.0f ? -1.0f : forward.y > 1.0f ? 1.0f : forward.y;
+        ui->pitch = asinf(up);
+        ui->yaw = atan2f(-forward.x, -forward.z);
     }
     ImGuiIO* io = igGetIO_Nil();
     if (ui->view_hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Right, false)) ui->flying = true;
@@ -852,6 +854,103 @@ static bool wpe__ui_gizmo(WPE_EditorUi* ui, ImDrawList* draw) {
                             NULL);
     wpe__send_transform(ui, entity, &moved);
     return true;
+}
+
+/* ---- Light icons ------------------------------------------------------------------------------------ */
+
+/* Draws one light's icon at `at`, in its color: a bulb for point lights, a cone along the light for spots,
+ * and a sun with an arrow along the light for directional ones. */
+static void wpe__draw_light_icon(ImDrawList* draw, const WPE_Light* light, ImVec2_c at, ImVec2_c aim,
+                                 bool aimed, bool selected) {
+    /* Normalized to its brightest channel, so dim lights stay visible. */
+    const float peak = fmaxf(fmaxf(light->color.x, light->color.y), fmaxf(light->color.z, 1e-3f));
+    const uint32_t color =
+        WPE__COL((int)(light->color.x / peak * 255.0f), (int)(light->color.y / peak * 255.0f),
+                 (int)(light->color.z / peak * 255.0f), 255);
+    const uint32_t shadow = WPE__COL(15, 15, 18, 190);
+    const float dx = aim.x - at.x, dy = aim.y - at.y;
+    const float length = sqrtf(dx * dx + dy * dy);
+    aimed = aimed && length > 12.0f;
+    const float ux = aimed ? dx / length : 0.0f, uy = aimed ? dy / length : 0.0f;
+    if (aimed && light->type == WPE_LIGHT_SPOT) {
+        /* The cone's on-screen width follows its outer angle. */
+        float half = length * tanf(fminf(light->outer_cone, 1.3f));
+        half = half < 4.0f ? 4.0f : half > length ? length : half;
+        const ImVec2_c left = {aim.x - uy * half, aim.y + ux * half},
+                       right = {aim.x + uy * half, aim.y - ux * half};
+        ImDrawList_AddLine(draw, at, left, shadow, 3.5f);
+        ImDrawList_AddLine(draw, at, right, shadow, 3.5f);
+        ImDrawList_AddLine(draw, left, right, shadow, 3.5f);
+        ImDrawList_AddLine(draw, at, left, color, 1.5f);
+        ImDrawList_AddLine(draw, at, right, color, 1.5f);
+        ImDrawList_AddLine(draw, left, right, color, 1.5f);
+    } else if (aimed) {
+        const ImVec2_c head = {aim.x - ux * 8.0f, aim.y - uy * 8.0f};
+        ImDrawList_AddLine(draw, at, head, shadow, 3.5f);
+        ImDrawList_AddLine(draw, at, head, color, 1.5f);
+        ImDrawList_AddTriangleFilled(draw, aim, (ImVec2_c){head.x - uy * 5.0f, head.y + ux * 5.0f},
+                                     (ImVec2_c){head.x + uy * 5.0f, head.y - ux * 5.0f}, color);
+    }
+    ImDrawList_AddCircleFilled(draw, at, 10.0f, shadow, 20);
+    if (light->type == WPE_LIGHT_DIRECTIONAL) {
+        for (int i = 0; i < 8; ++i) {
+            const float angle = (float)i * 0.785398f, cx = cosf(angle), cy = sinf(angle);
+            ImDrawList_AddLine(draw, (ImVec2_c){at.x + cx * 6.0f, at.y + cy * 6.0f},
+                               (ImVec2_c){at.x + cx * 9.0f, at.y + cy * 9.0f}, color, 1.5f);
+        }
+        ImDrawList_AddCircleFilled(draw, at, 4.0f, color, 12);
+    } else if (light->type == WPE_LIGHT_POINT) {
+        ImDrawList_AddCircle(draw, at, 7.5f, color, 20, 1.5f);
+        ImDrawList_AddCircleFilled(draw, at, 4.0f, color, 12);
+    } else {
+        ImDrawList_AddCircleFilled(draw, at, 5.0f, color, 12);
+    }
+    if (selected) ImDrawList_AddCircle(draw, at, 12.5f, WPE__COL(237, 153, 56, 255), 24, 2.0f);
+}
+
+/* Draws an icon at every light in edit mode (when the view shows them) and returns the light whose icon
+ * is under the mouse, if any. */
+static WPE_Entity wpe__ui_light_icons(WPE_EditorUi* ui, ImDrawList* draw) {
+    WPE_Mat4 view_projection;
+    WPE_Vec3 eye, eye_dir;
+    if (!wpe_editor_view(ui->editor).lights || wpe_editor_mode(ui->editor) != WPE_EDITOR_EDIT ||
+        !wpe__view_projection(ui, &view_projection) ||
+        !wpe__ray(ui, ui->image_x + ui->image_w * 0.5f, ui->image_y + ui->image_h * 0.5f, &eye, &eye_dir))
+        return WPE_ENTITY_NULL;
+    WPE_Ecs* ecs = wpe__ui_ecs(ui);
+    const WPE_Entity selection = wpe_editor_selection(ui->editor);
+    const ImVec2_c mouse = igGetMousePos();
+    WPE_Entity hovered = WPE_ENTITY_NULL;
+    float hovered_distance = 12.0f;
+    ImDrawList_PushClipRect(draw, (ImVec2_c){ui->image_x, ui->image_y},
+                            (ImVec2_c){ui->image_x + ui->image_w, ui->image_y + ui->image_h}, true);
+    WPE_EcsIter it = wpe_ecs_query(
+        ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_LIGHT) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_Light* light = wpe_ecs_iter_get(&it, WPE_COMP_LIGHT);
+        const WPE_Transform* t = wpe_ecs_iter_get(&it, WPE_COMP_TRANSFORM);
+        const WPE_Vec3 position = wpe_mat4_transform_point(&t->world, wpe_vec3(0, 0, 0));
+        ImVec2_c at, aim = {0};
+        if (!wpe__to_screen(ui, &view_projection, position, &at)) continue;
+        /* The direction line has a constant on-screen length, like the gizmo. */
+        bool aimed = false;
+        const WPE_Vec3 direction = wpe_mat4_transform_dir(&t->world, wpe_vec3(0, 0, -1));
+        if (light->type != WPE_LIGHT_POINT && wpe_vec3_length(direction) > 1e-9f) {
+            const float length = wpe_vec3_length(wpe_vec3_sub(position, eye)) * 0.12f;
+            aimed = wpe__to_screen(
+                ui, &view_projection,
+                wpe_vec3_add(position, wpe_vec3_scale(wpe_vec3_normalize(direction), length)), &aim);
+        }
+        wpe__draw_light_icon(draw, light, at, aim, aimed, it.entity == selection);
+        const float distance =
+            sqrtf((mouse.x - at.x) * (mouse.x - at.x) + (mouse.y - at.y) * (mouse.y - at.y));
+        if (ui->view_hovered && distance < hovered_distance) {
+            hovered_distance = distance;
+            hovered = it.entity;
+        }
+    }
+    ImDrawList_PopClipRect(draw);
+    return hovered;
 }
 
 /* ---- Panels ----------------------------------------------------------------------------------------- */
@@ -1380,11 +1479,13 @@ static void wpe__ui_viewport(WPE_EditorUi* ui) {
         igEndDragDropTarget();
     }
     ImDrawList* draw = igGetWindowDrawList();
+    const WPE_Entity light = wpe__ui_light_icons(ui, draw);
     const bool gizmo = wpe__ui_gizmo(ui, draw);
     if (!gizmo && ui->view_hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) &&
         wpe_editor_mode(ui->editor) == WPE_EDITOR_EDIT) {
+        /* Icons are drawn over the scene, so they are picked before it. */
         const ImVec2_c mouse = igGetMousePos();
-        const WPE_Entity picked = wpe__pick(ui, mouse.x, mouse.y);
+        const WPE_Entity picked = light ? light : wpe__pick(ui, mouse.x, mouse.y);
         if (picked) {
             wpe__ui_entity_command(ui, "select", picked);
         } else {
@@ -1447,6 +1548,8 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
             wpe__ui_set_view(ui, "grid_spacing", NULL, spacing, false);
         if (igMenuItem_Bool("Physics shapes", "P", view.physics, true))
             wpe__ui_set_view(ui, "physics", NULL, 0, !view.physics);
+        if (igMenuItem_Bool("Light icons", "L", view.lights, true))
+            wpe__ui_set_view(ui, "lights", NULL, 0, !view.lights);
         if (igMenuItem_Bool("Reload changed scripts", NULL, view.hot_reload, true))
             wpe__ui_set_view(ui, "hot_reload", NULL, 0, !view.hot_reload);
         igSeparator();
@@ -1594,6 +1697,7 @@ static void wpe__ui_shortcuts(WPE_EditorUi* ui) {
             wpe__ui_set_view(ui, "gizmo_space", view.gizmo_local ? "world" : "local", 0, false);
         if (igIsKeyPressed_Bool(ImGuiKey_G, false)) wpe__ui_set_view(ui, "grid", NULL, 0, !view.grid);
         if (igIsKeyPressed_Bool(ImGuiKey_P, false)) wpe__ui_set_view(ui, "physics", NULL, 0, !view.physics);
+        if (igIsKeyPressed_Bool(ImGuiKey_L, false)) wpe__ui_set_view(ui, "lights", NULL, 0, !view.lights);
     }
 }
 

@@ -337,6 +337,7 @@ WPE_Result wpe_editor_create(const WPE_EditorDesc* desc, WPE_Editor** out_editor
     snprintf(editor->project_dir, sizeof editor->project_dir, "%s", desc->project_dir);
     editor->view = (WPE_EditorView){.grid = true,
                                     .grid_spacing = 1.0f,
+                                    .lights = true,
                                     .hot_reload = true,
                                     .snap_move = 0.5f,
                                     .snap_rotate = 15.0f,

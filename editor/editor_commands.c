@@ -307,6 +307,8 @@ static WPE_Result wpe__write_view(WPE_JsonWriter* w, const WPE_EditorView* view)
     wpe_json_write_number(w, view->grid_spacing);
     wpe_json_write_key(w, "physics");
     wpe_json_write_bool(w, view->physics);
+    wpe_json_write_key(w, "lights");
+    wpe_json_write_bool(w, view->lights);
     wpe_json_write_key(w, "gizmo");
     wpe_json_write_string(w, wpe__gizmo_names[view->gizmo]);
     wpe_json_write_key(w, "gizmo_space");
@@ -334,6 +336,7 @@ static WPE_Result wpe__read_view_key(wpe__Call* call, const char* key, const WPE
                                      WPE_EditorView* view) {
     bool* flag = strcmp(key, "grid") == 0         ? &view->grid
                  : strcmp(key, "physics") == 0    ? &view->physics
+                 : strcmp(key, "lights") == 0     ? &view->lights
                  : strcmp(key, "hot_reload") == 0 ? &view->hot_reload
                  : strcmp(key, "snap") == 0       ? &view->snap
                                                   : NULL;
@@ -378,11 +381,11 @@ static WPE_Result wpe__read_view_key(wpe__Call* call, const char* key, const WPE
         }
         return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"gizmo_space\" is \"world\" or \"local\"");
     }
-    return wpe__fail(
-        call, WPE_RESULT_ERROR_INVALID_ARG,
-        "unknown view setting \"%s\" (grid, grid_spacing, physics, gizmo, gizmo_space, hot_reload, snap, "
-        "snap_move, snap_rotate, snap_scale)",
-        key);
+    return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                     "unknown view setting \"%s\" (grid, grid_spacing, physics, lights, gizmo, gizmo_space, "
+                     "hot_reload, snap, "
+                     "snap_move, snap_rotate, snap_scale)",
+                     key);
 }
 
 static WPE_Result wpe__cmd_set_view(wpe__Call* call) {
@@ -842,7 +845,8 @@ static const struct {
     {"get_environment", wpe__cmd_get_environment, "{} -> the scene environment"},
     {"set_environment", wpe__cmd_set_environment, "{value: {...}} (merged) -> the environment"},
     {"get_view", wpe__cmd_get_view,
-     "{} -> {grid, grid_spacing, physics, gizmo, gizmo_space, hot_reload, snap, snap_move, snap_rotate, "
+     "{} -> {grid, grid_spacing, physics, lights, gizmo, gizmo_space, hot_reload, snap, snap_move, "
+     "snap_rotate, "
      "snap_scale}"},
     {"set_view", wpe__cmd_set_view, "{value: {...}} (merged; not saved or undone) -> the view"},
     {"new_scene", wpe__cmd_new_scene, "{discard = false} (refused with unsaved changes unless discard)"},
