@@ -1,6 +1,8 @@
 -- A rolling ball the player drives: moves relative to the camera (move_x / move_y), jumps when it
 -- stands on something (jump), boosts (boost), throws crates (fire) and rumbles the gamepad on hard
 -- landings.
+local util = require("scripts/lib/util")
+
 local Player = {}
 Player.properties = { speed = 6, jump_speed = 6.5, player = 1 } -- player: 1-4, whose input
 
@@ -10,20 +12,6 @@ function Player:on_start()
 	self.fall_speed = 0
 	self.cooldown = 0
 	self.thrown = {}
-end
-
--- Horizontal unit vectors of the camera's view (forward along the ground, and right).
-local function camera_axes()
-	local camera = wpe.get_camera()
-	local forward = vector.create(0, 0, -1)
-	if camera then
-		local f = wpe.forward(camera)
-		local flat = vector.create(f.x, 0, f.z)
-		if vector.magnitude(flat) > 1e-3 then
-			forward = vector.normalize(flat)
-		end
-	end
-	return forward, vector.create(-forward.z, 0, forward.x)
 end
 
 local function grounded(self)
@@ -53,7 +41,7 @@ function Player:on_update(dt)
 end
 
 function Player:throw()
-	local forward = camera_axes()
+	local forward = util.camera_axes()
 	local origin = wpe.get_world_position(self.entity) + forward * 0.9 + vector.create(0, 0.6, 0)
 	local crate = wpe.instantiate("crate", origin)
 	wpe.set_scale(crate, 0.4)
@@ -64,7 +52,7 @@ function Player:throw()
 end
 
 function Player:on_fixed_update(dt)
-	local forward, right = camera_axes()
+	local forward, right = util.camera_axes()
 	local wish = right * wpe.action_value("move_x", self.player) + forward * wpe.action_value("move_y", self.player)
 	if vector.magnitude(wish) > 1 then
 		wish = vector.normalize(wish)

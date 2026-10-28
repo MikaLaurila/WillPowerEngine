@@ -183,7 +183,8 @@ static void test_script_sandbox(void) {
         f.host, "probe",
         "assert(io == nil) assert(loadstring == nil) assert(load == nil) assert(dofile == nil)\n"
         "assert(getfenv == nil) assert(setfenv == nil) assert(os.execute == nil) assert(os.remove == nil)\n"
-        "assert(require == nil)"));
+        "assert(not pcall(require, 'C:/Windows/notepad.exe') and not pcall(require, '/etc/passwd'))\n"
+        "assert(not pcall(require, '../outside'))"));
     /* Libraries and the engine API are read-only. */
     WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR, wpe_script_host_run(f.host, "patch", "wpe.spawn = nil"));
     WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR, wpe_script_host_run(f.host, "patch", "math.sin = nil"));
@@ -807,6 +808,217 @@ static void test_script_declared_properties(void) {
     free_fixture(&f);
 }
 
+/* ---- Modules, timers, messages, saved data ------------------------------------------------------------ */
+
+static void test_script_require_modules(void) {
+    write_script("lib_a.luau", "return { n = 1, b = require('lib_b') }\n");
+    write_script("lib_b.luau", "return 'B'\n");
+    write_script("cycle_1.luau", "return require('cycle_2')\n");
+    write_script("cycle_2.luau", "return require('cycle_1.luau')\n");
+    write_script("empty_module.luau", "local x = 1\n");
+    write_script("uses.luau",
+                 "local a = require('lib_a')\n"
+                 "assert(a.b == 'B' and require('lib_a.luau') == a and require('empty_module') == true)\n"
+                 "local ok, message = pcall(require, 'cycle_1')\n"
+                 "assert(not ok and string.find(message, 'circular'))\n"
+                 "assert(not pcall(require, 'missing') and not pcall(require, ''))\n"
+                 "local S = {}\n"
+                 "function S:on_update(dt) wpe.set_position(self.entity, vector.create(a.n, 0, 0)) end\n"
+                 "return S\n");
+    Fixture f = make_fixture(0, 0);
+    const WPE_Entity e = spawn(&f, NULL);
+    quiet(true); /* The failing requires log. */
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, e, "uses.luau"));
+    quiet(false);
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.016f));
+    WPE_TEST_ASSERT_NEAR(1.0, position(&f, e).x, 0);
+
+    /* A changed module reloads every script, which require it again. */
+    write_script("lib_a.luau", "return { n = 2, b = require('lib_b') }\n");
+    WPE_TEST_ASSERT_OK(wpe_script_host_reload(f.host, "lib_a.luau"));
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.016f));
+    WPE_TEST_ASSERT_NEAR(2.0, position(&f, e).x, 0);
+
+    /* A broken module leaves the scripts running as they were; fixing it reloads them again. */
+    write_script("lib_a.luau", "return { n = \n");
+    quiet(true);
+    WPE_TEST_ASSERT_OK(wpe_script_host_reload(f.host, "lib_a.luau"));
+    quiet(false);
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.016f));
+    WPE_TEST_ASSERT_NEAR(2.0, position(&f, e).x, 0);
+    write_script("lib_a.luau", "return { n = 3, b = require('lib_b') }\n");
+    WPE_TEST_ASSERT_OK(wpe_script_host_reload(f.host, "lib_a.luau"));
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.016f));
+    WPE_TEST_ASSERT_NEAR(3.0, position(&f, e).x, 0);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(f.host).failed);
+    free_fixture(&f);
+}
+
+static void test_script_timers(void) {
+    /* x: repeats, y: one-shots; the witness counts the owner's timer ticks until the owner goes. */
+    write_script("timed.luau",
+                 "local S = {}\n"
+                 "function S:on_start()\n"
+                 "  self.ticks, self.once = 0, 0\n"
+                 "  wpe.after(0.1, function() self.once += 1 end)\n"
+                 "  wpe.every(0.05, function() self.ticks += 1 end)\n"
+                 "  local cancelled = wpe.after(0.01, function() error('cancelled') end)\n"
+                 "  assert(wpe.cancel(cancelled) and not wpe.cancel(cancelled) and not wpe.cancel(-1))\n"
+                 "  wpe.after(0.02, function() error('boom') end)\n"
+                 "  local witness = wpe.find('witness')\n"
+                 "  wpe.every(0.02, function()\n"
+                 "    wpe.set_position(witness, wpe.get_position(witness) + vector.create(1, 0, 0))\n"
+                 "  end)\n"
+                 "  assert(not pcall(wpe.after, -1, print) and not pcall(wpe.every, 0, print))\n"
+                 "  assert(not pcall(wpe.after, 1, 'not a function'))\n"
+                 "end\n"
+                 "function S:on_update(dt) wpe.set_position(self.entity, vector.create(self.ticks, "
+                 "self.once, 0)) end\n"
+                 "return S\n");
+    Fixture f = make_fixture(0, 0);
+    const WPE_Entity e = spawn(&f, NULL);
+    const WPE_Entity witness = spawn(&f, "witness");
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, e, "timed.luau"));
+    quiet(true);                /* The failing timer logs. */
+    for (int i = 0; i < 7; ++i) /* 0.14 s: repeats at 0.05 and 0.10, the one-shot at 0.10. */
+        WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.02f));
+    quiet(false);
+    WPE_TEST_ASSERT_NEAR(2.0, position(&f, e).x, 0);
+    WPE_TEST_ASSERT_NEAR(1.0, position(&f, e).y, 0);
+    /* The failing timer was cancelled and counted; the script runs on. */
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_script_host_stats(f.host).errors);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(f.host).failed);
+    /* A long frame fires a repeating timer once, not once per missed interval. */
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 1.0f));
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.001f));
+    WPE_TEST_ASSERT_NEAR(3.0, position(&f, e).x, 0);
+    /* The owner's timers go with its script. */
+    const float before = position(&f, witness).x;
+    WPE_TEST_ASSERT(before > 0.0f);
+    WPE_TEST_ASSERT_OK(wpe_ecs_despawn(f.ecs, e));
+    for (int i = 0; i < 5; ++i)
+        WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.02f));
+    WPE_TEST_ASSERT_NEAR(before, position(&f, witness).x, 0);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_script_host_stats(f.host).errors);
+    /* Timers made outside any script run until cancelled. */
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(
+        f.host, "free", "wpe.after(0, function() wpe.set_name(wpe.find('witness'), 'fired') end)"));
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.02f));
+    WPE_TEST_ASSERT_EQ_STR("fired", wpe_scene_get_name(f.ecs, witness));
+    free_fixture(&f);
+}
+
+static void test_script_messages(void) {
+    write_script("receiver.luau",
+                 "local S = {}\n"
+                 "function S:on_start() self.hp = 10 end\n"
+                 "function S:hit(damage) self.hp -= damage; return self.hp, 'ouch' end\n"
+                 "function S:on_alarm(level) wpe.set_position(self.entity, vector.create(level, 0, 0)) end\n"
+                 "function S:explode() error('kaboom') end\n"
+                 "return S\n");
+    write_script("sender.luau",
+                 "local S = {}\n"
+                 "function S:on_start() self.frames = 0 end\n"
+                 "function S:on_update(dt)\n"
+                 "  self.frames += 1\n"
+                 "  if self.frames ~= 2 then return end -- everyone has started\n"
+                 "  local target = wpe.find('receiver')\n"
+                 "  local hp, word = wpe.send(target, 'hit', 3)\n"
+                 "  assert(hp == 7 and word == 'ouch' and wpe.get_script(target).hp == 7)\n"
+                 "  assert(wpe.send(target, 'missing') == nil and wpe.send(4294967295, 'hit', 1) == nil)\n"
+                 "  assert(wpe.get_script(self.entity) == self)\n"
+                 "  assert(wpe.broadcast('on_alarm', 5) == 1)\n"
+                 "  -- An error in a sent message is the sender's; in a broadcast, the receiver's.\n"
+                 "  assert(not pcall(wpe.send, target, 'explode'))\n"
+                 "  assert(wpe.get_script(target) ~= nil)\n"
+                 "  assert(wpe.broadcast('explode') == 0 and wpe.get_script(target) == nil)\n"
+                 "  wpe.set_name(self.entity, 'sent')\n"
+                 "end\n"
+                 "return S\n");
+    Fixture f = make_fixture(0, 0);
+    const WPE_Entity receiver = spawn(&f, "receiver");
+    const WPE_Entity sender = spawn(&f, "sender");
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, receiver, "receiver.luau"));
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, sender, "sender.luau"));
+    quiet(true);
+    for (int i = 0; i < 2; ++i)
+        WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.016f));
+    quiet(false);
+    WPE_TEST_ASSERT_EQ_STR("sent", wpe_scene_get_name(f.ecs, sender));
+    WPE_TEST_ASSERT_NEAR(5.0, position(&f, receiver).x, 0);
+    const WPE_ScriptStats stats = wpe_script_host_stats(f.host);
+    WPE_TEST_ASSERT_EQ_UINT(1, stats.failed); /* The receiver, by the broadcast. */
+    WPE_TEST_ASSERT_EQ_UINT(1, stats.errors);
+    free_fixture(&f);
+}
+
+static const char* save_directory(void* user_data) {
+    return user_data;
+}
+
+static void test_script_saved_data(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/saves"));
+    Fixture f = make_fixture(0, 0);
+    /* Without the application's save directory, saving raises. */
+    quiet(true);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR,
+                           wpe_script_host_run(f.host, "no saving", "wpe.save_data('a', 1)"));
+    quiet(false);
+    free_fixture(&f);
+
+    f.assets = wpe_test_assets_create(ROOT, 0);
+    WPE_TEST_ASSERT_OK(wpe_ecs_create(&f.ecs));
+    WPE_TEST_ASSERT_OK(wpe_scene_register_components(f.ecs));
+    const WPE_ScriptApp app = {.user_data = ROOT "/saves", .save_directory = save_directory};
+    WPE_TEST_ASSERT_OK(wpe_script_host_create(
+        &(WPE_ScriptHostDesc){.ecs = f.ecs, .assets = f.assets.assets, .app = &app}, &f.host));
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(
+        f.host, "round trip",
+        "wpe.delete_data('slot-1')\n"
+        "assert(wpe.load_data('slot-1') == nil)\n"
+        "local data = { level = 4, score = 1234.5, name = 'Ann', hard = false, at = vector.create(1, -2, "
+        "3.5),\n"
+        "               list = { 'a', 'b', 'c' }, empty = {}, nested = { a = { b = { c = 'deep' } } } }\n"
+        "wpe.save_data('slot-1', data)\n"
+        "local back = wpe.load_data('slot-1')\n"
+        "assert(back.level == 4 and back.score == 1234.5 and back.name == 'Ann' and back.hard == false)\n"
+        "assert(back.at == vector.create(1, -2, 3.5) and #back.list == 3 and back.list[3] == 'c')\n"
+        "assert(next(back.empty) == nil and back.nested.a.b.c == 'deep')\n"
+        "wpe.save_data('slot-1', 'replaced'); assert(wpe.load_data('slot-1') == 'replaced')\n"
+        "wpe.save_data('plain_number', 42); assert(wpe.load_data('plain_number') == 42)\n"
+        "assert(wpe.delete_data('plain_number') and not wpe.delete_data('plain_number'))\n"));
+    /* The file is plain JSON, written whole. */
+    void* text = NULL;
+    size_t size = 0;
+    WPE_TEST_ASSERT_OK(wpe_file_read_all(ROOT "/saves/slot-1.json", &text, &size));
+    WPE_TEST_ASSERT(size >= 10 && strncmp((const char*)text, "\"replaced\"", 10) == 0);
+    wpe_free(text);
+    int64_t modified = 0;
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND,
+                           wpe_file_modified_time(ROOT "/saves/slot-1.json.tmp", &modified));
+
+    /* What can't be saved, names that aren't names, and a damaged file. */
+    quiet(true);
+    const char* const refused[] = {
+        "wpe.save_data('bad/name', 1)",    "wpe.save_data('', 1)",
+        "wpe.save_data('x', nil)",         "wpe.save_data('x', print)",
+        "wpe.save_data('x', { [5] = 1 })", "wpe.save_data('x', { [true] = 1 })",
+        "wpe.save_data('x', 0/0)",         "local t = {}; t.self = t; wpe.save_data('x', t)",
+        "wpe.load_data('../escape')"};
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; ++i)
+        WPE_TEST_ASSERT_MSG(wpe_script_host_run(f.host, "refused", refused[i]) == WPE_RESULT_ERROR, "%s",
+                            refused[i]);
+    write_script("saves/broken.json", "{\"a\": ");
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR,
+                           wpe_script_host_run(f.host, "damaged", "wpe.load_data('broken')"));
+    quiet(false);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND,
+                           wpe_file_modified_time(ROOT "/saves/x.json", &modified));
+    WPE_TEST_ASSERT_OK(wpe_path_remove(ROOT "/saves/broken.json"));
+    WPE_TEST_ASSERT_OK(wpe_path_remove(ROOT "/saves/slot-1.json"));
+    free_fixture(&f);
+}
+
 /* ---- Input, application services and 2D drawing ----------------------------------------------------- */
 
 typedef struct AppLog {
@@ -909,7 +1121,9 @@ static void test_script_input_app_and_draw(void) {
     /* A real SDL key event drives the key and action queries. */
     wpe_platform_poll_events(NULL, NULL);
     wpe_input_begin_frame(input);
-    SDL_Event key = {.type = SDL_EVENT_KEY_DOWN};
+    SDL_Event key;
+    SDL_zero(key); /* All of it: a partial initializer leaves key.repeat as stack garbage. */
+    key.type = SDL_EVENT_KEY_DOWN;
     key.key.scancode = SDL_SCANCODE_SPACE;
     key.key.down = true;
     WPE_TEST_ASSERT(SDL_PushEvent(&key));
@@ -994,5 +1208,7 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_script_lifecycle_order), WPE_TEST_CASE(test_scr
               WPE_TEST_CASE(test_script_fixed_step_clock), WPE_TEST_CASE(test_script_quat_euler_roundtrip),
               WPE_TEST_CASE(test_script_physics_api_and_callbacks), WPE_TEST_CASE(test_script_physics_errors),
               WPE_TEST_CASE(test_script_audio_api), WPE_TEST_CASE(test_script_properties),
-              WPE_TEST_CASE(test_script_declared_properties), WPE_TEST_CASE(test_script_input_app_and_draw),
+              WPE_TEST_CASE(test_script_declared_properties), WPE_TEST_CASE(test_script_require_modules),
+              WPE_TEST_CASE(test_script_timers), WPE_TEST_CASE(test_script_messages),
+              WPE_TEST_CASE(test_script_saved_data), WPE_TEST_CASE(test_script_input_app_and_draw),
               WPE_TEST_CASE(test_script_ecs_unregister_component))

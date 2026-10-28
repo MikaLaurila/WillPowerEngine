@@ -10,8 +10,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "core/alloc.h"
+#include "core/json.h"
 #include "core/log.h"
 #include "graphics/graphics.h"
+#include "platform/platform.h"
 #include "scene/scene.h"
 #include "script/script_internal.h"
 
@@ -836,6 +839,360 @@ static int wpe__api_set_gravity(lua_State* L) {
 
 static int wpe__api_get_gravity(lua_State* L) {
     wpe__push_vec3(L, wpe_physics_gravity(wpe__physics(L)));
+    return 1;
+}
+
+/* ---- Timers and messages --------------------------------------------------------------------------- */
+
+static int wpe__add_timer(lua_State* L, const char* function, bool repeat) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const double seconds = luaL_checknumber(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    if (!isfinite(seconds) || seconds < 0.0 || (repeat && !(seconds > 0.0)))
+        luaL_errorL(L, "wpe.%s: seconds must be %s", function, repeat ? "positive" : "0 or more");
+    lua_pushvalue(L, 2);
+    const int fn_ref = lua_ref(L, -1);
+    lua_pop(L, 1);
+    const uint32_t id = wpe__script_add_timer(host, seconds, repeat ? seconds : 0.0, fn_ref);
+    if (id == 0) {
+        lua_unref(L, fn_ref);
+        luaL_errorL(L, "wpe.%s: out of memory", function);
+    }
+    lua_pushnumber(L, (double)id);
+    return 1;
+}
+
+static int wpe__api_after(lua_State* L) {
+    return wpe__add_timer(L, "after", false);
+}
+
+static int wpe__api_every(lua_State* L) {
+    return wpe__add_timer(L, "every", true);
+}
+
+static int wpe__api_cancel(lua_State* L) {
+    const double id = luaL_checknumber(L, 1);
+    const bool valid = id >= 1.0 && id <= (double)UINT32_MAX && id == floor(id);
+    lua_pushboolean(L, valid && wpe__script_cancel_timer(wpe__script_host_from(L), (uint32_t)id));
+    return 1;
+}
+
+/* The live script component of a handle, or NULL (dead entities and missing scripts are not errors:
+ * the receiver of a message may be gone). */
+static const WPE_Script* wpe__receiver(lua_State* L, int index) {
+    const WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_Entity entity = wpe__check_handle(L, index);
+    if (!wpe_ecs_is_alive(host->ecs, entity)) return NULL;
+    const WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
+    return s && !(s->state & WPE__SCRIPT_FAILED) ? s : NULL;
+}
+
+static int wpe__api_get_script(lua_State* L) {
+    const WPE_Script* s = wpe__receiver(L, 1);
+    if (!s) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_getref(L, s->instance_ref);
+    return 1;
+}
+
+static int wpe__api_send(lua_State* L) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const char* method = luaL_checkstring(L, 2);
+    const WPE_Script* s = wpe__receiver(L, 1);
+    if (!s) return 0;
+    const WPE_Entity entity = (WPE_Entity)lua_tonumber(L, 1);
+    const int instance_ref = s->instance_ref;
+    const int top = lua_gettop(L); /* Arguments are 3..top. */
+    lua_getref(L, instance_ref);
+    lua_getfield(L, -1, method);
+    if (!lua_isfunction(L, -1)) return 0; /* Receivers that don't handle it ignore it. */
+    lua_insert(L, -2);                    /* [fn, instance] */
+    for (int a = 3; a <= top; ++a)
+        lua_pushvalue(L, a);
+    /* Timers the method makes belong to the receiver. An error goes on to the sender (its callback
+     * fails), and the callback that called it restores the running instance. */
+    const int previous_instance = host->current_instance;
+    const WPE_Entity previous_entity = host->current_entity;
+    host->current_instance = instance_ref;
+    host->current_entity = entity;
+    lua_call(L, top - 1, LUA_MULTRET);
+    host->current_instance = previous_instance;
+    host->current_entity = previous_entity;
+    return lua_gettop(L) - top;
+}
+
+/* ---- Saved data ------------------------------------------------------------------------------------- */
+
+#define WPE__SAVE_NAME_MAX 64u
+#define WPE__SAVE_MAX_DEPTH 32
+
+/* Raises unless `name` is a save name: 1-64 letters, digits, '_' or '-'. */
+static void wpe__check_save_name(lua_State* L, const char* function, const char* name) {
+    const size_t length = strlen(name);
+    bool valid = length > 0 && length <= WPE__SAVE_NAME_MAX;
+    for (size_t i = 0; valid && i < length; ++i) {
+        const char c = name[i];
+        valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' ||
+                c == '-';
+    }
+    if (!valid)
+        luaL_errorL(L, "wpe.%s: '%s' is not a save name (1-64 letters, digits, '_' and '-')", function, name);
+}
+
+/* The file of a save: <save directory>/<name>.json. Raises when the application has nowhere to save. */
+static void wpe__save_path(lua_State* L, const char* function, const char* name, char* out, size_t capacity) {
+    const WPE_ScriptHost* host = wpe__script_host_from(L);
+    const char* directory = host->app.save_directory ? host->app.save_directory(host->app.user_data) : NULL;
+    if (!directory || !directory[0]) luaL_errorL(L, "wpe.%s: saving isn't available here", function);
+    const size_t length = strlen(directory);
+    const bool separated = directory[length - 1] == '/' || directory[length - 1] == '\\';
+    const int written = snprintf(out, capacity, "%s%s%s.json", directory, separated ? "" : "/", name);
+    if (written < 0 || (size_t)written >= capacity)
+        luaL_errorL(L, "wpe.%s: the save path is too long", function);
+}
+
+/* A table holding exactly the keys 1..n (n > 0) is saved as a list; any other needs string keys. */
+static bool wpe__table_is_list(lua_State* L, int table) {
+    const int length = lua_objlen(L, table);
+    if (length <= 0) return false;
+    int keys = 0;
+    lua_pushnil(L);
+    while (lua_next(L, table)) {
+        lua_pop(L, 1);
+        ++keys;
+    }
+    return keys == length;
+}
+
+/* Raises unless the value at `index` (absolute) can be saved. */
+static void wpe__check_savable(lua_State* L, int index, int depth) {
+    switch (lua_type(L, index)) {
+    case LUA_TBOOLEAN:
+    case LUA_TVECTOR:
+        return;
+    case LUA_TNUMBER:
+        if (!isfinite(lua_tonumber(L, index))) luaL_errorL(L, "wpe.save_data: numbers must be finite");
+        return;
+    case LUA_TSTRING: {
+        size_t length = 0;
+        const char* text = lua_tolstring(L, index, &length);
+        if (strlen(text) != length) luaL_errorL(L, "wpe.save_data: strings can't hold zero bytes");
+        return;
+    }
+    case LUA_TTABLE:
+        break;
+    default:
+        luaL_errorL(L,
+                    "wpe.save_data: a %s can't be saved (numbers, booleans, strings, vectors and tables can)",
+                    luaL_typename(L, index));
+    }
+    if (depth >= WPE__SAVE_MAX_DEPTH)
+        luaL_errorL(L, "wpe.save_data: tables nest deeper than %d (or a table contains itself)",
+                    WPE__SAVE_MAX_DEPTH);
+    luaL_checkstack(L, 4, "wpe.save_data");
+    const bool list = wpe__table_is_list(L, index);
+    lua_pushnil(L);
+    while (lua_next(L, index)) {
+        if (!list && lua_type(L, -2) != LUA_TSTRING)
+            luaL_errorL(L, "wpe.save_data: table keys must be strings, or 1..n for a list");
+        if (!list) {
+            size_t length = 0;
+            const char* key = lua_tolstring(L, -2, &length);
+            if (strlen(key) != length) luaL_errorL(L, "wpe.save_data: keys can't hold zero bytes");
+        }
+        wpe__check_savable(L, lua_gettop(L), depth + 1);
+        lua_pop(L, 1);
+    }
+}
+
+/* Writes a checked value (raises nothing). Vectors are {"$vector": [x, y, z]}. */
+static void wpe__encode(lua_State* L, int index, WPE_JsonWriter* w) {
+    switch (lua_type(L, index)) {
+    case LUA_TBOOLEAN:
+        wpe_json_write_bool(w, lua_toboolean(L, index) != 0);
+        return;
+    case LUA_TNUMBER:
+        wpe_json_write_double(w, lua_tonumber(L, index));
+        return;
+    case LUA_TSTRING:
+        wpe_json_write_string(w, lua_tostring(L, index));
+        return;
+    case LUA_TVECTOR: {
+        const float* v = lua_tovector(L, index);
+        wpe_json_write_object_begin(w);
+        wpe_json_write_key(w, "$vector");
+        wpe_json_write_array_begin(w, true);
+        for (int i = 0; i < 3; ++i)
+            wpe_json_write_double(w, v[i]);
+        wpe_json_write_array_end(w);
+        wpe_json_write_object_end(w);
+        return;
+    }
+    default:
+        break;
+    }
+    if (wpe__table_is_list(L, index)) {
+        wpe_json_write_array_begin(w, false);
+        const int length = lua_objlen(L, index);
+        for (int i = 1; i <= length; ++i) {
+            lua_rawgeti(L, index, i);
+            wpe__encode(L, lua_gettop(L), w);
+            lua_pop(L, 1);
+        }
+        wpe_json_write_array_end(w);
+        return;
+    }
+    wpe_json_write_object_begin(w);
+    lua_pushnil(L);
+    while (lua_next(L, index)) {
+        wpe_json_write_key(w, lua_tostring(L, -2));
+        wpe__encode(L, lua_gettop(L), w);
+        lua_pop(L, 1);
+    }
+    wpe_json_write_object_end(w);
+}
+
+static int wpe__api_save_data(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    wpe__check_save_name(L, "save_data", name);
+    luaL_checkany(L, 2);
+    if (lua_isnil(L, 2)) luaL_errorL(L, "wpe.save_data: nothing to save (wpe.delete_data removes a save)");
+    wpe__check_savable(L, 2, 0);
+    char path[1024];
+    wpe__save_path(L, "save_data", name, path, sizeof path);
+    char temporary[sizeof path + 4];
+    snprintf(temporary, sizeof temporary, "%s.tmp", path);
+
+    /* Nothing below raises until the writer is gone. Written beside the save, then renamed over it, so
+     * a crash mid-write never leaves a half-written save. */
+    WPE_JsonWriter* w = NULL;
+    WPE_Result result = wpe_json_writer_create(&w);
+    if (result == WPE_RESULT_OK) {
+        wpe__encode(L, 2, w);
+        const char* text = NULL;
+        size_t size = 0;
+        result = wpe_json_writer_finish(w, &text, &size);
+        WPE_File* file = NULL;
+        if (result == WPE_RESULT_OK) result = wpe_file_open(temporary, true, &file);
+        if (result == WPE_RESULT_OK) {
+            result = wpe_file_write(file, text, size);
+            const WPE_Result closed = wpe_file_close(file);
+            if (result == WPE_RESULT_OK) result = closed;
+        }
+        if (result == WPE_RESULT_OK) result = wpe_path_rename(temporary, path);
+    }
+    wpe_json_writer_destroy(w);
+    if (result != WPE_RESULT_OK)
+        luaL_errorL(L, "wpe.save_data: cannot write '%s': %s", path, wpe_result_to_string(result));
+    return 0;
+}
+
+typedef struct wpe__DecodeOp {
+    const WPE_JsonValue* value;
+    int ref; /* out */
+} wpe__DecodeOp;
+
+/* Pushes a saved JSON value as Lua (may raise: runs protected). */
+static void wpe__decode(lua_State* L, const WPE_JsonValue* v, int depth) {
+    if (depth > WPE__SAVE_MAX_DEPTH) luaL_errorL(L, "the saved data nests too deep");
+    luaL_checkstack(L, 4, "wpe.load_data");
+    switch (wpe_json_type(v)) {
+    case WPE_JSON_BOOL:
+        lua_pushboolean(L, wpe_json_bool(v, false));
+        return;
+    case WPE_JSON_NUMBER:
+        lua_pushnumber(L, wpe_json_number(v, 0.0));
+        return;
+    case WPE_JSON_STRING:
+        lua_pushstring(L, wpe_json_string(v));
+        return;
+    case WPE_JSON_ARRAY:
+        lua_createtable(L, (int)wpe_json_count(v), 0);
+        for (uint32_t i = 0; i < wpe_json_count(v); ++i) {
+            wpe__decode(L, wpe_json_at(v, i), depth + 1);
+            lua_rawseti(L, -2, (int)i + 1);
+        }
+        return;
+    case WPE_JSON_OBJECT: {
+        const WPE_JsonValue* vector = wpe_json_get(v, "$vector");
+        if (vector && wpe_json_count(v) == 1 && wpe_json_type(vector) == WPE_JSON_ARRAY &&
+            wpe_json_count(vector) == 3) {
+            lua_pushvector(L, (float)wpe_json_number(wpe_json_at(vector, 0), 0.0),
+                           (float)wpe_json_number(wpe_json_at(vector, 1), 0.0),
+                           (float)wpe_json_number(wpe_json_at(vector, 2), 0.0));
+            return;
+        }
+        lua_createtable(L, 0, (int)wpe_json_count(v));
+        for (uint32_t i = 0; i < wpe_json_count(v); ++i) {
+            const char* key = NULL;
+            const WPE_JsonValue* member = wpe_json_member(v, i, &key);
+            lua_pushstring(L, key);
+            wpe__decode(L, member, depth + 1);
+            lua_rawset(L, -3);
+        }
+        return;
+    }
+    default:
+        lua_pushnil(L);
+        return;
+    }
+}
+
+static int wpe__op_decode(lua_State* L) {
+    wpe__DecodeOp* op = lua_touserdata(L, 1);
+    wpe__decode(L, op->value, 0);
+    op->ref = lua_ref(L, -1);
+    return 0;
+}
+
+static int wpe__api_load_data(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    wpe__check_save_name(L, "load_data", name);
+    char path[1024];
+    wpe__save_path(L, "load_data", name, path, sizeof path);
+    int64_t modified = 0;
+    if (wpe_file_modified_time(path, &modified) != WPE_RESULT_OK) {
+        lua_pushnil(L); /* Never saved. */
+        return 1;
+    }
+    /* The text and document are freed before anything raises; Lua values are built protected. */
+    void* text = NULL;
+    size_t size = 0;
+    WPE_JsonDocument* doc = NULL;
+    WPE_Result result = wpe_file_read_all(path, &text, &size);
+    if (result == WPE_RESULT_OK) result = wpe_json_parse(text, size, &doc, NULL);
+    char message[256] = "";
+    wpe__DecodeOp op = {.ref = LUA_NOREF};
+    if (result == WPE_RESULT_OK) {
+        op.value = wpe_json_root(doc);
+        if (lua_cpcall(L, wpe__op_decode, &op) != 0) {
+            snprintf(message, sizeof message, "%s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "VM error");
+            lua_pop(L, 1);
+            result = WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        }
+    }
+    wpe_json_free(doc);
+    wpe_free(text);
+    if (result != WPE_RESULT_OK)
+        luaL_errorL(L, "wpe.load_data: save '%s' can't be read (%s)", name,
+                    message[0] ? message : wpe_result_to_string(result));
+    lua_getref(L, op.ref);
+    lua_unref(L, op.ref);
+    return 1;
+}
+
+static int wpe__api_delete_data(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    wpe__check_save_name(L, "delete_data", name);
+    char path[1024];
+    wpe__save_path(L, "delete_data", name, path, sizeof path);
+    int64_t modified = 0;
+    const bool exists = wpe_file_modified_time(path, &modified) == WPE_RESULT_OK;
+    if (exists && wpe_path_remove(path) != WPE_RESULT_OK)
+        luaL_errorL(L, "wpe.delete_data: cannot remove '%s'", path);
+    lua_pushboolean(L, exists);
     return 1;
 }
 
@@ -1874,6 +2231,15 @@ static const luaL_Reg wpe__api[] = {
     {"remove_character", wpe__api_remove_character},
     {"move_character", wpe__api_move_character},
     {"get_character", wpe__api_get_character},
+    {"after", wpe__api_after},
+    {"every", wpe__api_every},
+    {"cancel", wpe__api_cancel},
+    {"get_script", wpe__api_get_script},
+    {"send", wpe__api_send},
+    {"broadcast", wpe__script_broadcast},
+    {"save_data", wpe__api_save_data},
+    {"load_data", wpe__api_load_data},
+    {"delete_data", wpe__api_delete_data},
     {"set_gravity", wpe__api_set_gravity},
     {"get_gravity", wpe__api_get_gravity},
     {"play_sound", wpe__api_play_sound},
@@ -1973,4 +2339,6 @@ void wpe__script_api_register(lua_State* L) {
 
     lua_pushcfunction(L, wpe__api_log, "print");
     lua_setglobal(L, "print");
+    lua_pushcfunction(L, wpe__script_require, "require");
+    lua_setglobal(L, "require");
 }

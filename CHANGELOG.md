@@ -69,6 +69,23 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (modules, timers, messages, saved data)
+- `require(path)` loads Luau modules from the game's files (`.luau` optional): each runs once in
+  its own sandbox and every require returns its value. Circular requires raise. A changed module
+  reloads every script; a broken one leaves them running until it's fixed (it stays watched).
+- Timers: `wpe.after`, `wpe.every`, `wpe.cancel`, on game time, run after `on_update`. A timer
+  goes with the script that made it; one that errors is cancelled.
+- Messages: `wpe.get_script` (another script's `self`), `wpe.send` (call a method if it exists,
+  errors go to the caller), `wpe.broadcast` (every script with the method; an error disables only
+  that receiver).
+- Saved data: `wpe.save_data`, `wpe.load_data`, `wpe.delete_data` keep JSON files in the player's
+  directory for the game (`wpe_platform_save_directory`, made on first use;
+  `WPE_EngineDesc.save_dir` overrides it). Files are replaced whole.
+- `WPE_ScriptApp.save_directory`; `scripts/lib/util.luau` holds the demo scripts' shared helpers.
+- Tests: modules (caching, circular, hot reload, a broken module fixed later), timers (order,
+  cancellation, errors, long frames, owners), messages, saved data (round trip, refusals, damaged
+  files, no save directory), and all of it in the master test scene.
+
 ### Added (character controller and shape queries)
 - Character controllers (`WPE_CharacterController`, component 20, `"character"` in scenes and the
   editor): an upright capsule moved by `wpe_character_move` (Box3D's mover). It slides along walls,

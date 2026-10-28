@@ -61,6 +61,10 @@ typedef struct WPE_EngineDesc {
     bool embedded;
     bool no_audio_device; /* Mix audio without an output device even with a window (silent). */
     uint32_t workers;     /* Render worker threads (0 = one per core). */
+    /* Where wpe.save_data keeps its files (an existing directory). NULL: the user's directory for the
+     * game, wpe_platform_save_directory("WillPowerEngine", <project name>), made when a script first
+     * saves or loads. */
+    const char* save_dir;
 } WPE_EngineDesc;
 
 /**

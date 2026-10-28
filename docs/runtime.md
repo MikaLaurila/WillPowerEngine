@@ -46,8 +46,11 @@ Text uses the engine's built-in font until the project names its own. It works w
 | `--frames <n>` / `--fixed-dt <s>` | Stop after n frames / simulate a fixed frame time (reproducible runs). |
 | `--screenshot <png>` | Save the last frame. |
 | `--workers <n>` | Render threads (default: one per core). |
+| `--save-dir <dir>` | Keep saved data (`wpe.save_data`) in this existing directory instead of the player's own (tests, portable installs). |
 
 On Windows the runtime is a windowed (GUI) program: an exported game started by double-click opens no console. Started from a terminal it still logs there. A startup error shows a message box unless `--headless` is given. PowerShell does not wait for GUI programs unless their output is piped, so in scripts pipe it (`wpe_runtime ... | Out-Host`) or use `Start-Process -Wait`. The editor (`wpe_editor`) is a console program and needs neither.
+
+Saved data (`wpe.save_data`) goes to the player's own directory for the game, `%APPDATA%\WillPowerEngine\<project name>\` on Windows or `~/.local/share/WillPowerEngine/<project name>/` on Linux, named after the letters, digits and spaces of the project's `name`. The directory is made the first time a script saves or loads, and the editor's play mode uses the same one. Hosts can choose another with `WPE_EngineDesc.save_dir`.
 
 The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which the editor will reuse. Each frame the engine does the following:
 

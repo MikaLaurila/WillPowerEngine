@@ -27,9 +27,11 @@ if(NOT EXISTS "${game}")
     message(FATAL_ERROR "the exported game was not written")
 endif()
 
-# The game plays from its embedded archive, without the project directory.
-run("${game}" --headless --frames 60 --fixed-dt 0.0333333 --screenshot "${WORK}/demo.png")
-run("${game}" --headless --scene scenes/test_full.scene --frames 30 --fixed-dt 0.0333333)
+# The game plays from its embedded archive, without the project directory. Saves stay in the scratch
+# directory (the master scene saves and loads data).
+file(MAKE_DIRECTORY "${WORK}/saves")
+run("${game}" --headless --frames 60 --fixed-dt 0.0333333 --screenshot "${WORK}/demo.png" --save-dir "${WORK}/saves")
+run("${game}" --headless --scene scenes/test_full.scene --frames 30 --fixed-dt 0.0333333 --save-dir "${WORK}/saves")
 if(NOT EXISTS "${WORK}/demo.png")
     message(FATAL_ERROR "the exported game did not save its screenshot")
 endif()

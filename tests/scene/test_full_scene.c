@@ -10,14 +10,17 @@
 #include <stdio.h>
 
 #include "engine/engine.h"
+#include "platform/platform.h"
 #include "scene/scene.h"
 
 static void test_full_scene_runs_sixty_seconds(void) {
     WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_directory_create("saves")); /* wpe.save_data's files, in the build tree. */
     WPE_TEST_ASSERT_OK(wpe_engine_create(&(WPE_EngineDesc){.project_dir = WPE_TEST_ASSETS_DIR,
                                                            .scene = "scenes/test_full.scene",
                                                            .headless = true,
-                                                           .workers = 4},
+                                                           .workers = 4,
+                                                           .save_dir = "saves"},
                                          &engine));
     WPE_Ecs* ecs = wpe_engine_ecs(engine);
 

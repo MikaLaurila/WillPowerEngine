@@ -39,6 +39,26 @@ typedef struct wpe__Prefab {
     WPE_AssetHandle model; /* The host holds a reference. */
 } wpe__Prefab;
 
+/* A module loaded by require(), cached until one of the modules changes on disk. */
+typedef struct wpe__Module {
+    char path[WPE__SCRIPT_PATH_MAX];
+    int64_t modified_time;
+    int value_ref;  /* Registry ref: what the chunk returned (true for nothing). */
+    int thread_ref; /* Registry ref: sandbox thread holding the module's globals. */
+    bool loading;   /* Running its chunk now: requiring it again is circular. */
+} wpe__Module;
+
+/* A wpe.after / wpe.every callback. */
+typedef struct wpe__Timer {
+    uint32_t id;
+    int owner_instance; /* Instance ref of the script that made it (LUA_NOREF: none); it goes with that
+                           script. */
+    WPE_Entity owner;
+    double due;      /* Game time it fires at. */
+    double interval; /* Repeat interval (0: once). */
+    int fn_ref;      /* Registry ref of the callback; LUA_NOREF once cancelled. */
+} wpe__Timer;
+
 /* Sounds used by scripts stay loaded (one reference each) until the host is destroyed. */
 typedef struct wpe__CachedSound {
     char path[WPE__SCRIPT_PATH_MAX];
@@ -83,6 +103,19 @@ struct WPE_ScriptHost {
     WPE_Entity* snapshot; /* Script entities iterated by the current update. */
     uint32_t snapshot_capacity;
 
+    wpe__Module* modules;
+    uint32_t module_count;
+    uint32_t module_capacity;
+
+    wpe__Timer* timers;
+    uint32_t timer_count;
+    uint32_t timer_capacity;
+    uint32_t next_timer_id;
+
+    /* The script instance whose code runs now (timers it makes belong to it); LUA_NOREF/NULL outside. */
+    int current_instance;
+    WPE_Entity current_entity;
+
     uint64_t errors;
     double time; /* Accumulated game time (seconds) from updates. */
     uint64_t frame;
@@ -96,6 +129,15 @@ WPE_Result wpe__script_queue_destroy(WPE_ScriptHost* host, WPE_Entity entity);
 WPE_AssetHandle wpe__script_find_prefab(WPE_ScriptHost* host, const char* name_or_path);
 /* Finds or loads a sound by asset path (kept loaded by the host); WPE_ASSET_NONE on failure (logged). */
 WPE_AssetHandle wpe__script_find_sound(WPE_ScriptHost* host, const char* path);
+
+/* Adds a timer owned by the running script (if any); returns its id (0 when out of memory). */
+uint32_t wpe__script_add_timer(WPE_ScriptHost* host, double delay, double interval, int fn_ref);
+/* Cancels a timer; false when no such timer is pending. */
+bool wpe__script_cancel_timer(WPE_ScriptHost* host, uint32_t id);
+
+/* Bindings that need the host's internals: require(name), wpe.broadcast(method, ...). */
+int wpe__script_require(lua_State* L);
+int wpe__script_broadcast(lua_State* L);
 
 /* Installs the `wpe` library and `print` into the VM's globals (before sandboxing). */
 void wpe__script_api_register(lua_State* L);

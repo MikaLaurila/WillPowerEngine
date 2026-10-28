@@ -29,7 +29,8 @@ static WPE_Input* create_input(const WPE_InputSettings* settings) {
 }
 
 static void push_key(SDL_Scancode key, bool down, bool repeat) {
-    SDL_Event e = {0};
+    SDL_Event e;
+    SDL_zero(e);
     e.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
     e.key.scancode = key;
     e.key.down = down;
@@ -38,7 +39,8 @@ static void push_key(SDL_Scancode key, bool down, bool repeat) {
 }
 
 static void push_mouse_button(Uint8 button, bool down, float x, float y) {
-    SDL_Event e = {0};
+    SDL_Event e;
+    SDL_zero(e);
     e.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
     e.button.button = button;
     e.button.down = down;
@@ -122,7 +124,9 @@ static void test_input_keyboard_edges(void) {
     push_key(SDL_SCANCODE_LSHIFT, true, false);
     run_frame(input);
     wpe_input_begin_frame(input);
-    SDL_Event focus = {.type = SDL_EVENT_WINDOW_FOCUS_LOST};
+    SDL_Event focus;
+    SDL_zero(focus);
+    focus.type = SDL_EVENT_WINDOW_FOCUS_LOST;
     WPE_TEST_ASSERT(SDL_PushEvent(&focus));
     run_frame(input);
     WPE_TEST_ASSERT(!wpe_input_key_down(input, WPE_KEY_LSHIFT));
@@ -157,7 +161,9 @@ static void test_input_keyboard_edges(void) {
 static void test_input_mouse(void) {
     WPE_Input* input = create_input(NULL);
     wpe_input_begin_frame(input);
-    SDL_Event motion = {.type = SDL_EVENT_MOUSE_MOTION};
+    SDL_Event motion;
+    SDL_zero(motion);
+    motion.type = SDL_EVENT_MOUSE_MOTION;
     motion.motion.x = 10.0f;
     motion.motion.y = 20.0f;
     motion.motion.xrel = 3.0f;
@@ -167,7 +173,9 @@ static void test_input_mouse(void) {
     motion.motion.xrel = 2.0f;
     motion.motion.yrel = -1.0f;
     WPE_TEST_ASSERT(SDL_PushEvent(&motion));
-    SDL_Event wheel = {.type = SDL_EVENT_MOUSE_WHEEL};
+    SDL_Event wheel;
+    SDL_zero(wheel);
+    wheel.type = SDL_EVENT_MOUSE_WHEEL;
     wheel.wheel.y = 1.0f;
     WPE_TEST_ASSERT(SDL_PushEvent(&wheel));
     wheel.wheel.direction = SDL_MOUSEWHEEL_FLIPPED; /* Natural scrolling reports inverted values. */

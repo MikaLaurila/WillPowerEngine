@@ -464,6 +464,20 @@ void wpe_image_free(WPE_Image* image) {
     *image = (WPE_Image){0};
 }
 
+WPE_Result wpe_platform_save_directory(const char* org, const char* app, char* out_path, size_t capacity) {
+    if (!org || !app || !out_path) return WPE_RESULT_ERROR_NULL_ARG;
+    char* path = SDL_GetPrefPath(org, app);
+    if (!path) {
+        wpe_log_error("cannot find or create the save directory for '%s': %s", app, SDL_GetError());
+        return WPE_RESULT_ERROR_IO;
+    }
+    const size_t length = strlen(path);
+    const WPE_Result result = length < capacity ? WPE_RESULT_OK : WPE_RESULT_ERROR_CAPACITY;
+    if (result == WPE_RESULT_OK) memcpy(out_path, path, length + 1);
+    SDL_free(path);
+    return result;
+}
+
 /* ---- Process ------------------------------------------------------------------------------------- */
 
 WPE_Result wpe_platform_executable_path(char* out_path, size_t capacity) {

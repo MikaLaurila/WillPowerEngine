@@ -50,6 +50,7 @@ struct WPE_Engine {
     WPE_FixedStep clock;
     char music[WPE_VFS_PATH_MAX]; /* Track started by the current scene ("" = none). */
     char pending_scene[WPE_VFS_PATH_MAX];
+    char save_dir[1024]; /* "" until a script needs it (see wpe__app_save_directory). */
     bool quit;
     bool embedded;        /* The host forwards events and shows the framebuffer. */
     bool simulating;      /* Scripts, physics, animation and audio run (false: edit mode). */
@@ -84,6 +85,28 @@ static void wpe__app_screen_size(void* user_data, uint32_t* out_width, uint32_t*
     const WPE_Engine* engine = user_data;
     *out_width = engine->project.width;
     *out_height = engine->project.height;
+}
+
+/* The save directory: the one the host gave, or the user's directory for this game, found (and made)
+ * on first use. Only letters, digits and spaces of the project name make up the folder name. */
+static const char* wpe__app_save_directory(void* user_data) {
+    WPE_Engine* engine = user_data;
+    if (engine->save_dir[0]) return engine->save_dir;
+    char app[WPE_PROJECT_NAME_MAX];
+    size_t length = 0;
+    for (const char* c = engine->project.name; *c && length + 1 < sizeof app; ++c) {
+        const bool kept =
+            (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == ' ';
+        if (kept) app[length++] = *c;
+    }
+    app[length] = '\0';
+    if (length == 0) snprintf(app, sizeof app, "Game");
+    if (wpe_platform_save_directory("WillPowerEngine", app, engine->save_dir, sizeof engine->save_dir) !=
+        WPE_RESULT_OK) {
+        engine->save_dir[0] = '\0';
+        return NULL;
+    }
+    return engine->save_dir;
 }
 
 static WPE_SceneContext wpe__context(const WPE_Engine* engine) {
@@ -209,7 +232,8 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                    .set_camera = wpe__app_set_camera,
                                    .get_camera = wpe__app_get_camera,
                                    .screen_size = wpe__app_screen_size,
-                                   .instantiate = wpe__app_instantiate};
+                                   .instantiate = wpe__app_instantiate,
+                                   .save_directory = wpe__app_save_directory};
         result =
             wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = engine->ecs,
                                                          .assets = engine->assets,
@@ -258,6 +282,12 @@ WPE_Result wpe_engine_create(const WPE_EngineDesc* desc, WPE_Engine** out_engine
     engine->simulating = true;
     engine->draw_ui = true;
     engine->draw_scene = true;
+    if (desc->save_dir && strlen(desc->save_dir) >= sizeof engine->save_dir) {
+        wpe_log_error("the save directory path is too long");
+        wpe_free(engine);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    if (desc->save_dir) snprintf(engine->save_dir, sizeof engine->save_dir, "%s", desc->save_dir);
 
     WPE_Result result = wpe__mount(engine, desc);
     if (result == WPE_RESULT_OK) result = wpe__create_graphics(engine, desc);

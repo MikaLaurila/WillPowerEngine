@@ -300,6 +300,18 @@ WPE_Result wpe_path_rename(const char* from, const char* to);
 WPE_Result wpe_platform_executable_path(char* out_path, size_t capacity);
 
 /**
+ * Gets (creating it if needed) the per-user directory where an application may write its data:
+ * `%APPDATA%\<org>\<app>\` on Windows, `~/.local/share/<org>/<app>/` on Linux. The path ends with a
+ * separator. Names should hold only letters, digits and spaces.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_CAPACITY (buffer too small) or
+ *         WPE_RESULT_ERROR_IO (logged).
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_platform_save_directory(const char* org, const char* app, char* out_path, size_t capacity);
+
+/**
  * Programs built as GUI applications (the game runtime on Windows) have no console; when started
  * from a terminal, this attaches stdout/stderr to it so logs stay visible. Does nothing elsewhere
  * or when output is already redirected.

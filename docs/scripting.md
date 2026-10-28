@@ -74,12 +74,28 @@ When a scene is saved, each property is written with its current value, so a scr
 - **Inside `on_destroy`:** you may read and modify components and call `wpe.destroy`. Spawning, attaching scripts, adding/removing lights or physics components and reparenting raise errors there. When the entity is being despawned, its physics body is already gone.
 - **Errors:** an error in a callback is logged with a stack trace, and that instance is disabled until its script is reloaded. Other scripts keep running.
 - **Budgets:** each callback has a time budget (infinite loops are interrupted), and the VM has a memory limit. Hitting either counts as an error.
-- **Hot reload:** keeps every instance's state and swaps in the new code. A file that fails to compile leaves the previous version running.
+- **Hot reload:** keeps every instance's state and swaps in the new code. A file that fails to compile leaves the previous version running. When a module changes, every script reloads, so each one gets the new module.
+
+## Modules
+
+`require(path)` loads a module: a Luau file that returns a value, usually a table of functions. The path is an asset path, and `.luau` may be left out:
+
+```lua
+-- scripts/lib/util.luau
+local util = {}
+function util.approach(value, target, step) ... end
+return util
+
+-- scripts/hero.luau
+local util = require("scripts/lib/util")
+```
+
+A module runs once, and every `require` of it returns the same value, so modules can also hold state shared between scripts. Modules can require other modules; a module that ends up requiring itself raises an error. A module has its own globals, like a script file. When a module changes, hot reload drops every module and reloads every script, so each one requires the new version. If the module is broken, the scripts keep running as they were until it's fixed. `scripts/lib/util.luau` holds the demo scripts' shared helpers.
 
 ## Sandbox
 
-- **Available:** the Luau standard libraries `math`, `string`, `table`, `coroutine`, `bit32`, `utf8`, `buffer`, `vector`, and `os.time/clock/date/difftime`.
-- **Not available:** `io`, `loadstring`/`load`, `require`, `dofile`, `getfenv`/`setfenv`, and any other `os` functions.
+- **Available:** the Luau standard libraries `math`, `string`, `table`, `coroutine`, `bit32`, `utf8`, `buffer`, `vector`, and `os.time/clock/date/difftime`. `require` loads modules from the game's own files.
+- **Not available:** `io`, `loadstring`/`load`, `dofile`, `getfenv`/`setfenv`, and any other `os` functions.
 - **Read-only:** globals and libraries can't be modified.
 - **Separate globals per file:** each script file has its own global environment, so globals never leak between files.
 - **Paths:** script, prefab, sound and music paths are asset paths in the game's virtual file system (a directory during development, `.pak` archives in a shipped game), with forward slashes. They can't be absolute or climb above the root with `..`, so scripts can only read what the game ships.
@@ -117,6 +133,52 @@ Entity handles are numbers. Passing a handle that isn't alive raises an error. V
 | `wpe.animation_time(entity, [seconds]) -> seconds` | Get or set the playback position. |
 | `wpe.time() -> seconds` | Accumulated game time from updates. |
 | `wpe.frame() -> number` | Number of completed updates. |
+
+### Timers
+
+| Function | Description |
+|---|---|
+| `wpe.after(seconds, fn) -> id` | Calls `fn()` once, `seconds` of game time from now (0: at the end of this update). |
+| `wpe.every(seconds, fn) -> id` | Calls `fn()` every `seconds` (more than 0) until cancelled. After a long frame it fires once and keeps its rhythm from then, rather than catching up. |
+| `wpe.cancel(id) -> bool` | Stops a timer; false when it had already finished or was cancelled. |
+
+Timers run at the end of each update, after `on_update`, on game time, so they stop while the game is paused. A timer belongs to the script that made it and goes away with it. An error in a timer is logged and cancels that timer; the script keeps running.
+
+```lua
+function Door:open()
+	wpe.play_sound("sounds/creak.wav")
+	wpe.after(2, function()
+		self:close()
+	end)
+end
+```
+
+### Messages between scripts
+
+| Function | Description |
+|---|---|
+| `wpe.get_script(entity) -> self?` | Another entity's script instance, its `self`: read its fields and call its methods directly (`wpe.get_script(e):take_damage(5)`). nil for entities that are gone, have no script, or whose script failed. |
+| `wpe.send(entity, method, ...) -> ...` | Calls `method` on the entity's script with the arguments and returns what it returns. A script without the method, or a missing entity, ignores it (returns nothing). An error inside is the caller's error. |
+| `wpe.broadcast(method, ...) -> count` | Calls `method` on every started script that has it; returns how many did. An error in one receiver disables that receiver only. |
+
+### Saved data
+
+Games keep progress, settings and high scores with these. Data is stored per user, outside the game's files: `%APPDATA%\WillPowerEngine\<project name>\` on Windows and `~/.local/share/WillPowerEngine/<project name>/` on Linux, one `<name>.json` file per save.
+
+| Function | Description |
+|---|---|
+| `wpe.save_data(name, value)` | Saves a number, string, boolean, vector, or a table of those (tables nest up to 32 deep). A table is either a list (keys 1..n) or has string keys. The file is replaced whole, so a crash mid-save never leaves half a file. |
+| `wpe.load_data(name) -> value?` | What was saved under the name, or nil if nothing was. A damaged file raises an error. |
+| `wpe.delete_data(name) -> bool` | Removes a save; false if there was none. |
+
+Names are 1 to 64 letters, digits, `_` and `-`. Functions, cyclic tables and non-finite numbers can't be saved (that raises an error). Vectors are stored as `{"$vector": [x, y, z]}`, so don't use a table with a single `"$vector"` key for anything else.
+
+```lua
+local best = wpe.load_data("best") or { score = 0 }
+if score > best.score then
+	wpe.save_data("best", { score = score, when = os.time() })
+end
+```
 
 ### Physics
 

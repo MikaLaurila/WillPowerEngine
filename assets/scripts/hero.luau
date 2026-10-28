@@ -2,6 +2,8 @@
 -- runs (boost), jumps when standing (jump), faces the way it walks, and goes back to its start
 -- (reset, or after a fall). Slopes up to the controller's max_slope are walkable, steeper ones
 -- aren't; crates get pushed.
+local util = require("scripts/lib/util")
+
 local Hero = {}
 Hero.properties = { speed = 4, run_speed = 7.5, jump_speed = 6.5, gravity = 18, player = 1 }
 
@@ -10,20 +12,6 @@ function Hero:on_start()
 	self.velocity = vector.create(0, 0, 0)
 	self.jump_requested = false
 	self.yaw = wpe.get_rotation(self.entity).y
-end
-
--- Horizontal unit vectors of the camera's view (forward along the ground, and right).
-local function camera_axes()
-	local camera = wpe.get_camera()
-	local forward = vector.create(0, 0, -1)
-	if camera then
-		local f = wpe.forward(camera)
-		local flat = vector.create(f.x, 0, f.z)
-		if vector.magnitude(flat) > 1e-3 then
-			forward = vector.normalize(flat)
-		end
-	end
-	return forward, vector.create(-forward.z, 0, forward.x)
 end
 
 function Hero:on_update(dt)
@@ -38,7 +26,7 @@ function Hero:on_update(dt)
 end
 
 function Hero:on_fixed_update(dt)
-	local forward, right = camera_axes()
+	local forward, right = util.camera_axes()
 	local wish = right * wpe.action_value("move_x", self.player) + forward * wpe.action_value("move_y", self.player)
 	if vector.magnitude(wish) > 1 then
 		wish = vector.normalize(wish)
@@ -61,8 +49,7 @@ function Hero:on_fixed_update(dt)
 	-- Turn to face the way it walks (the entity looks down -Z).
 	if vector.magnitude(wish) > 0.1 then
 		local goal = math.atan2(-wish.x, -wish.z)
-		local turn = (goal - self.yaw + math.pi) % (2 * math.pi) - math.pi
-		self.yaw += turn * math.min(1, dt * 12)
+		self.yaw += util.angle_delta(self.yaw, goal) * math.min(1, dt * 12)
 		wpe.set_rotation(self.entity, vector.create(0, self.yaw, 0))
 	end
 end

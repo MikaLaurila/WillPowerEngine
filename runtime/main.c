@@ -14,6 +14,7 @@
  *     --fixed-dt <seconds>  simulate this frame time instead of real time (reproducible runs)
  *     --screenshot <png>    save the last frame
  *     --workers <n>         render worker threads (default: one per core)
+ *     --save-dir <dir>      keep saved data in this existing directory instead of the player's
  *
  * Exit code 0 when the game ran and quit normally.
  */
@@ -39,7 +40,7 @@ static int usage(void) {
     fprintf(stderr,
             "usage: wpe_runtime [--project <dir> | --pak <archive>] [--scene <path>] [--watch] [--mute]\n"
             "                   [--headless] [--frames <n>] [--fixed-dt <seconds>] [--screenshot <png>]\n"
-            "                   [--workers <n>]\n");
+            "                   [--workers <n>] [--save-dir <dir>]\n");
     return EXIT_FAILURE;
 }
 
@@ -71,6 +72,8 @@ static bool parse_options(int argc, char** argv, Options* o) {
             o->engine.scene = argv[++i];
         } else if (value && strcmp(arg, "--screenshot") == 0) {
             o->run.screenshot = argv[++i];
+        } else if (value && strcmp(arg, "--save-dir") == 0) {
+            o->engine.save_dir = argv[++i];
         } else if (value && strcmp(arg, "--frames") == 0 && parse_number(value, 1, 1e9, &number)) {
             o->run.frames = (uint32_t)number;
             ++i;

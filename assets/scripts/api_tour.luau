@@ -122,6 +122,47 @@ function Tour:on_start()
 	assert(#wpe.overlap(ball, vector.create(20, 3, 20), { triggers = true }) == 0)
 	assert(not pcall(wpe.overlap, { shape = wpe.COLLIDER_MESH }, vector.create(0, 0, 0)))
 
+	-- Modules: loaded once, by path with or without ".luau".
+	local util = require("scripts/lib/util")
+	assert(require("scripts/lib/util.luau") == util, "a module loads once")
+	assert(util.approach(0, 10, 3) == 3 and near(util.angle_delta(0, 1.5 * math.pi), -0.5 * math.pi))
+	assert(not pcall(require, "scripts/lib/missing"))
+	assert(not pcall(require, "../outside"))
+
+	-- Timers run on game time; a cancelled one never runs.
+	self.timer_hits = 0
+	self.ticks = 0
+	wpe.after(0.5, function()
+		self.timer_hits += 1
+	end)
+	local cancelled = wpe.after(0.5, function()
+		error("a cancelled timer ran")
+	end)
+	assert(wpe.cancel(cancelled) and not wpe.cancel(cancelled))
+	self.ticker = wpe.every(0.25, function()
+		self.ticks += 1
+	end)
+	assert(not pcall(wpe.every, 0, function() end))
+
+	-- Messages: another script's self, method calls that skip scripts without the method, broadcasts.
+	assert(wpe.get_script(self.entity) == self)
+	assert(wpe.send(self.entity, "add", 2, 3) == 5)
+	assert(wpe.send(self.entity, "no_such_method") == nil)
+	assert(wpe.get_script(self.ball) == nil and wpe.send(self.ball, "add", 1, 1) == nil) -- the ball has no script
+	assert(wpe.broadcast("on_tour_ping", 7) >= 1 and self.pinged == 7)
+
+	-- Saved data: tables of numbers, strings, booleans and vectors, nested.
+	local data = { level = 3, name = "tour", alive = true, spot = vector.create(1, 2, 3), items = { "a", "b" }, deep = { x = { y = 1 } } }
+	wpe.save_data("tour", data)
+	local loaded = wpe.load_data("tour")
+	assert(loaded.level == 3 and loaded.name == "tour" and loaded.alive == true and vnear(loaded.spot, data.spot))
+	assert(#loaded.items == 2 and loaded.items[2] == "b" and loaded.deep.x.y == 1)
+	assert(wpe.delete_data("tour") and wpe.load_data("tour") == nil and not wpe.delete_data("tour"))
+	assert(not pcall(wpe.save_data, "bad name!", 1))
+	assert(not pcall(wpe.save_data, "tour", { f = print }))
+	assert(not pcall(wpe.save_data, "tour", { [2] = 1 }))
+	assert(not pcall(wpe.save_data, "tour", nil))
+
 	-- A character controller, walked in a circle at the fixed rate.
 	self.walker = wpe.spawn("tour_walker")
 	wpe.set_position(self.walker, vector.create(-12, 0.5, 12))
@@ -316,6 +357,9 @@ function Tour:on_update(dt)
 		local walker = wpe.get_character(self.walker)
 		assert(walker.grounded and walker.ground_normal.y > 0.99, "the walker should be on the ground")
 		assert(vector.magnitude(wpe.get_position(self.walker) - self.walker_start) > 0.5, "the walker should walk")
+		assert(self.timer_hits == 1, "a one-shot timer fires once")
+		assert(self.ticks >= 6, "a repeating timer keeps firing")
+		assert(wpe.cancel(self.ticker))
 	elseif self.updates == 140 then
 		wpe.remove_character(self.walker)
 		assert(not pcall(wpe.get_character, self.walker))
@@ -324,6 +368,15 @@ function Tour:on_update(dt)
 	assert(wpe.time() >= 0 and wpe.frame() >= 0)
 	wpe.draw_rect(256, 0, 64, 10, wpe.color(0.1, 0.2, 0.4, 0.7))
 	wpe.draw_text(258, 2, "tour " .. self.updates, wpe.color(1, 1, 1), 1)
+end
+
+-- Called by wpe.send and wpe.broadcast in on_start.
+function Tour:add(a, b)
+	return a + b
+end
+
+function Tour:on_tour_ping(value)
+	self.pinged = value
 end
 
 function Tour:on_fixed_update(dt)

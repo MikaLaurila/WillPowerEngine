@@ -325,20 +325,9 @@ static int wpe__op_call(lua_State* L) {
     return 0;
 }
 
-/* Calls a lifecycle method; on error logs, counts and marks the instance failed. Returns false on error. */
-static bool wpe__call_method(WPE_ScriptHost* host, WPE_Entity entity, int instance_ref, uint32_t script,
-                             const char* method, bool has_arg, double arg) {
-    wpe__CallOp op = {
-        .host = host, .instance_ref = instance_ref, .method = method, .has_arg = has_arg, .arg = arg};
-    if (lua_cpcall(host->L, wpe__op_call, &op) != 0) {
-        op.failed = true;
-        snprintf(op.message, sizeof op.message, "%s",
-                 lua_tostring(host->L, -1) ? lua_tostring(host->L, -1) : "VM error");
-        lua_pop(host->L, 1);
-    }
-    /* No lua_settop here: this may run nested inside a binding whose stack frame must survive. */
-    if (!op.failed) return true;
-
+/* Logs and counts a failed method of an instance and disables it until reload. */
+static void wpe__instance_failed(WPE_ScriptHost* host, WPE_Entity entity, int instance_ref, uint32_t script,
+                                 const char* method, const char* message) {
     ++host->errors;
     /*
      * Luau does not collect garbage when an allocation fails, so a memory error leaves the failed
@@ -346,10 +335,32 @@ static bool wpe__call_method(WPE_ScriptHost* host, WPE_Entity entity, int instan
      */
     lua_gc(host->L, LUA_GCCOLLECT, 0);
     wpe_log_error("%s failed in '%s' (entity 0x%08x); instance disabled until reload:\n%s", method,
-                  script < host->file_count ? host->files[script].path : "?", entity, op.message);
+                  script < host->file_count ? host->files[script].path : "?", entity, message);
     /* The component may have moved or been replaced during the call; only flag the same instance. */
     WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
     if (s && s->instance_ref == instance_ref) s->state |= WPE__SCRIPT_FAILED;
+}
+
+/* Calls a lifecycle method; on error logs, counts and marks the instance failed. Returns false on error. */
+static bool wpe__call_method(WPE_ScriptHost* host, WPE_Entity entity, int instance_ref, uint32_t script,
+                             const char* method, bool has_arg, double arg) {
+    wpe__CallOp op = {
+        .host = host, .instance_ref = instance_ref, .method = method, .has_arg = has_arg, .arg = arg};
+    const int previous_instance = host->current_instance;
+    const WPE_Entity previous_entity = host->current_entity;
+    host->current_instance = instance_ref;
+    host->current_entity = entity;
+    if (lua_cpcall(host->L, wpe__op_call, &op) != 0) {
+        op.failed = true;
+        snprintf(op.message, sizeof op.message, "%s",
+                 lua_tostring(host->L, -1) ? lua_tostring(host->L, -1) : "VM error");
+        lua_pop(host->L, 1);
+    }
+    host->current_instance = previous_instance;
+    host->current_entity = previous_entity;
+    /* No lua_settop here: this may run nested inside a binding whose stack frame must survive. */
+    if (!op.failed) return true;
+    wpe__instance_failed(host, entity, instance_ref, script, method, op.message);
     return false;
 }
 
@@ -363,6 +374,13 @@ static void wpe__script_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* compone
         ++host->restricted_depth;
         wpe__call_method(host, entity, s.instance_ref, s.script, "on_destroy", false, 0.0);
         --host->restricted_depth;
+    }
+    /* Its timers go with it. */
+    for (uint32_t i = 0; i < host->timer_count; ++i) {
+        wpe__Timer* timer = &host->timers[i];
+        if (timer->owner_instance != s.instance_ref || timer->fn_ref == LUA_NOREF) continue;
+        lua_unref(host->L, timer->fn_ref);
+        timer->fn_ref = LUA_NOREF;
     }
     lua_unref(host->L, s.instance_ref);
     if (s.property_ref != LUA_NOREF) lua_unref(host->L, s.property_ref);
@@ -404,6 +422,282 @@ static void wpe__flush_destroys(WPE_ScriptHost* host) {
     host->pending_count = 0;
 }
 
+/* ---- Timers --------------------------------------------------------------------------------------- */
+
+uint32_t wpe__script_add_timer(WPE_ScriptHost* host, double delay, double interval, int fn_ref) {
+    if (host->timer_count == host->timer_capacity) {
+        const uint32_t capacity = host->timer_capacity ? host->timer_capacity * 2 : 16;
+        wpe__Timer* timers = wpe_realloc(host->timers, (size_t)capacity * sizeof *timers);
+        if (!timers) return 0;
+        host->timers = timers;
+        host->timer_capacity = capacity;
+    }
+    const uint32_t id = host->next_timer_id++;
+    if (host->next_timer_id == 0) host->next_timer_id = 1; /* 0 means "none". */
+    host->timers[host->timer_count++] = (wpe__Timer){.id = id,
+                                                     .owner_instance = host->current_instance,
+                                                     .owner = host->current_entity,
+                                                     .due = host->time + delay,
+                                                     .interval = interval,
+                                                     .fn_ref = fn_ref};
+    return id;
+}
+
+bool wpe__script_cancel_timer(WPE_ScriptHost* host, uint32_t id) {
+    for (uint32_t i = 0; i < host->timer_count; ++i) {
+        wpe__Timer* timer = &host->timers[i];
+        if (timer->id != id || timer->fn_ref == LUA_NOREF) continue;
+        lua_unref(host->L, timer->fn_ref);
+        timer->fn_ref = LUA_NOREF; /* Removed by the next wpe__fire_timers. */
+        return true;
+    }
+    return false;
+}
+
+typedef struct wpe__TimerOp {
+    WPE_ScriptHost* host;
+    int fn_ref;
+    bool failed;                          /* out */
+    char message[WPE__ERROR_MESSAGE_MAX]; /* out */
+} wpe__TimerOp;
+
+/* Protected: calls a timer's callback. */
+static int wpe__op_call_timer(lua_State* L) {
+    wpe__TimerOp* op = lua_touserdata(L, 1);
+    lua_pushcfunction(L, wpe__traceback, "traceback");
+    const int handler = lua_gettop(L);
+    lua_getref(L, op->fn_ref);
+    const double previous = wpe__begin_budget(op->host);
+    const int status = lua_pcall(L, 0, 0, handler);
+    op->host->deadline = previous;
+    if (status != 0) {
+        op->failed = true;
+        snprintf(op->message, sizeof op->message, "%s",
+                 lua_tostring(L, -1) ? lua_tostring(L, -1) : "unknown error");
+    }
+    return 0;
+}
+
+/* Fires the timers due by the current game time (each at most once per update), then drops the
+ * finished and cancelled ones. Timers of a disabled (failed) script wait for its reload. */
+static void wpe__fire_timers(WPE_ScriptHost* host) {
+    const uint32_t count = host->timer_count; /* Timers made by callbacks wait for the next update. */
+    for (uint32_t i = 0; i < count; ++i) {
+        const wpe__Timer timer = host->timers[i];
+        if (timer.fn_ref == LUA_NOREF || timer.due > host->time) continue;
+        if (timer.owner_instance != LUA_NOREF) {
+            const WPE_Script* s = wpe_ecs_get_component(host->ecs, timer.owner, WPE_COMP_SCRIPT);
+            if (s && s->instance_ref == timer.owner_instance && (s->state & WPE__SCRIPT_FAILED)) continue;
+        }
+        if (timer.interval > 0.0) {
+            /* After a long frame it fires once and keeps its rhythm from now, rather than catching up. */
+            const double next = timer.due + timer.interval;
+            host->timers[i].due = next > host->time ? next : host->time + timer.interval;
+        } else {
+            host->timers[i].fn_ref = LUA_NOREF; /* Done once it has run; the callback may not cancel it. */
+        }
+        wpe__TimerOp op = {.host = host, .fn_ref = timer.fn_ref};
+        const int previous_instance = host->current_instance;
+        const WPE_Entity previous_entity = host->current_entity;
+        host->current_instance = timer.owner_instance;
+        host->current_entity = timer.owner;
+        if (lua_cpcall(host->L, wpe__op_call_timer, &op) != 0) {
+            op.failed = true;
+            snprintf(op.message, sizeof op.message, "%s",
+                     lua_tostring(host->L, -1) ? lua_tostring(host->L, -1) : "VM error");
+            lua_pop(host->L, 1);
+        }
+        host->current_instance = previous_instance;
+        host->current_entity = previous_entity;
+        if (timer.interval <= 0.0) lua_unref(host->L, timer.fn_ref);
+        if (op.failed) {
+            ++host->errors;
+            wpe_log_error("timer %u (entity 0x%08x) failed and was cancelled:\n%s", timer.id, timer.owner,
+                          op.message);
+            if (timer.interval > 0.0) wpe__script_cancel_timer(host, timer.id);
+        }
+    }
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < host->timer_count; ++i)
+        if (host->timers[i].fn_ref != LUA_NOREF) host->timers[kept++] = host->timers[i];
+    host->timer_count = kept;
+}
+
+/* ---- Modules (require) ---------------------------------------------------------------------------- */
+
+typedef struct wpe__ModuleOp {
+    WPE_ScriptHost* host;
+    const char* chunk_name;
+    const char* bytecode;
+    size_t bytecode_size;
+    int value_ref;                        /* out */
+    int thread_ref;                       /* out */
+    bool failed;                          /* out */
+    char message[WPE__ERROR_MESSAGE_MAX]; /* out */
+} wpe__ModuleOp;
+
+/* Protected: runs a module's chunk in a fresh sandbox thread and keeps what it returns. */
+static int wpe__op_load_module(lua_State* L) {
+    wpe__ModuleOp* op = lua_touserdata(L, 1);
+    lua_State* T = lua_newthread(L);
+    luaL_sandboxthread(T);
+    if (luau_load(T, op->chunk_name, op->bytecode, op->bytecode_size, 0) != 0) {
+        op->failed = true;
+        snprintf(op->message, sizeof op->message, "%s",
+                 lua_tostring(T, -1) ? lua_tostring(T, -1) : "invalid bytecode");
+        return 0;
+    }
+    lua_pushcfunction(T, wpe__traceback, "traceback");
+    lua_insert(T, -2);
+    if (lua_pcall(T, 0, 1, -2) != 0) {
+        op->failed = true;
+        snprintf(op->message, sizeof op->message, "%s",
+                 lua_tostring(T, -1) ? lua_tostring(T, -1) : "unknown error");
+        return 0;
+    }
+    if (lua_isnil(T, -1)) {
+        lua_pop(T, 1);
+        lua_pushboolean(T, 1); /* A module returning nothing is still loaded. */
+    }
+    lua_xmove(T, L, 1); /* L: [op, T, value] */
+    op->value_ref = lua_ref(L, -1);
+    op->thread_ref = lua_ref(L, -2);
+    return 0;
+}
+
+int wpe__script_require(lua_State* L) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const char* name = luaL_checkstring(L, 1);
+    char path[WPE__SCRIPT_PATH_MAX];
+    const size_t length = strlen(name);
+    const bool extension = length >= 5 && strcmp(name + length - 5, ".luau") == 0;
+    if (length == 0 || length + (extension ? 0 : 5) >= sizeof path)
+        luaL_errorL(L, "require: '%s' is not a module path", name);
+    snprintf(path, sizeof path, extension ? "%s" : "%s.luau", name);
+    if (!wpe_vfs_path_is_valid(path)) luaL_errorL(L, "require: '%s' is not a safe asset-relative path", path);
+    /* Listed modules are loaded (returned at once), loading (a circular require) or stale: dropped by a
+     * reload, or failed. Stale ones stay listed so hot reload watches them, and load again here. */
+    uint32_t index = host->module_count;
+    for (uint32_t i = 0; i < host->module_count && index == host->module_count; ++i)
+        if (strcmp(host->modules[i].path, path) == 0) index = i;
+    if (index < host->module_count) {
+        if (host->modules[index].loading)
+            luaL_errorL(L, "require: '%s' requires itself (a circular require)", path);
+        if (host->modules[index].value_ref != LUA_NOREF) {
+            lua_getref(L, host->modules[index].value_ref);
+            return 1;
+        }
+    } else {
+        if (host->module_count == host->module_capacity) {
+            const uint32_t capacity = host->module_capacity ? host->module_capacity * 2 : 8;
+            wpe__Module* modules = wpe_realloc(host->modules, (size_t)capacity * sizeof *modules);
+            if (!modules) luaL_errorL(L, "require: out of memory");
+            host->modules = modules;
+            host->module_capacity = capacity;
+        }
+        host->modules[index] = (wpe__Module){.value_ref = LUA_NOREF, .thread_ref = LUA_NOREF};
+        snprintf(host->modules[index].path, sizeof host->modules[index].path, "%s", path);
+        ++host->module_count;
+    }
+    char* bytecode = NULL; /* malloc'd by luau_compile: freed before anything below can raise. */
+    size_t size = 0;
+    int64_t modified = 0;
+    const WPE_Result compiled = wpe__compile_file(host, path, &bytecode, &size, &modified);
+    if (modified == 0) wpe_vfs_modified_time(wpe_asset_manager_vfs(host->assets), path, &modified);
+    host->modules[index].modified_time = modified; /* Watched from now on, even when broken. */
+    if (compiled != WPE_RESULT_OK) luaL_errorL(L, "require: cannot load '%s' (see the log)", path);
+
+    /* Marked while its chunk runs, so a circular require is caught (nested ones may grow the list). */
+    host->modules[index].loading = true;
+    char chunk_name[WPE__SCRIPT_PATH_MAX + 1];
+    snprintf(chunk_name, sizeof chunk_name, "@%s", path);
+    wpe__ModuleOp op = {.host = host, .chunk_name = chunk_name, .bytecode = bytecode, .bytecode_size = size};
+    if (lua_cpcall(L, wpe__op_load_module, &op) != 0) {
+        op.failed = true;
+        snprintf(op.message, sizeof op.message, "%s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "VM error");
+        lua_pop(L, 1);
+    }
+    free(bytecode);
+    host->modules[index].loading = false;
+    if (op.failed) {
+        ++host->errors;
+        luaL_errorL(L, "require: '%s' failed:\n%s", path, op.message);
+    }
+    host->modules[index].value_ref = op.value_ref;
+    host->modules[index].thread_ref = op.thread_ref;
+    lua_getref(L, op.value_ref);
+    return 1;
+}
+
+/* Makes every module stale, so the next require of each loads it again; they stay watched, with
+ * their current modification times. */
+static void wpe__drop_modules(WPE_ScriptHost* host) {
+    const WPE_Vfs* vfs = wpe_asset_manager_vfs(host->assets);
+    for (uint32_t i = 0; i < host->module_count; ++i) {
+        wpe__Module* module = &host->modules[i];
+        if (module->value_ref != LUA_NOREF) lua_unref(host->L, module->value_ref);
+        if (module->thread_ref != LUA_NOREF) lua_unref(host->L, module->thread_ref);
+        module->value_ref = module->thread_ref = LUA_NOREF;
+        int64_t modified = 0;
+        if (wpe_vfs_modified_time(vfs, module->path, &modified) == WPE_RESULT_OK)
+            module->modified_time = modified;
+    }
+}
+
+/* ---- Messages ------------------------------------------------------------------------------------- */
+
+int wpe__script_broadcast(lua_State* L) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const char* method = luaL_checkstring(L, 1);
+    const int arguments = lua_gettop(L) - 1;
+    /* The receivers as they are now (a userdata copy: handlers may change the world, and the snapshot
+     * belongs to the running update). */
+    WPE_EcsPoolView view;
+    if (wpe_ecs_pool_view(host->ecs, WPE_COMP_SCRIPT, &view) != WPE_RESULT_OK || view.count == 0) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+    const uint32_t count = view.count;
+    WPE_Entity* receivers = lua_newuserdata(L, (size_t)count * sizeof *receivers);
+    memcpy(receivers, view.entities, (size_t)count * sizeof *receivers);
+    lua_pushcfunction(L, wpe__traceback, "traceback");
+    const int handler = lua_gettop(L);
+    int called = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const WPE_Entity entity = receivers[i];
+        const WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
+        if (!s || !(s->state & WPE__SCRIPT_STARTED) || (s->state & WPE__SCRIPT_FAILED)) continue;
+        const int instance_ref = s->instance_ref;
+        const uint32_t script = s->script;
+        lua_getref(L, instance_ref);
+        lua_getfield(L, -1, method);
+        if (!lua_isfunction(L, -1)) {
+            lua_pop(L, 2);
+            continue;
+        }
+        lua_insert(L, -2); /* [fn, instance] */
+        for (int a = 0; a < arguments; ++a)
+            lua_pushvalue(L, 2 + a);
+        const int previous_instance = host->current_instance;
+        const WPE_Entity previous_entity = host->current_entity;
+        host->current_instance = instance_ref;
+        host->current_entity = entity;
+        const int status = lua_pcall(L, arguments + 1, 0, handler);
+        host->current_instance = previous_instance;
+        host->current_entity = previous_entity;
+        if (status != 0) {
+            /* A receiver's error disables that receiver, not the sender. */
+            wpe__instance_failed(host, entity, instance_ref, script, method,
+                                 lua_tostring(L, -1) ? lua_tostring(L, -1) : "unknown error");
+            lua_pop(L, 1);
+            continue;
+        }
+        ++called;
+    }
+    lua_pushinteger(L, called);
+    return 1;
+}
+
 /* ---- Public API ----------------------------------------------------------------------------------- */
 
 static int wpe__op_init(lua_State* L) {
@@ -434,6 +728,8 @@ WPE_Result wpe_script_host_create(const WPE_ScriptHostDesc* desc, WPE_ScriptHost
     host->input = desc->input;
     host->draw2d = desc->draw2d;
     host->ui = desc->ui;
+    host->current_instance = LUA_NOREF;
+    host->next_timer_id = 1;
     if (desc->app) host->app = *desc->app;
     if (desc->font != WPE_ASSET_NONE) {
         if (!wpe_asset_font(desc->assets, desc->font)) {
@@ -503,6 +799,8 @@ void wpe_script_host_destroy(WPE_ScriptHost* host) {
     wpe_free(host->sounds);
     wpe_asset_release(host->assets, host->font);
     wpe_free(host->files);
+    wpe_free(host->modules); /* Their references went with the VM. */
+    wpe_free(host->timers);
     wpe_free(host->pending_destroy);
     wpe_free(host->snapshot);
     wpe_free(host);
@@ -573,6 +871,8 @@ WPE_Result wpe_script_host_update(WPE_ScriptHost* host, float dt) {
     const WPE_Result result = wpe__run_callbacks(host, dt, false);
     host->time += dt;
     ++host->frame;
+    wpe__fire_timers(host);
+    wpe__flush_destroys(host);
     return result;
 }
 
@@ -662,8 +962,26 @@ static WPE_Result wpe__reload_file(WPE_ScriptHost* host, uint32_t index) {
     return WPE_RESULT_OK;
 }
 
+/* A module changed: scripts hold on to what they required, so every script file loads again (and
+ * requires fresh modules). Returns how many reloaded. */
+static uint32_t wpe__reload_all(WPE_ScriptHost* host) {
+    wpe_log_info("a module changed; reloading every script");
+    wpe__drop_modules(host);
+    uint32_t reloaded = 0;
+    for (uint32_t i = 0; i < host->file_count; ++i)
+        if (wpe__reload_file(host, i) == WPE_RESULT_OK) ++reloaded;
+    return reloaded;
+}
+
 uint32_t wpe_script_host_reload_changed(WPE_ScriptHost* host) {
     if (!host) return 0;
+    const WPE_Vfs* vfs = wpe_asset_manager_vfs(host->assets);
+    for (uint32_t i = 0; i < host->module_count; ++i) {
+        int64_t modified = 0;
+        if (wpe_vfs_modified_time(vfs, host->modules[i].path, &modified) == WPE_RESULT_OK &&
+            modified != host->modules[i].modified_time)
+            return wpe__reload_all(host);
+    }
     uint32_t reloaded = 0;
     for (uint32_t i = 0; i < host->file_count; ++i) {
         int64_t modified = 0;
@@ -681,6 +999,11 @@ WPE_Result wpe_script_host_reload(WPE_ScriptHost* host, const char* path) {
     if (!host || !path) return WPE_RESULT_ERROR_NULL_ARG;
     for (uint32_t i = 0; i < host->file_count; ++i) {
         if (strcmp(host->files[i].path, path) == 0) return wpe__reload_file(host, i);
+    }
+    for (uint32_t i = 0; i < host->module_count; ++i) {
+        if (strcmp(host->modules[i].path, path) != 0) continue;
+        wpe__reload_all(host);
+        return WPE_RESULT_OK;
     }
     return WPE_RESULT_ERROR_NOT_FOUND;
 }

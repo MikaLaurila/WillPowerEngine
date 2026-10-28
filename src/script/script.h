@@ -104,6 +104,9 @@ typedef struct WPE_ScriptApp {
      * or returns WPE_RESULT_ERROR_NOT_FOUND for names that are not its own (the host then looks for a
      * model). Other errors are raised in the script. */
     WPE_Result (*instantiate)(void* user_data, const char* name, WPE_Entity* out_root);
+    /* The existing directory for wpe.save_data/load_data files (ending in a separator or not), or NULL
+     * when saving isn't possible. Asked on first use, so a directory is only made for games that save. */
+    const char* (*save_directory)(void* user_data);
 } WPE_ScriptApp;
 
 typedef struct WPE_ScriptHostDesc {
