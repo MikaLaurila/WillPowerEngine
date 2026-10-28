@@ -231,6 +231,8 @@ WPE_Result wpe__editor_play(WPE_Editor* editor) {
     editor->camera = WPE_ENTITY_NULL;
     editor->selection = WPE_ENTITY_NULL;
     wpe_engine_set_camera(editor->engine, editor->scene_camera);
+    /* Keys pressed while editing (the play shortcut's included) were never the game's. */
+    wpe_input_release_all(wpe_engine_input(editor->engine));
     editor->mode = WPE_EDITOR_PLAY;
     wpe_engine_set_simulating(editor->engine, true);
     wpe_log_info("play");
@@ -248,7 +250,9 @@ WPE_Result wpe__editor_stop(WPE_Editor* editor) {
     if (editor->mode == WPE_EDITOR_EDIT) return WPE_RESULT_OK;
     wpe_engine_set_simulating(editor->engine, false);
     editor->mode = WPE_EDITOR_EDIT;
+    /* Keys held when play stops would never see their release (the game stops getting key events). */
     wpe_input_set_mouse_captured(wpe_engine_input(editor->engine), false);
+    wpe_input_release_all(wpe_engine_input(editor->engine));
     const WPE_Result result = wpe__editor_restore(editor, &editor->play, "play snapshot");
     wpe__snapshot_free(&editor->play);
     wpe_log_info("stopped");
@@ -337,7 +341,7 @@ WPE_Result wpe_editor_create(const WPE_EditorDesc* desc, WPE_Editor** out_editor
     snprintf(editor->project_dir, sizeof editor->project_dir, "%s", desc->project_dir);
     editor->view = (WPE_EditorView){.grid = true,
                                     .grid_spacing = 1.0f,
-                                    .lights = true,
+                                    .icons = true,
                                     .hot_reload = true,
                                     .snap_move = 0.5f,
                                     .snap_rotate = 15.0f,

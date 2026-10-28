@@ -202,6 +202,15 @@ void wpe_input_handle_event(WPE_Input* input, const WPE_PlatformEvent* event);
 /** Evaluates the actions from the device state after this frame's events. @thread_safety Main thread only */
 void wpe_input_update(WPE_Input* input);
 
+/**
+ * Releases every held key and mouse button (with release edges), as losing window focus does: for hosts
+ * that stop delivering events (the editor between play tests), so nothing stays held. Gamepads are not
+ * affected; they report their own state.
+ *
+ * @thread_safety Main thread only
+ */
+void wpe_input_release_all(WPE_Input* input);
+
 /* ---- Actions ------------------------------------------------------------------------------------ */
 
 /**

@@ -1,5 +1,6 @@
 #include "wpe_test.h"
 
+#include <SDL3/SDL.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -300,20 +301,20 @@ static uint32_t frame_changes(WPE_Editor* editor, WPE_Color* previous) {
 static void test_editor_view_settings_and_overlays(void) {
     WPE_Editor* editor = open_editor();
     const WPE_EditorView defaults = wpe_editor_view(editor);
-    WPE_TEST_ASSERT(defaults.grid && !defaults.physics && defaults.lights && defaults.hot_reload &&
+    WPE_TEST_ASSERT(defaults.grid && !defaults.physics && defaults.icons && defaults.hot_reload &&
                     !defaults.gizmo_local);
     WPE_TEST_ASSERT_EQ_INT(WPE_EDITOR_GIZMO_MOVE, defaults.gizmo);
     /* Merged: keys left out keep their values. */
     WPE_JsonDocument* view =
         run(editor,
             "{\"cmd\": \"set_view\", \"value\": {\"gizmo\": \"rotate\", \"gizmo_space\": "
-            "\"local\", \"lights\": false}}",
+            "\"local\", \"icons\": false}}",
             true);
     WPE_TEST_ASSERT_EQ_STR("local", wpe_json_string(wpe_json_get(result_of(view), "gizmo_space")));
-    WPE_TEST_ASSERT(!wpe_json_bool(wpe_json_get(result_of(view), "lights"), true));
+    WPE_TEST_ASSERT(!wpe_json_bool(wpe_json_get(result_of(view), "icons"), true));
     wpe_json_free(view);
     WPE_TEST_ASSERT(wpe_editor_view(editor).grid && wpe_editor_view(editor).gizmo_local &&
-                    !wpe_editor_view(editor).lights);
+                    !wpe_editor_view(editor).icons);
     WPE_TEST_ASSERT_EQ_INT(WPE_EDITOR_GIZMO_ROTATE, wpe_editor_view(editor).gizmo);
     /* All or nothing, and never an undo step or unsaved change. */
     wpe_json_free(
@@ -576,6 +577,28 @@ static void test_editor_fits_colliders_to_meshes(void) {
     wpe_editor_destroy(editor);
 }
 
+/* A key held when a play test stops must not still be held when the next one starts. */
+static void test_editor_play_does_not_keep_keys_held(void) {
+    WPE_Editor* editor = open_editor();
+    WPE_Input* input = wpe_engine_input(wpe_editor_engine(editor));
+    const WPE_Key w = WPE_KEY_A + ('w' - 'a');
+    run_ok(editor, "{\"cmd\": \"play\"}");
+    SDL_Event key;
+    SDL_zero(key);
+    key.type = SDL_EVENT_KEY_DOWN;
+    key.key.scancode = SDL_SCANCODE_W;
+    key.key.down = true;
+    wpe_engine_handle_event(wpe_editor_engine(editor), (const WPE_PlatformEvent*)&key);
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 60.0));
+    WPE_TEST_ASSERT(wpe_input_key_down(input, w));
+    run_ok(editor, "{\"cmd\": \"stop\"}"); /* W is still held down on the keyboard... */
+    run_ok(editor, "{\"cmd\": \"play\"}");
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 60.0));
+    WPE_TEST_ASSERT(!wpe_input_key_down(input, w)); /* ...but the game no longer sees it. */
+    run_ok(editor, "{\"cmd\": \"stop\"}");
+    wpe_editor_destroy(editor);
+}
+
 static WPE_Color pixel(WPE_Editor* editor, uint32_t x, uint32_t y) {
     const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(wpe_editor_engine(editor)));
     return fb->color[y * fb->width + x];
@@ -758,6 +781,7 @@ static void test_editor_prefab_commands(void) {
 WPE_TEST_MAIN(
     WPE_TEST_CASE(test_editor_coalesces_continuous_edits), WPE_TEST_CASE(test_editor_prefab_commands),
     WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
+    WPE_TEST_CASE(test_editor_play_does_not_keep_keys_held),
     WPE_TEST_CASE(test_editor_fits_colliders_to_meshes), WPE_TEST_CASE(test_editor_guards_unsaved_changes),
     WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
     WPE_TEST_CASE(test_editor_view_settings_and_overlays), WPE_TEST_CASE(test_editor_physics_follows_edits),

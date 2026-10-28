@@ -380,7 +380,8 @@ static void wpe__set_button(uint8_t* state, bool down) {
 }
 
 /* Focus loss: nothing held can be trusted to receive its release event. */
-static void wpe__release_all(WPE_Input* input) {
+void wpe_input_release_all(WPE_Input* input) {
+    if (!wpe_check(input != NULL)) return;
     for (uint32_t i = 0; i < WPE_KEY_COUNT; ++i)
         wpe__set_button(&input->keys[i], false);
     for (uint32_t i = 0; i <= WPE_MOUSE_BUTTON_MAX; ++i)
@@ -416,7 +417,7 @@ void wpe_input_handle_event(WPE_Input* input, const WPE_PlatformEvent* platform_
         break;
     }
     case SDL_EVENT_WINDOW_FOCUS_LOST:
-        wpe__release_all(input);
+        wpe_input_release_all(input);
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
         if (input->gamepads_enabled) wpe__open_pad(input, event->gdevice.which);

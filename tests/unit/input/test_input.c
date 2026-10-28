@@ -128,6 +128,26 @@ static void test_input_keyboard_edges(void) {
     WPE_TEST_ASSERT(!wpe_input_key_down(input, WPE_KEY_LSHIFT));
     WPE_TEST_ASSERT(wpe_input_key_released(input, WPE_KEY_LSHIFT));
 
+    /* A host that stops delivering events (the editor stopping a play test) releases everything held. */
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_W, true, false);
+    push_mouse_button(SDL_BUTTON_LEFT, true, 1.0f, 1.0f);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_key_down(input, WPE_KEY_A + ('w' - 'a')) &&
+                    wpe_input_mouse_down(input, WPE_MOUSE_LEFT));
+    wpe_input_begin_frame(input);
+    wpe_input_release_all(input);
+    wpe_input_update(input);
+    WPE_TEST_ASSERT(!wpe_input_key_down(input, WPE_KEY_A + ('w' - 'a')) &&
+                    !wpe_input_mouse_down(input, WPE_MOUSE_LEFT));
+    WPE_TEST_ASSERT(wpe_input_key_released(input, WPE_KEY_A + ('w' - 'a')));
+    WPE_TEST_ASSERT(wpe_input_mouse_released(input, WPE_MOUSE_LEFT));
+    /* A late release event then changes nothing. */
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_W, false, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(!wpe_input_key_released(input, WPE_KEY_A + ('w' - 'a')));
+
     /* Out-of-range queries are harmless. */
     WPE_TEST_ASSERT(!wpe_input_key_down(input, WPE_KEY_COUNT));
     WPE_TEST_ASSERT(!wpe_input_key_down(NULL, WPE_KEY_SPACE));

@@ -61,6 +61,16 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Engine: `wpe_engine_set_draw_scene`. UI: `wpe_ui_pick` can count every element (editors).
 - Tests: the 2D and 3D views (camera, UI, a scene without a camera, play mode), view settings.
 
+### Added (editor: particle icons)
+- Particle emitters have viewport icons (a sparkle in their starting color) next to the light icons;
+  clicking one selects the emitter. The view setting `lights` is now `icons` (View > Icons, L).
+
+### Fixed (editor play tests)
+- A key held when a play test stopped stayed held in the next one: key releases now always reach
+  the game, and play and stop release every key and mouse button (`wpe_input_release_all`).
+- While the game holds the mouse (mouse look), the editor's panels no longer react to the hidden
+  cursor, so it can't drift onto them and take the focus from the game view.
+
 ### Added (particles)
 - `WPE_ParticleEmitter` (`particles` in scenes, docs in `docs/scenes.md#particles`): emits and
   simulates particles drawn through the billboard shader, one draw per emitter.

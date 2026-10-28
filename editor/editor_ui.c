@@ -1005,12 +1005,34 @@ static void wpe__draw_light_icon(ImDrawList* draw, const WPE_Light* light, ImVec
     if (selected) ImDrawList_AddCircle(draw, at, 12.5f, WPE__COL(237, 153, 56, 255), 24, 2.0f);
 }
 
-/* Draws an icon at every light in edit mode (when the view shows them) and returns the light whose icon
- * is under the mouse, if any. */
+/* A particle emitter's icon: a four-pointed sparkle with small diagonal glints, in the emitter's starting
+ * color (brightened like a light's, so dark smoke still shows). */
+static void wpe__draw_particle_icon(ImDrawList* draw, const WPE_ParticleEmitter* emitter, ImVec2_c at,
+                                    bool selected) {
+    const WPE_Vec4 c = emitter->color_start;
+    const float peak = fmaxf(fmaxf(c.x, c.y), fmaxf(c.z, 1e-3f));
+    const float lift = peak < 0.6f ? 0.6f / peak : 1.0f / peak; /* Grey smoke reads as light grey. */
+    const uint32_t color =
+        WPE__COL((int)fminf(c.x * lift * 255.0f, 255.0f), (int)fminf(c.y * lift * 255.0f, 255.0f),
+                 (int)fminf(c.z * lift * 255.0f, 255.0f), 255);
+    ImDrawList_AddCircleFilled(draw, at, 10.0f, WPE__COL(15, 15, 18, 190), 20);
+    const ImVec2_c star[8] = {{at.x, at.y - 8}, {at.x + 2, at.y - 2}, {at.x + 8, at.y}, {at.x + 2, at.y + 2},
+                              {at.x, at.y + 8}, {at.x - 2, at.y + 2}, {at.x - 8, at.y}, {at.x - 2, at.y - 2}};
+    ImDrawList_AddConvexPolyFilled(draw, star, 8, color);
+    const float d = 5.0f;
+    ImDrawList_AddLine(draw, (ImVec2_c){at.x + d, at.y - d}, (ImVec2_c){at.x + d + 2, at.y - d - 2}, color,
+                       1.5f);
+    ImDrawList_AddLine(draw, (ImVec2_c){at.x - d, at.y + d}, (ImVec2_c){at.x - d - 2, at.y + d + 2}, color,
+                       1.5f);
+    if (selected) ImDrawList_AddCircle(draw, at, 12.5f, WPE__COL(237, 153, 56, 255), 24, 2.0f);
+}
+
+/* Draws an icon at every light and particle emitter in edit mode (when the view shows them) and returns the
+ * entity whose icon is under the mouse, if any. */
 static WPE_Entity wpe__ui_light_icons(WPE_EditorUi* ui, ImDrawList* draw) {
     WPE_Mat4 view_projection;
     WPE_Vec3 eye, eye_dir;
-    if (!wpe_editor_view(ui->editor).lights || wpe_editor_mode(ui->editor) != WPE_EDITOR_EDIT ||
+    if (!wpe_editor_view(ui->editor).icons || wpe_editor_mode(ui->editor) != WPE_EDITOR_EDIT ||
         !wpe__view_projection(ui, &view_projection) ||
         !wpe__ray(ui, ui->image_x + ui->image_w * 0.5f, ui->image_y + ui->image_h * 0.5f, &eye, &eye_dir))
         return WPE_ENTITY_NULL;
@@ -1039,6 +1061,24 @@ static WPE_Entity wpe__ui_light_icons(WPE_EditorUi* ui, ImDrawList* draw) {
                 wpe_vec3_add(position, wpe_vec3_scale(wpe_vec3_normalize(direction), length)), &aim);
         }
         wpe__draw_light_icon(draw, light, at, aim, aimed, it.entity == selection);
+        const float distance =
+            sqrtf((mouse.x - at.x) * (mouse.x - at.x) + (mouse.y - at.y) * (mouse.y - at.y));
+        if (ui->view_hovered && distance < hovered_distance) {
+            hovered_distance = distance;
+            hovered = it.entity;
+        }
+    }
+    /* Particle emitters: a sparkle in their starting color, at the emitter. */
+    it = wpe_ecs_query(
+        ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_PARTICLES) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_ParticleEmitter* emitter = wpe_ecs_iter_get(&it, WPE_COMP_PARTICLES);
+        const WPE_Transform* t = wpe_ecs_iter_get(&it, WPE_COMP_TRANSFORM);
+        ImVec2_c at;
+        if (!wpe__to_screen(ui, &view_projection, wpe_mat4_transform_point(&t->world, wpe_vec3(0, 0, 0)),
+                            &at))
+            continue;
+        wpe__draw_particle_icon(draw, emitter, at, it.entity == selection);
         const float distance =
             sqrtf((mouse.x - at.x) * (mouse.x - at.x) + (mouse.y - at.y) * (mouse.y - at.y));
         if (ui->view_hovered && distance < hovered_distance) {
@@ -2122,8 +2162,8 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
             wpe__ui_set_view(ui, "grid_spacing", NULL, spacing, false);
         if (igMenuItem_Bool("Physics shapes", "P", view.physics, true))
             wpe__ui_set_view(ui, "physics", NULL, 0, !view.physics);
-        if (igMenuItem_Bool("Light icons", "L", view.lights, true))
-            wpe__ui_set_view(ui, "lights", NULL, 0, !view.lights);
+        if (igMenuItem_Bool("Icons (lights, particles)", "L", view.icons, true))
+            wpe__ui_set_view(ui, "icons", NULL, 0, !view.icons);
         if (igMenuItem_Bool("Reload changed scripts", NULL, view.hot_reload, true))
             wpe__ui_set_view(ui, "hot_reload", NULL, 0, !view.hot_reload);
         igSeparator();
@@ -2276,7 +2316,7 @@ static void wpe__ui_shortcuts(WPE_EditorUi* ui) {
             wpe__ui_set_view(ui, "gizmo_space", view.gizmo_local ? "world" : "local", 0, false);
         if (igIsKeyPressed_Bool(ImGuiKey_G, false)) wpe__ui_set_view(ui, "grid", NULL, 0, !view.grid);
         if (igIsKeyPressed_Bool(ImGuiKey_P, false)) wpe__ui_set_view(ui, "physics", NULL, 0, !view.physics);
-        if (igIsKeyPressed_Bool(ImGuiKey_L, false)) wpe__ui_set_view(ui, "lights", NULL, 0, !view.lights);
+        if (igIsKeyPressed_Bool(ImGuiKey_L, false)) wpe__ui_set_view(ui, "icons", NULL, 0, !view.icons);
     }
 }
 
@@ -2403,8 +2443,12 @@ void wpe_editor_ui_destroy(WPE_EditorUi* ui) {
 
 void wpe_editor_ui_handle_event(WPE_EditorUi* ui, const WPE_PlatformEvent* event) {
     if (!ui || !event) return;
-    wpe_ui_backend_handle_event(ui->backend, event);
     const SDL_Event* e = (const SDL_Event*)event;
+    /* While the game holds the mouse (mouse look), the hidden cursor must not hover or click the editor's
+     * panels: that would take the focus from the game view. The mouse goes to the game alone. */
+    const bool mouse_event = e->type == SDL_EVENT_MOUSE_MOTION || e->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+                             e->type == SDL_EVENT_MOUSE_BUTTON_UP || e->type == SDL_EVENT_MOUSE_WHEEL;
+    if (!(mouse_event && wpe_editor_ui_mouse_captured(ui))) wpe_ui_backend_handle_event(ui->backend, event);
     WPE_Engine* engine = wpe_editor_engine(ui->editor);
     const bool playing = wpe_editor_mode(ui->editor) == WPE_EDITOR_PLAY;
     switch (e->type) {
@@ -2417,10 +2461,13 @@ void wpe_editor_ui_handle_event(WPE_EditorUi* ui, const WPE_PlatformEvent* event
                                 event); /* Pads always reach the game (connections must be tracked). */
         break;
     case SDL_EVENT_KEY_DOWN:
+        if (playing && ui->view_focused) wpe_engine_handle_event(engine, event);
+        break;
     case SDL_EVENT_KEY_UP:
     case SDL_EVENT_WINDOW_FOCUS_LOST:
-        if (playing && (ui->view_focused || e->type == SDL_EVENT_WINDOW_FOCUS_LOST))
-            wpe_engine_handle_event(engine, event);
+        /* Releases always reach the game, so a key let go after stopping or away from the view never
+         * stays held. */
+        wpe_engine_handle_event(engine, event);
         break;
     case SDL_EVENT_MOUSE_MOTION:
     case SDL_EVENT_MOUSE_BUTTON_DOWN:

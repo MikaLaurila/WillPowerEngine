@@ -48,10 +48,10 @@ typedef enum WPE_EditorGizmo {
 
 /** How the editor shows the scene: not part of the scene, never saved with it or undone. */
 typedef struct WPE_EditorView {
-    bool grid;             /* A ground grid in edit mode (default on). */
-    float grid_spacing;    /* World units between grid lines (default 1). */
-    bool physics;          /* Collider wireframes, in edit and play mode (default off). */
-    bool lights;           /* An icon at every light in edit mode; clicking one selects it (default on). */
+    bool grid;          /* A ground grid in edit mode (default on). */
+    float grid_spacing; /* World units between grid lines (default 1). */
+    bool physics;       /* Collider wireframes, in edit and play mode (default off). */
+    bool icons; /* Icons at lights and particle emitters in edit mode; clicking one selects it (on). */
     WPE_EditorGizmo gizmo; /* The viewport gizmo's mode (default move). */
     bool gizmo_local;      /* Gizmo axes: the entity's own (true) or the world's (false, default). Scaling
                               always uses the entity's own axes. */
