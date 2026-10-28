@@ -243,6 +243,8 @@ WPE_Result wpe__editor_pause(WPE_Editor* editor) {
     if (editor->mode == WPE_EDITOR_EDIT) return WPE_RESULT_ERROR_INVALID_STATE;
     editor->mode = WPE_EDITOR_PAUSED;
     wpe_engine_set_simulating(editor->engine, false);
+    /* A paused game can't release the mouse it holds, so the editor takes it back. */
+    wpe_input_set_mouse_captured(wpe_engine_input(editor->engine), false);
     return WPE_RESULT_OK;
 }
 

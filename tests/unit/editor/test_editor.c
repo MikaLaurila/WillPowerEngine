@@ -699,6 +699,23 @@ static void test_editor_play_does_not_keep_keys_held(void) {
     wpe_editor_destroy(editor);
 }
 
+/* A game holding the mouse (mouse look) gives it back on release_mouse and when paused, and can take it
+ * again. */
+static void test_editor_takes_the_mouse_back_from_the_game(void) {
+    WPE_Editor* editor = open_editor();
+    WPE_Input* input = wpe_engine_input(wpe_editor_engine(editor));
+    run_ok(editor, "{\"cmd\": \"play\"}");
+    wpe_input_set_mouse_captured(input, true); /* What wpe.set_mouse_captured(true) does. */
+    WPE_TEST_ASSERT(wpe_input_mouse_captured(input));
+    run_ok(editor, "{\"cmd\": \"release_mouse\"}");
+    WPE_TEST_ASSERT(!wpe_input_mouse_captured(input));
+    wpe_input_set_mouse_captured(input, true);
+    run_ok(editor, "{\"cmd\": \"pause\"}");
+    WPE_TEST_ASSERT(!wpe_input_mouse_captured(input));
+    run_ok(editor, "{\"cmd\": \"stop\"}");
+    wpe_editor_destroy(editor);
+}
+
 static WPE_Color pixel(WPE_Editor* editor, uint32_t x, uint32_t y) {
     const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(wpe_editor_engine(editor)));
     return fb->color[y * fb->width + x];
@@ -882,6 +899,7 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_editor_coalesces_continuous_edits),
               WPE_TEST_CASE(test_editor_prefab_commands),
               WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
               WPE_TEST_CASE(test_editor_play_does_not_keep_keys_held),
+              WPE_TEST_CASE(test_editor_takes_the_mouse_back_from_the_game),
               WPE_TEST_CASE(test_editor_fits_colliders_to_meshes),
               WPE_TEST_CASE(test_editor_guards_unsaved_changes),
               WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),

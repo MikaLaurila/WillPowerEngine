@@ -69,6 +69,11 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Fixed (editor: games that capture the mouse)
+- A play test whose game captured the mouse (mouse look) couldn't be stopped with the mouse. Shift+F1
+  now frees the mouse whatever the game does (command `release_mouse`), the viewport shows how while
+  the game holds it, and pausing frees it too.
+
 ### Added (project templates: first person)
 - Project templates: each directory of `templates/` is a complete, runnable project, embedded into
   the engine at build time (`cmake/WpeEmbedTemplates.cmake`). `wpe_editor <dir> --init --template

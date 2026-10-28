@@ -606,6 +606,12 @@ static WPE_Result wpe__cmd_stop(wpe__Call* call) {
     return wpe__null(call, wpe__editor_stop(call->editor));
 }
 
+/* Frees the mouse a playing game captured (mouse look), so the editor's panels can be used again. */
+static WPE_Result wpe__cmd_release_mouse(wpe__Call* call) {
+    wpe_input_set_mouse_captured(wpe_engine_input(wpe_editor_engine(call->editor)), false);
+    return wpe__null(call, WPE_RESULT_OK);
+}
+
 static WPE_Result wpe__cmd_frames(wpe__Call* call) {
     const double count = wpe_json_number(wpe_json_get(call->args, "count"), 1.0);
     const double dt = wpe_json_number(wpe_json_get(call->args, "dt"), 1.0 / 60.0);
@@ -1095,6 +1101,8 @@ static const struct {
     {"play", wpe__cmd_play, "{} (also resumes)"},
     {"pause", wpe__cmd_pause, "{}"},
     {"stop", wpe__cmd_stop, "{} (restores the scene as it was before play)"},
+    {"release_mouse", wpe__cmd_release_mouse,
+     "{}: free the mouse the game captured (the game can capture it again)"},
     {"frames", wpe__cmd_frames, "{count = 1, dt = 1/60}: run frames"},
     {"screenshot", wpe__cmd_screenshot, "{path, target = \"game\"|\"editor\"}"},
     {"camera", wpe__cmd_camera, "{position: [x,y,z], target: [x,y,z]}: place the editor camera"},

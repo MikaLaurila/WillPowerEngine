@@ -28,7 +28,7 @@
 
 Shortcuts:
 - **Editing:** Ctrl+Z / Ctrl+Y undo and redo, Ctrl+S save, Ctrl+D duplicate, Del delete.
-- **Playing:** F5 play (Shift+F5, or F5 while playing, stops), F6 pause.
+- **Playing:** F5 play (Shift+F5, or F5 while playing, stops), F6 pause. A game that captures the mouse (mouse look) keeps the cursor until it releases it; Shift+F1 frees it whatever the game does (the viewport says so while the game holds it), and pausing frees it too. A click in the viewport lets the game capture it again.
 - **Gizmo:** W / E / R choose move, rotate or scale; X switches world/local axes; hold Ctrl while dragging to snap (or, with Snap on, to move freely).
 - **View:** F focuses on the selection; G toggles the grid, P the physics shapes, L the icons.
 
@@ -85,7 +85,8 @@ Entities and components use the **scene-file schema** ([scenes.md](scenes.md)), 
 | `new_scene`, `load_scene`, `save_scene` | `{discard?}`, `{path, discard?}`, `{path?}`: asset paths inside the project; `save_scene` without a path saves the open scene. `new_scene` and `load_scene` refuse while the scene has unsaved changes, unless `"discard": true`. |
 | `get_view` / `set_view` | `{}` / `{value: {grid, grid_spacing, physics, icons, gizmo: "move"\|"rotate"\|"scale", gizmo_space: "world"\|"local", hot_reload, snap, snap_move, snap_rotate (degrees), snap_scale, mode: "3d"\|"2d", snap_ui (pixels)}}` (merged; all or nothing) → the view. `mode: "2d"` renders edit mode from the scene's camera with its UI (screenshots too); UI elements are edited with `set_component` on `"ui"`. View settings aren't part of the scene: they are never saved or undone. |
 | `undo`, `redo` | `{}` |
-| `play`, `pause`, `stop` | `{}` (play also resumes) |
+| `play`, `pause`, `stop` | `{}` (play also resumes; pause frees the mouse) |
+| `release_mouse` | `{}`: frees the mouse a playing game captured |
 | `frames` | `{count = 1, dt = 1/60}`: runs frames (simulated in play mode) |
 | `screenshot` | `{path, target = "game" or "editor"}`: the game view, or the whole editor window (also headless) |
 | `camera` | `{position: [x,y,z], target: [x,y,z]}`: aims the editor camera |

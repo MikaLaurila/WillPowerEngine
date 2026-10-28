@@ -2365,6 +2365,16 @@ static void wpe__ui_viewport(WPE_EditorUi* ui) {
     const WPE_EditorMode mode = wpe_editor_mode(ui->editor);
     ImDrawList_AddText_Vec2(draw, (ImVec2_c){ui->image_x + 6, ui->image_y + 4}, WPE__COL(255, 255, 255, 200),
                             mode == WPE_EDITOR_EDIT && view_2d ? "EDIT 2D" : modes[mode], NULL);
+    if (wpe_editor_ui_mouse_captured(ui)) {
+        static const char hint[] = "The game holds the mouse: Shift+F1 frees it, F5 stops";
+        const ImVec2_c size = igCalcTextSize(hint, NULL, false, -1.0f);
+        const ImVec2_c at = {ui->image_x + (ui->image_w - size.x) * 0.5f,
+                             ui->image_y + ui->image_h - size.y - 6};
+        ImDrawList_AddRectFilled(draw, (ImVec2_c){at.x - 6, at.y - 3},
+                                 (ImVec2_c){at.x + size.x + 6, at.y + size.y + 3}, WPE__COL(0, 0, 0, 150),
+                                 4.0f, 0);
+        ImDrawList_AddText_Vec2(draw, at, WPE__COL(255, 255, 255, 220), hint, NULL);
+    }
     igEnd();
 }
 
@@ -2545,6 +2555,9 @@ static void wpe__ui_shortcuts(WPE_EditorUi* ui) {
         wpe__ui_simple(ui, io->KeyShift || mode != WPE_EDITOR_EDIT ? "stop" : "play");
     if (igIsKeyPressed_Bool(ImGuiKey_F6, false))
         wpe__ui_simple(ui, mode == WPE_EDITOR_PLAY ? "pause" : "play");
+    /* The way out of a game's mouse look that doesn't depend on the game's own scripts. */
+    if (io->KeyShift && igIsKeyPressed_Bool(ImGuiKey_F1, false) && wpe_editor_ui_mouse_captured(ui))
+        wpe__ui_simple(ui, "release_mouse");
     if (mode != WPE_EDITOR_EDIT) return; /* The game owns the keyboard while playing. */
     if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_Z, false)) wpe__ui_simple(ui, "undo");
     if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_Y, false)) wpe__ui_simple(ui, "redo");
