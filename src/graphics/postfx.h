@@ -25,6 +25,8 @@
 #ifndef WPE_GRAPHICS_POSTFX_H
 #define WPE_GRAPHICS_POSTFX_H
 
+#include <stddef.h>
+
 #include "renderer/renderer.h"
 
 /** Camera parameters effects need to linearize depth. */
