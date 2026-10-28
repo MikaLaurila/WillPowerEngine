@@ -68,6 +68,16 @@ typedef struct WPE_BitmapFont {
 [[nodiscard]] WPE_Result wpe_font_create(uint32_t width, uint32_t height, const uint32_t* texels,
                                          WPE_BitmapFont** out_font);
 
+/**
+ * Builds the engine's built-in font: assets/fonts/small.png, compiled into the engine so every game
+ * has text even without a font of its own.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_OUT_OF_MEMORY.
+ *
+ * @thread_safety Any thread
+ */
+[[nodiscard]] WPE_Result wpe_font_create_builtin(WPE_BitmapFont** out_font);
+
 /** Frees a font (ownership consumed); NULL is a no-op. @thread_safety Any thread */
 void wpe_font_destroy(WPE_BitmapFont* font);
 

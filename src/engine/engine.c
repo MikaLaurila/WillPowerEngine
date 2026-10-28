@@ -143,14 +143,31 @@ static WPE_Result wpe__create_graphics(WPE_Engine* engine, const WPE_EngineDesc*
     return result;
 }
 
+/* The project's font, or the built-in one when the project names none or its file is missing (a sheet
+ * that exists but is broken stays an error). */
+static WPE_Result wpe__load_font(WPE_Engine* engine) {
+    const char* path = engine->project.font;
+    if (path[0]) {
+        if (wpe_vfs_exists(engine->vfs, path))
+            return wpe_asset_load(engine->assets, WPE_ASSET_FONT, path, &engine->font);
+        wpe_log_warn("font '%s' not found; using the built-in font", path);
+    }
+    WPE_BitmapFont* font = NULL;
+    WPE_Result result = wpe_font_create_builtin(&font);
+    if (result == WPE_RESULT_OK) {
+        result = wpe_asset_add(engine->assets, WPE_ASSET_FONT, "builtin/font", font, &engine->font);
+        if (result != WPE_RESULT_OK) wpe_font_destroy(font);
+    }
+    return result;
+}
+
 static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* desc) {
     const WPE_ProjectSettings* p = &engine->project;
     WPE_Result result = wpe_asset_manager_create(
         &(WPE_AssetManagerDesc){
             .vfs = engine->vfs, .jobs = engine->jobs, .max_texture_size = p->max_texture_size},
         &engine->assets);
-    if (result == WPE_RESULT_OK && p->font[0])
-        result = wpe_asset_load(engine->assets, WPE_ASSET_FONT, p->font, &engine->font);
+    if (result == WPE_RESULT_OK) result = wpe__load_font(engine);
     if (result == WPE_RESULT_OK) result = wpe_ecs_create(&engine->ecs);
     if (result == WPE_RESULT_OK) result = wpe_scene_register_components(engine->ecs);
     if (result == WPE_RESULT_OK) result = wpe_graphics_register_components(engine->ecs, engine->assets);

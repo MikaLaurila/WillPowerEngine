@@ -64,7 +64,7 @@ The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which t
 |---|---|
 | `name` | Window title. |
 | `start_scene` | Scene loaded at startup (asset path; empty starts with an empty world). |
-| `font` | Bitmap font for `wpe.draw_text` (optional). |
+| `font` | Bitmap font sheet for text: UI texts without a font of their own and `wpe.draw_text` (optional). Without it, or when the file is missing (a warning), the engine uses its built-in font, `assets/fonts/small.png` compiled in. |
 | `display` | `width` × `height`: the framebuffer resolution (16..4096). `scale`: the initial window size multiplier. Also `vsync`, `resizable`, `fullscreen`. The image is scaled with nearest filtering and letterboxed. |
 | `simulation` | `fixed_rate`: fixed steps per second. `max_steps`: fixed steps per frame before time is dropped, which avoids a spiral of death. |
 | `assets` | `max_texture_size` caps model textures (0 = original size). |

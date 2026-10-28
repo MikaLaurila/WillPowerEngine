@@ -61,6 +61,10 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Engine: `wpe_engine_set_draw_scene`. UI: `wpe_ui_pick` can count every element (editors).
 - Tests: the 2D and 3D views (camera, UI, a scene without a camera, play mode), view settings.
 
+### Added (built-in font)
+- `assets/fonts/small.png` is compiled into the engine (`wpe_font_create_builtin`): projects that name no
+  font, or whose font file is missing (with a warning), get text with it.
+
 ### Changed
 - Scene, prefab and other engine JSON files write floats in their shortest exact form: a value typed
   as `0.06` is saved as `0.06` rather than `0.0599999987`, and whole numbers as integers.

@@ -627,7 +627,8 @@ static void write_tiny_game(void) {
         "               \"properties\": {\"frames\": 2}}}]}\n");
     write_text(ROOT "/game/scripts/switch.luau",
                "local S = {}\n"
-               "function S:on_start() self.n = 0; assert(wpe.get_camera() == nil) end\n"
+               "function S:on_start() self.n = 0; assert(wpe.get_camera() == nil)\n"
+               "  assert(wpe.text_size('x') > 0) end -- the built-in font: the project names none\n"
                "function S:on_update(dt)\n"
                "  self.n += 1\n"
                "  assert(not wpe.action_down('go'))\n"
@@ -759,6 +760,30 @@ static void test_engine_ui_clicks_reach_scripts(void) {
     wpe_engine_destroy(engine);
 }
 
+/* A project whose font file is missing starts with the built-in font, and its texts are drawn. */
+static void test_engine_falls_back_to_the_builtin_font(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/nofont/scenes"));
+    write_text(ROOT "/nofont/project.json",
+               "{\"format\": \"wpe.project\", \"version\": 1, \"name\": \"No font\", \"start_scene\": "
+               "\"scenes/s.scene\", \"font\": \"fonts/missing.png\", \"display\": {\"width\": 64, "
+               "\"height\": 48}}\n");
+    write_text(ROOT "/nofont/scenes/s.scene",
+               "{\"format\": \"wpe.scene\", \"version\": 1, \"environment\": {\"clear_color\": [0, 0, 0]},\n"
+               " \"entities\": [{\"id\": 1, \"ui\": {}, \"text\": {\"text\": \"HELLO\"}}]}\n");
+    quiet(true);
+    WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_engine_create(
+        &(WPE_EngineDesc){.project_dir = ROOT "/nofont", .headless = true, .workers = 2}, &engine));
+    quiet(false);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(engine));
+    uint32_t ink = 0;
+    for (uint32_t i = 0; i < fb->width * fb->height; ++i)
+        ink += fb->color[i] == 0xFFFFFFFFu;
+    WPE_TEST_ASSERT(ink > 10);
+    wpe_engine_destroy(engine);
+}
+
 static void test_engine_runs_scenes_headless(void) {
     write_tiny_game();
     WPE_Engine* engine = NULL;
@@ -859,4 +884,5 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_engine_scene_game_components), WPE_TEST_CASE(test_engine_scene_editing_functions),
     WPE_TEST_CASE(test_engine_scene_save_filter), WPE_TEST_CASE(test_engine_embedded_edit_mode),
     WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts),
+    WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
     WPE_TEST_CASE(test_engine_export_embeds_the_project))

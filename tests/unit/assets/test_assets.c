@@ -136,6 +136,23 @@ static void test_assets_file_read_missing(void) {
 
 /* ---- Fonts ---------------------------------------------------------------------------------------- */
 
+/* The built-in font is small.png compiled in: the same glyphs and the same atlas. */
+static void test_assets_font_builtin_matches_small_png(void) {
+    WPE_BitmapFont* file = NULL;
+    WPE_BitmapFont* builtin = NULL;
+    WPE_TEST_ASSERT_OK(wpe_font_load(ASSET("fonts/small.png"), &file));
+    WPE_TEST_ASSERT_OK(wpe_font_create_builtin(&builtin));
+    WPE_TEST_ASSERT_EQ_UINT(file->line_height, builtin->line_height);
+    WPE_TEST_ASSERT(memcmp(file->glyphs, builtin->glyphs, sizeof file->glyphs) == 0);
+    const WPE_TextureLevel* a = &file->atlas->levels[0];
+    const WPE_TextureLevel* b = &builtin->atlas->levels[0];
+    WPE_TEST_ASSERT(a->width == b->width && a->height == b->height);
+    WPE_TEST_ASSERT(memcmp(a->texels, b->texels, (size_t)a->width * a->height * sizeof *a->texels) == 0);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_font_create_builtin(NULL));
+    wpe_font_destroy(builtin);
+    wpe_font_destroy(file);
+}
+
 static void test_assets_font_loads_sample_sheet(void) {
     WPE_BitmapFont* font = NULL;
     WPE_TEST_ASSERT_OK(wpe_font_load(ASSET("fonts/small.png"), &font));
@@ -373,6 +390,7 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_assets_image_decode_png_roundtrip),
               WPE_TEST_CASE(test_assets_image_decode_rejects_garbage),
               WPE_TEST_CASE(test_assets_file_read_missing),
               WPE_TEST_CASE(test_assets_font_loads_sample_sheet),
+              WPE_TEST_CASE(test_assets_font_builtin_matches_small_png),
               WPE_TEST_CASE(test_assets_font_rejects_wrong_glyph_count),
               WPE_TEST_CASE(test_assets_model_damaged_helmet), WPE_TEST_CASE(test_assets_model_car_concept),
               WPE_TEST_CASE(test_assets_model_fridge_with_required_transmission),
