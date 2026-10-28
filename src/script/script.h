@@ -20,6 +20,10 @@
  *
  * Each entity with a WPE_COMP_SCRIPT component gets its own instance table (`self`), whose
  * `entity` field holds the entity handle and whose other fields persist across hot reloads.
+ *
+ * Properties: a script may declare its configurable fields with defaults, `Spinner.properties = {speed
+ * = 1.5}`. Every instance starts with those fields (before the scene's own values are set), editors
+ * list them (wpe_script_visit_declared()), and only values that differ from a default are saved.
  * Lifecycle:
  * - on_start: once, at the first wpe_script_host_update() after the script was attached.
  * - on_update(dt): every wpe_script_host_update(). on_fixed_update(dt): every fixed step.
@@ -257,7 +261,9 @@ const char* wpe_script_path(const WPE_ScriptHost* host, WPE_Entity entity);
 /**
  * Sets a property of an entity's script instance: the field `self[name]`, assigned before on_start
  * when set right after wpe_script_attach() (scene files use this to configure scripts). Properties
- * set this way are remembered so wpe_script_visit_properties() can save their current values.
+ * set this way are remembered so wpe_script_visit_properties() can save their current values; one set
+ * to the default its script declares is not (there is nothing to save), and NIL resets a declared
+ * property to its default.
  *
  * @param name An identifier ([A-Za-z_][A-Za-z0-9_]*, at most 63 bytes) other than "entity".
  * @param value Number, boolean, string or vector (NIL removes the field and the property).
@@ -281,6 +287,23 @@ WPE_Result wpe_script_set_property(WPE_ScriptHost* host, WPE_Entity entity, cons
  */
 WPE_Result wpe_script_visit_properties(const WPE_ScriptHost* host, WPE_Entity entity, WPE_ScriptPropertyFn fn,
                                        void* user_data);
+
+/** Receives one declared property: its current value and its default (both valid only during the call). */
+typedef void (*WPE_ScriptDeclaredFn)(const char* name, const WPE_ScriptValue* value,
+                                     const WPE_ScriptValue* default_value, void* user_data);
+
+/**
+ * Calls `fn` for each property the entity's script declares in its class's `properties` table (number,
+ * boolean, string or vector defaults), sorted by name, with the instance's current value. Editors show
+ * these so properties can be set without knowing their names.
+ *
+ * @return WPE_RESULT_OK (also when the script declares none), WPE_RESULT_ERROR_NULL_ARG or
+ *         WPE_RESULT_ERROR_NOT_FOUND (no script).
+ *
+ * @thread_safety Main thread; `fn` must not call into the host
+ */
+WPE_Result wpe_script_visit_declared(const WPE_ScriptHost* host, WPE_Entity entity, WPE_ScriptDeclaredFn fn,
+                                     void* user_data);
 
 /**
  * Compiles and runs a chunk of Luau code in a fresh sandboxed environment (tools, consoles,

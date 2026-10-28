@@ -1,14 +1,11 @@
 -- Third-person camera orbiting a target entity (found by name once). Mouse look while the mouse is
 -- captured (click the window to capture, Escape to release), right stick on a gamepad.
--- Properties: target (entity name), distance, height, sensitivity.
 local Camera = {}
+-- target: an entity name, resolved to an entity when found.
+Camera.properties = { target = "player", distance = 6, height = 2.5, sensitivity = 0.006 }
 
 function Camera:on_start()
-	self.target = self.target or "player" -- a name (saved with the scene), resolved to an entity once
 	self.followed = wpe.find(self.target)
-	self.distance = self.distance or 6
-	self.height = self.height or 2.5
-	self.sensitivity = self.sensitivity or 0.006
 	self.yaw = 0
 	self.pitch = -0.35
 	wpe.set_camera(self.entity)

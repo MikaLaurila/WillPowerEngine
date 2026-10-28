@@ -1,9 +1,9 @@
--- Spins its entity around an axis and bobs it up and down. Properties: speed (radians per second).
+-- Spins its entity around an axis and bobs it up and down.
 local Spinner = {}
+Spinner.properties = { speed = 1.2 } -- radians per second
 
 function Spinner:on_start()
 	self.axis = vector.normalize(vector.create(0.3, 1, 0.2))
-	self.speed = self.speed or 1.2
 	self.base = wpe.get_position(self.entity)
 	self.phase = (self.entity % 7) * 0.9
 end

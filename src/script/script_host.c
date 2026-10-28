@@ -216,6 +216,58 @@ typedef struct wpe__InstanceOp {
     int instance_ref; /* out */
 } wpe__InstanceOp;
 
+/* ---- Declared properties: the `properties` table of a script's class ------------------------------- */
+
+static bool wpe__property_name_valid(const char* name);
+
+/* Whether a Lua value can be a script property (number, boolean, string or vector). */
+static bool wpe__property_value(lua_State* L, int index) {
+    const int type = lua_type(L, index);
+    return type == LUA_TNUMBER || type == LUA_TBOOLEAN || type == LUA_TSTRING || type == LUA_TVECTOR;
+}
+
+/* Pushes the declared-properties table of the class behind an instance's metatable; false (nothing
+ * pushed) when the script declares none. */
+static bool wpe__push_declared(lua_State* L, int instance) {
+    if (!lua_getmetatable(L, instance)) return false;
+    lua_pushstring(L, "__index");
+    lua_rawget(L, -2);
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 2);
+        return false;
+    }
+    lua_pushstring(L, "properties");
+    lua_rawget(L, -2);
+    lua_remove(L, -2); /* class */
+    lua_remove(L, -2); /* metatable */
+    if (lua_istable(L, -1)) return true;
+    lua_pop(L, 1);
+    return false;
+}
+
+/* Gives the instance at `instance` the declared defaults of the properties it doesn't hold yet. */
+static void wpe__fill_defaults(lua_State* L, int instance) {
+    if (!wpe__push_declared(L, instance)) return;
+    const int declared = lua_gettop(L);
+    lua_pushnil(L);
+    while (lua_next(L, declared)) {
+        if (lua_type(L, -2) == LUA_TSTRING && wpe__property_value(L, -1) &&
+            wpe__property_name_valid(lua_tostring(L, -2))) {
+            lua_pushvalue(L, -2);
+            lua_rawget(L, instance);
+            const bool missing = lua_isnil(L, -1);
+            lua_pop(L, 1);
+            if (missing) {
+                lua_pushvalue(L, -2);
+                lua_pushvalue(L, -2);
+                lua_rawset(L, instance);
+            }
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+}
+
 static int wpe__op_create_instance(lua_State* L) {
     wpe__InstanceOp* op = lua_touserdata(L, 1);
     lua_createtable(L, 0, 4);
@@ -223,8 +275,17 @@ static int wpe__op_create_instance(lua_State* L) {
     lua_setfield(L, -2, "entity");
     lua_getref(L, op->meta_ref);
     lua_setmetatable(L, -2);
+    wpe__fill_defaults(L, lua_gettop(L));
     op->instance_ref = lua_ref(L, -1);
     lua_pop(L, 1);
+    return 0;
+}
+
+/* Protected: wpe__fill_defaults for an instance (after hot reload declared new properties). */
+static int wpe__op_fill_defaults(lua_State* L) {
+    const int* instance_ref = lua_touserdata(L, 1);
+    lua_getref(L, *instance_ref);
+    wpe__fill_defaults(L, lua_gettop(L));
     return 0;
 }
 
@@ -587,6 +648,12 @@ static WPE_Result wpe__reload_file(WPE_ScriptHost* host, uint32_t index) {
         WPE_Script* s = wpe_ecs_get_component(host->ecs, host->snapshot[i], WPE_COMP_SCRIPT);
         if (!s || s->script != index) continue;
         s->state &= (uint8_t)~WPE__SCRIPT_FAILED; /* New code gets a fresh chance. */
+        /* Properties the new code declares start at their defaults; existing values stay. */
+        int instance_ref = s->instance_ref;
+        if (lua_cpcall(host->L, wpe__op_fill_defaults, &instance_ref) != 0) {
+            wpe_log_error("declared properties of '%s': %s", file->path, lua_tostring(host->L, -1));
+            lua_pop(host->L, 1);
+        }
         if (s->state & WPE__SCRIPT_STARTED) {
             wpe__call_method(host, host->snapshot[i], s->instance_ref, index, "on_reload", false, 0.0);
         }
@@ -765,11 +832,22 @@ typedef struct wpe__PropertyOp {
     const WPE_ScriptValue* value;
 } wpe__PropertyOp;
 
-/* Protected: sets instance[name] (raw) and records the name in the property list. */
+/* Protected: sets instance[name] (raw) and records the name in the property list, unless the value is the
+ * script's declared default (then there is nothing to save). Removing (nil) a declared property sets it
+ * back to its default. */
 static int wpe__op_set_property(lua_State* L) {
     wpe__PropertyOp* op = lua_touserdata(L, 1);
     lua_getref(L, op->instance_ref);
     const int instance = lua_gettop(L);
+    /* The declared default, or nil. */
+    if (wpe__push_declared(L, instance)) {
+        lua_getfield(L, -1, op->name);
+        lua_remove(L, -2);
+    } else {
+        lua_pushnil(L);
+    }
+    const int declared_default = lua_gettop(L);
+    const bool declared = wpe__property_value(L, declared_default);
     lua_pushstring(L, op->name);
     switch (op->value->type) {
     case WPE_SCRIPT_VALUE_NUMBER:
@@ -785,13 +863,19 @@ static int wpe__op_set_property(lua_State* L) {
         lua_pushvector(L, op->value->vector.x, op->value->vector.y, op->value->vector.z);
         break;
     case WPE_SCRIPT_VALUE_NIL:
-        lua_pushnil(L);
+        if (declared) {
+            lua_pushvalue(L, declared_default); /* Back to the declared default. */
+        } else {
+            lua_pushnil(L);
+        }
         break;
     }
+    const bool is_default = declared && lua_rawequal(L, -1, declared_default);
     lua_rawset(L, instance);
+    const bool forget = op->value->type == WPE_SCRIPT_VALUE_NIL || is_default;
 
     if (op->property_ref == LUA_NOREF) {
-        if (op->value->type == WPE_SCRIPT_VALUE_NIL) return 0;
+        if (forget) return 0;
         lua_createtable(L, 4, 0);
         op->property_ref = lua_ref(L, -1);
     } else {
@@ -805,7 +889,7 @@ static int wpe__op_set_property(lua_State* L) {
         if (strcmp(lua_tostring(L, -1), op->name) == 0) found = i;
         lua_pop(L, 1);
     }
-    if (op->value->type == WPE_SCRIPT_VALUE_NIL) {
+    if (forget) {
         /* Remove the name, keeping the order of the others. */
         for (int i = found; found && i < count; ++i) {
             lua_rawgeti(L, list, i + 1);
@@ -854,8 +938,28 @@ typedef struct wpe__VisitOp {
     int instance_ref;
     int property_ref;
     WPE_ScriptPropertyFn fn;
+    WPE_ScriptDeclaredFn declared_fn;
     void* user_data;
 } wpe__VisitOp;
+
+/* A Lua value as a script value (NIL for kinds a property can't hold). Strings are borrowed from the stack.
+ */
+static WPE_ScriptValue wpe__script_value(lua_State* L, int index) {
+    switch (lua_type(L, index)) {
+    case LUA_TNUMBER:
+        return (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_NUMBER, .number = lua_tonumber(L, index)};
+    case LUA_TBOOLEAN:
+        return (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_BOOL, .boolean = lua_toboolean(L, index) != 0};
+    case LUA_TSTRING:
+        return (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_STRING, .string = lua_tostring(L, index)};
+    case LUA_TVECTOR: {
+        const float* v = lua_tovector(L, index);
+        return (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_VECTOR, .vector = wpe_vec3(v[0], v[1], v[2])};
+    }
+    default:
+        return (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_NIL};
+    }
+}
 
 static int wpe__op_visit_properties(lua_State* L) {
     const wpe__VisitOp* op = lua_touserdata(L, 1);
@@ -869,29 +973,62 @@ static int wpe__op_visit_properties(lua_State* L) {
         const char* name = lua_tostring(L, -1);
         lua_pushvalue(L, -1);
         lua_rawget(L, instance);
-        WPE_ScriptValue value = {.type = WPE_SCRIPT_VALUE_NIL};
-        switch (lua_type(L, -1)) {
-        case LUA_TNUMBER:
-            value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_NUMBER, .number = lua_tonumber(L, -1)};
-            break;
-        case LUA_TBOOLEAN:
-            value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_BOOL, .boolean = lua_toboolean(L, -1) != 0};
-            break;
-        case LUA_TSTRING:
-            value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_STRING, .string = lua_tostring(L, -1)};
-            break;
-        case LUA_TVECTOR: {
-            const float* v = lua_tovector(L, -1);
-            value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_VECTOR, .vector = wpe_vec3(v[0], v[1], v[2])};
-            break;
-        }
-        default:
-            break;
-        }
+        const WPE_ScriptValue value = wpe__script_value(L, -1);
         if (value.type != WPE_SCRIPT_VALUE_NIL) op->fn(name, &value, op->user_data);
         lua_pop(L, 2);
     }
     return 0;
+}
+
+#define WPE__MAX_DECLARED 64u
+
+static int wpe__compare_names(const void* a, const void* b) {
+    return strcmp((const char*)a, (const char*)b);
+}
+
+static int wpe__op_visit_declared(lua_State* L) {
+    const wpe__VisitOp* op = lua_touserdata(L, 1);
+    lua_getref(L, op->instance_ref);
+    const int instance = lua_gettop(L);
+    if (!wpe__push_declared(L, instance)) return 0;
+    const int declared = lua_gettop(L);
+    /* Names sorted, so every listing shows them in the same order (table order is arbitrary). */
+    char names[WPE__MAX_DECLARED][64];
+    uint32_t count = 0;
+    lua_pushnil(L);
+    while (lua_next(L, declared)) {
+        if (lua_type(L, -2) == LUA_TSTRING && wpe__property_value(L, -1) &&
+            wpe__property_name_valid(lua_tostring(L, -2)) && count < WPE__MAX_DECLARED)
+            snprintf(names[count++], sizeof names[0], "%s", lua_tostring(L, -2));
+        lua_pop(L, 1);
+    }
+    qsort(names, count, sizeof names[0], wpe__compare_names);
+    for (uint32_t i = 0; i < count; ++i) {
+        lua_getfield(L, declared, names[i]);
+        lua_pushstring(L, names[i]);
+        lua_rawget(L, instance);
+        const WPE_ScriptValue fallback = wpe__script_value(L, -2);
+        WPE_ScriptValue value = wpe__script_value(L, -1);
+        if (value.type == WPE_SCRIPT_VALUE_NIL)
+            value = fallback; /* The script cleared it: show the default. */
+        op->declared_fn(names[i], &value, &fallback, op->user_data);
+        lua_pop(L, 2);
+    }
+    return 0;
+}
+
+WPE_Result wpe_script_visit_declared(const WPE_ScriptHost* host, WPE_Entity entity, WPE_ScriptDeclaredFn fn,
+                                     void* user_data) {
+    if (!host || !fn) return WPE_RESULT_ERROR_NULL_ARG;
+    const WPE_Script* s = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SCRIPT);
+    if (!s) return WPE_RESULT_ERROR_NOT_FOUND;
+    wpe__VisitOp op = {.instance_ref = s->instance_ref, .declared_fn = fn, .user_data = user_data};
+    if (lua_cpcall(host->L, wpe__op_visit_declared, &op) != 0) {
+        wpe_log_error("reading declared script properties failed: %s", lua_tostring(host->L, -1));
+        lua_pop(host->L, 1);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    return WPE_RESULT_OK;
 }
 
 WPE_Result wpe_script_visit_properties(const WPE_ScriptHost* host, WPE_Entity entity, WPE_ScriptPropertyFn fn,

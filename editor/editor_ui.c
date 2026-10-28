@@ -84,6 +84,8 @@ struct WPE_EditorUi {
     /* Inspector edits. */
     uint32_t edit_serial; /* Bumped when a widget becomes active: one undo step per edit gesture. */
     char add_path[WPE__UI_PATH];
+    char add_property[64]; /* "Add property": its name and type (number, bool, string, vector). */
+    int add_property_type;
 
     /* Assets. */
     char** assets;
@@ -1734,6 +1736,214 @@ static void wpe__ui_apply_edit(WPE_EditorUi* ui, WPE_Entity entity, const char* 
     wpe__ui_send(ui, w);
 }
 
+/* ---- Script properties ----------------------------------------------------------------------------- */
+
+#define WPE__MAX_PROPERTIES 64u
+
+typedef struct wpe__Property {
+    char name[64];
+    WPE_ScriptValue value, fallback; /* fallback.type is NIL when the script doesn't declare it. */
+    char string[WPE__UI_PATH], fallback_string[WPE__UI_PATH];
+} wpe__Property;
+
+typedef struct wpe__Properties {
+    wpe__Property items[WPE__MAX_PROPERTIES];
+    uint32_t count;
+} wpe__Properties;
+
+/* Copies a value whose string the host only lends. */
+static void wpe__copy_script_value(WPE_ScriptValue* out, char* buffer, size_t size,
+                                   const WPE_ScriptValue* v) {
+    *out = *v;
+    if (v->type != WPE_SCRIPT_VALUE_STRING) return;
+    snprintf(buffer, size, "%s", v->string);
+    out->string = buffer;
+}
+
+static wpe__Property* wpe__property_slot(wpe__Properties* list, const char* name) {
+    for (uint32_t i = 0; i < list->count; ++i)
+        if (strcmp(list->items[i].name, name) == 0) return NULL; /* Listed already (declared). */
+    if (list->count == WPE__MAX_PROPERTIES) return NULL;
+    wpe__Property* p = &list->items[list->count++];
+    snprintf(p->name, sizeof p->name, "%s", name);
+    p->fallback.type = WPE_SCRIPT_VALUE_NIL;
+    return p;
+}
+
+static void wpe__collect_declared(const char* name, const WPE_ScriptValue* value,
+                                  const WPE_ScriptValue* fallback, void* user_data) {
+    wpe__Property* p = wpe__property_slot(user_data, name);
+    if (!p) return;
+    wpe__copy_script_value(&p->value, p->string, sizeof p->string, value);
+    wpe__copy_script_value(&p->fallback, p->fallback_string, sizeof p->fallback_string, fallback);
+}
+
+static void wpe__collect_set(const char* name, const WPE_ScriptValue* value, void* user_data) {
+    wpe__Property* p = wpe__property_slot(user_data, name);
+    if (p) wpe__copy_script_value(&p->value, p->string, sizeof p->string, value);
+}
+
+static bool wpe__script_values_equal(const WPE_ScriptValue* a, const WPE_ScriptValue* b) {
+    if (a->type != b->type) return false;
+    switch (a->type) {
+    case WPE_SCRIPT_VALUE_NUMBER:
+        return a->number == b->number;
+    case WPE_SCRIPT_VALUE_BOOL:
+        return a->boolean == b->boolean;
+    case WPE_SCRIPT_VALUE_STRING:
+        return strcmp(a->string, b->string) == 0;
+    case WPE_SCRIPT_VALUE_VECTOR:
+        return a->vector.x == b->vector.x && a->vector.y == b->vector.y && a->vector.z == b->vector.z;
+    case WPE_SCRIPT_VALUE_NIL:
+        return true;
+    }
+    return false;
+}
+
+/* Sends set_script_property; NULL `value` removes the property (or resets a declared one). */
+static void wpe__ui_set_property(WPE_EditorUi* ui, WPE_Entity entity, const char* name,
+                                 const WPE_ScriptValue* value) {
+    WPE_JsonWriter* w = wpe__ui_begin("set_script_property");
+    if (!w) return;
+    wpe_json_write_key(w, "id");
+    wpe_json_write_integer(w, entity);
+    wpe_json_write_key(w, "name");
+    wpe_json_write_string(w, name);
+    wpe_json_write_key(w, "value");
+    const WPE_ScriptValue nil = {.type = WPE_SCRIPT_VALUE_NIL};
+    if (!value) value = &nil;
+    switch (value->type) {
+    case WPE_SCRIPT_VALUE_NUMBER:
+        wpe_json_write_double(w, value->number);
+        break;
+    case WPE_SCRIPT_VALUE_BOOL:
+        wpe_json_write_bool(w, value->boolean);
+        break;
+    case WPE_SCRIPT_VALUE_STRING:
+        wpe_json_write_string(w, value->string);
+        break;
+    case WPE_SCRIPT_VALUE_VECTOR:
+        wpe_json_write_array_begin(w, true);
+        for (int i = 0; i < 3; ++i)
+            wpe_json_write_number(w, value->vector.v[i]);
+        wpe_json_write_array_end(w);
+        break;
+    case WPE_SCRIPT_VALUE_NIL:
+        wpe_json_write_null(w);
+        break;
+    }
+    char coalesce[32];
+    snprintf(coalesce, sizeof coalesce, "prop-%u", ui->edit_serial);
+    wpe_json_write_key(w, "coalesce");
+    wpe_json_write_string(w, coalesce);
+    wpe__ui_send(ui, w);
+}
+
+/* The script's properties: the declared ones (a reset button when changed), then the others set on this
+ * entity (a remove button), then a row to add one. Returns true when it sent a command. */
+static bool wpe__ui_script_properties(WPE_EditorUi* ui, WPE_Entity entity) {
+    WPE_ScriptHost* scripts = wpe_engine_scripts(wpe_editor_engine(ui->editor));
+    wpe__Properties* list = wpe_alloc(sizeof *list);
+    if (!list) return false;
+    list->count = 0;
+    (void)wpe_script_visit_declared(scripts, entity, wpe__collect_declared, list);
+    (void)wpe_script_visit_properties(scripts, entity, wpe__collect_set, list);
+    /* Drawn in full; the frame's change (at most one) is sent afterwards. */
+    int changed = -1;
+    bool removed = false;
+    WPE_ScriptValue edit = {0};
+    char edit_string[WPE__UI_PATH] = "";
+    igTextDisabled(list->count ? "properties" : "properties: none (declare them in the script, or add one)");
+    for (uint32_t i = 0; i < list->count; ++i) {
+        wpe__Property* p = &list->items[i];
+        const bool declared = p->fallback.type != WPE_SCRIPT_VALUE_NIL;
+        igPushID_Str(p->name);
+        bool edited = false;
+        WPE_ScriptValue value = p->value;
+        switch (p->value.type) {
+        case WPE_SCRIPT_VALUE_NUMBER:
+            edited = igDragScalar(p->name, ImGuiDataType_Double, &value.number, 0.05f, NULL, NULL, "%.6g", 0);
+            wpe__note_activation(ui);
+            break;
+        case WPE_SCRIPT_VALUE_BOOL:
+            edited = igCheckbox(p->name, &value.boolean);
+            if (edited) ++ui->edit_serial;
+            break;
+        case WPE_SCRIPT_VALUE_STRING: {
+            char buffer[WPE__UI_PATH];
+            snprintf(buffer, sizeof buffer, "%s", p->value.string);
+            igInputText(p->name, buffer, sizeof buffer, 0, NULL, NULL); /* Applied when the edit ends. */
+            if (igIsItemDeactivatedAfterEdit()) {
+                snprintf(edit_string, sizeof edit_string, "%s", buffer);
+                value.string = edit_string;
+                edited = true;
+                ++ui->edit_serial;
+            }
+            break;
+        }
+        case WPE_SCRIPT_VALUE_VECTOR:
+            edited = igDragFloat3(p->name, value.vector.v, 0.05f, 0, 0, "%.3g", 0);
+            wpe__note_activation(ui);
+            break;
+        case WPE_SCRIPT_VALUE_NIL:
+            break;
+        }
+        if (declared && !wpe__script_values_equal(&p->value, &p->fallback)) {
+            igSameLine(0, -1);
+            if (igSmallButton("Reset") && changed < 0) {
+                changed = (int)i;
+                removed = true;
+            }
+            if (igIsItemHovered(0)) igSetTooltip("Back to the script's default");
+        } else if (!declared) {
+            igSameLine(0, -1);
+            if (igSmallButton("x") && changed < 0) {
+                changed = (int)i;
+                removed = true;
+            }
+            if (igIsItemHovered(0)) igSetTooltip("Remove the property (the script doesn't declare it)");
+        }
+        if (edited && changed < 0) {
+            changed = (int)i;
+            edit = value;
+        }
+        igPopID();
+    }
+    /* Adding one the script doesn't declare: a name and a type; the value is edited above afterwards. */
+    static const char* const types[] = {"number", "bool", "string", "vector"};
+    igSetNextItemWidth(igGetContentRegionAvail().x * 0.45f);
+    igInputTextWithHint("##property_name", "new property", ui->add_property, sizeof ui->add_property, 0, NULL,
+                        NULL);
+    igSameLine(0, -1);
+    igSetNextItemWidth(igGetContentRegionAvail().x * 0.55f);
+    if (igBeginCombo("##property_type", types[ui->add_property_type], 0)) {
+        for (int t = 0; t < 4; ++t)
+            if (igSelectable_Bool(types[t], t == ui->add_property_type, 0, (ImVec2_c){0, 0}))
+                ui->add_property_type = t;
+        igEndCombo();
+    }
+    igSameLine(0, -1);
+    const bool add = igSmallButton("Add") && ui->add_property[0];
+    bool sent = false;
+    if (changed >= 0) {
+        wpe__ui_set_property(ui, entity, list->items[changed].name, removed ? NULL : &edit);
+        sent = true;
+    } else if (add) {
+        static const WPE_ScriptValue initial[] = {
+            {.type = WPE_SCRIPT_VALUE_NUMBER, .number = 0.0},
+            {.type = WPE_SCRIPT_VALUE_BOOL, .boolean = false},
+            {.type = WPE_SCRIPT_VALUE_STRING, .string = ""},
+            {.type = WPE_SCRIPT_VALUE_VECTOR, .vector = {.v = {0, 0, 0}}},
+        };
+        ++ui->edit_serial;
+        wpe__ui_set_property(ui, entity, ui->add_property, &initial[ui->add_property_type]);
+        ui->add_property[0] = '\0';
+        sent = true;
+    }
+    wpe_free(list);
+    return sent;
+}
+
 static void wpe__ui_inspector(WPE_EditorUi* ui) {
     if (!igBegin("Inspector", NULL, 0)) {
         igEnd();
@@ -1785,6 +1995,7 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
     const WPE_JsonValue* edited_value = NULL;
     const char* removed_key = NULL;
     const char* reverted_key = NULL;
+    bool property_sent = false; /* The script properties sent their own change. */
     for (uint32_t i = 0; doc && i < wpe_json_count(root); ++i) {
         const char* key = NULL;
         const WPE_JsonValue* value = wpe_json_member(root, i, &key);
@@ -1810,9 +2021,11 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
                 igEndPopup();
             }
             if (open) {
+                const bool script = strcmp(key, "script") == 0;
                 for (uint32_t m = 0; m < wpe_json_count(value); ++m) {
                     const char* member_key = NULL;
                     const WPE_JsonValue* member = wpe_json_member(value, m, &member_key);
+                    if (script && strcmp(member_key, "properties") == 0) continue; /* Drawn below. */
                     igPushID_Int((int)m);
                     if (wpe__draw_member(ui, key, member_key, member, &edit, edited_key != NULL) &&
                         !edited_key) {
@@ -1821,6 +2034,7 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
                     }
                     igPopID();
                 }
+                if (script && wpe__ui_script_properties(ui, entity)) property_sent = true;
                 if (strcmp(key, "collider") == 0 && igSmallButton("Fit to meshes")) command = "fit_collider";
                 if (strcmp(key, "collider") == 0 && igIsItemHovered(0))
                     igSetTooltip(
@@ -1831,7 +2045,9 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
         igPopID();
     }
     igPopItemWidth();
-    if (command) {
+    if (property_sent) {
+        /* One change per frame: the property was it. */
+    } else if (command) {
         wpe__ui_entity_command(ui, command, entity);
     } else if (reverted_key) {
         WPE_JsonWriter* w = wpe__ui_begin("revert_prefab");

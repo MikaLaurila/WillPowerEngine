@@ -1,8 +1,8 @@
 -- Game flow for the demo scenes: mouse capture (click to capture, Escape to release, Escape again
 -- to quit), scene switching (switch_scene), and a heads-up display showing the controls and every
 -- connected gamepad's live state (handy for testing controllers).
--- Properties: next_scene (asset path), title.
 local Game = {}
+Game.properties = { next_scene = "scenes/test_full.scene", title = "WillPowerEngine" }
 
 local BUTTONS = {
 	"south", "east", "west", "north", "back", "guide", "start", "left_stick", "right_stick",
@@ -15,8 +15,6 @@ local SHORT = {
 }
 
 function Game:on_start()
-	self.next_scene = self.next_scene or "scenes/test_full.scene"
-	self.title = self.title or "WillPowerEngine"
 	self.frames = 0
 	self.fps_time = 0
 	self.fps = 0

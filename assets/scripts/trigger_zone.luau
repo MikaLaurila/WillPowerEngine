@@ -1,9 +1,8 @@
 -- A trigger area: chimes and flashes its light whenever something enters, and counts visitors.
--- Properties: pitch (chime pitch).
 local Zone = {}
+Zone.properties = { pitch = 1 } -- chime pitch
 
 function Zone:on_start()
-	self.pitch = self.pitch or 1
 	self.visits = 0
 	self.flash = 0
 	wpe.set_light(self.entity, { type = wpe.LIGHT_POINT, color = vector.create(0.3, 1, 0.5), intensity = 0, range = 5 })

@@ -272,6 +272,128 @@ static WPE_Result wpe__cmd_remove_component(wpe__Call* call) {
     return wpe__null(call, result);
 }
 
+static void wpe__write_script_value(WPE_JsonWriter* w, const WPE_ScriptValue* value) {
+    switch (value->type) {
+    case WPE_SCRIPT_VALUE_NUMBER:
+        wpe_json_write_double(w, value->number);
+        break;
+    case WPE_SCRIPT_VALUE_BOOL:
+        wpe_json_write_bool(w, value->boolean);
+        break;
+    case WPE_SCRIPT_VALUE_STRING:
+        wpe_json_write_string(w, value->string);
+        break;
+    case WPE_SCRIPT_VALUE_VECTOR:
+        wpe_json_write_array_begin(w, true);
+        for (int i = 0; i < 3; ++i)
+            wpe_json_write_number(w, value->vector.v[i]);
+        wpe_json_write_array_end(w);
+        break;
+    case WPE_SCRIPT_VALUE_NIL:
+        wpe_json_write_null(w);
+        break;
+    }
+}
+
+typedef struct wpe__PropertyList {
+    WPE_JsonWriter* w;
+    char declared[64][64]; /* Names already listed, so set properties appear once. */
+    uint32_t declared_count;
+} wpe__PropertyList;
+
+static void wpe__list_declared(const char* name, const WPE_ScriptValue* value,
+                               const WPE_ScriptValue* fallback, void* user_data) {
+    wpe__PropertyList* list = user_data;
+    if (list->declared_count < 64) snprintf(list->declared[list->declared_count++], 64, "%s", name);
+    wpe_json_write_object_begin(list->w);
+    wpe_json_write_key(list->w, "name");
+    wpe_json_write_string(list->w, name);
+    wpe_json_write_key(list->w, "value");
+    wpe__write_script_value(list->w, value);
+    wpe_json_write_key(list->w, "default");
+    wpe__write_script_value(list->w, fallback);
+    wpe_json_write_object_end(list->w);
+}
+
+static void wpe__list_set(const char* name, const WPE_ScriptValue* value, void* user_data) {
+    wpe__PropertyList* list = user_data;
+    for (uint32_t i = 0; i < list->declared_count; ++i)
+        if (strcmp(list->declared[i], name) == 0) return;
+    wpe_json_write_object_begin(list->w);
+    wpe_json_write_key(list->w, "name");
+    wpe_json_write_string(list->w, name);
+    wpe_json_write_key(list->w, "value");
+    wpe__write_script_value(list->w, value);
+    wpe_json_write_object_end(list->w);
+}
+
+static WPE_Result wpe__cmd_get_script_properties(wpe__Call* call) {
+    WPE_Entity e = WPE_ENTITY_NULL;
+    WPE_Result result = wpe__entity_arg(call, "id", &e);
+    if (result == WPE_RESULT_OK && !wpe_ecs_has_component(wpe__ecs(call), e, WPE_COMP_SCRIPT))
+        result = wpe__fail(call, WPE_RESULT_ERROR_NOT_FOUND, "entity %u has no script", e);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    const WPE_ScriptHost* scripts = wpe_engine_scripts(call->editor->engine);
+    wpe__PropertyList list = {.w = call->w};
+    wpe_json_write_array_begin(call->w, false);
+    result = wpe_script_visit_declared(scripts, e, wpe__list_declared, &list);
+    if (result == WPE_RESULT_OK) result = wpe_script_visit_properties(scripts, e, wpe__list_set, &list);
+    wpe_json_write_array_end(call->w);
+    return result;
+}
+
+static WPE_Result wpe__cmd_set_script_property(wpe__Call* call) {
+    WPE_Entity e = WPE_ENTITY_NULL;
+    WPE_Result result = wpe__entity_arg(call, "id", &e);
+    const char* name = wpe__string_arg(call, "name");
+    const WPE_JsonValue* v = wpe_json_get(call->args, "value");
+    WPE_ScriptHost* scripts = wpe_engine_scripts(call->editor->engine);
+    if (result == WPE_RESULT_OK && (!name || !v))
+        result =
+            wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                      "\"name\" and \"value\" (a number, boolean, string, [x, y, z] or null) are required");
+    if (result == WPE_RESULT_OK && !wpe_ecs_has_component(wpe__ecs(call), e, WPE_COMP_SCRIPT))
+        result = wpe__fail(call, WPE_RESULT_ERROR_NOT_FOUND, "entity %u has no script", e);
+    WPE_ScriptValue value = {.type = WPE_SCRIPT_VALUE_NIL};
+    if (result == WPE_RESULT_OK) {
+        switch (wpe_json_type(v)) {
+        case WPE_JSON_NULL: /* Removes the property (a declared one goes back to its default). */
+            break;
+        case WPE_JSON_NUMBER:
+            value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_NUMBER, .number = wpe_json_number(v, 0.0)};
+            break;
+        case WPE_JSON_BOOL:
+            value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_BOOL, .boolean = wpe_json_bool(v, false)};
+            break;
+        case WPE_JSON_STRING:
+            value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_STRING, .string = wpe_json_string(v)};
+            break;
+        default: {
+            value.type = WPE_SCRIPT_VALUE_VECTOR;
+            bool ok = wpe_json_type(v) == WPE_JSON_ARRAY && wpe_json_count(v) == 3;
+            for (uint32_t i = 0; ok && i < 3; ++i) {
+                const WPE_JsonValue* c = wpe_json_at(v, i);
+                ok = wpe_json_type(c) == WPE_JSON_NUMBER;
+                value.vector.v[i] = (float)wpe_json_number(c, 0.0);
+            }
+            if (!ok)
+                result = wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                                   "\"value\" must be a number, boolean, string, [x, y, z] or null");
+            break;
+        }
+        }
+    }
+    if (result == WPE_RESULT_OK) result = wpe__editor_begin_change(call->editor);
+    if (result == WPE_RESULT_OK) {
+        result = wpe_script_set_property(scripts, e, name, &value);
+        if (result == WPE_RESULT_ERROR_INVALID_ARG)
+            wpe__fail(call, result, "\"%s\" is not a valid property name (letters, digits and _)", name);
+    }
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    const WPE_SceneContext context = wpe__editor_context(call->editor);
+    return wpe_scene_save_entity(&context, e, call->w); /* The entity as it is now. */
+}
+
 static WPE_Result wpe__cmd_set_parent(wpe__Call* call) {
     WPE_Entity e = WPE_ENTITY_NULL, parent = WPE_ENTITY_NULL;
     WPE_Result result = wpe__entity_arg(call, "id", &e);
@@ -953,6 +1075,11 @@ static const struct {
      "{id, component, value} -> the entity (replaces the component)"},
     {"remove_component", wpe__cmd_remove_component, "{id, component}"},
     {"set_parent", wpe__cmd_set_parent, "{id, parent: id|null, keep_world = true}"},
+    {"get_script_properties", wpe__cmd_get_script_properties,
+     "{id} -> [{name, value, default?}]: the declared properties (with defaults), then the other set ones"},
+    {"set_script_property", wpe__cmd_set_script_property,
+     "{id, name, value: number|bool|string|[x,y,z]|null} -> the entity (null removes, or resets a declared "
+     "one)"},
     {"save_prefab", wpe__cmd_save_prefab,
      "{id, path}: save the entity and its descendants as a prefab file; they become an instance of it"},
     {"apply_prefab", wpe__cmd_apply_prefab,

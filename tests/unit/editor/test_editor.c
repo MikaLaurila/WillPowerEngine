@@ -426,6 +426,106 @@ static void test_editor_hot_reloads_scripts(void) {
     wpe_editor_destroy(editor);
 }
 
+/* The entity named `name` (ids change with undo). */
+static WPE_Entity entity_named(WPE_Editor* editor, const char* name) {
+    WPE_JsonDocument* list = run(editor, "{\"cmd\": \"list_entities\"}", true);
+    WPE_Entity id = WPE_ENTITY_NULL;
+    for (uint32_t i = 0; i < wpe_json_count(result_of(list)); ++i) {
+        const WPE_JsonValue* e = wpe_json_at(result_of(list), i);
+        if (strcmp(wpe_json_string(wpe_json_get(e, "name")), name) == 0)
+            id = (WPE_Entity)wpe_json_number(wpe_json_get(e, "id"), 0);
+    }
+    wpe_json_free(list);
+    return id;
+}
+
+/* The script properties of the entity named `name`, as get_script_properties lists them. */
+static WPE_JsonDocument* script_properties(WPE_Editor* editor, const char* name) {
+    char command[128];
+    snprintf(command, sizeof command, "{\"cmd\": \"get_script_properties\", \"id\": %u}",
+             entity_named(editor, name));
+    return run(editor, command, true);
+}
+
+static void test_editor_script_properties(void) {
+    WPE_Editor* editor = open_editor();
+    write_text(ROOT "/project/scripts/props.luau",
+               "local P = {}\nP.properties = { speed = 2, tag = 'a' }\nreturn P\n");
+    WPE_JsonDocument* created = run(editor,
+                                    "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"p\", \"script\": "
+                                    "{\"path\": \"scripts/props.luau\"}}}",
+                                    true);
+    const WPE_Entity p = (WPE_Entity)wpe_json_number(result_of(created), 0);
+    wpe_json_free(created);
+
+    /* Declared properties are listed with their defaults, sorted by name. */
+    WPE_JsonDocument* props = script_properties(editor, "p");
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_json_count(result_of(props)));
+    const WPE_JsonValue* speed = wpe_json_at(result_of(props), 0);
+    WPE_TEST_ASSERT_EQ_STR("speed", wpe_json_string(wpe_json_get(speed, "name")));
+    WPE_TEST_ASSERT_NEAR(2.0, wpe_json_number(wpe_json_get(speed, "default"), 0), 0);
+    wpe_json_free(props);
+
+    char command[256];
+    snprintf(command, sizeof command,
+             "{\"cmd\": \"set_script_property\", \"id\": %u, \"name\": \"speed\", \"value\": 5}", p);
+    WPE_JsonDocument* updated = run(editor, command, true);
+    const WPE_JsonValue* saved = wpe_json_get(wpe_json_get(result_of(updated), "script"), "properties");
+    WPE_TEST_ASSERT_NEAR(5.0, wpe_json_number(wpe_json_get(saved, "speed"), 0), 0);
+    wpe_json_free(updated);
+    snprintf(command, sizeof command,
+             "{\"cmd\": \"set_script_property\", \"id\": %u, \"name\": \"extra\", \"value\": [1, 2, 3]}", p);
+    run_ok(editor, command);
+    props = script_properties(editor, "p");
+    WPE_TEST_ASSERT_EQ_UINT(3, wpe_json_count(result_of(props)));
+    const WPE_JsonValue* extra = wpe_json_at(result_of(props), 2); /* Undeclared ones come last. */
+    WPE_TEST_ASSERT_EQ_STR("extra", wpe_json_string(wpe_json_get(extra, "name")));
+    WPE_TEST_ASSERT(wpe_json_get(extra, "default") == NULL);
+    WPE_TEST_ASSERT_NEAR(3.0, wpe_json_number(wpe_json_at(wpe_json_get(extra, "value"), 2), 0), 0);
+    wpe_json_free(props);
+
+    /* null resets a declared property and removes another; neither is saved then. */
+    snprintf(command, sizeof command,
+             "{\"cmd\": \"set_script_property\", \"id\": %u, \"name\": \"speed\", \"value\": null}", p);
+    run_ok(editor, command);
+    snprintf(command, sizeof command,
+             "{\"cmd\": \"set_script_property\", \"id\": %u, \"name\": \"extra\", \"value\": null}", p);
+    updated = run(editor, command, true);
+    saved = wpe_json_get(wpe_json_get(result_of(updated), "script"), "properties");
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_json_count(saved));
+    wpe_json_free(updated);
+    props = script_properties(editor, "p");
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_json_count(result_of(props)));
+    WPE_TEST_ASSERT_NEAR(2.0, wpe_json_number(wpe_json_get(wpe_json_at(result_of(props), 0), "value"), 0), 0);
+    wpe_json_free(props);
+
+    /* Each change is an undo step. */
+    run_ok(editor, "{\"cmd\": \"undo\"}");
+    run_ok(editor, "{\"cmd\": \"undo\"}");
+    props = script_properties(editor, "p");
+    WPE_TEST_ASSERT_EQ_UINT(3, wpe_json_count(result_of(props)));
+    WPE_TEST_ASSERT_NEAR(5.0, wpe_json_number(wpe_json_get(wpe_json_at(result_of(props), 0), "value"), 0), 0);
+    wpe_json_free(props);
+
+    /* Bad arguments fail without a change. */
+    wpe_log_set_stderr_enabled(false);
+    const uint32_t undo_count = wpe_editor_undo_count(editor);
+    const char* const bad[] = {"\"name\": \"speed\", \"value\": {}", "\"name\": \"speed\", \"value\": [1, 2]",
+                               "\"name\": \"2x\", \"value\": 1", "\"name\": \"speed\""};
+    const WPE_Entity restored = entity_named(editor, "p");
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; ++i) {
+        snprintf(command, sizeof command, "{\"cmd\": \"set_script_property\", \"id\": %u, %s}", restored,
+                 bad[i]);
+        wpe_json_free(run(editor, command, false));
+    }
+    WPE_TEST_ASSERT_EQ_UINT(undo_count, wpe_editor_undo_count(editor));
+    snprintf(command, sizeof command, "{\"cmd\": \"get_script_properties\", \"id\": %u}",
+             entity_named(editor, "camera")); /* No script. */
+    wpe_json_free(run(editor, command, false));
+    wpe_log_set_stderr_enabled(true);
+    wpe_editor_destroy(editor);
+}
+
 /* Commands that replace the scene never drop unsaved changes by accident. */
 static void test_editor_guards_unsaved_changes(void) {
     WPE_Editor* editor = open_editor();
@@ -778,14 +878,17 @@ static void test_editor_prefab_commands(void) {
     wpe_editor_destroy(editor);
 }
 
-WPE_TEST_MAIN(
-    WPE_TEST_CASE(test_editor_coalesces_continuous_edits), WPE_TEST_CASE(test_editor_prefab_commands),
-    WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
-    WPE_TEST_CASE(test_editor_play_does_not_keep_keys_held),
-    WPE_TEST_CASE(test_editor_fits_colliders_to_meshes), WPE_TEST_CASE(test_editor_guards_unsaved_changes),
-    WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
-    WPE_TEST_CASE(test_editor_view_settings_and_overlays), WPE_TEST_CASE(test_editor_physics_follows_edits),
-    WPE_TEST_CASE(test_editor_hot_reloads_scripts), WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
-    WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
-    WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
-    WPE_TEST_CASE(test_editor_play_mode_restores_the_scene))
+WPE_TEST_MAIN(WPE_TEST_CASE(test_editor_coalesces_continuous_edits),
+              WPE_TEST_CASE(test_editor_prefab_commands),
+              WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
+              WPE_TEST_CASE(test_editor_play_does_not_keep_keys_held),
+              WPE_TEST_CASE(test_editor_fits_colliders_to_meshes),
+              WPE_TEST_CASE(test_editor_guards_unsaved_changes),
+              WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
+              WPE_TEST_CASE(test_editor_view_settings_and_overlays),
+              WPE_TEST_CASE(test_editor_physics_follows_edits),
+              WPE_TEST_CASE(test_editor_hot_reloads_scripts), WPE_TEST_CASE(test_editor_script_properties),
+              WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
+              WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
+              WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
+              WPE_TEST_CASE(test_editor_play_mode_restores_the_scene))

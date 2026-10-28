@@ -69,6 +69,17 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (declared script properties)
+- Scripts declare their properties with defaults (`Spinner.properties = {speed = 1.2}`): every
+  instance starts with them, hot reload adds newly declared ones, and a value equal to its default is
+  not saved. Setting a declared property to nil resets it. `wpe_script_visit_declared` lists them,
+  sorted by name, with current values and defaults.
+- Editor: the inspector shows a script's declared properties ready to edit, with Reset for changed
+  ones, × for undeclared ones, and a row to add a property (name and type). Commands
+  `get_script_properties` and `set_script_property` (undoable; null removes or resets).
+- The demo scripts and the `--init` template declare their properties instead of `self.x = self.x or`.
+- Tests: defaults, values equal to defaults, resets, hot reload, sorting; the editor commands with undo.
+
 ### Added (editor: particle icons)
 - Particle emitters have viewport icons (a sparkle in their starting color) next to the light icons;
   clicking one selects the emitter. The view setting `lights` is now `icons` (View > Icons, L).

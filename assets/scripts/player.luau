@@ -1,12 +1,10 @@
 -- A rolling ball the player drives: moves relative to the camera (move_x / move_y), jumps when it
 -- stands on something (jump), boosts (boost), throws crates (fire) and rumbles the gamepad on hard
--- landings. Properties (set in the scene file): speed, jump_speed, player (1-4: whose input).
+-- landings.
 local Player = {}
+Player.properties = { speed = 6, jump_speed = 6.5, player = 1 } -- player: 1-4, whose input
 
 function Player:on_start()
-	self.speed = self.speed or 6
-	self.jump_speed = self.jump_speed or 6.5
-	self.player = self.player or 1
 	self.spawn = wpe.get_position(self.entity)
 	self.jump_requested = false
 	self.fall_speed = 0

@@ -127,7 +127,8 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - Post-processing: `wpe_postfx_apply(chain, renderer, effects, n, camera)` runs after `end_frame`. Draw HUD/2D in a second, non-clearing frame if it shouldn't be post-processed.
   - Procedural models: `assets/procedural.h` provides a plane, a box and `wpe_model_create_mesh`.
 - **script** (`script/script.h`, Luau; API reference in `docs/scripting.md`):
-  - There is one `WPE_ScriptHost` per world. It registers `WPE_COMP_SCRIPT` and must be destroyed *before* the world. Scripts, prefabs and sounds are asset paths read through `desc.assets`' VFS; the host keeps prefab models and used sounds referenced until it is destroyed.
+  - There is one `WPE_ScriptHost` per world. It registers `WPE_COMP_SCRIPT` and must be destroyed *before* the world.
+  - Scripts declare properties as `Class.properties = {name = default}`: instances get the defaults at creation (and on hot reload), only values that differ from them are recorded and saved, and the editor lists them through `wpe_script_visit_declared`. Scripts, prefabs and sounds are asset paths read through `desc.assets`' VFS; the host keeps prefab models and used sounds referenced until it is destroyed.
   - The game loop is `wpe_fixed_step_advance` → for each step: `wpe_script_host_fixed_update` → `wpe_physics_step` → `wpe_script_host_dispatch_physics` → then `wpe_script_host_update` → animation → transforms → `wpe_audio_update` → render. Destroy order: script host, audio, physics, world, asset manager, VFS.
   - Luau is built with `LUA_USE_LONGJMP=1`, so script errors unwind with `longjmp` rather than C++ exceptions. API bindings in `script_api.c` must therefore validate all arguments (which may raise) *before* touching engine state, and must never hold engine allocations across calls that can raise.
   - Host-side Luau operations run inside `lua_cpcall`.

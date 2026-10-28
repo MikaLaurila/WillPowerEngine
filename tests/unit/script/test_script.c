@@ -729,6 +729,84 @@ static void test_script_properties(void) {
     free_fixture(&f);
 }
 
+static void log_declared(const char* name, const WPE_ScriptValue* value, const WPE_ScriptValue* fallback,
+                         void* user_data) {
+    log_property(name, value, user_data);
+    PropertyLog* log = user_data;
+    /* "name=value(=default);": the ';' moves after the default. */
+    const size_t end = strlen(log->text) - 1;
+    PropertyLog fallback_log = {{0}};
+    log_property("", fallback, &fallback_log); /* "=value;" */
+    fallback_log.text[strlen(fallback_log.text) - 1] = '\0';
+    snprintf(log->text + end, sizeof log->text - end, "(%s);", fallback_log.text);
+}
+
+static void test_script_declared_properties(void) {
+    /* Declared defaults: every instance has them before on_start; tables and functions aren't properties. */
+    write_script("declared.luau",
+                 "local S = {}\n"
+                 "S.properties = { speed = 1.5, label = 'go', on = false, dir = vector.create(0, 1, 0),"
+                 " nested = {}, entity = 3 }\n"
+                 "function S:on_start()\n"
+                 "  assert(self.speed == 3 and self.label == 'go' and self.on == false)\n"
+                 "  assert(self.dir == vector.create(0, 1, 0) and self.nested == nil)\n"
+                 "end\n"
+                 "return S\n");
+    Fixture f = make_fixture(0, 0);
+    const WPE_Entity e = spawn(&f, NULL);
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, e, "declared.luau"));
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(
+        f.host, e, "speed", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_NUMBER, .number = 3}));
+    /* Equal to its default: nothing to save. */
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(
+        f.host, e, "label", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_STRING, .string = "go"}));
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(
+        f.host, e, "extra", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_NUMBER, .number = 7}));
+    PropertyLog log = {{0}};
+    WPE_TEST_ASSERT_OK(wpe_script_visit_properties(f.host, e, log_property, &log));
+    WPE_TEST_ASSERT_EQ_STR("speed=3;extra=7;", log.text);
+    log.text[0] = '\0';
+    WPE_TEST_ASSERT_OK(wpe_script_visit_declared(f.host, e, log_declared, &log));
+    WPE_TEST_ASSERT_EQ_STR("dir=(0,1,0)(=(0,1,0));label='go'(='go');on=false(=false);speed=3(=1.5);",
+                           log.text);
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.016f));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(f.host).errors);
+
+    /* Setting a value back to its default forgets it; nil resets a declared property to its default. */
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(
+        f.host, e, "on", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_BOOL, .boolean = true}));
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(f.host, e, "speed", &(WPE_ScriptValue){0}));
+    log.text[0] = '\0';
+    WPE_TEST_ASSERT_OK(wpe_script_visit_properties(f.host, e, log_property, &log));
+    WPE_TEST_ASSERT_EQ_STR("extra=7;on=true;", log.text);
+    WPE_TEST_ASSERT_OK(wpe_script_set_property(
+        f.host, e, "on", &(WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_BOOL, .boolean = false}));
+    log.text[0] = '\0';
+    WPE_TEST_ASSERT_OK(wpe_script_visit_declared(f.host, e, log_declared, &log));
+    WPE_TEST_ASSERT_EQ_STR("dir=(0,1,0)(=(0,1,0));label='go'(='go');on=false(=false);speed=1.5(=1.5);",
+                           log.text);
+
+    /* Hot reload: a newly declared property reaches running instances; values they hold stay. */
+    write_script("declared.luau", "local S = {}\n"
+                                  "S.properties = { speed = 9, jump = 2 }\n"
+                                  "return S\n");
+    WPE_TEST_ASSERT_OK(wpe_script_host_reload(f.host, "declared.luau"));
+    log.text[0] = '\0';
+    WPE_TEST_ASSERT_OK(wpe_script_visit_declared(f.host, e, log_declared, &log));
+    WPE_TEST_ASSERT_EQ_STR("jump=2(=2);speed=1.5(=9);", log.text);
+
+    /* No declaration: nothing visited. */
+    write_script("plain.luau", "return {}\n");
+    const WPE_Entity plain = spawn(&f, NULL);
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, plain, "plain.luau"));
+    log.text[0] = '\0';
+    WPE_TEST_ASSERT_OK(wpe_script_visit_declared(f.host, plain, log_declared, &log));
+    WPE_TEST_ASSERT_EQ_STR("", log.text);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND,
+                           wpe_script_visit_declared(f.host, spawn(&f, NULL), log_declared, &log));
+    free_fixture(&f);
+}
+
 /* ---- Input, application services and 2D drawing ----------------------------------------------------- */
 
 typedef struct AppLog {
@@ -916,5 +994,5 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_script_lifecycle_order), WPE_TEST_CASE(test_scr
               WPE_TEST_CASE(test_script_fixed_step_clock), WPE_TEST_CASE(test_script_quat_euler_roundtrip),
               WPE_TEST_CASE(test_script_physics_api_and_callbacks), WPE_TEST_CASE(test_script_physics_errors),
               WPE_TEST_CASE(test_script_audio_api), WPE_TEST_CASE(test_script_properties),
-              WPE_TEST_CASE(test_script_input_app_and_draw),
+              WPE_TEST_CASE(test_script_declared_properties), WPE_TEST_CASE(test_script_input_app_and_draw),
               WPE_TEST_CASE(test_script_ecs_unregister_component))

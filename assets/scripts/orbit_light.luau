@@ -1,10 +1,8 @@
--- Turns its entity into a colored point light circling the origin. Properties: radius, speed, height.
+-- Turns its entity into a colored point light circling the origin.
 local OrbitLight = {}
+OrbitLight.properties = { radius = 3.5, speed = 0.7, height = 0.9 }
 
 function OrbitLight:on_start()
-	self.radius = self.radius or 3.5
-	self.speed = self.speed or 0.7
-	self.height = self.height or 0.9
 	self.offset = (self.entity % 3) * 2.094
 	wpe.set_light(self.entity, { type = wpe.LIGHT_POINT, intensity = 2.5, range = 6 })
 end

@@ -39,13 +39,11 @@ static const char wpe__cube_prim[] =
     "{\"shape\": \"box\", \"size\": [1, 1, 1], \"color\": [0.93, 0.6, 0.22], \"roughness\": 0.6}\n";
 
 static const char wpe__spin_script[] =
-    "-- Spins its entity around the Y axis. Properties: speed (radians per second).\n"
+    "-- Spins its entity around the Y axis.\n"
     "-- Edit this file while the game runs: the editor and `wpe_runtime --watch` reload it.\n"
     "local Spin = {}\n"
-    "\n"
-    "function Spin:on_start()\n"
-    "\tself.speed = self.speed or 1\n"
-    "end\n"
+    "-- Declared properties: every entity using the script gets them, and the editor shows them.\n"
+    "Spin.properties = { speed = 1 } -- radians per second\n"
     "\n"
     "function Spin:on_update(dt)\n"
     "\twpe.rotate(self.entity, vector.create(0, 1, 0), self.speed * dt)\n"

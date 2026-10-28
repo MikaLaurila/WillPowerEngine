@@ -45,15 +45,22 @@ A scene file can configure each script instance through `properties` (see [scene
 "script": {"path": "scripts/spinner.luau", "properties": {"speed": 0.8, "label": "slow", "axis": [0, 1, 0]}}
 ```
 
-Properties are plain fields of `self`, set before `on_start`. Numbers, booleans, strings and `[x, y, z]` vectors are allowed. Read them with a default so the script also works without them:
+Properties are plain fields of `self`, set before `on_start`. Numbers, booleans, strings and `[x, y, z]` vectors are allowed.
+
+A script declares the properties it takes, with their defaults, in a `properties` table on its class:
 
 ```lua
+local Spinner = {}
+Spinner.properties = { speed = 1.2, label = "", axis = vector.create(0, 1, 0) }
+
 function Spinner:on_start()
-	self.speed = self.speed or 1.2
+	wpe.log(self.speed) -- 1.2 unless the scene sets another value
 end
 ```
 
-When a scene is saved, each property is written with its current value, so a script that changes `self.speed` saves the new value. A property that now holds something else (a table, a function, nil) is left out. From C, `wpe_script_set_property()` and `wpe_script_visit_properties()` do the same.
+Every instance starts with the declared defaults, and the scene's values are then set over them. The editor's inspector lists the declared properties, with a Reset button on those that differ from their default. Entries that aren't numbers, booleans, strings or vectors are ignored, and so are names that can't be properties (such as `entity`). When hot reload declares a new property, the running instances receive its default, and properties they already hold keep their values.
+
+When a scene is saved, each property is written with its current value, so a script that changes `self.speed` saves the new value. A property equal to its declared default is not written, and neither is one that now holds something else (a table, a function or nil). Scripts that declare nothing still accept any property from the scene; read those with a fallback (`self.speed or 1`). From C, `wpe_script_set_property()` (NIL removes a property, or resets a declared one), `wpe_script_visit_properties()` and `wpe_script_visit_declared()` do the same.
 
 ## Lifecycle and rules
 

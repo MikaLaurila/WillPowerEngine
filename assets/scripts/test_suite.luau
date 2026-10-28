@@ -2,8 +2,9 @@
 -- extreme transforms, a mass spawn and destroy, prefab instantiate/destroy cycles, camera
 -- switching, the input API without input, and on-screen progress. Progress is reported through the
 -- entity's name ("suite:<checks>:<cycles>"); any failed check raises an error, which the scene
--- test counts. Properties: spawn_count.
+-- test counts.
 local Suite = {}
+Suite.properties = { spawn_count = 2000 }
 
 local function near(a, b, eps)
 	return math.abs(a - b) <= (eps or 1e-4)
@@ -15,7 +16,6 @@ function Suite:check(condition, what)
 end
 
 function Suite:on_start()
-	self.spawn_count = self.spawn_count or 2000
 	self.checks = 0
 	self.cycles = 0
 	self.updates = 0
