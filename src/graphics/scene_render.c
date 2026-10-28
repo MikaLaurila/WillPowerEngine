@@ -394,6 +394,7 @@ static WPE_Result wpe__render_shadow_map(WPE_SceneRenderer* sr, WPE_JobSystem* j
         wpe_renderer_begin_frame(sr->shadow_pass, &(WPE_ClearDesc){.clear_depth = true, .depth = 1.0f});
     for (uint32_t i = 0; i < instance_count && result == WPE_RESULT_OK; ++i) {
         const wpe__MeshInstance* inst = &instances[i];
+        if (!inst->mesh->cast_shadows) continue;
         const WPE_Model* model = inst->mesh->model;
         const WPE_Mesh* mesh = &model->meshes[inst->mesh->mesh];
         const WPE_Mat4 mvp = wpe_mat4_mul(light_view_projection, &inst->world);
@@ -410,7 +411,9 @@ static WPE_Result wpe__render_shadow_map(WPE_SceneRenderer* sr, WPE_JobSystem* j
             /* Front faces are culled for casters, which moves acne-prone depth to back faces. */
             WPE_RenderState state = wpe_render_state_default();
             state.depth_only = true;
-            state.cull = material->double_sided ? WPE_CULL_NONE : (mirrored ? WPE_CULL_BACK : WPE_CULL_FRONT);
+            state.cull = material->double_sided || inst->mesh->double_sided ? WPE_CULL_NONE
+                         : mirrored                                         ? WPE_CULL_BACK
+                                                                            : WPE_CULL_FRONT;
             const bool masked = material->alpha_mode != WPE_ALPHA_OPAQUE;
             const WPE_MaterialUniforms uniforms = {.mvp = mvp,
                                                    .model = model,
@@ -754,10 +757,12 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             .has_sun = sun.present,
             .sun_direction = sun.direction,
             .sun_color = sun.color,
-            .sun_shadow = sr->has_shadow ? &sr->shadow : NULL,
+            .sun_shadow = sr->has_shadow && inst->mesh->receive_shadows ? &sr->shadow : NULL,
             .shadow_matrix = shadow_matrix,
             .fog = settings->fog,
             .model = model,
+            .unlit = inst->mesh->unlit,
+            .double_sided = inst->mesh->double_sided,
             .joint_palette = inst->palette,
             .joint_count = inst->palette ? inst->mesh->joint_count : 0,
         };
@@ -773,7 +778,9 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             const WPE_Material* material = wpe__primitive_material(model, prim);
 
             WPE_RenderState state = wpe_render_state_default();
-            state.cull = material->double_sided ? WPE_CULL_NONE : (mirrored ? WPE_CULL_FRONT : WPE_CULL_BACK);
+            state.cull = material->double_sided || inst->mesh->double_sided ? WPE_CULL_NONE
+                         : mirrored                                         ? WPE_CULL_FRONT
+                                                                            : WPE_CULL_BACK;
             bool transparent = false;
             if (material->alpha_mode == WPE_ALPHA_BLEND) {
                 if (settings->dither_transparency) {

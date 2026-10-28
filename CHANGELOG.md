@@ -61,6 +61,14 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Engine: `wpe_engine_set_draw_scene`. UI: `wpe_ui_pick` can count every element (editors).
 - Tests: the 2D and 3D views (camera, UI, a scene without a camera, play mode), view settings.
 
+### Added (mesh options)
+- Mesh renderers (`mesh` in scenes) take `unlit`, `cast_shadows`, `receive_shadows` and
+  `double_sided`. Unlit meshes show their material's colors without lighting but still receive the
+  sun's shadow (darkened toward the ambient light) unless told not to; double-sided draws and lights
+  both faces whatever the material says. `wpe_mesh_renderer_default` gives the defaults.
+- Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
+  behind.
+
 ### Added (editor: particle icons)
 - Particle emitters have viewport icons (a sparkle in their starting color) next to the light icons;
   clicking one selects the emitter. The view setting `lights` is now `icons` (View > Icons, L).

@@ -75,6 +75,15 @@ static void wpe__billboard_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* comp
     billboard->texture = NULL;
 }
 
+WPE_MeshRenderer wpe_mesh_renderer_default(WPE_AssetHandle model, uint32_t mesh) {
+    return (WPE_MeshRenderer){.model_asset = model,
+                              .mesh = mesh,
+                              .skin = WPE_MODEL_NONE,
+                              .visible = true,
+                              .cast_shadows = true,
+                              .receive_shadows = true};
+}
+
 WPE_Camera wpe_camera_default(void) {
     return (WPE_Camera){.fov_y = WPE_PI / 3.0f, .near_z = 0.1f, .far_z = 500.0f, .ortho_height = 10.0f};
 }
@@ -238,8 +247,7 @@ WPE_Result wpe_model_instantiate(WPE_Ecs* ecs, WPE_AssetManager* assets, WPE_Ass
             result = wpe__spawn_node_entity(ecs, node, parent != WPE_ENTITY_NULL ? parent : root,
                                             &node_entities[n]);
             if (result == WPE_RESULT_OK && node->mesh != WPE_MODEL_NONE) {
-                const WPE_MeshRenderer mesh = {
-                    .model_asset = model_asset, .mesh = node->mesh, .skin = WPE_MODEL_NONE, .visible = true};
+                const WPE_MeshRenderer mesh = wpe_mesh_renderer_default(model_asset, node->mesh);
                 result = wpe_ecs_add_component(ecs, node_entities[n], WPE_COMP_MESH, &mesh, NULL);
             }
             for (uint32_t c = node->first_child; c != WPE_MODEL_NONE && top < model->node_count;

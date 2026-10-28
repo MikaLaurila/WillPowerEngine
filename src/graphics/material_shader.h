@@ -81,6 +81,11 @@ typedef struct WPE_MaterialUniforms {
     const WPE_Material* material;  /* Borrowed until the frame ends. */
     const WPE_Mat4* joint_palette; /* World-space skinning matrices, or NULL for static meshes. */
     uint32_t joint_count;
+    /* Per-mesh overrides (WPE_MeshRenderer). Unlit: the material's colors without lighting, darkened toward
+     * the ambient light where the sun's shadow (if sun_shadow is set) falls. Double-sided: both faces lit, as
+     * for a double-sided material. */
+    bool unlit;
+    bool double_sided;
 } WPE_MaterialUniforms;
 
 /** @return The material program (static storage); supports subdivision. @thread_safety Any thread */

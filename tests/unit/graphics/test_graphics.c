@@ -2,6 +2,7 @@
 #include "wpe_test_assets.h"
 
 #include "assets/font.h"
+#include "assets/procedural.h"
 #include "graphics/animation.h"
 #include "graphics/debug_lines.h"
 #include "graphics/draw2d.h"
@@ -245,6 +246,113 @@ static WPE_Entity spawn_camera(WPE_Ecs* ecs, WPE_Vec3 position, WPE_Quat rotatio
     WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, camera, WPE_COMP_TRANSFORM, &t, NULL));
     WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, camera, WPE_COMP_CAMERA, &c, NULL));
     return camera;
+}
+
+/* ---- Mesh options ---------------------------------------------------------------------------------------
+ */
+
+static uint32_t count_color(const WPE_Framebuffer* fb, WPE_Color color);
+static const WPE_Framebuffer* render_scene(WPE_Renderer* renderer, WPE_SceneRenderer* sr, WPE_Ecs* ecs,
+                                           WPE_Entity camera, WPE_SceneRenderStats* stats);
+
+static WPE_Entity spawn_mesh(WPE_Ecs* ecs, WPE_AssetHandle model, WPE_Vec3 position) {
+    const WPE_Entity e = wpe_ecs_spawn(ecs);
+    WPE_Transform t = wpe_transform_identity();
+    t.position = position;
+    const WPE_MeshRenderer mesh = wpe_mesh_renderer_default(model, 0);
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, e, WPE_COMP_TRANSFORM, &t, NULL));
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, e, WPE_COMP_MESH, &mesh, NULL));
+    return e;
+}
+
+/* The framebuffer pixel showing a world point (the point must be in view). */
+static WPE_Color pixel_at(const WPE_Framebuffer* fb, const WPE_Ecs* ecs, WPE_Entity camera, WPE_Vec3 p) {
+    WPE_Mat4 view, projection;
+    WPE_TEST_ASSERT(
+        wpe_scene_camera_matrices(ecs, camera, (float)fb->width / (float)fb->height, &view, &projection));
+    const WPE_Mat4 vp = wpe_mat4_mul(&projection, &view);
+    const WPE_Vec4 clip = wpe_mat4_mul_vec4(&vp, wpe_vec4(p.x, p.y, p.z, 1.0f));
+    const uint32_t x = (uint32_t)((clip.x / clip.w * 0.5f + 0.5f) * (float)fb->width);
+    const uint32_t y = (uint32_t)((0.5f - clip.y / clip.w * 0.5f) * (float)fb->height);
+    WPE_TEST_ASSERT(x < fb->width && y < fb->height);
+    return fb->color[y * fb->width + x];
+}
+
+static WPE_MeshRenderer* mesh_of(WPE_Ecs* ecs, WPE_Entity e) {
+    return wpe_ecs_get_component(ecs, e, WPE_COMP_MESH);
+}
+
+static void test_graphics_mesh_shadow_unlit_and_sides(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    const WPE_Material gray = wpe_material_solid(wpe_vec4(0.8f, 0.8f, 0.8f, 1), 0.0f, 1.0f);
+    WPE_Model* plane = NULL;
+    WPE_Model* cube = NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_create_plane(12.0f, 1, &gray, &plane));
+    WPE_TEST_ASSERT_OK(wpe_model_create_box(wpe_vec3(1, 1, 1), &gray, &cube));
+    const WPE_AssetHandle plane_asset = wpe_test_add_model(t.assets, "test/plane", plane);
+    const WPE_AssetHandle cube_asset = wpe_test_add_model(t.assets, "test/cube", cube);
+    WPE_Ecs* ecs = make_world(t.assets);
+    const WPE_Entity ground = spawn_mesh(ecs, plane_asset, wpe_vec3(0, 0, 0));
+    const WPE_Entity box = spawn_mesh(ecs, cube_asset, wpe_vec3(0, 2, 0));
+    /* A sun going down and toward +X: the box's shadow falls about two units right of it. */
+    const WPE_Entity sun = wpe_ecs_spawn(ecs);
+    WPE_Transform st = wpe_transform_identity();
+    const WPE_Quat down = wpe_quat_from_axis_angle(wpe_vec3(1, 0, 0), -WPE_PI * 0.5f);
+    st.rotation = wpe_quat_mul(wpe_quat_from_axis_angle(wpe_vec3(0, 0, 1), WPE_PI * 0.25f), down);
+    WPE_Light light = wpe_light_default(WPE_LIGHT_DIRECTIONAL);
+    light.cast_shadows = true;
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, sun, WPE_COMP_TRANSFORM, &st, NULL));
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, sun, WPE_COMP_LIGHT, &light, NULL));
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 9, 0), down); /* Looking straight down. */
+
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_SceneRenderStats stats;
+    const WPE_Vec3 shadowed = wpe_vec3(2, 0, 0), open = wpe_vec3(-2.5f, 0, 0);
+
+    const WPE_Framebuffer* fb = render_scene(renderer, sr, ecs, camera, &stats);
+    const WPE_Color lit = pixel_at(fb, ecs, camera, open);
+    WPE_TEST_ASSERT(pixel_at(fb, ecs, camera, shadowed) != lit); /* The box's shadow. */
+    /* A box that casts no shadow, or a ground that receives none: no shadow there. */
+    mesh_of(ecs, box)->cast_shadows = false;
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(lit, pixel_at(fb, ecs, camera, shadowed));
+    mesh_of(ecs, box)->cast_shadows = true;
+    mesh_of(ecs, ground)->receive_shadows = false;
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(lit, pixel_at(fb, ecs, camera, shadowed));
+
+    /* Unlit: exactly the material's color in the open, still shadowed where the box's shadow falls. */
+    mesh_of(ecs, ground)->receive_shadows = true;
+    mesh_of(ecs, ground)->unlit = true;
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    const WPE_Color base = wpe_color_from_vec4(wpe_vec4(0.8f, 0.8f, 0.8f, 1));
+    WPE_TEST_ASSERT_EQ_UINT(base, pixel_at(fb, ecs, camera, open));
+    const WPE_Color dark = pixel_at(fb, ecs, camera, shadowed);
+    WPE_TEST_ASSERT(dark != base && (dark & 0xFF) < (base & 0xFF));
+    mesh_of(ecs, ground)->receive_shadows = false;
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(base, pixel_at(fb, ecs, camera, shadowed));
+
+    /* From below, a single-sided ground is culled; a double-sided one is drawn. */
+    ((WPE_Transform*)wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM))->position = wpe_vec3(0, -9, 0);
+    ((WPE_Transform*)wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM))->rotation =
+        wpe_quat_from_axis_angle(wpe_vec3(1, 0, 0), WPE_PI * 0.5f);
+    mesh_of(ecs, box)->visible = false;
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(0, count_color(fb, base));
+    mesh_of(ecs, ground)->double_sided = true;
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT(count_color(fb, base) > 1000);
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_asset_release(t.assets, plane_asset);
+    wpe_asset_release(t.assets, cube_asset);
+    wpe_test_assets_destroy(&t);
 }
 
 /* ---- Billboards ------------------------------------------------------------------------------------- */
@@ -836,6 +944,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_shininess_range), WPE_TEST_CASE(test_graphics_scene_render_frustum_culling),
     WPE_TEST_CASE(test_graphics_billboard_corners), WPE_TEST_CASE(test_graphics_billboard_animation),
     WPE_TEST_CASE(test_graphics_billboard_draws_frames_and_blends),
+    WPE_TEST_CASE(test_graphics_mesh_shadow_unlit_and_sides),
     WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
     WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),
     WPE_TEST_CASE(test_graphics_camera_matrices_validation),

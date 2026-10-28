@@ -334,6 +334,10 @@ void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
             wpe__write_refs(s, "joints", mesh->joints, mesh->joint_count);
         }
         wpe__write_bool(w, "visible", mesh->visible);
+        wpe__write_bool(w, "unlit", mesh->unlit);
+        wpe__write_bool(w, "cast_shadows", mesh->cast_shadows);
+        wpe__write_bool(w, "receive_shadows", mesh->receive_shadows);
+        wpe__write_bool(w, "double_sided", mesh->double_sided);
         wpe_json_write_object_end(w);
     }
     const WPE_Camera* camera = wpe_ecs_get_component(ecs, e, WPE_COMP_CAMERA);
@@ -819,9 +823,15 @@ static bool wpe__skin_covers_mesh(const WPE_Model* model, uint32_t mesh_index, u
 }
 
 static bool wpe__load_mesh(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
-    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "mesh", "model", "mesh", "skin", "joints", "visible")) return false;
-    WPE_MeshRenderer mesh = {.skin = WPE_MODEL_NONE, .visible = true};
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "mesh", "model", "mesh", "skin", "joints", "visible", "unlit",
+                                "cast_shadows", "receive_shadows", "double_sided"))
+        return false;
+    WPE_MeshRenderer mesh = wpe_mesh_renderer_default(WPE_ASSET_NONE, 0);
     if (!wpe__json_read_bool(&l->r, v, "visible", &mesh.visible) ||
+        !wpe__json_read_bool(&l->r, v, "unlit", &mesh.unlit) ||
+        !wpe__json_read_bool(&l->r, v, "cast_shadows", &mesh.cast_shadows) ||
+        !wpe__json_read_bool(&l->r, v, "receive_shadows", &mesh.receive_shadows) ||
+        !wpe__json_read_bool(&l->r, v, "double_sided", &mesh.double_sided) ||
         !wpe__read_asset(l, v, "model", WPE_ASSET_MODEL, &mesh.model_asset))
         return false;
     const WPE_Model* model = wpe_asset_model(l->context->assets, mesh.model_asset);

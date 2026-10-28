@@ -111,13 +111,13 @@ static void wpe__material_vs(const void* uniforms, const void* vertex, WPE_Vec4*
         out[WPE__V_SHADOW + 2] = s.z;
     }
 
-    if (u->material->workflow == WPE_MATERIAL_UNLIT) {
+    if (u->material->workflow == WPE_MATERIAL_UNLIT || u->unlit) {
         for (int i = 0; i < 3; ++i)
             out[WPE__V_DIFFUSE + i] = 1.0f;
         return;
     }
 
-    const bool two_sided = u->material->double_sided;
+    const bool two_sided = u->material->double_sided || u->double_sided;
     const WPE_Vec3 n = wpe_vec3_normalize(wpe_mat4_transform_dir(&u->normal_matrix, normal));
     const WPE_Vec3 view = wpe_vec3_normalize(to_camera);
     WPE_Vec3 diffuse = u->ambient, specular = wpe_vec3(0, 0, 0);
@@ -300,8 +300,18 @@ static bool wpe__material_fs(const void* uniforms, const WPE_FragmentInput* in, 
     if (!wpe__resolve_alpha(m, &base.w)) return false;
 
     WPE_Vec3 color;
-    if (m->workflow == WPE_MATERIAL_UNLIT) {
+    if (m->workflow == WPE_MATERIAL_UNLIT || u->unlit) {
         color = wpe_vec3(base.x, base.y, base.z);
+        /* A mesh made unlit still takes the sun's shadow: shadowed parts fall to the ambient light, as lit
+         * surfaces do. */
+        if (u->unlit && u->sun_shadow) {
+            const float shadow = wpe_shadow_visibility(u->sun_shadow, v[WPE__V_SHADOW], v[WPE__V_SHADOW + 1],
+                                                       v[WPE__V_SHADOW + 2]);
+            for (int i = 0; i < 3; ++i) {
+                const float floor_light = fminf(fmaxf(u->ambient.v[i], 0.0f), 1.0f);
+                color.v[i] *= floor_light + (1.0f - floor_light) * shadow;
+            }
+        }
     } else {
         WPE_Vec3 diffuse, specular;
         float gloss;
@@ -334,7 +344,7 @@ static bool wpe__material_fs(const void* uniforms, const WPE_FragmentInput* in, 
             const WPE_Vec3 h =
                 wpe_vec3_normalize(wpe_vec3(v[WPE__V_HALF_TS], v[WPE__V_HALF_TS + 1], v[WPE__V_HALF_TS + 2]));
             float ndl = wpe_vec3_dot(nm, l), ndh = wpe_vec3_dot(nm, h);
-            if (m->double_sided && !in->front_facing) {
+            if ((m->double_sided || u->double_sided) && !in->front_facing) {
                 ndl = -ndl;
                 ndh = -ndh;
             }

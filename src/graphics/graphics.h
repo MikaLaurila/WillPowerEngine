@@ -48,6 +48,10 @@ typedef struct WPE_MeshRenderer {
     WPE_Entity* joints; /* Owned (freed by the component's remove hook): one entity per skin joint. */
     uint32_t joint_count;
     bool visible;
+    bool unlit; /* Its own colors (texture x material), no lighting; the sun's shadow may still darken it. */
+    bool cast_shadows;    /* Drawn into the sun's shadow map (default true). */
+    bool receive_shadows; /* Darkened by the sun's shadow (default true). */
+    bool double_sided;    /* Both faces drawn and lit even if the material is single-sided (default false). */
 } WPE_MeshRenderer;
 
 typedef struct WPE_Camera {
@@ -242,6 +246,10 @@ void wpe_particles_clear(WPE_Ecs* ecs, WPE_Entity entity);
  * @thread_safety Thread owning the world
  */
 WPE_Result wpe_particles_preview(WPE_Ecs* ecs, WPE_Entity entity, float dt);
+
+/** @return A visible, lit, single-sided (as the material says) mesh renderer of `mesh` in `model` that casts
+ * and receives shadows, without a skin. @thread_safety Any thread */
+WPE_MeshRenderer wpe_mesh_renderer_default(WPE_AssetHandle model, uint32_t mesh);
 
 /** @return A perspective camera with a 60 degree vertical FOV, near 0.1, far 500. @thread_safety Any thread
  */
