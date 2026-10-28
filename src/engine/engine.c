@@ -50,7 +50,9 @@ struct WPE_Engine {
     WPE_FixedStep clock;
     char music[WPE_VFS_PATH_MAX]; /* Track started by the current scene ("" = none). */
     char pending_scene[WPE_VFS_PATH_MAX];
-    char save_dir[1024]; /* "" until a script needs it (see wpe__app_save_directory). */
+    char save_dir[1024];              /* "" until a script needs it (see wpe__app_save_directory). */
+    WPE_AssetHandle sky;              /* The loaded sky image (wpe__resolve_sky). */
+    char sky_image[WPE_VFS_PATH_MAX]; /* Its path. */
     bool quit;
     bool embedded;        /* The host forwards events and shows the framebuffer. */
     bool simulating;      /* Scripts, physics, animation and audio run (false: edit mode). */
@@ -316,6 +318,7 @@ void wpe_engine_destroy(WPE_Engine* engine) {
     wpe_ui_destroy(engine->ui);
     wpe_prefab_cache_destroy(engine->prefabs);
     wpe_asset_release(engine->assets, engine->font);
+    wpe_asset_release(engine->assets, engine->sky);
     wpe_asset_manager_destroy(engine->assets);
     wpe_vfs_destroy(engine->vfs);
     wpe_input_destroy(engine->input);
@@ -532,7 +535,25 @@ static WPE_Result wpe__draw_debug(WPE_Engine* engine, WPE_Entity camera) {
     return wpe_debug_lines_submit(engine->debug_lines, engine->renderer, true);
 }
 
+/* Points the sky at its panorama image, loading it when the environment names a new one (a missing or
+ * broken image is reported once and leaves the clear color showing). */
+static void wpe__resolve_sky(WPE_Engine* engine) {
+    WPE_SceneEnvironment* env = &engine->environment;
+    if (strcmp(env->sky_image, engine->sky_image) != 0) {
+        wpe_asset_release(engine->assets, engine->sky);
+        engine->sky = WPE_ASSET_NONE;
+        snprintf(engine->sky_image, sizeof engine->sky_image, "%s", env->sky_image);
+        if (env->sky_image[0] &&
+            wpe_asset_load(engine->assets, WPE_ASSET_IMAGE, env->sky_image, &engine->sky) != WPE_RESULT_OK) {
+            wpe_log_warn("the sky image '%s' can't be loaded; the clear color shows instead", env->sky_image);
+            engine->sky = WPE_ASSET_NONE;
+        }
+    }
+    env->render.sky.panorama = wpe_asset_image(engine->assets, engine->sky);
+}
+
 static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
+    wpe__resolve_sky(engine);
     const WPE_SceneEnvironment* env = &engine->environment;
     const WPE_Color clear =
         wpe_color_rgba8(wpe__channel(env->clear_color.x), wpe__channel(env->clear_color.y),

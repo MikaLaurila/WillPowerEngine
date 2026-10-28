@@ -5,6 +5,7 @@
     "clear_color": [0.11, 0.125, 0.17],
     "ambient": [0.16, 0.17, 0.21],
     "fog": {"mode": "exponential", "color": [0.11, 0.125, 0.17], "density": 0.012},
+    "sky": {"mode": "panorama", "image": "skies/dusk.png", "rotation": 30, "sun_size": 1.5, "sun_glow": 0.2},
     "shadows": {"enabled": true, "map_size": 1024, "distance": 30, "caster_extension": 20, "bias": 0.002},
     "dither_transparency": false,
     "frustum_culling": true,

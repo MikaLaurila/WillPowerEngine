@@ -69,6 +69,20 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (sky)
+- `sky` in the scene environment (`WPE_SkySettings` in the render settings): `color` (the clear
+  color, as before), `gradient` (zenith, horizon and ground colors, with a curve) or `panorama` (an
+  equirectangular image, turned by `rotation`), plus a sun disc with a glow where the scene's sun
+  is. One full-screen triangle at the far plane, depth-tested after the opaque geometry (so covered
+  pixels aren't shaded), on the same multithreaded pipeline. The engine loads the panorama image
+  named by the environment (`sky_image`).
+- The character demo has a gradient sky with a sun; the master test scene a panorama
+  (`assets/skies/dusk.png`, a generated 256 x 128 dusk). The editor's Environment panel offers the
+  sky's modes, and its image is an editable asset path.
+- Tests: gradient colors up, level and down; the sun's disc; geometry covering the sky; no holes at
+  any angle at 320 x 240 (a sky exactly on the far plane left some); panorama directions and
+  rotation; color mode and a missing image draw nothing.
+
 ### Added (UI toggles and sliders)
 - `toggle` (component 21) and `slider` (22) turn a UI button into an on/off switch (clicks flip
   it; a mark is drawn while on) or a value: a track, the part up to the value filled and a handle.

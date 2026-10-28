@@ -41,9 +41,38 @@ typedef struct WPE_ShadowSettings {
     float bias;             /* Depth bias in shadow-map depth units. */
 } WPE_ShadowSettings;
 
+typedef enum WPE_SkyMode {
+    WPE_SKY_COLOR = 0, /* Nothing drawn: the frame's clear color shows. */
+    WPE_SKY_GRADIENT,  /* Zenith, horizon and ground colors by view direction. */
+    WPE_SKY_PANORAMA,  /* An equirectangular image around the camera. */
+} WPE_SkyMode;
+
+/* The background where no geometry is: drawn behind everything, at the far plane. Colors are sRGB
+ * (0..1). With fog, give the horizon the fog's color so distant geometry fades into the sky. */
+typedef struct WPE_SkySettings {
+    WPE_SkyMode mode;
+    WPE_Vec3 zenith;  /* Straight up. */
+    WPE_Vec3 horizon; /* Level with the camera. */
+    WPE_Vec3 ground;  /* Straight down. */
+    float curve; /* How fast the zenith color takes over above the horizon (and the ground below); 1 linear,
+                    lower hugs the horizon (default 0.5). */
+    const WPE_Texture* panorama; /* PANORAMA: borrowed until the frame ends (the engine resolves `image`). */
+    float rotation;              /* PANORAMA: turns the image about the vertical axis, degrees. */
+    /* A disc where the sun is (the scene's sun light), drawn in both modes: its angular radius in degrees (0:
+     * none), color and a glow around it (0..1). */
+    float sun_size;
+    WPE_Vec3 sun_color;
+    float sun_glow;
+} WPE_SkySettings;
+
+/** @return The color mode, with a daylight gradient and a warm sun ready for the other modes. @thread_safety
+ * Any thread */
+WPE_SkySettings wpe_sky_settings_default(void);
+
 typedef struct WPE_SceneRenderSettings {
     WPE_Vec3 ambient;
     WPE_FogParams fog;
+    WPE_SkySettings sky;
     WPE_ShadowSettings shadows;
     bool dither_transparency; /* Render alpha-blended materials with WPE_BLEND_ALPHA_DITHER. */
     bool frustum_culling;

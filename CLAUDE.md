@@ -125,6 +125,7 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
   - Lighting is hybrid; see AGENTS.md §4.2.1.
     - Lights are `WPE_Light` entities. The sun is the first directional light with `cast_shadows`, otherwise the first directional light. If the world has no lights at all, `settings.default_sun` is used.
     - Material varyings are laid out at the top of `material_shader.c` (26 of 32 are used). Keep that layout and the `static_assert` next to it in sync.
+  - Sky (`sky.c`, `WPE_SceneRenderSettings.sky`): a full-screen triangle just inside the far plane (exactly on it, rounded depths leave holes), LEQUAL-tested with the sort key just below the transparent pass. Its corners carry view rays, which interpolate exactly. The engine resolves the panorama texture from `WPE_SceneEnvironment.sky_image` each frame (`wpe__resolve_sky`).
   - Post-processing: `wpe_postfx_apply(chain, renderer, effects, n, camera)` runs after `end_frame`. Draw HUD/2D in a second, non-clearing frame if it shouldn't be post-processed.
   - Procedural models: `assets/procedural.h` provides a plane, a box and `wpe_model_create_mesh`.
 - **script** (`script/script.h`, Luau; API reference in `docs/scripting.md`):

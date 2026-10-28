@@ -65,9 +65,11 @@ typedef struct WPE_SceneEnvironment {
     WPE_SceneRenderSettings render;
     WPE_PostFxConfig postfx[WPE_SCENE_MAX_POSTFX]; /* Applied in order. */
     uint32_t postfx_count;
-    WPE_Vec3 gravity;             /* Physics gravity (m/s^2). */
-    char music[WPE_VFS_PATH_MAX]; /* Music track started when the scene loads ("" = none). */
-    float music_fade;             /* Crossfade into the track, seconds. */
+    WPE_Vec3 gravity;                 /* Physics gravity (m/s^2). */
+    char music[WPE_VFS_PATH_MAX];     /* Music track started when the scene loads ("" = none). */
+    char sky_image[WPE_VFS_PATH_MAX]; /* The panorama sky's image ("" = none); render.sky.panorama is set from
+                                         it by the engine. */
+    float music_fade;                 /* Crossfade into the track, seconds. */
 } WPE_SceneEnvironment;
 
 /** Maps entities to file ids while saving and file ids to entities while loading. Opaque. */

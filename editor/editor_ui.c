@@ -334,6 +334,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
                                                   "screen_aligned"};
     static const char* const billboard_blends[] = {"cutout", "alpha", "additive"};
     static const char* const particle_shapes[] = {"point", "sphere", "box"};
+    static const char* const skies[] = {"color", "gradient", "panorama"};
     const struct {
         const char* component;
         const char* key;
@@ -344,7 +345,8 @@ static const char* const* wpe__choices(const char* component, const char* key, u
         {"rigidbody", "type", bodies, 3},
         {"collider", "shape", shapes, 5},
         {"audio_source", "bus", buses, 2},
-        {"environment", "mode", fogs, 3},
+        {"fog", "mode", fogs, 3}, /* The environment's objects go by their own names (wpe__draw_value). */
+        {"sky", "mode", skies, 3},
         {"environment", "effect", effects, 5},
         {"text", "align", aligns, 3},
         {"text", "valign", valigns, 3},
@@ -365,8 +367,9 @@ static const char* const* wpe__choices(const char* component, const char* key, u
 /* Optional asset references (null when there is none), by component and key. */
 static bool wpe__is_asset_key(const char* component, const char* key) {
     static const char* const table[][2] = {
-        {"mesh", "model"},   {"animator", "model"}, {"collider", "model"},  {"audio_source", "sound"},
-        {"sprite", "image"}, {"text", "font"},      {"billboard", "image"}, {"particles", "image"}};
+        {"mesh", "model"},         {"animator", "model"},  {"collider", "model"},
+        {"audio_source", "sound"}, {"sprite", "image"},    {"text", "font"},
+        {"billboard", "image"},    {"particles", "image"}, {"sky", "image"}};
     for (size_t i = 0; i < sizeof table / sizeof table[0]; ++i) {
         if (strcmp(table[i][0], component) == 0 && strcmp(table[i][1], key) == 0) return true;
     }
@@ -473,11 +476,14 @@ static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char*
     }
     case WPE_JSON_OBJECT:
         if (igTreeNodeEx_Str(key, ImGuiTreeNodeFlags_DefaultOpen)) {
+            /* The environment's objects ("fog", "sky") name their own fields' choices; list elements ("[0]")
+             * keep the environment's. */
+            const char* inner = strcmp(component, "environment") == 0 && key[0] != '[' ? key : component;
             for (uint32_t i = 0; i < wpe_json_count(v); ++i) {
                 const char* member_key = NULL;
                 const WPE_JsonValue* member = wpe_json_member(v, i, &member_key);
                 igPushID_Int((int)i);
-                changed |= wpe__draw_member(ui, component, member_key, member, edit, changed);
+                changed |= wpe__draw_member(ui, inner, member_key, member, edit, changed);
                 igPopID();
             }
             igTreePop();

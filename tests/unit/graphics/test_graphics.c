@@ -638,6 +638,153 @@ static const WPE_Framebuffer* render_scene(WPE_Renderer* renderer, WPE_SceneRend
     return wpe_renderer_framebuffer(renderer);
 }
 
+/* ---- Sky -------------------------------------------------------------------------------------------- */
+
+static const WPE_Framebuffer* render_sky(WPE_Renderer* renderer, WPE_SceneRenderer* sr, WPE_Ecs* ecs,
+                                         WPE_Entity camera, const WPE_SceneRenderSettings* settings) {
+    WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
+    WPE_TEST_ASSERT_OK(wpe_renderer_begin_frame(
+        renderer,
+        &(WPE_ClearDesc){.clear_color = true, .color = 0xFF000000u, .clear_depth = true, .depth = 1.0f}));
+    WPE_TEST_ASSERT_OK(wpe_scene_render(sr, renderer, ecs, camera, settings, NULL));
+    WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
+    return wpe_renderer_framebuffer(renderer);
+}
+
+static WPE_Color center_pixel(const WPE_Framebuffer* fb) {
+    return fb->color[(fb->height / 2) * fb->width + fb->width / 2];
+}
+
+/* Within 2 per channel (rays through pixel centers are not exactly level). */
+static bool near_color(WPE_Color a, WPE_Vec3 expected) {
+    const WPE_Color b = wpe_color_from_vec4(wpe_vec4(expected.x, expected.y, expected.z, 1.0f));
+    for (int shift = 0; shift < 32; shift += 8) {
+        const int d = (int)((a >> shift) & 0xFFu) - (int)((b >> shift) & 0xFFu);
+        if (d < -2 || d > 2) return false;
+    }
+    return true;
+}
+
+static void test_graphics_sky_gradient_sun_and_occlusion(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    /* An odd height puts the middle row's pixel centers exactly level. */
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 47}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_SceneRenderSettings settings = wpe_scene_render_settings_default();
+    settings.sky.mode = WPE_SKY_GRADIENT;
+    settings.sky.zenith = wpe_vec3(0.0f, 0.0f, 1.0f);
+    settings.sky.horizon = wpe_vec3(0.0f, 1.0f, 0.0f);
+    settings.sky.ground = wpe_vec3(1.0f, 0.0f, 0.0f);
+    settings.default_sun_direction = wpe_vec3(0.0f, -1.0f, 0.0f); /* Straight down: out of the level views. */
+
+    /* Level: the horizon at the middle, the zenith color above, ground below. */
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 0, 0), wpe_quat_identity());
+    const WPE_Framebuffer* fb = render_sky(renderer, sr, ecs, camera, &settings);
+    WPE_TEST_ASSERT(near_color(center_pixel(fb), settings.sky.horizon));
+    const WPE_Color top = fb->color[fb->width / 2],
+                    bottom = fb->color[(fb->height - 1) * fb->width + fb->width / 2];
+    WPE_TEST_ASSERT(((top >> 0) & 0xFFu) > 0x40u && ((top >> 16) & 0xFFu) == 0);       /* Blue, no red. */
+    WPE_TEST_ASSERT(((bottom >> 16) & 0xFFu) > 0x40u && ((bottom >> 0) & 0xFFu) == 0); /* Red, no blue. */
+    /* Every pixel of a game-sized frame, at any angle: no holes where depths round past the far plane. */
+    WPE_Renderer* large = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 320, .height = 240}, &large));
+    for (int degrees = 0; degrees <= 90; degrees += 10) {
+        ((WPE_Transform*)wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM))->rotation =
+            wpe_quat_mul(wpe_quat_from_axis_angle(wpe_vec3(0, 1, 0), (float)degrees * 0.02f),
+                         wpe_quat_from_axis_angle(wpe_vec3(1, 0, 0), (float)degrees * (WPE_PI / 180.0f)));
+        WPE_TEST_ASSERT_MSG(count_color(render_sky(large, sr, ecs, camera, &settings), 0xFF000000u) == 0,
+                            "holes at %d degrees", degrees);
+    }
+    wpe_renderer_destroy(large);
+    /* Straight up the zenith, straight down the ground. */
+    ((WPE_Transform*)wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM))->rotation =
+        wpe_quat_from_axis_angle(wpe_vec3(1, 0, 0), WPE_PI * 0.5f);
+    WPE_TEST_ASSERT(
+        near_color(center_pixel(render_sky(renderer, sr, ecs, camera, &settings)), settings.sky.zenith));
+
+    /* The sun's disc where its light comes from (here, the sun shining down from overhead). */
+    settings.sky.sun_size = 5.0f;
+    settings.sky.sun_color = wpe_vec3(1.0f, 0.0f, 1.0f);
+    WPE_TEST_ASSERT(
+        near_color(center_pixel(render_sky(renderer, sr, ecs, camera, &settings)), settings.sky.sun_color));
+    settings.default_sun = false; /* No sun, no disc. */
+    WPE_TEST_ASSERT(
+        near_color(center_pixel(render_sky(renderer, sr, ecs, camera, &settings)), settings.sky.zenith));
+    settings.default_sun = true;
+    ((WPE_Transform*)wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM))->rotation =
+        wpe_quat_from_axis_angle(wpe_vec3(1, 0, 0), -WPE_PI * 0.5f);
+    WPE_TEST_ASSERT(
+        near_color(center_pixel(render_sky(renderer, sr, ecs, camera, &settings)), settings.sky.ground));
+
+    /* Geometry covers the sky: a white unlit box in front of a level view. */
+    const WPE_Material white = wpe_material_solid(wpe_vec4(1, 1, 1, 1), 0.0f, 1.0f);
+    WPE_Model* cube = NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_create_box(wpe_vec3(1, 1, 1), &white, &cube));
+    const WPE_Entity box =
+        spawn_mesh(ecs, wpe_test_add_model(t.assets, "test/cube", cube), wpe_vec3(0, 0, -4));
+    mesh_of(ecs, box)->unlit = true;
+    ((WPE_Transform*)wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM))->rotation = wpe_quat_identity();
+    fb = render_sky(renderer, sr, ecs, camera, &settings);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFFFFFFu, center_pixel(fb));
+    WPE_TEST_ASSERT(near_color(fb->color[(fb->height / 2) * fb->width + 1], settings.sky.horizon));
+
+    /* The color mode draws nothing: the clear color stays. */
+    settings.sky.mode = WPE_SKY_COLOR;
+    fb = render_sky(renderer, sr, ecs, camera, &settings);
+    WPE_TEST_ASSERT_EQ_UINT(0xFF000000u, fb->color[(fb->height / 2) * fb->width + 1]);
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
+static void test_graphics_sky_panorama(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    /* 3 x 3 texels: longitude across (the middle column straight ahead, -Z), latitude down. */
+    const uint32_t texels[9] = {0xFF000010u, 0xFF000020u, 0xFF000030u, 0xFFFF0000u, 0xFF00FF00u,
+                                0xFF0000FFu, 0xFF100000u, 0xFF200000u, 0xFF300000u};
+    WPE_Texture* panorama = NULL;
+    WPE_TEST_ASSERT_OK(
+        wpe_texture_create(&(WPE_TextureDesc){.width = 3, .height = 3, .texels = texels}, &panorama));
+    WPE_SceneRenderSettings settings = wpe_scene_render_settings_default();
+    settings.sky.mode = WPE_SKY_PANORAMA;
+    settings.sky.panorama = panorama;
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 0, 0), wpe_quat_identity());
+    WPE_TEST_ASSERT_EQ_UINT(0xFF00FF00u, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+    /* Looking toward +X: a quarter turn further along the image. */
+    WPE_Transform* transform = wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM);
+    transform->rotation = wpe_quat_from_axis_angle(wpe_vec3(0, 1, 0), -WPE_PI * 0.5f);
+    WPE_TEST_ASSERT_EQ_UINT(0xFF0000FFu, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+    /* Turned a third of a turn, the image moves with it. */
+    transform = wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM);
+    transform->rotation = wpe_quat_identity();
+    settings.sky.rotation = 120.0f;
+    WPE_TEST_ASSERT_EQ_UINT(0xFF0000FFu, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+    /* Up the top row, down the bottom one. */
+    settings.sky.rotation = 0.0f;
+    transform = wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM);
+    transform->rotation = wpe_quat_from_axis_angle(wpe_vec3(1, 0, 0), WPE_PI * 0.45f);
+    WPE_TEST_ASSERT_EQ_UINT(0xFF000020u, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+    /* Without its image a panorama draws nothing. */
+    settings.sky.panorama = NULL;
+    WPE_TEST_ASSERT_EQ_UINT(0xFF000000u, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+
+    wpe_texture_destroy(panorama);
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
 static void test_graphics_billboard_draws_frames_and_blends(void) {
     WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
     /* Two frames side by side: opaque red, then fully transparent. */
@@ -1100,6 +1247,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_sample_cubic_spline), WPE_TEST_CASE(test_graphics_instantiate_rigged_figure),
     WPE_TEST_CASE(test_graphics_animation_crossfade),
     WPE_TEST_CASE(test_graphics_animation_crossfade_between_clips),
+    WPE_TEST_CASE(test_graphics_sky_gradient_sun_and_occlusion), WPE_TEST_CASE(test_graphics_sky_panorama),
     WPE_TEST_CASE(test_graphics_instantiate_validates_and_cleans_up),
     WPE_TEST_CASE(test_graphics_material_vertex_shader_skinning),
     WPE_TEST_CASE(test_graphics_shininess_range), WPE_TEST_CASE(test_graphics_scene_render_frustum_culling),

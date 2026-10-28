@@ -36,6 +36,7 @@ static const char* const wpe__body_types[] = {"static", "kinematic", "dynamic"};
 static const char* const wpe__collider_shapes[] = {"box", "sphere", "capsule", "convex", "mesh"};
 static const char* const wpe__buses[] = {"master", "effects", "music"};
 static const char* const wpe__fog_modes[] = {"none", "linear", "exponential"};
+static const char* const wpe__sky_modes[] = {"color", "gradient", "panorama"};
 static const char* const wpe__postfx_kinds[] = {"ssao", "chromatic_aberration", "ps1", "vignette",
                                                 "color_adjust"};
 
@@ -205,6 +206,24 @@ static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment*
     wpe__write_number(w, "start", r->fog.start);
     wpe__write_number(w, "end", r->fog.end);
     wpe__write_number(w, "density", r->fog.density);
+    wpe_json_write_object_end(w);
+    wpe_json_write_key(w, "sky");
+    wpe_json_write_object_begin(w);
+    wpe__write_string(w, "mode", wpe__sky_modes[r->sky.mode]);
+    wpe__write_vec3(w, "zenith", r->sky.zenith);
+    wpe__write_vec3(w, "horizon", r->sky.horizon);
+    wpe__write_vec3(w, "ground", r->sky.ground);
+    wpe__write_number(w, "curve", r->sky.curve);
+    wpe_json_write_key(w, "image");
+    if (env->sky_image[0]) {
+        wpe_json_write_string(w, env->sky_image);
+    } else {
+        wpe_json_write_null(w);
+    }
+    wpe__write_number(w, "rotation", r->sky.rotation);
+    wpe__write_number(w, "sun_size", r->sky.sun_size);
+    wpe__write_vec3(w, "sun_color", r->sky.sun_color);
+    wpe__write_number(w, "sun_glow", r->sky.sun_glow);
     wpe_json_write_object_end(w);
     wpe_json_write_key(w, "shadows");
     wpe_json_write_object_begin(w);
@@ -696,11 +715,45 @@ bool wpe__add(wpe__Loader* l, const WPE_JsonValue* at, WPE_Entity e, WPE_Compone
     return true;
 }
 
+/* "sky" (absent: unchanged). The panorama image is kept as a path; the engine loads it. */
+static bool wpe__load_sky(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvironment* env) {
+    if (!v) return true;
+    WPE_SkySettings* sky = &env->render.sky;
+    uint32_t mode = sky->mode;
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "sky", "mode", "zenith", "horizon", "ground", "curve", "image",
+                                "rotation", "sun_size", "sun_color", "sun_glow") ||
+        !wpe__json_read_enum(&l->r, v, "mode", wpe__sky_modes, WPE__COUNT(wpe__sky_modes), &mode) ||
+        !wpe__json_read_vec3(&l->r, v, "zenith", &sky->zenith) ||
+        !wpe__json_read_vec3(&l->r, v, "horizon", &sky->horizon) ||
+        !wpe__json_read_vec3(&l->r, v, "ground", &sky->ground) ||
+        !wpe__json_read_float(&l->r, v, "curve", 0.01f, 100.0f, &sky->curve) ||
+        !wpe__json_read_float(&l->r, v, "rotation", -360.0f, 360.0f, &sky->rotation) ||
+        !wpe__json_read_float(&l->r, v, "sun_size", 0.0f, 45.0f, &sky->sun_size) ||
+        !wpe__json_read_vec3(&l->r, v, "sun_color", &sky->sun_color) ||
+        !wpe__json_read_float(&l->r, v, "sun_glow", 0.0f, 1.0f, &sky->sun_glow))
+        return false;
+    sky->mode = (WPE_SkyMode)mode;
+    const WPE_JsonValue* image = wpe_json_get(v, "image");
+    if (image && wpe_json_type(image) != WPE_JSON_NULL) {
+        const char* path = wpe_json_string(image);
+        if (!path || !wpe_vfs_path_is_valid(path))
+            return wpe__json_fail(&l->r, image, WPE_RESULT_ERROR_PARSE,
+                                  "the sky's \"image\" must be an asset path or null");
+        snprintf(env->sky_image, sizeof env->sky_image, "%s", path);
+    } else if (image) {
+        env->sky_image[0] = '\0';
+    }
+    if (sky->mode == WPE_SKY_PANORAMA && !env->sky_image[0])
+        return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE, "a panorama sky needs an \"image\"");
+    return true;
+}
+
 static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvironment* env) {
-    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "environment", "clear_color", "ambient", "fog", "shadows",
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "environment", "clear_color", "ambient", "fog", "sky", "shadows",
                                 "dither_transparency", "frustum_culling", "subdivision", "default_sun",
                                 "gravity", "music", "postfx"))
         return false;
+    if (!wpe__load_sky(l, wpe_json_get(v, "sky"), env)) return false;
     WPE_SceneRenderSettings* r = &env->render;
     if (!wpe__json_read_vec3(&l->r, v, "clear_color", &env->clear_color) ||
         !wpe__json_read_vec3(&l->r, v, "ambient", &r->ambient) ||

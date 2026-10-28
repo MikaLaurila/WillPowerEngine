@@ -10,6 +10,7 @@
 #include "core/debug.h"
 #include "core/log.h"
 #include "graphics/billboard_internal.h"
+#include "graphics/sky_internal.h"
 
 struct WPE_SceneRenderer {
     WPE_Arena frame;           /* Per-call data; valid until the next wpe_scene_render(). */
@@ -35,6 +36,7 @@ WPE_SceneRenderSettings wpe_scene_render_settings_default(void) {
                 .start = 20.0f,
                 .end = 100.0f,
                 .density = 0.02f},
+        .sky = wpe_sky_settings_default(),
         .shadows = {.enabled = true,
                     .map_size = 1024,
                     .distance = 30.0f,
@@ -818,6 +820,8 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             if (result == WPE_RESULT_OK) ++stats.primitives_submitted;
         }
     }
+    if (result == WPE_RESULT_OK)
+        result = wpe__render_sky(renderer, &settings->sky, &view_projection, sun.present, sun.direction);
     if (result == WPE_RESULT_OK && (wpe_ecs_component_count(ecs, WPE_COMP_BILLBOARD) > 0 ||
                                     wpe_ecs_component_count(ecs, WPE_COMP_PARTICLES) > 0)) {
         wpe__BillboardPass pass = {.view = &view,

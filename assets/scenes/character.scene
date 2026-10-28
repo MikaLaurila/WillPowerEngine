@@ -4,7 +4,9 @@
   "environment": {
     "clear_color": [0.42, 0.52, 0.64],
     "ambient": [0.22, 0.23, 0.27],
-    "fog": {"mode": "linear", "color": [0.42, 0.52, 0.64], "start": 25, "end": 60},
+    "fog": {"mode": "linear", "color": [0.62, 0.72, 0.84], "start": 25, "end": 60},
+    "sky": {"mode": "gradient", "zenith": [0.2, 0.36, 0.68], "horizon": [0.62, 0.72, 0.84], "ground": [0.36, 0.38, 0.4],
+            "curve": 0.6, "sun_size": 2.5, "sun_color": [1, 0.95, 0.82], "sun_glow": 0.35},
     "shadows": {"enabled": true, "map_size": 1024, "distance": 24}
   },
   "camera": 1,
