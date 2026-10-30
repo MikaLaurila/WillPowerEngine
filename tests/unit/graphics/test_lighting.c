@@ -687,8 +687,9 @@ static void test_lighting_postfx_cracks(void) {
                         tinted[1]);
     wpe_renderer_destroy(r);
 
-    /* The seam and the streaks move the image near the cut, and only there. */
+    /* The seam and the streaks move the image near the cut, and only there (without the slide). */
     params.glow_pixels = 0.0f;
+    params.slide_pixels = 0.0f;
     r = striped();
     WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
     fb = wpe_renderer_framebuffer(r);
@@ -704,6 +705,20 @@ static void test_lighting_postfx_cracks(void) {
     }
     WPE_TEST_ASSERT(near_moved > S / 4);
     WPE_TEST_ASSERT_EQ_UINT(0, far_moved);
+    wpe_renderer_destroy(r);
+    /* The slide moves the image on both sides of the cut, far from it too: the stripes shift. */
+    params.offset_pixels = 0.0f;
+    params.bevel_pixels = 0.0f;
+    params.slide_pixels = 1.0f;
+    r = filled_renderer(0xFF000000u);
+    WPE_Framebuffer* unique = wpe_renderer_framebuffer_for_write(r);
+    for (uint32_t i = 0; i < S * S; ++i)
+        unique->color[i] = 0xFF000000u | ((i % S) << 8) | (i / S); /* Every pixel its own color. */
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    uint32_t slid = 0;
+    for (uint32_t i = 0; i < S * S; ++i)
+        slid += unique->color[i] != (0xFF000000u | ((i % S) << 8) | (i / S));
+    WPE_TEST_ASSERT_MSG(slid > S * S / 2, "only %u pixels slid", slid);
     wpe_renderer_destroy(r);
     /* Strength 0: untouched. */
     params.strength = 0.0f;
@@ -747,6 +762,16 @@ static void test_lighting_postfx_shatter(void) {
     WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
     WPE_TEST_ASSERT(memcmp(first, wpe_renderer_framebuffer(r)->color, (size_t)S * S * sizeof *first) == 0);
     wpe_free(first);
+    wpe_renderer_destroy(r);
+    /* With fade, the pieces are gone at time = fade: only the background (black) is left. */
+    params.fade = 0.8f;
+    r = filled_renderer(0xFFFFFFFFu);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    fb = wpe_renderer_framebuffer(r);
+    uint32_t left = 0;
+    for (uint32_t i = 0; i < S * S; ++i)
+        left += (fb->color[i] & 0x00FFFFFFu) != 0;
+    WPE_TEST_ASSERT_EQ_UINT(0, left);
     wpe_renderer_destroy(r);
     wpe_postfx_destroy(chain);
 }

@@ -141,6 +141,7 @@ typedef struct WPE_CracksParams {
     float center_x, center_y; /* Where the cuts cross (fractions of the screen). */
     float spread;             /* How far from it each line may pass (a fraction of the screen's height). */
     float offset_pixels;      /* How far the image is pulled across a cut (each: half to 1.5 times this). */
+    float slide_pixels;       /* How far each side of a cut slides along it, opposite ways (depth). */
     float width_pixels;       /* The core's half width (0: no core line). */
     float glow_pixels;        /* The rim's width, on one side of each cut (0: no rim). */
     float bevel_pixels;       /* How far from a cut the image is sheared along it (0: no streaks). */
@@ -184,6 +185,7 @@ typedef struct WPE_ShatterParams {
     float spin;               /* The fastest a piece turns (radians per second). */
     float background;         /* 0: the live scene shows behind the pieces; 1: black. */
     uint32_t capture;         /* Which of the host's captured frames the pieces show (0: the live frame). */
+    float fade;               /* Seconds over which the pieces fade into the scene behind (0: they don't). */
     const WPE_Texture* image; /* Not a parameter: the captured frame, set by the host (NULL: live). */
 } WPE_ShatterParams;
 /* Depth of field: what's near `focus_distance` is sharp, and the image blurs with distance from there,
@@ -214,6 +216,7 @@ typedef struct WPE_RadialBlurParams {
 /* ---- Configured effects (scene files, scripts) ---------------------------------------------------- */
 
 #define WPE_POSTFX_MAX_EFFECTS 8u /* Effects a scene can have. */
+#define WPE_POSTFX_MAX_PARAMS 24u /* Parameters an effect kind can have. */
 
 typedef enum WPE_PostFxKind {
     WPE_POSTFX_SSAO = 0,

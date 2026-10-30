@@ -11,7 +11,7 @@
 --   hold = 0.45        seconds the finished cuts stay before the ending
 --   ending = "shatter" "shatter": the screen breaks along the cuts and falls away;
 --                      "fade": the cuts fade out; "stay": they stay until stop()
---   shatter_time = 1.4 seconds the pieces fall
+--   shatter_time = 1.4 seconds the pieces fall (fading away as they go)
 --   spread = 0.15      how far from the point the cuts may pass (fraction of the screen's height)
 --   dim = 0.3          how much darker the scene gets during the cuts (0: not at all)
 --   glow               the rim's tint (a vector; bluish by default). The cuts look like broken glass: the
@@ -107,7 +107,7 @@ function JudgementCut:update(dt: number): boolean
 			remove_effect("cracks")
 			wpe.add_postfx({
 				effect = "shatter", count = self.lines, seed = self.seed, center_x = self.x, center_y = self.y,
-				spread = self.spread, time = 0, capture = self.slot, background = 0.6,
+				spread = self.spread, time = 0, capture = self.slot, background = 0.6, fade = self.shatter_time,
 			})
 			self.phase = "shattering"
 		end

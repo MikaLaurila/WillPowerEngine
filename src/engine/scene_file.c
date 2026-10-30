@@ -786,8 +786,8 @@ static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_Sc
             /* The kind's parameters, described by graphics/postfx.h: names, ranges, whole numbers. */
             uint32_t count = 0;
             const WPE_PostFxParam* params = wpe_postfx_params(c.kind, &count);
-            const char* allowed[2 + 16] = {"effect", "enabled"};
-            for (uint32_t p = 0; p < count && p < 16; ++p)
+            const char* allowed[2 + WPE_POSTFX_MAX_PARAMS] = {"effect", "enabled"};
+            for (uint32_t p = 0; p < count && p < WPE_POSTFX_MAX_PARAMS; ++p)
                 allowed[2 + p] = params[p].name;
             if (!wpe__json_check_object(&l->r, e, kinds[kind], allowed, 2 + count)) return false;
             for (uint32_t p = 0; p < count; ++p) {

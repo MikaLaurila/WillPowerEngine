@@ -74,11 +74,14 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   change. At the cut the image is pulled across it (a seam, each cut by its own amount), near it the image
   is sheared along the cut by an amount that wanders along it (the streaks of fractured glass), and a rim on
   one side, tinted by the glow color, darkens bright areas toward the tint and lights dark ones with it.
-  The cuts no longer slide the whole image. `split_pixels` is replaced by `bevel_pixels` (the streaks'
-  reach), `glow_pixels` is the rim's width, and `width_pixels` an optional line in the core color (0 by
-  default). `judgement_cut.luau` draws a core line only when given a `core` color.
+  `slide_pixels` slides each side of every cut along it, opposite ways (the whole image, for depth).
+  `split_pixels` is replaced by `bevel_pixels` (the streaks' reach), `glow_pixels` is the rim's width,
+  and `width_pixels` an optional line in the core color (0 by default). Effects may have up to
+  `WPE_POSTFX_MAX_PARAMS` (24) parameters, checked at compile time.
+- `shatter` gains `fade`: the pieces fade into the scene behind them over that many seconds;
+  `judgement_cut.luau` fades them over the shatter. `judgement_cut.luau` draws a core line only when given a `core` color.
 - Tests: a core line lights the cut; the rim is on one side only; seams and streaks move the image near
-  the cut and nowhere else.
+  the cut and nowhere else; the slide moves it everywhere; faded pieces leave only the background.
 ### Added (Judgement Cut: cracks, shatter, screen capture)
 - Post effect `cracks`: straight cuts across the screen crossing near a point; the image slides along each
   (opposite ways on its sides), the line glows in its core and glow colors with color fringes, and a

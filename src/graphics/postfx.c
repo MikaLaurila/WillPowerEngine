@@ -138,6 +138,13 @@ static float wpe__clamp01(float v) {
     return v > 0.0f ? (v < 1.0f ? v : 1.0f) : 0.0f;
 }
 
+/* a, then b with weight t (0..1); alpha from b. */
+static WPE_Color wpe__mix_colors(WPE_Color a, WPE_Color b, float t) {
+    const WPE_Vec4 x = wpe_color_to_vec4(a), y = wpe_color_to_vec4(b);
+    return wpe_color_from_vec4(
+        wpe_vec4(x.x + (y.x - x.x) * t, x.y + (y.y - x.y) * t, x.z + (y.z - x.z) * t, y.w));
+}
+
 static WPE_Color wpe__scale_rgb(WPE_Color c, float s) {
     WPE_Vec4 v = wpe_color_to_vec4(c);
     return wpe_color_from_vec4(wpe_vec4(v.x * s, v.y * s, v.z * s, v.w));
@@ -472,12 +479,16 @@ static void wpe__cracks_pass(const WPE_PostContext* c, const void* params_ptr, u
             const float px = (float)x + 0.5f, py = (float)y + 0.5f;
             uint32_t nearest = UINT32_MAX;
             float d = zone, side = 0.0f, along = 0.0f, tip = 0.0f;
+            float slide_x = 0.0f, slide_y = 0.0f; /* Each side of every cut slides along it, opposite ways. */
             for (uint32_t l = 0; l < count; ++l) {
                 const WPE_CrackLine* line = &lines[l];
                 const float vx = px - line->x, vy = py - line->y;
                 const float a = vx * line->dx + vy * line->dy;
                 if (fabsf(a) > line->reach) continue; /* Past the end of a growing line. */
                 const float s = vx * -line->dy + vy * line->dx;
+                const float slide = s >= 0.0f ? p->slide_pixels : -p->slide_pixels;
+                slide_x += line->dx * slide;
+                slide_y += line->dy * slide;
                 if (fabsf(s) < d) {
                     nearest = l;
                     d = fabsf(s);
@@ -487,8 +498,13 @@ static void wpe__cracks_pass(const WPE_PostContext* c, const void* params_ptr, u
                     tip = fminf((line->reach - fabsf(a)) / (zone + 1.0f), 1.0f);
                 }
             }
+            slide_x *= p->strength;
+            slide_y *= p->strength;
             if (nearest == UINT32_MAX) {
-                c->dst[i] = c->src[i];
+                c->dst[i] =
+                    slide_x == 0.0f && slide_y == 0.0f
+                        ? c->src[i]
+                        : wpe__texel_clamped(c, (int32_t)floorf(px - slide_x), (int32_t)floorf(py - slide_y));
                 continue;
             }
             const WPE_CrackLine* line = &lines[nearest];
@@ -497,7 +513,7 @@ static void wpe__cracks_pass(const WPE_PostContext* c, const void* params_ptr, u
             const float amount = p->strength * tip;
             /* The seam: pulled across the cut, fading over two pixels. */
             const float across = pull[nearest] * sign * (1.0f - wpe__clamp01(d * 0.5f)) * amount;
-            float off_x = nx * across, off_y = ny * across;
+            float off_x = nx * across + slide_x, off_y = ny * across + slide_y;
             /* The streaks: sheared along the cut. */
             if (d < shear_zone) {
                 const float jitter = wpe__line_noise(p->seed, nearest, along * 0.08f) * 2.0f - 1.0f;
@@ -667,6 +683,9 @@ static void wpe__shatter_pass(const WPE_PostContext* c, const void* params_ptr, 
     const wpe__ShatterScratch* s = c->scratch;
     const WPE_TextureLevel* image = p->image ? &p->image->levels[0] : NULL;
     const float dim = 1.0f - wpe__clamp01(p->background);
+    /* The pieces fade into what's behind them as time runs (eased, so they linger before going). */
+    const float gone = p->fade > 0.0f ? wpe__clamp01(p->time / p->fade) : 0.0f;
+    const float opacity = 1.0f - gone * gone;
     for (uint32_t y = row_begin; y < row_end; ++y) {
         for (uint32_t x = 0; x < c->width; ++x) {
             const size_t i = (size_t)y * c->width + x;
@@ -695,7 +714,9 @@ static void wpe__shatter_pass(const WPE_PostContext* c, const void* params_ptr, 
                 float nearest = 1e9f;
                 for (uint32_t l = 0; l < s->line_count; ++l)
                     nearest = fminf(nearest, fabsf((sx - s->lx[l]) * s->nx[l] + (sy - s->ly[l]) * s->ny[l]));
-                c->dst[i] = nearest < 1.0f && p->time > 0.0f ? wpe__scale_rgb(color, 1.35f) : color;
+                color = nearest < 1.0f && p->time > 0.0f ? wpe__scale_rgb(color, 1.35f) : color;
+                c->dst[i] =
+                    opacity < 1.0f ? wpe__mix_colors(wpe__scale_rgb(c->src[i], dim), color, opacity) : color;
             }
             if (!covered) c->dst[i] = wpe__scale_rgb(c->src[i], dim);
         }
@@ -801,6 +822,7 @@ static const WPE_CracksParams wpe__cracks_defaults = {.count = 8.0f,
                                                       .center_y = 0.5f,
                                                       .spread = 0.15f,
                                                       .offset_pixels = 3.0f,
+                                                      .slide_pixels = 1.5f,
                                                       .width_pixels = 0.0f,
                                                       .glow_pixels = 5.0f,
                                                       .bevel_pixels = 5.0f,
@@ -920,6 +942,7 @@ static const WPE_PostFxParam wpe__cracks_params[] = {
     {"center_y", offsetof(WPE_PostFxConfig, cracks.center_y), -1, 2, false},
     {"spread", offsetof(WPE_PostFxConfig, cracks.spread), 0, 2, false},
     {"offset_pixels", offsetof(WPE_PostFxConfig, cracks.offset_pixels), 0, 32, false},
+    {"slide_pixels", offsetof(WPE_PostFxConfig, cracks.slide_pixels), 0, 32, false},
     {"width_pixels", offsetof(WPE_PostFxConfig, cracks.width_pixels), 0, 16, false},
     {"glow_pixels", offsetof(WPE_PostFxConfig, cracks.glow_pixels), 0, 32, false},
     {"bevel_pixels", offsetof(WPE_PostFxConfig, cracks.bevel_pixels), 0, 32, false},
@@ -941,7 +964,16 @@ static const WPE_PostFxParam wpe__shatter_params[] = {
     {"gravity", offsetof(WPE_PostFxConfig, shatter.gravity), -10, 10, false},
     {"spin", offsetof(WPE_PostFxConfig, shatter.spin), 0, 30, false},
     {"background", offsetof(WPE_PostFxConfig, shatter.background), 0, 1, false},
-    {"capture", offsetof(WPE_PostFxConfig, shatter.capture), 0, 8, true}};
+    {"capture", offsetof(WPE_PostFxConfig, shatter.capture), 0, 8, true},
+    {"fade", offsetof(WPE_PostFxConfig, shatter.fade), 0, 1e3, false}};
+
+/* Scene files read at most WPE_POSTFX_MAX_PARAMS parameters per effect. */
+#define WPE__FITS(t)                                                                                         \
+    static_assert(sizeof(t) / sizeof((t)[0]) <= WPE_POSTFX_MAX_PARAMS, #t " has too many parameters")
+WPE__FITS(wpe__ssao_params);
+WPE__FITS(wpe__cracks_params);
+WPE__FITS(wpe__shatter_params);
+#undef WPE__FITS
 
 static const struct {
     const WPE_PostFxParam* params;
