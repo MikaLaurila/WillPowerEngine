@@ -69,6 +69,10 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (editor: camera gizmo)
+- Scene cameras show in the edit view (with the other icons, L): a camera body and the outline of what
+  the camera sees, from its field of view (or orthographic size) and the game's aspect ratio, with an
+  up marker; the game's camera is drawn brighter. Clicking the body selects the camera.
 ### Added (editor: drag assets onto fields)
 - Assets dragged from the Assets panel drop onto the inspector's asset fields (models, images, sounds,
   scripts, fonts, the sky's image) and onto the "Add component" path box. A field lights up only for an

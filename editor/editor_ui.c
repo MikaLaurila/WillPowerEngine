@@ -1189,8 +1189,70 @@ static void wpe__draw_particle_icon(ImDrawList* draw, const WPE_ParticleEmitter*
     if (selected) ImDrawList_AddCircle(draw, at, 12.5f, WPE__COL(237, 153, 56, 255), 24, 2.0f);
 }
 
-/* Draws an icon at every light and particle emitter in edit mode (when the view shows them) and returns the
- * entity whose icon is under the mouse, if any. */
+/* A scene camera: the shape of its view (lines from the camera to the corners of its view, `depth` along
+ * it, with a triangle on the top edge for up) and a small camera body at its position. The camera the game
+ * renders from is drawn brighter. */
+static void wpe__draw_camera_gizmo(const WPE_EditorUi* ui, ImDrawList* draw, const WPE_Mat4* view_projection,
+                                   const WPE_Camera* camera, const WPE_Mat4* world, float depth, bool active,
+                                   bool selected, ImVec2_c* out_at, bool* out_visible) {
+    const WPE_ProjectSettings* p = wpe_engine_project(wpe_editor_engine(ui->editor));
+    const float aspect = (float)p->width / (float)p->height;
+    const float half_h =
+        camera->orthographic ? camera->ortho_height * 0.5f : depth * tanf(camera->fov_y * 0.5f);
+    const float half_w = half_h * aspect;
+    const WPE_Vec3 origin = wpe_mat4_transform_point(world, wpe_vec3(0, 0, 0));
+    /* Orthographic views are boxes: their near rectangle is as big as the far one. */
+    const float near_h = camera->orthographic ? half_h : 0.0f, near_w = near_h * aspect;
+    const WPE_Vec3 far_local[4] = {{{-half_w, half_h, -depth}},
+                                   {{half_w, half_h, -depth}},
+                                   {{half_w, -half_h, -depth}},
+                                   {{-half_w, -half_h, -depth}}};
+    const WPE_Vec3 near_local[4] = {
+        {{-near_w, near_h, 0}}, {{near_w, near_h, 0}}, {{near_w, -near_h, 0}}, {{-near_w, -near_h, 0}}};
+    const uint32_t color = active ? WPE__COL(150, 215, 255, 255) : WPE__COL(120, 150, 180, 220);
+    const uint32_t shadow = WPE__COL(15, 15, 18, 170);
+    ImVec2_c corners[4], near_corners[4];
+    bool visible = true;
+    for (int i = 0; i < 4 && visible; ++i) {
+        visible =
+            wpe__to_screen(ui, view_projection, wpe_mat4_transform_point(world, far_local[i]), &corners[i]) &&
+            wpe__to_screen(ui, view_projection, wpe_mat4_transform_point(world, near_local[i]),
+                           &near_corners[i]);
+    }
+    if (visible) {
+        for (int pass = 0; pass < 2; ++pass) {
+            const uint32_t c = pass == 0 ? shadow : color;
+            const float width = pass == 0 ? 3.0f : 1.2f;
+            for (int i = 0; i < 4; ++i) {
+                ImDrawList_AddLine(draw, near_corners[i], corners[i], c, width);
+                ImDrawList_AddLine(draw, corners[i], corners[(i + 1) % 4], c, width);
+            }
+        }
+        /* Up: a small triangle over the middle of the top edge. */
+        ImVec2_c tip;
+        if (wpe__to_screen(ui, view_projection,
+                           wpe_mat4_transform_point(world, wpe_vec3(0, half_h * 1.35f, -depth)), &tip)) {
+            const ImVec2_c a = corners[0], b = corners[1];
+            const ImVec2_c left = {a.x + (b.x - a.x) * 0.35f, a.y + (b.y - a.y) * 0.35f};
+            const ImVec2_c right = {a.x + (b.x - a.x) * 0.65f, a.y + (b.y - a.y) * 0.65f};
+            ImDrawList_AddTriangleFilled(draw, left, right, tip, color);
+        }
+    }
+    ImVec2_c at;
+    *out_visible = wpe__to_screen(ui, view_projection, origin, &at);
+    if (!*out_visible) return;
+    *out_at = at;
+    /* The body: a rounded box with a lens. */
+    ImDrawList_AddCircleFilled(draw, at, 10.0f, shadow, 20);
+    ImDrawList_AddRectFilled(draw, (ImVec2_c){at.x - 6.0f, at.y - 4.0f}, (ImVec2_c){at.x + 4.0f, at.y + 4.0f},
+                             color, 1.5f, 0);
+    ImDrawList_AddTriangleFilled(draw, (ImVec2_c){at.x + 4.0f, at.y}, (ImVec2_c){at.x + 8.0f, at.y - 4.0f},
+                                 (ImVec2_c){at.x + 8.0f, at.y + 4.0f}, color);
+    if (selected) ImDrawList_AddCircle(draw, at, 12.5f, WPE__COL(237, 153, 56, 255), 24, 2.0f);
+}
+
+/* Draws an icon at every light, particle emitter and scene camera in edit mode (when the view shows them)
+ * and returns the entity whose icon is under the mouse, if any. */
 static WPE_Entity wpe__ui_light_icons(WPE_EditorUi* ui, ImDrawList* draw) {
     WPE_Mat4 view_projection;
     WPE_Vec3 eye, eye_dir;
@@ -1241,6 +1303,28 @@ static WPE_Entity wpe__ui_light_icons(WPE_EditorUi* ui, ImDrawList* draw) {
                             &at))
             continue;
         wpe__draw_particle_icon(draw, emitter, at, it.entity == selection);
+        const float distance =
+            sqrtf((mouse.x - at.x) * (mouse.x - at.x) + (mouse.y - at.y) * (mouse.y - at.y));
+        if (ui->view_hovered && distance < hovered_distance) {
+            hovered_distance = distance;
+            hovered = it.entity;
+        }
+    }
+    /* Scene cameras (not the editor's own): where they are and what they see, the view's size following
+     * the distance like the light arrows. */
+    it = wpe_ecs_query(
+        ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_CAMERA) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    while (wpe_ecs_iter_next(&it)) {
+        if (it.entity == ui->editor->camera) continue;
+        const WPE_Camera* camera = wpe_ecs_iter_get(&it, WPE_COMP_CAMERA);
+        const WPE_Transform* t = wpe_ecs_iter_get(&it, WPE_COMP_TRANSFORM);
+        const WPE_Vec3 position = wpe_mat4_transform_point(&t->world, wpe_vec3(0, 0, 0));
+        const float depth = fmaxf(wpe_vec3_length(wpe_vec3_sub(position, eye)) * 0.15f, 0.3f);
+        ImVec2_c at = {0};
+        bool visible = false;
+        wpe__draw_camera_gizmo(ui, draw, &view_projection, camera, &t->world, depth,
+                               it.entity == ui->editor->scene_camera, it.entity == selection, &at, &visible);
+        if (!visible) continue;
         const float distance =
             sqrtf((mouse.x - at.x) * (mouse.x - at.x) + (mouse.y - at.y) * (mouse.y - at.y));
         if (ui->view_hovered && distance < hovered_distance) {
