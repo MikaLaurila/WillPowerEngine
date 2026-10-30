@@ -630,19 +630,17 @@ static void test_lighting_postfx_cracks(void) {
     params.count = 0.0f;
     WPE_TEST_ASSERT_EQ_UINT(0, wpe_postfx_crack_lines(&params, S, S, b));
 
-    /* One line, the magical look (a white core and a glow, no band or slide): it lights the pixels on it,
-     * and those far away keep their color. */
+    /* One line with a white core and nothing else: it lights the pixels on it; past its reach (a few
+     * pixels) nothing changes. */
     WPE_PostChain* chain = NULL;
     WPE_TEST_ASSERT_OK(wpe_postfx_create(&chain));
     params = wpe_postfx_config_default(WPE_POSTFX_CRACKS).cracks;
     params.count = 1.0f;
     params.offset_pixels = 0.0f;
     params.bevel_pixels = 0.0f;
-    params.glow_pixels = 3.0f;
+    params.glow_pixels = 0.0f;
+    params.width_pixels = 1.0f;
     params.core_r = params.core_g = params.core_b = 1.0f;
-    params.glow_r = 0.35f;
-    params.glow_g = 0.55f;
-    params.glow_b = 1.0f;
     WPE_PostEffect effect = wpe_postfx_cracks(&params);
     WPE_Renderer* r = filled_renderer(0xFF404040u);
     WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
@@ -656,7 +654,7 @@ static void test_lighting_postfx_cracks(void) {
                 fabsf(((float)x + 0.5f - line.x) * -line.dy + ((float)y + 0.5f - line.y) * line.dx);
             const WPE_Color c = fb->color[y * S + x];
             if (d < 0.3f) lit += ((c >> 8) & 0xFFu) > 0x80u;
-            if (d > params.width_pixels + params.glow_pixels + 1.0f) {
+            if (d > 3.0f) {
                 ++kept;
                 changed += c != 0xFF404040u;
             }
@@ -667,40 +665,45 @@ static void test_lighting_postfx_cracks(void) {
     WPE_TEST_ASSERT_EQ_UINT(0, changed);
     wpe_renderer_destroy(r);
 
-    /* Glass: the band is on one side only. On stripes, pixels just beside the cut change on that side (the
-     * band refracts them) and stay put on the other; the cut itself darkens toward the core color. */
+    /* The rim is on one side only: over a dark gray, pixels just beside the cut take the tint (bluer) on
+     * that side and keep their color on the other. */
     params = wpe_postfx_config_default(WPE_POSTFX_CRACKS).cracks;
     params.count = 1.0f;
-    params.offset_pixels = 0.0f;
-    params.bevel_pixels = 6.0f;
-    params.glow_r = params.glow_g = params.glow_b = 0.0f; /* No rim light: only the refraction shows. */
-    r = striped();
+    r = filled_renderer(0xFF404040u);
     WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
     fb = wpe_renderer_framebuffer(r);
-    uint32_t moved[2] = {0, 0}, beside[2] = {0, 0};
+    uint32_t tinted[2] = {0, 0}, beside[2] = {0, 0};
     for (uint32_t y = 0; y < S; ++y) {
         for (uint32_t x = 0; x < S; ++x) {
             const float side = ((float)x + 0.5f - line.x) * -line.dy + ((float)y + 0.5f - line.y) * line.dx;
-            if (fabsf(side) < 1.0f || fabsf(side) > 2.0f) continue; /* Just off the cut, inside any band. */
+            if (fabsf(side) < 1.0f || fabsf(side) > 2.5f) continue;
             const int k = side > 0.0f;
             ++beside[k];
-            moved[k] += fb->color[y * S + x] != ((x & 1) ? 0xFFFFFFFFu : 0xFF000000u);
+            tinted[k] += (fb->color[y * S + x] & 0xFFu) > 0x40u;
         }
     }
     WPE_TEST_ASSERT(beside[0] > 20 && beside[1] > 20);
-    WPE_TEST_ASSERT_MSG((moved[0] == 0) != (moved[1] == 0), "changed beside the cut: %u and %u", moved[0],
-                        moved[1]);
+    WPE_TEST_ASSERT_MSG((tinted[0] == 0) != (tinted[1] == 0), "tinted beside the cut: %u and %u", tinted[0],
+                        tinted[1]);
     wpe_renderer_destroy(r);
 
-    /* With a slide and no light, the stripes move near the line: the image is cut. */
-    params.bevel_pixels = 0.0f;
-    params.offset_pixels = 3.0f;
-    params.strength = 1.0f;
-    params.core_r = params.core_g = params.core_b = 0.0f;
-    params.glow_r = params.glow_g = params.glow_b = 0.0f;
+    /* The seam and the streaks move the image near the cut, and only there. */
+    params.glow_pixels = 0.0f;
     r = striped();
     WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
-    WPE_TEST_ASSERT(changed_pixels(wpe_renderer_framebuffer(r), 0, S, 0, S) > 0);
+    fb = wpe_renderer_framebuffer(r);
+    uint32_t near_moved = 0, far_moved = 0;
+    for (uint32_t y = 0; y < S; ++y) {
+        for (uint32_t x = 0; x < S; ++x) {
+            const float d =
+                fabsf(((float)x + 0.5f - line.x) * -line.dy + ((float)y + 0.5f - line.y) * line.dx);
+            const bool moved = fb->color[y * S + x] != ((x & 1) ? 0xFFFFFFFFu : 0xFF000000u);
+            if (d < 2.0f) near_moved += moved;
+            if (d > params.bevel_pixels + 3.0f) far_moved += moved;
+        }
+    }
+    WPE_TEST_ASSERT(near_moved > S / 4);
+    WPE_TEST_ASSERT_EQ_UINT(0, far_moved);
     wpe_renderer_destroy(r);
     /* Strength 0: untouched. */
     params.strength = 0.0f;

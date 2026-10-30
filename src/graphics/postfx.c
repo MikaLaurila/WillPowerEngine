@@ -443,101 +443,89 @@ static float wpe__line_noise(uint32_t seed, uint32_t line, float x) {
     return a + (b - a) * f;
 }
 
-/* Each pixel shows the image slid along every cut it's beside (one way on each side). Then, like broken
- * glass, the nearest cut shades it: on one side of each cut a band (the fracture's slanted face, its width
- * wandering along the cut) refracts the image outward with color fringes, darker toward the cut and with a
- * bright rim at its outer edge; the cut itself blends toward the core color; and the glow adds light
- * around it. */
+/* Like broken glass, only pixels near a cut change; the nearest cut shapes them. Within two pixels of it
+ * the image is pulled across the cut (a seam); within the bevel zone it is sheared along the cut by an
+ * amount that wanders along it and fades with distance (the streaks of fractured glass); on one side a rim
+ * tinted by the glow color darkens bright areas toward it and lights dark ones with it, so it shows on
+ * both; and an optional core blends the cut itself toward the core color. */
 static void wpe__cracks_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
                              uint32_t row_begin, uint32_t row_end) {
     (void)pass;
     const WPE_CracksParams* p = params_ptr;
     WPE_CrackLine lines[WPE_POSTFX_MAX_CRACKS];
     const uint32_t count = p->strength > 0.0f ? wpe_postfx_crack_lines(p, c->width, c->height, lines) : 0;
-    const float width = fmaxf(p->width_pixels, 0.25f), glow = fmaxf(p->glow_pixels, 0.0f);
+    const float width = fmaxf(p->width_pixels, 0.0f), glow = fmaxf(p->glow_pixels, 0.0f);
     const float bevel = fmaxf(p->bevel_pixels, 0.0f);
+    const float shear_zone = bevel > 0.0f ? bevel + 2.0f : 0.0f;
+    const float zone = fmaxf(fmaxf(glow, shear_zone), fmaxf(width, 2.0f));
     const float core_color[3] = {p->core_r, p->core_g, p->core_b};
-    const float glow_color[3] = {p->glow_r, p->glow_g, p->glow_b};
-    /* Which side of each cut has the band. */
-    float band_side[WPE_POSTFX_MAX_CRACKS];
-    for (uint32_t l = 0; l < count; ++l)
-        band_side[l] = wpe__crack_random(p->seed, l, 3) < 0.5f ? -1.0f : 1.0f;
+    const float tint[3] = {p->glow_r, p->glow_g, p->glow_b};
+    /* Each cut's rim side and how far it pulls (between half and one and a half times offset). */
+    float rim_side[WPE_POSTFX_MAX_CRACKS], pull[WPE_POSTFX_MAX_CRACKS];
+    for (uint32_t l = 0; l < count; ++l) {
+        rim_side[l] = wpe__crack_random(p->seed, l, 3) < 0.5f ? -1.0f : 1.0f;
+        pull[l] = p->offset_pixels * (0.5f + wpe__crack_random(p->seed, l, 4));
+    }
     for (uint32_t y = row_begin; y < row_end; ++y) {
         for (uint32_t x = 0; x < c->width; ++x) {
             const size_t i = (size_t)y * c->width + x;
-            if (count == 0) {
-                c->dst[i] = c->src[i];
-                continue;
-            }
             const float px = (float)x + 0.5f, py = (float)y + 0.5f;
-            float shift_x = 0.0f, shift_y = 0.0f, shine = 0.0f;
             uint32_t nearest = UINT32_MAX;
-            float nearest_d = 1e30f, nearest_side = 0.0f, nearest_along = 0.0f, nearest_tip = 0.0f;
+            float d = zone, side = 0.0f, along = 0.0f, tip = 0.0f;
             for (uint32_t l = 0; l < count; ++l) {
                 const WPE_CrackLine* line = &lines[l];
                 const float vx = px - line->x, vy = py - line->y;
-                const float along = vx * line->dx + vy * line->dy;
-                if (fabsf(along) > line->reach) continue;          /* Past the end of a growing line. */
-                const float side = vx * -line->dy + vy * line->dx; /* Signed distance from the line. */
-                const float s = side >= 0.0f ? 1.0f : -1.0f;
-                shift_x += s * line->dx;
-                shift_y += s * line->dy;
-                /* The light fades in over the last pixels of a growing line instead of stopping flat. */
-                const float tip = fminf((line->reach - fabsf(along)) / (width + glow + bevel + 1.0f), 1.0f);
-                const float d = fabsf(side);
-                if (glow > 0.0f) {
-                    const float g = fmaxf(1.0f - d / (width + glow), 0.0f);
-                    shine = fmaxf(shine, g * g * tip);
-                }
-                if (d < nearest_d) {
+                const float a = vx * line->dx + vy * line->dy;
+                if (fabsf(a) > line->reach) continue; /* Past the end of a growing line. */
+                const float s = vx * -line->dy + vy * line->dx;
+                if (fabsf(s) < d) {
                     nearest = l;
-                    nearest_d = d;
-                    nearest_side = side;
-                    nearest_along = along;
-                    nearest_tip = tip;
+                    d = fabsf(s);
+                    side = s;
+                    along = a;
+                    /* A growing line's end fades in over a few pixels instead of stopping flat. */
+                    tip = fminf((line->reach - fabsf(a)) / (zone + 1.0f), 1.0f);
                 }
             }
-            /* The image slides along the cuts: sample against the shift. */
-            const float offset = p->offset_pixels * p->strength;
-            float sx = px - shift_x * offset, sy = py - shift_y * offset;
-            float red_x = sx, red_y = sy, blue_x = sx, blue_y = sy;
-            float shade = 1.0f, rim = 0.0f, sheen = 0.0f, core = 0.0f;
-            if (nearest != UINT32_MAX) {
-                const WPE_CrackLine* line = &lines[nearest];
-                core = fmaxf(1.0f - nearest_d / width, 0.0f) * nearest_tip;
-                /* The band: on its side, out to a width that wanders between 35% and 100% of bevel. */
-                const float into = nearest_side * band_side[nearest];
-                const float band =
-                    bevel * (0.3f + 0.7f * wpe__line_noise(p->seed, nearest, nearest_along / 14.0f));
-                if (bevel > 0.0f && into > 0.0f && into < band) {
-                    const float t = into / band; /* 0 at the cut, 1 at the band's edge. */
-                    const float lens = band * 0.9f * (1.0f - t) * p->strength * nearest_tip;
-                    const float nx = -line->dy * band_side[nearest], ny = line->dx * band_side[nearest];
-                    red_x = sx + nx * lens * 1.25f;
-                    red_y = sy + ny * lens * 1.25f;
-                    blue_x = sx + nx * lens * 0.75f;
-                    blue_y = sy + ny * lens * 0.75f;
-                    sx += nx * lens;
-                    sy += ny * lens;
-                    shade = 1.0f - 0.45f * (1.0f - t) * p->strength * nearest_tip;
-                    sheen = 0.06f * nearest_tip; /* The face reflects a little of the edge light. */
-                    rim = fmaxf(1.0f - (band - into), 0.0f) * nearest_tip; /* Its last pixel. */
+            if (nearest == UINT32_MAX) {
+                c->dst[i] = c->src[i];
+                continue;
+            }
+            const WPE_CrackLine* line = &lines[nearest];
+            const float sign = side >= 0.0f ? 1.0f : -1.0f;
+            const float nx = -line->dy, ny = line->dx; /* The cut's normal. */
+            const float amount = p->strength * tip;
+            /* The seam: pulled across the cut, fading over two pixels. */
+            const float across = pull[nearest] * sign * (1.0f - wpe__clamp01(d * 0.5f)) * amount;
+            float off_x = nx * across, off_y = ny * across;
+            /* The streaks: sheared along the cut. */
+            if (d < shear_zone) {
+                const float jitter = wpe__line_noise(p->seed, nearest, along * 0.08f) * 2.0f - 1.0f;
+                const float shear = jitter * (1.0f - d / shear_zone) * bevel * 0.6f * amount;
+                off_x += line->dx * shear;
+                off_y += line->dy * shear;
+            }
+            float rgb[3];
+            wpe__channels(wpe__texel_clamped(c, (int32_t)floorf(px - off_x), (int32_t)floorf(py - off_y)),
+                          rgb);
+            /* The rim, on one side: darker toward the tint over bright areas, lit with it over dark ones. */
+            if (glow > 0.0f && d < glow && sign == rim_side[nearest]) {
+                const float rim = (1.0f - d / glow) * 0.3f * amount;
+                const float lum = 0.299f * rgb[0] + 0.587f * rgb[1] + 0.114f * rgb[2];
+                for (int k = 0; k < 3; ++k) {
+                    rgb[k] = lum > 0.5f ? rgb[k] * (1.0f - rim * (1.0f - wpe__clamp01(tint[k])) * 0.55f)
+                                        : rgb[k] + rim * tint[k];
                 }
             }
-            float rgb[3], red[3], blue[3];
-            wpe__channels(wpe__texel_clamped(c, (int32_t)floorf(sx), (int32_t)floorf(sy)), rgb);
-            wpe__channels(wpe__texel_clamped(c, (int32_t)floorf(red_x), (int32_t)floorf(red_y)), red);
-            wpe__channels(wpe__texel_clamped(c, (int32_t)floorf(blue_x), (int32_t)floorf(blue_y)), blue);
-            rgb[0] = red[0];
-            rgb[2] = blue[2];
-            const float blend = core * p->strength;
-            for (int k = 0; k < 3; ++k) {
-                float v = rgb[k] * shade + (rim + shine + sheen) * glow_color[k] * p->strength;
-                v += (wpe__clamp01(core_color[k]) - v) * blend;
-                rgb[k] = wpe__clamp01(v);
+            /* The cut itself, when it has a core. */
+            if (width > 0.0f && d < width) {
+                const float blend = (1.0f - d / width) * amount;
+                for (int k = 0; k < 3; ++k)
+                    rgb[k] += (wpe__clamp01(core_color[k]) - rgb[k]) * blend;
             }
             const float a = (float)((c->src[i] >> 24) & 0xFFu) / 255.0f;
-            c->dst[i] = wpe_color_from_vec4(wpe_vec4(rgb[0], rgb[1], rgb[2], a));
+            c->dst[i] = wpe_color_from_vec4(
+                wpe_vec4(wpe__clamp01(rgb[0]), wpe__clamp01(rgb[1]), wpe__clamp01(rgb[2]), a));
         }
     }
 }
@@ -812,17 +800,17 @@ static const WPE_CracksParams wpe__cracks_defaults = {.count = 8.0f,
                                                       .center_x = 0.5f,
                                                       .center_y = 0.5f,
                                                       .spread = 0.15f,
-                                                      .offset_pixels = 1.5f,
-                                                      .width_pixels = 0.7f,
-                                                      .glow_pixels = 0.0f,
-                                                      .bevel_pixels = 4.0f,
+                                                      .offset_pixels = 3.0f,
+                                                      .width_pixels = 0.0f,
+                                                      .glow_pixels = 5.0f,
+                                                      .bevel_pixels = 5.0f,
                                                       .strength = 1.0f,
-                                                      .core_r = 0.06f,
-                                                      .core_g = 0.07f,
-                                                      .core_b = 0.09f,
-                                                      .glow_r = 0.85f,
-                                                      .glow_g = 0.92f,
-                                                      .glow_b = 1.0f};
+                                                      .core_r = 0.05f,
+                                                      .core_g = 0.06f,
+                                                      .core_b = 0.08f,
+                                                      .glow_r = 0.1f,
+                                                      .glow_g = 0.2f,
+                                                      .glow_b = 0.6f};
 
 WPE_PostEffect wpe_postfx_cracks(const WPE_CracksParams* params) {
     return (WPE_PostEffect){.name = "cracks",
@@ -932,7 +920,7 @@ static const WPE_PostFxParam wpe__cracks_params[] = {
     {"center_y", offsetof(WPE_PostFxConfig, cracks.center_y), -1, 2, false},
     {"spread", offsetof(WPE_PostFxConfig, cracks.spread), 0, 2, false},
     {"offset_pixels", offsetof(WPE_PostFxConfig, cracks.offset_pixels), 0, 32, false},
-    {"width_pixels", offsetof(WPE_PostFxConfig, cracks.width_pixels), 0.25, 16, false},
+    {"width_pixels", offsetof(WPE_PostFxConfig, cracks.width_pixels), 0, 16, false},
     {"glow_pixels", offsetof(WPE_PostFxConfig, cracks.glow_pixels), 0, 32, false},
     {"bevel_pixels", offsetof(WPE_PostFxConfig, cracks.bevel_pixels), 0, 32, false},
     {"strength", offsetof(WPE_PostFxConfig, cracks.strength), 0, 1, false},

@@ -70,13 +70,15 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   behind.
 
 ### Changed (cracks look like broken glass)
-- `cracks` now looks like broken glass by default: each cut is a dark line, and on one side of it a band
-  (the fracture's face, its width breaking jaggedly along the cut) refracts the image with color fringes,
-  darker toward the cut, with a pale edge. `split_pixels` is replaced by `bevel_pixels` (the band's width;
-  0 for both sides alike); the core color is now blended toward (dark for glass, white for light) and the
-  glow color also lights the band's edge. A white core, a blue glow and no band give the magical look.
-  `judgement_cut.luau` uses the glass look unless given colors (`glass = false` for the magical one).
-- Tests: the band changes the image on one side of the cut only.
+- `cracks` now works like broken glass (after the project owner's earlier effect): only pixels near a cut
+  change. At the cut the image is pulled across it (a seam, each cut by its own amount), near it the image
+  is sheared along the cut by an amount that wanders along it (the streaks of fractured glass), and a rim on
+  one side, tinted by the glow color, darkens bright areas toward the tint and lights dark ones with it.
+  The cuts no longer slide the whole image. `split_pixels` is replaced by `bevel_pixels` (the streaks'
+  reach), `glow_pixels` is the rim's width, and `width_pixels` an optional line in the core color (0 by
+  default). `judgement_cut.luau` draws a core line only when given a `core` color.
+- Tests: a core line lights the cut; the rim is on one side only; seams and streaks move the image near
+  the cut and nowhere else.
 ### Added (Judgement Cut: cracks, shatter, screen capture)
 - Post effect `cracks`: straight cuts across the screen crossing near a point; the image slides along each
   (opposite ways on its sides), the line glows in its core and glow colors with color fringes, and a

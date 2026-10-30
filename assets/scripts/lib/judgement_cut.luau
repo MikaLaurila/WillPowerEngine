@@ -14,10 +14,9 @@
 --   shatter_time = 1.4 seconds the pieces fall
 --   spread = 0.15      how far from the point the cuts may pass (fraction of the screen's height)
 --   dim = 0.3          how much darker the scene gets during the cuts (0: not at all)
---   core, glow         colors (vectors): the cut's, and the glow and edge light's. By default the cuts look
---                      like broken glass (a dark cut, a refracting band, a pale edge); for a magical cut
---                      give a white core, a blue glow and glass = false
---   glass = true       the refracting band on one side of each cut (false: both sides alike)
+--   glow               the rim's tint (a vector; bluish by default). The cuts look like broken glass: the
+--                      image is pulled and streaked along them, with the tinted rim on one side
+--   core               a color for a line drawn along each cut (none by default; white for cuts of light)
 --   slot = 8           the capture slot the shatter breaks (wpe.capture_screen)
 --   seed               which cuts (random by default)
 --
@@ -69,13 +68,10 @@ function JudgementCut.start(x: number, y: number, options: { [string]: any }?)
 	self.clock = 0
 	wpe.add_postfx({ effect = "color_adjust", brightness = 0 })
 	local cracks = { effect = "cracks", count = 0, seed = self.seed, center_x = x, center_y = y, spread = self.spread }
-	if not self.glass then
-		cracks.bevel_pixels = 0
-		cracks.glow_pixels = 3
-	end
 	local core = options and options.core
 	local glow = options and options.glow
 	if core then
+		cracks.width_pixels = 1
 		cracks.core_r, cracks.core_g, cracks.core_b = core.x, core.y, core.z
 	end
 	if glow then
