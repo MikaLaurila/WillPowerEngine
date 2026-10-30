@@ -23,7 +23,8 @@
 #define WPE__GRID_HALF_LINES 50 /* Grid lines on each side of the center. */
 #define WPE__GRID_PIECE 5.0f    /* Grid line pieces, in spacings (each fades on its own). */
 #define WPE__AUDIO_CHUNK_FRAMES 1024u
-#define WPE__CAPTURE_SLOTS 8u /* wpe.capture_screen slots (and shatter's capture parameter). */
+#define WPE__CAPTURE_SLOTS 8u     /* wpe.capture_screen slots (and shatter's capture parameter). */
+#define WPE__SLASH_DISTORTIONS 8u /* Slashes whose distortion a frame shows (the first ones found). */
 
 struct WPE_Engine {
     WPE_ProjectSettings project;
@@ -660,12 +661,26 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
     engine->stats.render_ms = wpe__ms_since(&mark);
 
     const WPE_Camera* cam = wpe_ecs_get_component(engine->ecs, camera, WPE_COMP_CAMERA);
-    if (result == WPE_RESULT_OK && cam && env->postfx_count > 0) {
-        WPE_PostEffect effects[WPE_SCENE_MAX_POSTFX];
-        const uint32_t count = wpe_scene_environment_effects(env, effects);
+    if (result == WPE_RESULT_OK && cam) {
+        /* Slashes' distortions warp the scene first; the environment's effects follow. */
+        WPE_PostEffect effects[WPE__SLASH_DISTORTIONS + WPE_SCENE_MAX_POSTFX];
+        WPE_CurveDistortParams distortions[WPE__SLASH_DISTORTIONS];
+        float points[WPE__SLASH_DISTORTIONS * WPE_SLASH_DISTORTION_POINTS * 3];
+        const WPE_Framebuffer* fb = wpe_renderer_framebuffer(engine->renderer);
+        WPE_Mat4 view, projection;
+        uint32_t count = 0;
+        if (wpe_scene_camera_matrices(engine->ecs, camera, (float)fb->width / (float)fb->height, &view,
+                                      &projection)) {
+            const WPE_Mat4 view_projection = wpe_mat4_mul(&projection, &view);
+            count = wpe_slash_distortions(engine->ecs, &view_projection, fb->width, fb->height, distortions,
+                                          points, WPE__SLASH_DISTORTIONS);
+            for (uint32_t i = 0; i < count; ++i)
+                effects[i] = wpe_postfx_curve_distort(&distortions[i]);
+        }
+        count += wpe_scene_environment_effects(env, &effects[count]);
         const WPE_PostCamera post = {
             .near_z = cam->near_z, .far_z = cam->far_z, .orthographic = cam->orthographic};
-        result = wpe_postfx_apply(engine->postfx, engine->renderer, effects, count, &post);
+        if (count > 0) result = wpe_postfx_apply(engine->postfx, engine->renderer, effects, count, &post);
     }
     engine->stats.postfx_ms = wpe__ms_since(&mark);
     /* Debug overlays, the UI and script 2D drawing go on top, untouched by post-processing. */

@@ -752,6 +752,143 @@ static void wpe__radial_blur_pass(const WPE_PostContext* c, const void* params_p
     }
 }
 
+/* ---- Curve distortion ------------------------------------------------------------------------------- */
+
+#define WPE__CURVE_MAX_TAPS 16u
+#define WPE__CURVE_CUTOFF 0.03f /* Intensity below which pixels are left alone (exp(-3.5)). */
+
+/* The image at a point (pixel centers at .5), bilinear, clamped to the edges. */
+static void wpe__sample_bilinear(const WPE_PostContext* c, float x, float y, float out[3]) {
+    x = fminf(fmaxf(x - 0.5f, -1.0f), (float)c->width);
+    y = fminf(fmaxf(y - 0.5f, -1.0f), (float)c->height);
+    const float fx = floorf(x), fy = floorf(y);
+    const float tx = x - fx, ty = y - fy;
+    const int32_t x0 = (int32_t)fx, y0 = (int32_t)fy;
+    float a[3], b[3], d[3], e[3];
+    wpe__channels(wpe__texel_clamped(c, x0, y0), a);
+    wpe__channels(wpe__texel_clamped(c, x0 + 1, y0), b);
+    wpe__channels(wpe__texel_clamped(c, x0, y0 + 1), d);
+    wpe__channels(wpe__texel_clamped(c, x0 + 1, y0 + 1), e);
+    for (int k = 0; k < 3; ++k) {
+        const float top = a[k] + (b[k] - a[k]) * tx, bottom = d[k] + (e[k] - d[k]) * tx;
+        out[k] = top + (bottom - top) * ty;
+    }
+}
+
+/* Each pixel near the curve shows the image from further across it (along the curve's perpendicular), blended
+ * over a spread of such offsets so the push smears; red and blue come from either side of the push, a core
+ * line and a tint go on top. The nearest point on the polyline decides everything, so it all varies smoothly
+ * between the points. */
+static void wpe__curve_distort_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
+                                    uint32_t row_begin, uint32_t row_end) {
+    (void)pass;
+    const WPE_CurveDistortParams* p = params_ptr;
+    const uint32_t n = p->points ? p->point_count : 0;
+    const float strength = wpe__clamp01(p->strength);
+    const float width = fmaxf(p->width, 0.5f), taper = wpe__clamp01(p->taper);
+    const float prism = fmaxf(p->prism, 0.0f), core = fmaxf(p->core, 0.0f), ripple = fmaxf(p->ripple, 0.0f);
+    const uint32_t taps =
+        p->smear_taps < 1 ? 1 : (p->smear_taps > WPE__CURVE_MAX_TAPS ? WPE__CURVE_MAX_TAPS : p->smear_taps);
+    const float half = taps > 1 ? 0.5f * (float)(taps - 1) : 1.0f;
+    const float tint[3] = {p->tint.x, p->tint.y, p->tint.z};
+    /* Pixels further than this from every point are untouched (the falloff is below the cutoff there). */
+    const float reach = width * 3.5f + 1.0f;
+    float min_x = INFINITY, min_y = INFINITY, max_x = -INFINITY, max_y = -INFINITY;
+    for (uint32_t k = 0; k < (n >= 2 && strength > 0.0f ? n : 0); ++k) {
+        const float* point = &p->points[(size_t)k * 3];
+        min_x = fminf(min_x, point[0] - reach);
+        max_x = fmaxf(max_x, point[0] + reach);
+        min_y = fminf(min_y, point[1] - reach);
+        max_y = fmaxf(max_y, point[1] + reach);
+    }
+    for (uint32_t y = row_begin; y < row_end; ++y) {
+        for (uint32_t x = 0; x < c->width; ++x) {
+            const size_t i = (size_t)y * c->width + x;
+            const float px = (float)x + 0.5f, py = (float)y + 0.5f;
+            c->dst[i] = c->src[i];
+            if (!(px >= min_x && px <= max_x && py >= min_y && py <= max_y)) continue;
+            /* The nearest point on the polyline: its segment and where along it. */
+            float best_d2 = INFINITY, best_t = 0.0f;
+            uint32_t seg = 0;
+            for (uint32_t k = 0; k + 1 < n; ++k) {
+                const float* a = &p->points[(size_t)k * 3];
+                const float vx = a[3] - a[0], vy = a[4] - a[1];
+                const float len2 = vx * vx + vy * vy;
+                const float t =
+                    len2 > 1e-6f ? wpe__clamp01(((px - a[0]) * vx + (py - a[1]) * vy) / len2) : 0.0f;
+                const float dx = px - (a[0] + vx * t), dy = py - (a[1] + vy * t);
+                const float d2 = dx * dx + dy * dy;
+                if (d2 < best_d2) {
+                    best_d2 = d2;
+                    best_t = t;
+                    seg = k;
+                }
+            }
+            const float dist = sqrtf(best_d2);
+            /* Widest and strongest in the middle of the curve, pinched toward its ends. */
+            const float u = ((float)seg + best_t) / (float)(n - 1);
+            const float profile = fmaxf(powf(fmaxf(sinf(WPE_PI * u), 0.0f), 2.5f), 0.2f);
+            const float twidth = (1.0f - taper) + taper * profile;
+            const float tdisp = 1.0f - taper * 0.5f * (1.0f - profile);
+            float intensity = strength * expf(-dist / (width * twidth));
+            if (intensity < WPE__CURVE_CUTOFF) continue;
+            /* Weaker over surfaces in front of the curve. */
+            const float* a = &p->points[(size_t)seg * 3];
+            const float curve_depth = a[2] + (a[5] - a[2]) * best_t;
+            if (c->depth[i] < curve_depth - 1e-4f) intensity *= 1.0f - wpe__clamp01(p->depth_fade);
+            if (intensity < WPE__CURVE_CUTOFF) continue;
+            /* A smooth tangent: central differences at the segment's ends, blended across it. */
+            const uint32_t before = seg == 0 ? 0 : seg - 1, after = seg + 2 < n ? seg + 2 : n - 1;
+            const float* b = &p->points[(size_t)before * 3];
+            const float* f = &p->points[(size_t)after * 3];
+            float tx = a[3] - b[0], ty = a[4] - b[1];
+            tx += (f[0] - a[0] - tx) * best_t;
+            ty += (f[1] - a[1] - ty) * best_t;
+            const float tl = sqrtf(tx * tx + ty * ty);
+            const float nx = tl > 1e-4f ? -ty / tl : 0.0f, ny = tl > 1e-4f ? tx / tl : 1.0f;
+            const float jitter = ripple > 0.0f
+                                     ? (wpe__line_noise(0x5EEDu, 0, p->phase * 12.0f + dist * 0.3f) - 0.5f) *
+                                           2.0f * ripple * intensity
+                                     : 0.0f;
+            const float disp = p->amplitude * intensity * tdisp;
+            const float spread = fmaxf(p->smear_spread, 0.0f) * disp;
+            float rgb[3] = {0.0f, 0.0f, 0.0f}, sum = 0.0f;
+            for (uint32_t k = 0; k < taps; ++k) {
+                const float s = taps > 1 ? ((float)k - half) / half : 0.0f;  /* -1..1 */
+                const float weight = 1.0f - fabsf(s) * half / (half + 1.0f); /* A triangle, ends included. */
+                const float off = disp + s * spread + jitter;
+                float tap[3];
+                wpe__sample_bilinear(c, px + nx * off, py + ny * off, tap);
+                for (int ch = 0; ch < 3; ++ch)
+                    rgb[ch] += tap[ch] * weight;
+                sum += weight;
+            }
+            for (int ch = 0; ch < 3; ++ch)
+                rgb[ch] /= sum;
+            if (prism > 0.0f) {
+                const float blend = wpe__clamp01(intensity * 0.6f);
+                const float off_r = disp + jitter + prism * intensity,
+                            off_b = disp + jitter - prism * intensity;
+                float red[3], blue[3];
+                wpe__sample_bilinear(c, px + nx * off_r, py + ny * off_r, red);
+                wpe__sample_bilinear(c, px + nx * off_b, py + ny * off_b, blue);
+                rgb[0] += (red[0] - rgb[0]) * blend;
+                rgb[2] += (blue[2] - rgb[2]) * blend;
+            }
+            const float core_radius = core * (0.2f + 0.8f * profile);
+            if (core_radius > 0.0f && dist < core_radius) {
+                const float blend = (1.0f - dist / core_radius) * wpe__clamp01(intensity) * 0.85f;
+                for (int ch = 0; ch < 3; ++ch)
+                    rgb[ch] += (1.0f - rgb[ch]) * blend;
+            }
+            const float tint_blend = wpe__clamp01(p->tint.w) * wpe__clamp01(intensity) * 0.5f;
+            for (int ch = 0; ch < 3; ++ch)
+                rgb[ch] = wpe__clamp01(rgb[ch] + (tint[ch] - rgb[ch]) * tint_blend);
+            c->dst[i] = wpe_color_from_vec4(wpe_vec4(rgb[0], rgb[1], rgb[2], wpe_color_to_vec4(c->src[i]).w));
+        }
+    }
+}
+
 /* ---- Constructors ---------------------------------------------------------------------------------- */
 
 static const WPE_SsaoParams wpe__ssao_defaults = {
@@ -860,6 +997,14 @@ WPE_PostEffect wpe_postfx_shatter(const WPE_ShatterParams* params) {
                             .scratch_size = sizeof(wpe__ShatterScratch),
                             .params = params ? params : &wpe__shatter_defaults,
                             .enabled = true};
+}
+
+WPE_PostEffect wpe_postfx_curve_distort(const WPE_CurveDistortParams* params) {
+    return (WPE_PostEffect){.name = "curve_distort",
+                            .pass = wpe__curve_distort_pass,
+                            .pass_count = 1,
+                            .params = params,
+                            .enabled = params != NULL};
 }
 
 static const WPE_GrayscaleParams wpe__grayscale_defaults = {

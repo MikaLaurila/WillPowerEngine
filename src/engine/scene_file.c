@@ -753,6 +753,9 @@ static void wpe__save_slash(wpe__Saver* s, WPE_Entity e) {
     wpe__write_bool(w, "even", slash->even);
     wpe__write_bool(w, "visible", slash->visible);
     wpe__write_bool(w, "playing", slash->playing);
+    wpe__write_number(w, "distortion", slash->distortion);
+    wpe__write_number(w, "distortion_width", slash->distortion_width);
+    wpe__write_color(w, "distortion_tint", slash->distortion_tint);
     wpe_json_write_object_end(w);
 }
 
@@ -760,7 +763,8 @@ static bool wpe__load_slash(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v
     WPE_Slash slash = wpe_slash_default();
     uint32_t blend = slash.blend;
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "slash", "points", "width", "length", "duration", "color_head",
-                                "color_tail", "blend", "segments", "head", "even", "visible", "playing") ||
+                                "color_tail", "blend", "segments", "head", "even", "visible", "playing",
+                                "distortion", "distortion_width", "distortion_tint") ||
         !wpe__json_read_float(&l->r, v, "width", 0.0, 1e4, &slash.width) ||
         !wpe__json_read_float(&l->r, v, "length", 0.001, 1.0, &slash.length) ||
         !wpe__json_read_float(&l->r, v, "duration", 0.001, 60.0, &slash.duration) ||
@@ -771,7 +775,10 @@ static bool wpe__load_slash(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v
         !wpe__read_ref_value(l, wpe_json_get(v, "head"), "head", &slash.head) ||
         !wpe__json_read_bool(&l->r, v, "even", &slash.even) ||
         !wpe__json_read_bool(&l->r, v, "visible", &slash.visible) ||
-        !wpe__json_read_bool(&l->r, v, "playing", &slash.playing))
+        !wpe__json_read_bool(&l->r, v, "playing", &slash.playing) ||
+        !wpe__json_read_float(&l->r, v, "distortion", -1e3, 1e3, &slash.distortion) ||
+        !wpe__json_read_float(&l->r, v, "distortion_width", 0.5, 1e3, &slash.distortion_width) ||
+        !wpe__read_color(l, v, "distortion_tint", &slash.distortion_tint))
         return false;
     const WPE_JsonValue* points = wpe_json_get(v, "points");
     if (points) {

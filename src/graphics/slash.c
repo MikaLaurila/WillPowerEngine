@@ -19,7 +19,10 @@ WPE_Slash wpe_slash_default(void) {
                        .head = WPE_ENTITY_NULL,
                        .even = true,
                        .visible = true,
-                       .playing = false};
+                       .playing = false,
+                       .distortion = 0.0f,
+                       .distortion_width = 10.0f,
+                       .distortion_tint = wpe_vec4(1.0f, 1.0f, 1.0f, 0.0f)};
 }
 
 WPE_Vec3 wpe_slash_point(const WPE_Slash* slash, float t) {
@@ -79,4 +82,53 @@ void wpe_slash_update(WPE_Ecs* ecs, float dt) {
         if (follower && wpe_scene_get_parent(ecs, slash->head) == it.entity)
             follower->position = wpe_slash_point_along(slash, head);
     }
+}
+
+uint32_t wpe_slash_distortions(WPE_Ecs* ecs, const WPE_Mat4* view_projection, uint32_t width, uint32_t height,
+                               WPE_CurveDistortParams* out_params, float* out_points, uint32_t max) {
+    if (!ecs || !view_projection || !out_params || !out_points) return 0;
+    uint32_t count = 0;
+    WPE_EcsIter it = wpe_ecs_query(
+        ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_SLASH) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    while (count < max && wpe_ecs_iter_next(&it)) {
+        const WPE_Slash* slash = wpe_ecs_iter_get(&it, WPE_COMP_SLASH);
+        const WPE_Transform* t = wpe_ecs_iter_get(&it, WPE_COMP_TRANSFORM);
+        if (!slash->visible || !slash->playing || !(slash->distortion != 0.0f)) continue;
+        /* The visible piece, as wpe_scene_render() draws it. */
+        const float duration = slash->duration > 1e-4f ? slash->duration : 1e-4f;
+        const float sweep = slash->time / duration * (1.0f + slash->length);
+        const float head = fminf(sweep, 1.0f), tail = fmaxf(sweep - slash->length, 0.0f);
+        if (!(head > tail)) continue;
+        float* points = &out_points[(size_t)count * WPE_SLASH_DISTORTION_POINTS * 3];
+        uint32_t n = 0;
+        for (uint32_t k = 0; k < WPE_SLASH_DISTORTION_POINTS; ++k) {
+            const float along = tail + (head - tail) * (float)k / (float)(WPE_SLASH_DISTORTION_POINTS - 1);
+            const WPE_Vec3 world = wpe_mat4_transform_point(&t->world, wpe_slash_point_along(slash, along));
+            const WPE_Vec4 clip =
+                wpe_mat4_mul_vec4(view_projection, wpe_vec4(world.x, world.y, world.z, 1.0f));
+            if (!(clip.w > 1e-4f)) break;
+            float* out = &points[(size_t)n * 3];
+            out[0] = (clip.x / clip.w * 0.5f + 0.5f) * (float)width;
+            out[1] = (0.5f - clip.y / clip.w * 0.5f) * (float)height;
+            out[2] = clip.z / clip.w * 0.5f + 0.5f;
+            ++n;
+        }
+        if (n < 2) continue;
+        out_params[count++] = (WPE_CurveDistortParams){
+            .points = points,
+            .point_count = n,
+            .amplitude = slash->distortion,
+            .width = slash->distortion_width,
+            .taper = 0.8f,
+            .smear_taps = 5,
+            .smear_spread = 0.6f,
+            .prism = fabsf(slash->distortion) * 0.4f,
+            .ripple = fabsf(slash->distortion) * 0.15f,
+            .phase = slash->time,
+            .tint = slash->distortion_tint,
+            .depth_fade = 0.7f,
+            .strength = fminf((1.0f - slash->time / duration) * 5.0f, 1.0f),
+        };
+    }
+    return count;
 }

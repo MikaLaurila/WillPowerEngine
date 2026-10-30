@@ -74,6 +74,7 @@ function SwordTrail:make_spell()
 	wpe.set_slash(self.spell, {
 		width = 0.06, length = 1, duration = SPELL_SECONDS, segments = 48, head = blobs, even = true,
 		color_head = wpe.color(1, 1, 1, 0.45), color_tail = wpe.color(1, 1, 1, 0.05),
+		distortion = 5, distortion_width = 9, distortion_tint = wpe.color(1, 0.2, 0.15, 0.35),
 	})
 	wpe.set_particles(blobs, {
 		playing = false, rate = 11, lifetime = { 0.7, 1 }, speed = { 0, 0.12 }, spread = math.pi, size = { 0.3, 0.08 },
@@ -119,6 +120,7 @@ function SwordTrail:make_wave()
 		points = { vector.create(0, -1.1, 0), vector.create(0, -0.6, 0.7), vector.create(0, 0.6, 0.7), vector.create(0, 1.1, 0) },
 		width = 0.4, length = 0.8, duration = WAVE_SECONDS, head = sparks,
 		color_head = wpe.color(0.9, 0.95, 1, 1), color_tail = wpe.color(0.3, 0.45, 1, 0),
+		distortion = 8, distortion_width = 12, distortion_tint = wpe.color(0.4, 0.6, 1, 0.3),
 	})
 	wpe.set_particles(sparks, {
 		playing = false, rate = 160, lifetime = { 0.2, 0.45 }, speed = { 0.4, 1.4 }, spread = math.pi, size = { 0.07, 0.01 },

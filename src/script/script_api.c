@@ -2441,9 +2441,14 @@ static WPE_Slash wpe__check_slash(lua_State* L, int table, WPE_Slash base) {
     base.segments = wpe__field_count(L, table, "segments", 2, 64, base.segments);
     base.visible = wpe__field_bool(L, table, "visible", base.visible);
     base.even = wpe__field_bool(L, table, "even", base.even);
-    const char* colors[] = {"color_head", "color_tail"};
-    WPE_Vec4* color_targets[] = {&base.color_head, &base.color_tail};
-    for (int i = 0; i < 2; ++i) {
+    base.distortion = wpe__field_number(L, table, "distortion", base.distortion);
+    base.distortion_width = wpe__field_number(L, table, "distortion_width", base.distortion_width);
+    if (!(fabsf(base.distortion) <= 1e3f)) luaL_errorL(L, "distortion must be -1000..1000 pixels");
+    if (!(base.distortion_width >= 0.5f && base.distortion_width <= 1e3f))
+        luaL_errorL(L, "distortion_width must be 0.5..1000 pixels");
+    const char* colors[] = {"color_head", "color_tail", "distortion_tint"};
+    WPE_Vec4* color_targets[] = {&base.color_head, &base.color_tail, &base.distortion_tint};
+    for (int i = 0; i < 3; ++i) {
         lua_getfield(L, table, colors[i]);
         if (!lua_isnil(L, -1)) *color_targets[i] = wpe_color_to_vec4(wpe__opt_color(L, -1));
         lua_pop(L, 1);
@@ -2490,7 +2495,7 @@ static int wpe__api_get_slash(lua_State* L) {
         return 1;
     }
     const WPE_Slash s = *found; /* Copy before pushing. */
-    lua_createtable(L, 0, 12);
+    lua_createtable(L, 0, 15);
     lua_createtable(L, 4, 0);
     for (int i = 0; i < 4; ++i) {
         wpe__push_vec3(L, s.points[i]);
@@ -2504,7 +2509,9 @@ static int wpe__api_get_slash(lua_State* L) {
                    {"length", s.length},
                    {"duration", s.duration},
                    {"segments", s.segments},
-                   {"time", s.time}};
+                   {"time", s.time},
+                   {"distortion", s.distortion},
+                   {"distortion_width", s.distortion_width}};
     for (size_t i = 0; i < sizeof numbers / sizeof numbers[0]; ++i) {
         lua_pushnumber(L, numbers[i].value);
         lua_setfield(L, -2, numbers[i].key);
@@ -2519,6 +2526,8 @@ static int wpe__api_get_slash(lua_State* L) {
     lua_setfield(L, -2, "color_head");
     lua_pushnumber(L, (double)wpe_color_from_vec4(s.color_tail));
     lua_setfield(L, -2, "color_tail");
+    lua_pushnumber(L, (double)wpe_color_from_vec4(s.distortion_tint));
+    lua_setfield(L, -2, "distortion_tint");
     lua_pushstring(L, wpe__trail_blends[s.blend]);
     lua_setfield(L, -2, "blend");
     if (s.head == WPE_ENTITY_NULL) {

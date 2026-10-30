@@ -116,7 +116,8 @@
       "transform": {"position": [3, 1, -2]},
       "slash": {"points": [[-1, 0, 0], [-0.5, 0.6, 0], [0.5, 0.6, 0], [1, 0, 0]], "width": 0.3, "length": 0.6,
                 "duration": 0.5, "color_head": [1, 1, 1, 1], "color_tail": [0.4, 0.6, 1, 0], "segments": 16,
-                "head": 49, "playing": true}
+                "head": 49, "playing": true, "distortion": 6, "distortion_width": 8,
+                "distortion_tint": [1, 0.3, 0.3, 0.4]}
     },
     {"id": 49, "name": "slash sparks", "parent": 48, "transform": {}},
     {

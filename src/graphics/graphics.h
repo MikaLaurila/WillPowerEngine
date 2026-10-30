@@ -41,6 +41,7 @@
 #include "assets/model.h"
 #include "ecs/ecs.h"
 #include "graphics/draw2d.h"
+#include "graphics/postfx.h"
 #include "jobs/jobs.h"
 #include "scene/scene.h"
 
@@ -319,8 +320,11 @@ typedef struct WPE_Slash {
     WPE_Entity head;   /* Optional: a child of the entity moved to the head as it sweeps (sparks, a light). */
     bool even;         /* Sweep at an even speed along the curve (else at the curve parameter's pace). */
     bool visible;
-    bool playing; /* Sweeping; it stops (and disappears) at the end. */
-    float time;   /* Seconds into the sweep. */
+    bool playing;             /* Sweeping; it stops (and disappears) at the end. */
+    float time;               /* Seconds into the sweep. */
+    float distortion;         /* Pixels the screen around the visible piece is pushed across it (0: none). */
+    float distortion_width;   /* Pixels from the piece at which the push has fallen to about a third. */
+    WPE_Vec4 distortion_tint; /* A color cast in the distortion, by its alpha. */
 } WPE_Slash;
 
 /** @return A 1.2 m crescent in the entity's XY plane, 0.25 m wide, sweeping evenly in 0.3 s with half of it
@@ -344,6 +348,22 @@ void wpe_slash_play(WPE_Ecs* ecs, WPE_Entity entity);
  * @thread_safety Thread owning the world
  */
 void wpe_slash_update(WPE_Ecs* ecs, float dt);
+
+/** Points in each curve wpe_slash_distortions() fills (x, y and depth each). */
+#define WPE_SLASH_DISTORTION_POINTS 33u
+
+/**
+ * The screen distortions of playing, visible slashes with a `distortion`, for wpe_postfx_curve_distort():
+ * each one's visible piece projected onto a width x height screen through view_projection (world matrices
+ * as last updated). Points behind the camera end a curve. The distortion fades out over the sweep's last
+ * fifth.
+ *
+ * @param out_points  max * WPE_SLASH_DISTORTION_POINTS * 3 floats; out_params[k].points point into them.
+ * @return How many of out_params were filled (at most max).
+ * @thread_safety Thread owning the world
+ */
+uint32_t wpe_slash_distortions(WPE_Ecs* ecs, const WPE_Mat4* view_projection, uint32_t width, uint32_t height,
+                               WPE_CurveDistortParams* out_params, float* out_points, uint32_t max);
 /** @return A visible, lit, single-sided (as the material says) mesh renderer of `mesh` in `model` that casts
  * and receives shadows, without a skin. @thread_safety Any thread */
 WPE_MeshRenderer wpe_mesh_renderer_default(WPE_AssetHandle model, uint32_t mesh);

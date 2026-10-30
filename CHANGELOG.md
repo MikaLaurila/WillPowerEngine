@@ -80,6 +80,13 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   travels it steadily. The sword demo's E / left shoulder casts a curve spell: a faint line from Beowulf's
   hand over to the ground with red blobs left along it by the traveling emitter (after the project
   owner's earlier effect).
+- Slash distortion (`distortion`, `distortion_width`, `distortion_tint` on slashes, after the project
+  owner's earlier curve effect): the screen around a playing slash's visible piece is pushed across it
+  and smeared, with red and blue pulled apart, a wavering edge and a tint; widest in the middle, pinched
+  at the ends, weaker over things in front of the curve and fading out at the end of the sweep. It is a
+  new post pass, `wpe_postfx_curve_distort` (a screen polyline with depth), which the engine runs before
+  the environment's effects for each slash that asks for it (`wpe_slash_distortions` projects them). The
+  sword demo's wave and curve spell use it.
 - Tests: the curve, the sweep and its head entity, drawing while playing only; the master scene (round
   trip) and the tour.
 ### Added (weapon trails)

@@ -1195,6 +1195,23 @@ static void test_graphics_slash_sweeps(void) {
     fb = render_scene(renderer, sr, ecs, camera, &stats);
     WPE_TEST_ASSERT_EQ_UINT(1, wpe_renderer_stats(renderer).draws);
     WPE_TEST_ASSERT(count_color(fb, 0xFFFF00FFu) > 20);
+    /* Its screen distortion: none until asked for, then the visible piece on screen, from the tail at the
+     * curve's start to the head above the middle. */
+    WPE_Mat4 view, projection;
+    WPE_TEST_ASSERT(wpe_scene_camera_matrices(ecs, camera, 64.0f / 48.0f, &view, &projection));
+    const WPE_Mat4 view_projection = wpe_mat4_mul(&projection, &view);
+    WPE_CurveDistortParams wakes[2];
+    float wake_points[2 * WPE_SLASH_DISTORTION_POINTS * 3];
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_slash_distortions(ecs, &view_projection, 64, 48, wakes, wake_points, 2));
+    ((WPE_Slash*)wpe_ecs_get_component(ecs, e, WPE_COMP_SLASH))->distortion = 4.0f;
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_slash_distortions(ecs, &view_projection, 64, 48, wakes, wake_points, 2));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_SLASH_DISTORTION_POINTS, wakes[0].point_count);
+    WPE_TEST_ASSERT(wakes[0].points == wake_points && wakes[0].amplitude == 4.0f &&
+                    wakes[0].strength == 1.0f);
+    const float* last = &wakes[0].points[(WPE_SLASH_DISTORTION_POINTS - 1) * 3];
+    WPE_TEST_ASSERT_NEAR(32.0, last[0], 1e-3);
+    WPE_TEST_ASSERT(last[1] < 24.0f && wakes[0].points[0] < 32.0f && wakes[0].points[1] > last[1]);
+    WPE_TEST_ASSERT(last[2] > 0.0f && last[2] < 1.0f);
     /* Done after its duration: stopped and not drawn. */
     wpe_slash_update(ecs, 0.7f);
     WPE_TEST_ASSERT(!((WPE_Slash*)wpe_ecs_get_component(ecs, e, WPE_COMP_SLASH))->playing);

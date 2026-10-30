@@ -560,6 +560,42 @@ static void test_lighting_postfx_distortions(void) {
     const WPE_Color edge = fb->color[(S / 2) * S + 3];
     WPE_TEST_ASSERT_MSG(edge != 0xFFFFFFFFu && edge != 0xFF000000u, "0x%08x is not blurred", edge);
     wpe_renderer_destroy(r);
+
+    /* A curve down the middle pushes the columns sideways near it and leaves the rest; its fringe and
+     * tint only show where it pushes. */
+    const float curve[] = {32.0f, 8.0f, 0.5f, 32.0f, 32.0f, 0.5f, 32.0f, 56.0f, 0.5f};
+    WPE_CurveDistortParams wake = {.points = curve,
+                                   .point_count = 3,
+                                   .amplitude = 3.0f,
+                                   .width = 2.0f,
+                                   .taper = 0.8f,
+                                   .smear_taps = 5,
+                                   .smear_spread = 0.6f,
+                                   .prism = 1.0f,
+                                   .core = 1.0f,
+                                   .ripple = 0.5f,
+                                   .tint = wpe_vec4(1, 0, 0, 0.5f),
+                                   .depth_fade = 1.0f,
+                                   .strength = 1.0f};
+    effect = wpe_postfx_curve_distort(&wake);
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    fb = wpe_renderer_framebuffer(r);
+    WPE_TEST_ASSERT(changed_pixels(fb, 24, 40, 30, 34) > 40);    /* On the curve, in its middle. */
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(fb, 0, S, 0, 22)); /* Beyond its reach. */
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(fb, 0, 2, 0, S));  /* Past its end. */
+    wpe_renderer_destroy(r);
+
+    /* No strength, or no points: no change. */
+    wake.strength = 0.0f;
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(wpe_renderer_framebuffer(r), 0, S, 0, S));
+    wake.strength = 1.0f;
+    wake.point_count = 1;
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(wpe_renderer_framebuffer(r), 0, S, 0, S));
+    wpe_renderer_destroy(r);
     wpe_postfx_destroy(chain);
 }
 

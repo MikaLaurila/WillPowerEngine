@@ -188,6 +188,29 @@ typedef struct WPE_ShatterParams {
     float fade;               /* Seconds over which the pieces fade into the scene behind (0: they don't). */
     const WPE_Texture* image; /* Not a parameter: the captured frame, set by the host (NULL: live). */
 } WPE_ShatterParams;
+
+/* Curve distortion (a slash's wake): the image is pushed across a curve on screen and smeared along the
+ * push, with a prismatic fringe, an optional white-hot core and a tint, strongest on the curve and falling
+ * off with distance, widest in the curve's middle and pinched at its ends. The host gives the curve as
+ * points on screen (the engine projects playing slashes that ask for it, wpe_slash_distortions()); it is not
+ * a scene-file effect. */
+typedef struct WPE_CurveDistortParams {
+    const float* points;  /* Per point along the curve: x, y (pixels from the top left) and window depth. */
+    uint32_t point_count; /* At least 2. */
+    float amplitude;      /* How far (pixels) the image is pushed across the curve at its strongest. */
+    float width;          /* Pixels from the curve at which the effect has fallen to about a third. */
+    float taper;          /* 0..1: how much narrower and weaker it gets toward the ends. */
+    uint32_t smear_taps;  /* Samples blended across the push (1 = none, at most 16). */
+    float smear_spread;   /* Their spread, as a share of the push. */
+    float prism;          /* Pixels red and blue are pulled apart across the curve. */
+    float core;           /* Half width (pixels) of a white-hot line on the curve (0 = none). */
+    float ripple;         /* Pixels the push wavers by (0 = none). */
+    float phase;          /* Moves the waver (e.g. seconds). */
+    WPE_Vec4 tint;        /* A color cast near the curve, by its alpha. */
+    float depth_fade;     /* 0..1: how much weaker it is over surfaces in front of the curve. */
+    float strength;       /* 0..1 overall. */
+} WPE_CurveDistortParams;
+
 /* Depth of field: what's near `focus_distance` is sharp, and the image blurs with distance from there,
  * in front and behind. Distances are along the view (view units). */
 typedef struct WPE_DepthOfFieldParams {
@@ -295,6 +318,7 @@ WPE_PostEffect wpe_postfx_radial_blur(const WPE_RadialBlurParams* params);
 WPE_PostEffect wpe_postfx_grayscale(const WPE_GrayscaleParams* params);
 WPE_PostEffect wpe_postfx_cracks(const WPE_CracksParams* params);
 WPE_PostEffect wpe_postfx_shatter(const WPE_ShatterParams* params);
+WPE_PostEffect wpe_postfx_curve_distort(const WPE_CurveDistortParams* params); /* params required. */
 
 /** @return Linear view-space depth for a window depth value. @thread_safety Any thread */
 float wpe_postfx_linear_depth(const WPE_PostCamera* camera, float window_depth);
