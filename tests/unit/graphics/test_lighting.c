@@ -630,13 +630,19 @@ static void test_lighting_postfx_cracks(void) {
     params.count = 0.0f;
     WPE_TEST_ASSERT_EQ_UINT(0, wpe_postfx_crack_lines(&params, S, S, b));
 
-    /* One line, no slide or fringes: it lights the pixels on it, and those far away keep their color. */
+    /* One line, the magical look (a white core and a glow, no band or slide): it lights the pixels on it,
+     * and those far away keep their color. */
     WPE_PostChain* chain = NULL;
     WPE_TEST_ASSERT_OK(wpe_postfx_create(&chain));
     params = wpe_postfx_config_default(WPE_POSTFX_CRACKS).cracks;
     params.count = 1.0f;
     params.offset_pixels = 0.0f;
-    params.split_pixels = 0.0f;
+    params.bevel_pixels = 0.0f;
+    params.glow_pixels = 3.0f;
+    params.core_r = params.core_g = params.core_b = 1.0f;
+    params.glow_r = 0.35f;
+    params.glow_g = 0.55f;
+    params.glow_b = 1.0f;
     WPE_PostEffect effect = wpe_postfx_cracks(&params);
     WPE_Renderer* r = filled_renderer(0xFF404040u);
     WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
@@ -661,7 +667,33 @@ static void test_lighting_postfx_cracks(void) {
     WPE_TEST_ASSERT_EQ_UINT(0, changed);
     wpe_renderer_destroy(r);
 
+    /* Glass: the band is on one side only. On stripes, pixels just beside the cut change on that side (the
+     * band refracts them) and stay put on the other; the cut itself darkens toward the core color. */
+    params = wpe_postfx_config_default(WPE_POSTFX_CRACKS).cracks;
+    params.count = 1.0f;
+    params.offset_pixels = 0.0f;
+    params.bevel_pixels = 6.0f;
+    params.glow_r = params.glow_g = params.glow_b = 0.0f; /* No rim light: only the refraction shows. */
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    fb = wpe_renderer_framebuffer(r);
+    uint32_t moved[2] = {0, 0}, beside[2] = {0, 0};
+    for (uint32_t y = 0; y < S; ++y) {
+        for (uint32_t x = 0; x < S; ++x) {
+            const float side = ((float)x + 0.5f - line.x) * -line.dy + ((float)y + 0.5f - line.y) * line.dx;
+            if (fabsf(side) < 1.0f || fabsf(side) > 2.0f) continue; /* Just off the cut, inside any band. */
+            const int k = side > 0.0f;
+            ++beside[k];
+            moved[k] += fb->color[y * S + x] != ((x & 1) ? 0xFFFFFFFFu : 0xFF000000u);
+        }
+    }
+    WPE_TEST_ASSERT(beside[0] > 20 && beside[1] > 20);
+    WPE_TEST_ASSERT_MSG((moved[0] == 0) != (moved[1] == 0), "changed beside the cut: %u and %u", moved[0],
+                        moved[1]);
+    wpe_renderer_destroy(r);
+
     /* With a slide and no light, the stripes move near the line: the image is cut. */
+    params.bevel_pixels = 0.0f;
     params.offset_pixels = 3.0f;
     params.strength = 1.0f;
     params.core_r = params.core_g = params.core_b = 0.0f;

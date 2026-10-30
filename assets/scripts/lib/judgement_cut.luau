@@ -14,7 +14,10 @@
 --   shatter_time = 1.4 seconds the pieces fall
 --   spread = 0.15      how far from the point the cuts may pass (fraction of the screen's height)
 --   dim = 0.3          how much darker the scene gets during the cuts (0: not at all)
---   core, glow         the cuts' colors, vectors (0..4 per channel; above 1 burns brighter)
+--   core, glow         colors (vectors): the cut's, and the glow and edge light's. By default the cuts look
+--                      like broken glass (a dark cut, a refracting band, a pale edge); for a magical cut
+--                      give a white core, a blue glow and glass = false
+--   glass = true       the refracting band on one side of each cut (false: both sides alike)
 --   slot = 8           the capture slot the shatter breaks (wpe.capture_screen)
 --   seed               which cuts (random by default)
 --
@@ -31,7 +34,7 @@ local DEFAULTS = {
 	shatter_time = 1.4,
 	spread = 0.15,
 	dim = 0.3,
-	core = vector.create(1, 1, 1),
+	core = vector.create(1.0, 1.0, 1.0),
 	glow = vector.create(0.35, 0.55, 1),
 	slot = 8,
 }
@@ -65,11 +68,20 @@ function JudgementCut.start(x: number, y: number, options: { [string]: any }?)
 	self.phase = "cutting"
 	self.clock = 0
 	wpe.add_postfx({ effect = "color_adjust", brightness = 0 })
-	wpe.add_postfx({
-		effect = "cracks", count = 0, seed = self.seed, center_x = x, center_y = y, spread = self.spread,
-		core_r = self.core.x, core_g = self.core.y, core_b = self.core.z,
-		glow_r = self.glow.x, glow_g = self.glow.y, glow_b = self.glow.z,
-	})
+	local cracks = { effect = "cracks", count = 0, seed = self.seed, center_x = x, center_y = y, spread = self.spread }
+	if not self.glass then
+		cracks.bevel_pixels = 0
+		cracks.glow_pixels = 3
+	end
+	local core = options and options.core
+	local glow = options and options.glow
+	if core then
+		cracks.core_r, cracks.core_g, cracks.core_b = core.x, core.y, core.z
+	end
+	if glow then
+		cracks.glow_r, cracks.glow_g, cracks.glow_b = glow.x, glow.y, glow.z
+	end
+	wpe.add_postfx(cracks)
 	return self
 end
 

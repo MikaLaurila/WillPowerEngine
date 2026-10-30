@@ -69,6 +69,14 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Changed (cracks look like broken glass)
+- `cracks` now looks like broken glass by default: each cut is a dark line, and on one side of it a band
+  (the fracture's face, its width breaking jaggedly along the cut) refracts the image with color fringes,
+  darker toward the cut, with a pale edge. `split_pixels` is replaced by `bevel_pixels` (the band's width;
+  0 for both sides alike); the core color is now blended toward (dark for glass, white for light) and the
+  glow color also lights the band's edge. A white core, a blue glow and no band give the magical look.
+  `judgement_cut.luau` uses the glass look unless given colors (`glass = false` for the magical one).
+- Tests: the band changes the image on one side of the cut only.
 ### Added (Judgement Cut: cracks, shatter, screen capture)
 - Post effect `cracks`: straight cuts across the screen crossing near a point; the image slides along each
   (opposite ways on its sides), the line glows in its core and glow colors with color fringes, and a

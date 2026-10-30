@@ -126,8 +126,11 @@ typedef struct WPE_GrayscaleParams {
     float tint_r, tint_g, tint_b; /* Multiplies the gray (0..2). */
 } WPE_GrayscaleParams;
 
-/* Cracks ("Judgement Cut"): straight cuts across the screen. Each line crosses near a center point at a
- * random angle; the image slides along it, opposite ways on its two sides, and the line glows. `count`
+/* Cracks ("Judgement Cut"): straight cuts across the screen, like broken glass. Each line crosses near a
+ * center point at a random angle; the image slides along it, opposite ways on its two sides. On one side of
+ * each cut a band (the fracture's face, its width wandering along the cut) refracts the image with color
+ * fringes, darker toward the cut and with a bright rim; the cut itself takes the core color, and an optional
+ * glow adds light around it (a white core and a blue glow without a band give a magical cut instead). `count`
  * lines show (up to WPE_POSTFX_MAX_CRACKS); a fraction grows the newest one out from where it crosses, so
  * raising count over time draws the cuts in one by one. The same seed, center and spread always give the
  * same lines (wpe_postfx_crack_lines), so other effects can follow them. */
@@ -138,12 +141,13 @@ typedef struct WPE_CracksParams {
     float center_x, center_y; /* Where the cuts cross (fractions of the screen). */
     float spread;             /* How far from it each line may pass (a fraction of the screen's height). */
     float offset_pixels;      /* How far the image slides along a cut. */
-    float width_pixels;       /* The bright core's half width. */
-    float glow_pixels;        /* The glow's reach from the line. */
-    float split_pixels;       /* Red and blue drift apart across the lines (color fringes). */
+    float width_pixels;       /* The cut's half width. */
+    float glow_pixels;        /* The glow's reach from the line (0: none). */
+    float bevel_pixels;       /* The refracting band's widest (0: none, both sides alike). */
     float strength;           /* 0..1: everything above fades with it. */
-    float core_r, core_g, core_b; /* The core's color (added light). */
-    float glow_r, glow_g, glow_b; /* The glow's color. */
+    float core_r, core_g,
+        core_b; /* The cut's color (it blends toward it: dark for glass, white for light). */
+    float glow_r, glow_g, glow_b; /* The glow's and the band rim's color (added light). */
 } WPE_CracksParams;
 
 /* One crack line in pixels: a point it passes through, its unit direction, and how far it reaches from the
