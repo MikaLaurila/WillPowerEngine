@@ -76,8 +76,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   additive, alpha or cutout. Records while `emitting`. In scene files, the editor and scripts
   (`wpe.set_trail`, `get_trail`, `clear_trail`, `remove_trail`).
 - Demo `scenes/sword.scene` (after the character scene): Beowulf slashes (fire, or by himself) with the
-  katana drawn and a trail on it; `scripts/sword_trail.luau` adds the blade points under the `right_hand`
-  bone, which carries the skinned katana.
+  katana drawn and a trail on it. `Beowulf.glb` now has the empties `blade_base` and `blade_tip` under
+  the `right_hand` bone (which carries the skinned katana), made in Blender; `scripts/sword_trail.luau`
+  uses them, or adds its own points for a model without them.
 - Tests: recording, aging, a full trail, copies, clearing, drawing; the trail in the master scene (round
   trip) and the script functions in its tour.
 ### Changed (cracks look like broken glass)

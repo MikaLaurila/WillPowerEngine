@@ -1,6 +1,7 @@
 -- A weapon trail on Beowulf's katana. The katana (the skinned mesh "Katana2") moves with the "right_hand"
--- bone, so two points are added under that bone, at the blade's base and tip (in the hand's own space the
--- blade runs along +Z, from the guard at about 0.5 to the tip at about 1.95), and the trail follows them.
+-- bone, so the trail follows two points under that bone, at the blade's base and tip: the empties
+-- "blade_base" and "blade_tip" made in Blender (parented to the bone), or, for a model without them, points
+-- added here (in the hand's own space the blade runs along +Z, from the guard to the tip at about 1.95).
 --
 -- Each slash shows the drawn katana (hiding the one in the saya), records the trail while the slash plays,
 -- then goes back to Idle with the katana sheathed. Fire slashes; with `auto` it also slashes by itself.
@@ -43,8 +44,8 @@ function SwordTrail:on_start()
 	assert(self.figure and hand, "the swordsman needs Beowulf's model under it")
 	self.katana = util.find_child(self.entity, "Katana2")
 	self.sheathed = util.find_child(self.entity, "SayaKatana2")
-	local base = add_point(hand, "blade base", vector.create(0, 0.03, 0.5))
-	local tip = add_point(hand, "blade tip", vector.create(0, 0.03, 1.95))
+	local base = util.find_child(self.entity, "blade_base") or add_point(hand, "blade base", vector.create(0, 0.03, 0.5))
+	local tip = util.find_child(self.entity, "blade_tip") or add_point(hand, "blade tip", vector.create(0, 0.03, 1.95))
 	wpe.set_trail(self.entity, {
 		base = base, tip = tip, emitting = false, lifetime = 0.22, width_end = 0.25,
 		color_start = wpe.color(0.8, 0.9, 1, 0.85), color_end = wpe.color(0.35, 0.45, 1, 0),
