@@ -270,6 +270,89 @@ static void wpe__ui_entity_command(WPE_EditorUi* ui, const char* name, WPE_Entit
     wpe__ui_send(ui, w);
 }
 
+/* ---- Asset paths, and dragging assets onto fields --------------------------------------------------- */
+
+static bool wpe__has_suffix(const char* text, const char* suffix) {
+    const size_t a = strlen(text), b = strlen(suffix);
+    return a >= b && strcmp(text + a - b, suffix) == 0;
+}
+
+static bool wpe__is_image_path(const char* path) {
+    const size_t n = strlen(path);
+    return (n > 4 && (strcmp(path + n - 4, ".png") == 0 || strcmp(path + n - 4, ".jpg") == 0)) ||
+           (n > 5 && strcmp(path + n - 5, ".jpeg") == 0);
+}
+
+/* What a field takes, and so which assets may be dropped on it. */
+typedef enum wpe__AssetKind {
+    WPE__ASSET_NONE = 0,
+    WPE__ASSET_ANY, /* The "Add component" path. */
+    WPE__ASSET_MODEL,
+    WPE__ASSET_IMAGE,
+    WPE__ASSET_SOUND,
+    WPE__ASSET_SCRIPT,
+} wpe__AssetKind;
+
+static bool wpe__is_model_path(const char* path) {
+    return wpe__has_suffix(path, ".glb") || wpe__has_suffix(path, ".gltf") || wpe__has_suffix(path, ".prim");
+}
+
+static bool wpe__is_sound_path(const char* path) {
+    return wpe__has_suffix(path, ".wav") || wpe__has_suffix(path, ".mp3") || wpe__has_suffix(path, ".flac");
+}
+
+static bool wpe__asset_fits(wpe__AssetKind kind, const char* path) {
+    switch (kind) {
+    case WPE__ASSET_NONE:
+        return false;
+    case WPE__ASSET_ANY:
+        return true;
+    case WPE__ASSET_MODEL:
+        return wpe__is_model_path(path);
+    case WPE__ASSET_IMAGE:
+        return wpe__is_image_path(path);
+    case WPE__ASSET_SOUND:
+        return wpe__is_sound_path(path);
+    case WPE__ASSET_SCRIPT:
+        return wpe__has_suffix(path, ".luau");
+    }
+    return false;
+}
+
+/* The asset a component's field holds, by component and key. */
+static wpe__AssetKind wpe__field_asset_kind(const char* component, const char* key) {
+    static const struct {
+        const char* component;
+        const char* key;
+        wpe__AssetKind kind;
+    } table[] = {
+        {"mesh", "model", WPE__ASSET_MODEL},      {"animator", "model", WPE__ASSET_MODEL},
+        {"collider", "model", WPE__ASSET_MODEL},  {"audio_source", "sound", WPE__ASSET_SOUND},
+        {"sprite", "image", WPE__ASSET_IMAGE},    {"billboard", "image", WPE__ASSET_IMAGE},
+        {"particles", "image", WPE__ASSET_IMAGE}, {"sky", "image", WPE__ASSET_IMAGE},
+        {"text", "font", WPE__ASSET_IMAGE},       {"script", "path", WPE__ASSET_SCRIPT},
+    };
+    for (size_t i = 0; i < sizeof table / sizeof table[0]; ++i) {
+        if (strcmp(table[i].component, component) == 0 && strcmp(table[i].key, key) == 0)
+            return table[i].kind;
+    }
+    return WPE__ASSET_NONE;
+}
+
+/* Makes the last item a drop target for assets of `kind` dragged from the Assets panel: it lights up only
+ * while one that fits is dragged. Copies the dropped path into `out` and returns true on the drop. */
+static bool wpe__asset_drop(wpe__AssetKind kind, char* out, size_t capacity) {
+    const ImGuiPayload* dragged = igGetDragDropPayload();
+    if (!dragged || !ImGuiPayload_IsDataType((ImGuiPayload*)dragged, WPE__ASSET_PAYLOAD) || !dragged->Data ||
+        !wpe__asset_fits(kind, dragged->Data) || !igBeginDragDropTarget())
+        return false;
+    const ImGuiPayload* payload = igAcceptDragDropPayload(WPE__ASSET_PAYLOAD, 0);
+    const bool dropped = payload && payload->Data;
+    if (dropped) snprintf(out, capacity, "%s", (const char*)payload->Data);
+    igEndDragDropTarget();
+    return dropped;
+}
+
 /* ---- Generic JSON field editing ------------------------------------------------------------------------ */
 
 /* Writes `v` with the edited leaf replaced. */
@@ -465,7 +548,10 @@ static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char*
             snprintf(buffer, sizeof buffer, "%s", wpe_json_string(v));
             /* Applied on Enter or when the field loses focus, not per keystroke. */
             igInputText(key, buffer, sizeof buffer, 0, NULL, NULL);
-            if (igIsItemDeactivatedAfterEdit()) {
+            /* An asset dragged from the Assets panel onto the field replaces the path. */
+            const bool dropped =
+                wpe__asset_drop(wpe__field_asset_kind(component, key), buffer, sizeof buffer);
+            if (dropped || igIsItemDeactivatedAfterEdit()) {
                 /* Clearing an optional asset path removes the asset (null). */
                 const bool none = !buffer[0] && wpe__is_asset_key(component, key);
                 *edit = (wpe__Edit){.target = v, .type = none ? WPE_JSON_NULL : WPE_JSON_STRING};
@@ -557,10 +643,12 @@ static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char*
         break;
     case WPE_JSON_NULL:
         if (wpe__is_asset_key(component, key)) {
-            /* No asset yet: typing a path sets one. */
+            /* No asset yet: typing a path, or dropping an asset, sets one. */
             char buffer[WPE__UI_PATH] = "";
             igInputTextWithHint(key, "none (asset path)", buffer, sizeof buffer, 0, NULL, NULL);
-            if (igIsItemDeactivatedAfterEdit() && buffer[0]) {
+            const bool dropped =
+                wpe__asset_drop(wpe__field_asset_kind(component, key), buffer, sizeof buffer);
+            if ((dropped || igIsItemDeactivatedAfterEdit()) && buffer[0]) {
                 *edit = (wpe__Edit){.target = v, .type = WPE_JSON_STRING};
                 snprintf(edit->string, sizeof edit->string, "%s", buffer);
                 ++ui->edit_serial;
@@ -1416,12 +1504,6 @@ static void wpe__ui_create_model(WPE_EditorUi* ui, const char* path) {
 
 /* ---- New UI elements -------------------------------------------------------------------------------- */
 
-static bool wpe__is_image_path(const char* path) {
-    const size_t n = strlen(path);
-    return (n > 4 && (strcmp(path + n - 4, ".png") == 0 || strcmp(path + n - 4, ".jpg") == 0)) ||
-           (n > 5 && strcmp(path + n - 5, ".jpeg") == 0);
-}
-
 /* "ui": a width x height rectangle centered in its parent. */
 static void wpe__write_centered_ui(WPE_JsonWriter* w, float width, float height) {
     const float hw = floorf(width * 0.5f), hh = floorf(height * 0.5f);
@@ -2188,8 +2270,11 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
                                           "slider",    "script"};
     igSetNextItemWidth(-1.0f);
     igInputText("##asset_path", ui->add_path, sizeof ui->add_path, 0, NULL, NULL);
+    (void)wpe__asset_drop(WPE__ASSET_ANY, ui->add_path,
+                          sizeof ui->add_path); /* The path is just filled in. */
     if (igIsItemHovered(0))
-        igSetTooltip("Asset path for mesh (model), audio_source (sound), sprite (image) or script");
+        igSetTooltip("Asset path (type it or drag an asset here) for mesh (model), audio_source (sound), "
+                     "sprite (image) or script");
     if (igBeginCombo("##add", "Add component", 0)) {
         for (size_t i = 0; i < sizeof addable / sizeof addable[0]; ++i) {
             if (!igSelectable_Bool(addable[i], false, 0, (ImVec2_c){0, 0})) continue;
@@ -2281,11 +2366,6 @@ static void wpe__clear_assets(WPE_EditorUi* ui) {
     ui->asset_count = 0;
 }
 
-static bool wpe__has_suffix(const char* text, const char* suffix) {
-    const size_t a = strlen(text), b = strlen(suffix);
-    return a >= b && strcmp(text + a - b, suffix) == 0;
-}
-
 static void wpe__ui_assets(WPE_EditorUi* ui) {
     if (!igBegin("Assets", NULL, 0)) {
         igEnd();
@@ -2301,7 +2381,7 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
     igSetNextItemWidth(-1.0f);
     igInputText("##filter", ui->asset_filter, sizeof ui->asset_filter, 0, NULL, NULL);
     igTextDisabled("Double-click: open a scene / add a model, prefab or image (a UI sprite). Drag them into "
-                   "the viewport.");
+                   "the viewport, or drag assets onto the inspector's fields.");
     igBeginChild_Str("##asset_list", (ImVec2_c){0, 0}, 0, 0);
     for (uint32_t i = 0; i < ui->asset_count; ++i) {
         const char* path = ui->assets[i];
@@ -2321,7 +2401,10 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
                 wpe__ui_create_element(ui, "image", path);
             }
         }
-        if ((model || image) && igBeginDragDropSource(0)) {
+        /* Models, prefabs and images can be placed in the viewport; they, sounds and scripts can be dropped
+         * on the inspector's fields that take them. */
+        const bool draggable = model || image || wpe__is_sound_path(path) || wpe__has_suffix(path, ".luau");
+        if (draggable && igBeginDragDropSource(0)) {
             igSetDragDropPayload(WPE__ASSET_PAYLOAD, path, strlen(path) + 1, 0);
             igText("%s", path);
             igEndDragDropSource();
@@ -2416,7 +2499,13 @@ static void wpe__ui_viewport(WPE_EditorUi* ui) {
     igImage((ImTextureRef_c){._TexID = ui->view_image}, (ImVec2_c){w, h}, (ImVec2_c){0, 0}, (ImVec2_c){1, 1});
     ui->view_hovered = igIsItemHovered(0);
     ui->view_focused = igIsWindowFocused(0);
-    if (igBeginDragDropTarget()) {
+    /* Models and prefabs dropped here are placed in the scene; images become UI sprites. */
+    const ImGuiPayload* dragged = igGetDragDropPayload();
+    const bool placeable = dragged && ImGuiPayload_IsDataType((ImGuiPayload*)dragged, WPE__ASSET_PAYLOAD) &&
+                           dragged->Data &&
+                           (wpe__is_model_path(dragged->Data) || wpe_prefab_is_path(dragged->Data) ||
+                            wpe__is_image_path(dragged->Data));
+    if (placeable && igBeginDragDropTarget()) {
         const ImGuiPayload* payload = igAcceptDragDropPayload(WPE__ASSET_PAYLOAD, 0);
         if (payload && payload->DataSize > 1) {
             if (wpe__is_image_path(payload->Data)) {

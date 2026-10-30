@@ -69,6 +69,11 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (editor: drag assets onto fields)
+- Assets dragged from the Assets panel drop onto the inspector's asset fields (models, images, sounds,
+  scripts, fonts, the sky's image) and onto the "Add component" path box. A field lights up only for an
+  asset that fits it; the drop is the same undoable edit as typing the path. Sounds and scripts can now be
+  dragged too, and the viewport accepts only what it can place (models, prefabs, images).
 ### Added (console clear, grayscale)
 - Editor console: typing `clear`, `cls` or `clr` empties it (command `clear_log`, which also empties the
   `log` command's lines).
