@@ -69,6 +69,17 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (project templates: racing)
+- `racing` template: an arcade car (a sphere rigid body driven by a script: throttle, brake and reverse,
+  speed-scaled steering, adjustable grip and a handbrake for drifts) on a walled eight-sided circuit, a
+  chase camera, a 3-2-1 countdown, three laps counted through ordered checkpoints, lap times and a best
+  lap saved with `wpe.save_data`.
+- Tests: the countdown holds the car, it drives and steers and the walls hold it, laps need every
+  checkpoint in order, and the race finishes with the best lap saved.
+
+### Changed
+- A save directory given by the host (`WPE_EngineDesc.save_dir`, `wpe_runtime --save-dir`) is made if
+  it's missing, as the player's own directory always was.
 ### Added (project templates: platformer)
 - `platformer` template: a 2.5D side-scroller. The hero runs along one plane on a character controller
   with jump buffering, coyote time, variable jump height and squash and stretch; a side camera looks

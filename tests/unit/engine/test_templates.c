@@ -416,8 +416,81 @@ static void test_templates_platformer_plays(void) {
     remove_project(dir);
 }
 
+/* ---- Racing ---------------------------------------------------------------------------------------- */
+
+/* Puts the car somewhere (stopped) and lets the physics and triggers see it. */
+static void place_car(WPE_Engine* engine, float x, float z) {
+    char code[256];
+    snprintf(code, sizeof code,
+             "local car = wpe.find('car')\n"
+             "wpe.set_position(car, vector.create(%g, 0.1, %g))\n"
+             "wpe.set_velocity(car, vector.create(0, 0, 0))\n",
+             (double)x, (double)z);
+    check_lua(engine, "place the car", code);
+    frames(engine, 3);
+}
+
+/* The countdown holds the car; then it drives, steers and stays between the walls. Laps count only
+ * through every checkpoint in order; three laps finish the race and the best lap is saved. */
+static void test_templates_racing_plays(void) {
+    char dir[256];
+    create_project("racing", dir, sizeof dir);
+    WPE_TEST_ASSERT_OK(wpe_path_remove(ROOT "/saves/best_lap.json")); /* A best lap from an earlier run. */
+    WPE_Engine* engine = create_engine(dir);
+    WPE_Ecs* ecs = wpe_engine_ecs(engine);
+    const WPE_Entity car = find(ecs, "car");
+    WPE_TEST_ASSERT(car != WPE_ENTITY_NULL);
+    frames(engine, 2);
+    check_lua(engine, "no best lap yet", "assert(wpe.get_script(wpe.find('race')).best == nil)\n");
+
+    /* Throttle during the countdown: held. */
+    const WPE_Vec3 start = position(ecs, car);
+    key(engine, SDL_SCANCODE_W, true);
+    frames(engine, 60);
+    WPE_TEST_ASSERT(fabsf(position(ecs, car).x - start.x) < 0.05f);
+    check_lua(engine, "counting down", "assert(wpe.get_script(wpe.find('race')).state == 'countdown')\n");
+
+    /* GO (at 3 s): it accelerates along the straight (toward +X). */
+    frames(engine, 90);
+    check_lua(engine, "racing", "assert(wpe.get_script(wpe.find('race')).state == 'racing')\n");
+    WPE_TEST_ASSERT(position(ecs, car).x > start.x + 10.0f);
+    check_lua(engine, "fast", "assert(wpe.get_script(wpe.find('car')).speed > 15)\n");
+
+    /* Steering right turns it toward +Z, into the inner wall, which it doesn't pass (its face at z = -29). */
+    const float before_turn = position(ecs, car).z;
+    key(engine, SDL_SCANCODE_D, true);
+    frames(engine, 20);
+    WPE_TEST_ASSERT(position(ecs, car).z > before_turn + 0.5f);
+    frames(engine, 40);
+    key(engine, SDL_SCANCODE_D, false);
+    key(engine, SDL_SCANCODE_W, false);
+    WPE_TEST_ASSERT_MSG(position(ecs, car).z < -29.0f, "the car went through the wall to z %g",
+                        (double)position(ecs, car).z);
+
+    /* Laps: the finish line alone doesn't count; the checkpoints in order then the line do. */
+    place_car(engine, 0.0f, -35.0f);
+    check_lua(engine, "no lap from the line alone", "assert(wpe.get_script(wpe.find('race')).lap == 1)\n");
+    static const float route[][2] = {{60.0f, 0.0f}, {0.0f, 35.0f}, {-60.0f, 0.0f}, {0.0f, -35.0f}};
+    for (int lap = 1; lap <= 3; ++lap) {
+        for (size_t i = 0; i < sizeof route / sizeof route[0]; ++i) {
+            frames(engine, 15); /* Some lap time. */
+            place_car(engine, route[i][0], route[i][1] + 3.0f);
+            place_car(engine, route[i][0], route[i][1]);
+        }
+    }
+    check_lua(engine, "finished",
+              "local race = wpe.get_script(wpe.find('race'))\n"
+              "assert(race.state == 'finished' and race.lap == 3)\n"
+              "assert(race.best and race.best > 0 and race.best <= race.last_lap)\n"
+              "assert(wpe.load_data('best_lap') == race.best)\n"
+              "assert(not wpe.get_script(wpe.find('car')).controls)\n");
+    WPE_TEST_ASSERT_EQ_UINT(0, script_errors(engine));
+    wpe_engine_destroy(engine);
+    remove_project(dir);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_templates_create_projects_that_run),
               WPE_TEST_CASE(test_templates_reject_unknown_names),
               WPE_TEST_CASE(test_templates_first_person_plays),
               WPE_TEST_CASE(test_templates_third_person_plays),
-              WPE_TEST_CASE(test_templates_platformer_plays))
+              WPE_TEST_CASE(test_templates_platformer_plays), WPE_TEST_CASE(test_templates_racing_plays))

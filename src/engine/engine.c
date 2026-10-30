@@ -51,6 +51,7 @@ struct WPE_Engine {
     char music[WPE_VFS_PATH_MAX]; /* Track started by the current scene ("" = none). */
     char pending_scene[WPE_VFS_PATH_MAX];
     char save_dir[1024];              /* "" until a script needs it (see wpe__app_save_directory). */
+    bool save_dir_made;               /* save_dir exists (made on first use). */
     WPE_AssetHandle sky;              /* The loaded sky image (wpe__resolve_sky). */
     char sky_image[WPE_VFS_PATH_MAX]; /* Its path. */
     bool quit;
@@ -89,10 +90,14 @@ static void wpe__app_screen_size(void* user_data, uint32_t* out_width, uint32_t*
     *out_height = engine->project.height;
 }
 
-/* The save directory: the one the host gave, or the user's directory for this game, found (and made)
- * on first use. Only letters, digits and spaces of the project name make up the folder name. */
+/* The save directory: the one the host gave, or the user's directory for this game, found and made on
+ * first use. Only letters, digits and spaces of the project name make up the folder name. */
 static const char* wpe__app_save_directory(void* user_data) {
     WPE_Engine* engine = user_data;
+    if (engine->save_dir[0] && !engine->save_dir_made) {
+        if (wpe_directory_create(engine->save_dir) != WPE_RESULT_OK) return NULL; /* Logged. */
+        engine->save_dir_made = true;
+    }
     if (engine->save_dir[0]) return engine->save_dir;
     char app[WPE_PROJECT_NAME_MAX];
     size_t length = 0;
@@ -108,6 +113,7 @@ static const char* wpe__app_save_directory(void* user_data) {
         engine->save_dir[0] = '\0';
         return NULL;
     }
+    engine->save_dir_made = true; /* SDL makes it. */
     return engine->save_dir;
 }
 
