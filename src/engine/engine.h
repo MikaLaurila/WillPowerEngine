@@ -202,11 +202,18 @@ bool wpe_engine_draws_ui(const WPE_Engine* engine);
 void wpe_engine_set_draw_scene(WPE_Engine* engine, bool draw_scene);
 bool wpe_engine_draws_scene(const WPE_Engine* engine);
 
-/** Per-frame statistics of the last frame. */
+/** Per-frame statistics of the last frame. Times are wall-clock milliseconds. */
 typedef struct WPE_EngineStats {
     uint64_t frames;
-    uint32_t fixed_steps; /* Fixed steps run by the last frame. */
-    double frame_ms;      /* Wall time spent in the last wpe_engine_frame(). */
+    uint32_t fixed_steps;  /* Fixed steps run by the last frame. */
+    double frame_ms;       /* Wall time spent in the last wpe_engine_frame(). */
+    double simulate_ms;    /* Scripts, physics, animation, transforms and particles (0 in edit mode). */
+    double physics_ms;     /* The physics steps, part of simulate_ms. */
+    double render_ms;      /* The scene pass: culling, shadows, the sky and rasterizing. */
+    double postfx_ms;      /* Post-processing. */
+    double overlay_ms;     /* Debug lines, the UI and scripts' 2D drawing, and presenting. */
+    WPE_RenderStats scene; /* The scene pass's draws, triangles and shaded pixels. */
+    uint32_t entities;     /* Live entities after the frame. */
 } WPE_EngineStats;
 
 /** @return Statistics of the last frame. @thread_safety Main thread only */

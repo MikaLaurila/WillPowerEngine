@@ -69,6 +69,14 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (editor: performance panel)
+- A Performance panel (docked with the console): the editor's FPS, a graph of the game's frame times, the
+  frame split into simulation (of which physics), scene render, post effects and overlay, the scene's draw
+  calls, triangles and shaded pixels, entities, bodies, scripts and memory. Command `stats` returns the
+  same numbers.
+- `WPE_EngineStats` gains `simulate_ms`, `physics_ms`, `render_ms`, `postfx_ms`, `overlay_ms`, the scene
+  pass's `WPE_RenderStats` (taken before the overlay frame resets the renderer's) and `entities`.
+- Tests: the engine's timings and scene counts in the master scene; the `stats` command.
 ### Added (editor: camera gizmo)
 - Scene cameras show in the edit view (with the other icons, L): a camera body and the outline of what
   the camera sees, from its field of view (or orthographic size) and the game's aspect ratio, with an

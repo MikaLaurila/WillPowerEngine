@@ -60,9 +60,14 @@ typedef struct wpe__Edit {
     uint32_t vector_count;
 } wpe__Edit;
 
+#define WPE__PERF_HISTORY 120u /* Frames the Performance panel's graph shows. */
+
 struct WPE_EditorUi {
     WPE_Editor* editor;
     WPE_UiBackend* backend;
+    float frame_ms[WPE__PERF_HISTORY]; /* The game's frame times, oldest at frame_ms_at. */
+    uint32_t frame_ms_at;
+    float smoothed_dt;   /* The editor's own frame time, smoothed (its FPS). */
     uint64_t view_image; /* The game's framebuffer as a UI image (0 before the first frame). */
     uint32_t view_width, view_height;
 
@@ -2554,6 +2559,63 @@ static void wpe__ui_console(WPE_EditorUi* ui) {
     igEnd();
 }
 
+/* One row of the Performance panel's table: a label and its value. */
+static void wpe__perf_row(const char* label, const char* format, double value) {
+    igTableNextRow(0, 0.0f);
+    igTableNextColumn();
+    igTextUnformatted(label, NULL);
+    igTableNextColumn();
+    igText(format, value);
+}
+
+static void wpe__ui_performance(WPE_EditorUi* ui) {
+    if (!igBegin("Performance", NULL, 0)) {
+        igEnd();
+        return;
+    }
+    WPE_Engine* engine = wpe_editor_engine(ui->editor);
+    const WPE_EngineStats s = wpe_engine_stats(engine);
+    const WPE_ScriptStats scripts = wpe_script_host_stats(wpe_engine_scripts(engine));
+    const WPE_PhysicsStats physics = wpe_physics_stats(wpe_engine_physics(engine));
+    WPE_AllocStats memory;
+    wpe_alloc_get_stats(&memory);
+
+    const float fps = ui->smoothed_dt > 0.0f ? 1.0f / ui->smoothed_dt : 0.0f;
+    igText("Editor: %.0f FPS (%.1f ms)   Game frame: %.2f ms", (double)fps, (double)ui->smoothed_dt * 1000.0,
+           s.frame_ms);
+    /* The game's frame times, oldest first, scaled to the slowest frame shown. */
+    float highest = 0.5f;
+    for (uint32_t i = 0; i < WPE__PERF_HISTORY; ++i)
+        highest = fmaxf(highest, ui->frame_ms[i]);
+    char overlay[48];
+    snprintf(overlay, sizeof overlay, "slowest %.2f ms", (double)highest);
+    igPlotLines_FloatPtr("##frames", ui->frame_ms, (int)WPE__PERF_HISTORY, (int)ui->frame_ms_at, overlay,
+                         0.0f, highest * 1.1f, (ImVec2_c){-1.0f, 60.0f}, (int)sizeof(float));
+    if (igBeginTable("##perf", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp, (ImVec2_c){0, 0},
+                     0.0f)) {
+        wpe__perf_row("Simulation", "%.2f ms", s.simulate_ms);
+        wpe__perf_row("  of which physics", "%.2f ms", s.physics_ms);
+        wpe__perf_row("Scene render", "%.2f ms", s.render_ms);
+        wpe__perf_row("Post effects", "%.2f ms", s.postfx_ms);
+        wpe__perf_row("Overlay, UI, 2D", "%.2f ms", s.overlay_ms);
+        wpe__perf_row("Fixed steps", "%.0f", s.fixed_steps);
+        wpe__perf_row("Draw calls", "%.0f", s.scene.draws);
+        wpe__perf_row("Triangles", "%.0f", s.scene.triangles_submitted);
+        wpe__perf_row("  rasterized (clipped, subdivided)", "%.0f", s.scene.triangles_rasterized);
+        wpe__perf_row("Pixels shaded", "%.0f", (double)s.scene.fragments_shaded);
+        wpe__perf_row("Entities", "%.0f", (double)s.entities - (ui->editor->camera ? 1.0 : 0.0));
+        wpe__perf_row("Physics bodies", "%.0f", physics.bodies);
+        wpe__perf_row("Scripts", "%.0f", scripts.instances);
+        wpe__perf_row("Engine memory", "%.2f MB", (double)memory.live_bytes / (1024.0 * 1024.0));
+        wpe__perf_row("  peak", "%.2f MB", (double)memory.peak_live_bytes / (1024.0 * 1024.0));
+        wpe__perf_row("  allocations", "%.0f", (double)memory.live_allocations);
+        wpe__perf_row("Script memory", "%.0f KB", (double)scripts.memory / 1024.0);
+        wpe__perf_row("Physics memory", "%.0f KB", (double)physics.memory / 1024.0);
+        igEndTable();
+    }
+    igEnd();
+}
+
 static void wpe__ui_viewport(WPE_EditorUi* ui) {
     igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2_c){0, 0});
     const bool open =
@@ -2863,6 +2925,7 @@ static void wpe__ui_layout(WPE_EditorUi* ui, ImGuiID dockspace, const ImGuiViewp
     igDockBuilderDockWindow("Environment", right);
     igDockBuilderDockWindow("Console", bottom);
     igDockBuilderDockWindow("Assets", bottom);
+    igDockBuilderDockWindow("Performance", bottom);
     igDockBuilderDockWindow("Viewport", center);
     igDockBuilderFinish(dockspace);
     ui->layout_built = true;
@@ -3051,6 +3114,10 @@ WPE_Result wpe_editor_ui_frame(WPE_EditorUi* ui, WPE_Renderer* renderer, float d
         ui->camera_initialized = false; /* The editor camera is recreated when play stops. */
     }
     WPE_Result result = wpe_editor_frame(ui->editor, dt);
+    /* The Performance panel's history and FPS. */
+    ui->frame_ms[ui->frame_ms_at] = (float)wpe_engine_stats(wpe_editor_engine(ui->editor)).frame_ms;
+    ui->frame_ms_at = (ui->frame_ms_at + 1) % WPE__PERF_HISTORY;
+    ui->smoothed_dt = ui->smoothed_dt > 0.0f ? ui->smoothed_dt + (dt - ui->smoothed_dt) * 0.05f : dt;
     const WPE_Result view = wpe__ui_update_view(ui);
     if (result == WPE_RESULT_OK) result = view;
 
@@ -3073,6 +3140,7 @@ WPE_Result wpe_editor_ui_frame(WPE_EditorUi* ui, WPE_Renderer* renderer, float d
     wpe__ui_environment(ui);
     wpe__ui_assets(ui);
     wpe__ui_console(ui);
+    wpe__ui_performance(ui);
     wpe__ui_popups(ui);
 
     if (gpu) {

@@ -146,6 +146,18 @@ static void test_editor_edits_with_undo_and_redo(void) {
     wpe_json_free(run(editor, "[1]", false));
     wpe_log_set_stderr_enabled(true);
 
+    /* stats: the last frame's costs and the scene's size. */
+    run_ok(editor, "{\"cmd\": \"frames\", \"count\": 2}");
+    WPE_JsonDocument* stats = run(editor, "{\"cmd\": \"stats\"}", true);
+    WPE_JsonDocument* status = run(editor, "{\"cmd\": \"status\"}", true);
+    WPE_TEST_ASSERT(wpe_json_number(wpe_json_get(result_of(stats), "frame_ms"), -1) > 0.0);
+    WPE_TEST_ASSERT(wpe_json_number(wpe_json_get(result_of(stats), "render_ms"), -1) >= 0.0);
+    WPE_TEST_ASSERT(wpe_json_number(wpe_json_get(result_of(stats), "memory_bytes"), 0) > 0.0);
+    WPE_TEST_ASSERT_NEAR(wpe_json_number(wpe_json_get(result_of(status), "entities"), -1),
+                         wpe_json_number(wpe_json_get(result_of(stats), "entities"), -2), 0);
+    wpe_json_free(stats);
+    wpe_json_free(status);
+
     /* clear_log hides what was logged so far; later lines still show. */
     WPE_JsonDocument* lines = run(editor, "{\"cmd\": \"log\"}", true);
     WPE_TEST_ASSERT(wpe_json_count(result_of(lines)) > 0);

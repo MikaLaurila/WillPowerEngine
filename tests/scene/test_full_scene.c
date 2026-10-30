@@ -79,7 +79,14 @@ static void test_full_scene_runs_sixty_seconds(void) {
     WPE_TEST_ASSERT(wpe_ecs_entity_count(ecs) < 300);
     WPE_TEST_ASSERT(wpe_physics_stats(wpe_engine_physics(engine)).bodies > 5);
     WPE_TEST_ASSERT(wpe_audio_music_playing(wpe_engine_audio(engine)));
-    WPE_TEST_ASSERT_EQ_UINT(1800, wpe_engine_stats(engine).frames);
+    const WPE_EngineStats frame = wpe_engine_stats(engine);
+    WPE_TEST_ASSERT_EQ_UINT(1800, frame.frames);
+    /* The last frame's costs: the scene pass's own counts (not the overlay's), and its parts in time. */
+    WPE_TEST_ASSERT(frame.scene.draws > 10 && frame.scene.triangles_submitted > 100);
+    WPE_TEST_ASSERT_EQ_UINT(wpe_ecs_entity_count(ecs), frame.entities);
+    WPE_TEST_ASSERT(frame.physics_ms <= frame.simulate_ms && frame.simulate_ms > 0.0);
+    WPE_TEST_ASSERT(frame.simulate_ms + frame.render_ms + frame.postfx_ms + frame.overlay_ms <=
+                    frame.frame_ms);
     wpe_engine_destroy(engine);
 }
 

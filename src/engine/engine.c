@@ -454,9 +454,12 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double dt) {
         result = wpe_script_host_notify(engine->scripts, clicked[i], "on_click");
     if (result != WPE_RESULT_OK) return result;
     const uint32_t steps = wpe_fixed_step_advance(&engine->clock, dt);
+    engine->stats.physics_ms = 0.0;
     for (uint32_t s = 0; s < steps && result == WPE_RESULT_OK; ++s) {
         wpe_script_host_fixed_update(engine->scripts, (float)engine->clock.step);
+        const double physics_start = wpe_platform_time_seconds();
         result = wpe_physics_step(engine->physics, (float)engine->clock.step);
+        engine->stats.physics_ms += (wpe_platform_time_seconds() - physics_start) * 1000.0;
         wpe_script_host_dispatch_physics(engine->scripts);
     }
     engine->stats.fixed_steps = steps;
@@ -565,6 +568,14 @@ static void wpe__resolve_sky(WPE_Engine* engine) {
     env->render.sky.panorama = wpe_asset_image(engine->assets, engine->sky);
 }
 
+/* Milliseconds since *mark, which moves to now. */
+static double wpe__ms_since(double* mark) {
+    const double now = wpe_platform_time_seconds();
+    const double ms = (now - *mark) * 1000.0;
+    *mark = now;
+    return ms;
+}
+
 static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
     wpe__resolve_sky(engine);
     const WPE_SceneEnvironment* env = &engine->environment;
@@ -575,11 +586,14 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
         engine->renderer,
         &(WPE_ClearDesc){.clear_color = true, .color = clear, .clear_depth = true, .depth = 1.0f});
     if (result != WPE_RESULT_OK) return result;
+    double mark = wpe_platform_time_seconds();
     if (camera != WPE_ENTITY_NULL)
         result = wpe_scene_render(engine->scene_renderer, engine->renderer, engine->ecs, camera, &env->render,
                                   NULL);
     const WPE_Result ended = wpe_renderer_end_frame(engine->renderer);
     if (result == WPE_RESULT_OK) result = ended;
+    engine->stats.scene = wpe_renderer_stats(engine->renderer); /* Before the overlay frame resets them. */
+    engine->stats.render_ms = wpe__ms_since(&mark);
 
     const WPE_Camera* cam = wpe_ecs_get_component(engine->ecs, camera, WPE_COMP_CAMERA);
     if (result == WPE_RESULT_OK && cam && env->postfx_count > 0) {
@@ -589,6 +603,7 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
             .near_z = cam->near_z, .far_z = cam->far_z, .orthographic = cam->orthographic};
         result = wpe_postfx_apply(engine->postfx, engine->renderer, effects, count, &post);
     }
+    engine->stats.postfx_ms = wpe__ms_since(&mark);
     /* Debug overlays, the UI and script 2D drawing go on top, untouched by post-processing. */
     if (result == WPE_RESULT_OK) result = wpe_renderer_begin_frame(engine->renderer, &(WPE_ClearDesc){0});
     if (result == WPE_RESULT_OK) {
@@ -600,6 +615,7 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
     }
     if (result == WPE_RESULT_OK && engine->window)
         result = wpe_window_present(engine->window, wpe_renderer_framebuffer(engine->renderer));
+    engine->stats.overlay_ms = wpe__ms_since(&mark);
     return result;
 }
 
@@ -624,8 +640,11 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
         engine->mouse_captured = captured;
 
     wpe_draw2d_begin(engine->draw2d, engine->project.width, engine->project.height);
+    double mark = wpe_platform_time_seconds();
     WPE_Result result =
         engine->simulating ? wpe__simulate(engine, dt) : wpe_scene_update_transforms(engine->ecs);
+    engine->stats.simulate_ms = engine->simulating ? wpe__ms_since(&mark) : 0.0;
+    if (!engine->simulating) engine->stats.physics_ms = 0.0;
     const WPE_Entity camera = wpe_engine_camera(engine);
     if (result == WPE_RESULT_OK && engine->simulating) result = wpe__mix_audio(engine, camera, dt);
     if (result == WPE_RESULT_OK) result = wpe__render(engine, engine->draw_scene ? camera : WPE_ENTITY_NULL);
@@ -639,6 +658,7 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
         result = wpe_engine_load_scene(engine, path);
     }
     ++engine->stats.frames;
+    engine->stats.entities = wpe_ecs_entity_count(engine->ecs);
     engine->stats.frame_ms = (wpe_platform_time_seconds() - start) * 1000.0;
     return result;
 }

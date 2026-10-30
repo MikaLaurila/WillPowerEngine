@@ -169,6 +169,46 @@ static WPE_Result wpe__cmd_status(wpe__Call* call) {
     return WPE_RESULT_OK;
 }
 
+static void wpe__write_number_field(WPE_JsonWriter* w, const char* key, double value) {
+    wpe_json_write_key(w, key);
+    wpe_json_write_double(w, value);
+}
+
+/* The last frame's costs (as the Performance panel shows them) and memory use. */
+static WPE_Result wpe__cmd_stats(wpe__Call* call) {
+    WPE_Engine* engine = wpe_editor_engine(call->editor);
+    const WPE_EngineStats s = wpe_engine_stats(engine);
+    const WPE_ScriptStats scripts = wpe_script_host_stats(wpe_engine_scripts(engine));
+    const WPE_PhysicsStats physics = wpe_physics_stats(wpe_engine_physics(engine));
+    WPE_AllocStats memory;
+    wpe_alloc_get_stats(&memory);
+    WPE_JsonWriter* w = call->w;
+    wpe_json_write_object_begin(w);
+    wpe__write_number_field(w, "frame_ms", s.frame_ms);
+    wpe__write_number_field(w, "simulate_ms", s.simulate_ms);
+    wpe__write_number_field(w, "physics_ms", s.physics_ms);
+    wpe__write_number_field(w, "render_ms", s.render_ms);
+    wpe__write_number_field(w, "postfx_ms", s.postfx_ms);
+    wpe__write_number_field(w, "overlay_ms", s.overlay_ms);
+    wpe__write_number_field(w, "fixed_steps", s.fixed_steps);
+    /* The editor's own camera isn't the scene's. */
+    wpe__write_number_field(w, "entities", (double)s.entities - (call->editor->camera ? 1.0 : 0.0));
+    wpe__write_number_field(w, "draws", s.scene.draws);
+    wpe__write_number_field(w, "triangles", s.scene.triangles_submitted);
+    wpe__write_number_field(w, "triangles_rasterized", s.scene.triangles_rasterized);
+    wpe__write_number_field(w, "pixels_shaded", (double)s.scene.fragments_shaded);
+    wpe__write_number_field(w, "memory_bytes", (double)memory.live_bytes);
+    wpe__write_number_field(w, "memory_peak_bytes", (double)memory.peak_live_bytes);
+    wpe__write_number_field(w, "allocations", (double)memory.live_allocations);
+    wpe__write_number_field(w, "script_bytes", (double)scripts.memory);
+    wpe__write_number_field(w, "physics_bytes", (double)physics.memory);
+    wpe__write_number_field(w, "bodies", physics.bodies);
+    wpe__write_number_field(w, "scripts", scripts.instances);
+    wpe__write_number_field(w, "script_errors", (double)scripts.errors);
+    wpe_json_write_object_end(w);
+    return WPE_RESULT_OK;
+}
+
 typedef struct wpe__AssetList {
     WPE_JsonWriter* w;
     const char* prefix;
@@ -1068,6 +1108,7 @@ static const struct {
 } wpe__commands[] = {
     {"help", wpe__cmd_help, "{} -> the command list"},
     {"status", wpe__cmd_status, "{} -> project, scene, mode, dirty, selection, counts"},
+    {"stats", wpe__cmd_stats, "{} -> the last frame's times (ms), draws, triangles, entities and memory"},
     {"project", wpe__cmd_project, "{} -> project.json settings"},
     {"list_entities", wpe__cmd_list_entities, "{} -> [{id, name, parent, components}]"},
     {"get_entity", wpe__cmd_get_entity, "{id} -> the entity in the scene-file schema (ids are handles)"},
