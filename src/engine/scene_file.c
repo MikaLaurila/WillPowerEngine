@@ -979,12 +979,22 @@ static bool wpe__load_collider(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue
                                   "a capsule's height (size.y) must be at least twice its radius");
         return wpe__add(l, v, e, WPE_COMP_PHYSICS_COLLIDER, &collider, "collider");
     }
-    if (!wpe__read_asset(l, v, "model", WPE_ASSET_MODEL, &collider.model)) return false;
+    /* Without a "model", a convex or mesh collider takes the shape of the entity's own mesh (its mesh
+     * renderer is loaded first). */
+    const WPE_JsonValue* named = wpe_json_get(v, "model");
+    const WPE_MeshRenderer* renderer = wpe_ecs_get_component(l->context->ecs, e, WPE_COMP_MESH);
+    if ((!named || wpe_json_type(named) == WPE_JSON_NULL) && renderer && renderer->model) {
+        collider.model = renderer->model_asset;
+        wpe_asset_retain(l->context->assets, collider.model);
+        collider.mesh = renderer->mesh;
+    } else if (!wpe__read_asset(l, v, "model", WPE_ASSET_MODEL, &collider.model)) {
+        return false;
+    }
     const WPE_Model* model = wpe_asset_model(l->context->assets, collider.model);
     bool ok = false;
     if (!model || model->mesh_count == 0) {
         wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE,
-                       "convex and mesh colliders need a \"model\" with meshes");
+                       "convex and mesh colliders need a \"model\" with meshes (or a mesh on the entity)");
     } else {
         ok = wpe__json_read_uint(&l->r, v, "mesh", 0, model->mesh_count - 1, &collider.mesh) &&
              wpe__add(l, v, e, WPE_COMP_PHYSICS_COLLIDER, &collider, "collider");

@@ -180,6 +180,15 @@ static void test_editor_scenes_environment_and_screenshots(void) {
     WPE_TEST_ASSERT_EQ_STR("linear",
                            wpe_json_string(wpe_json_get(wpe_json_get(result_of(env), "fog"), "mode")));
     wpe_json_free(env);
+    /* The Environment panel adds a post effect by its name alone: it gets its default parameters. */
+    run_ok(editor, "{\"cmd\": \"set_environment\", \"value\": {\"postfx\": [{\"effect\": \"vignette\"}]}}");
+    env = run(editor, "{\"cmd\": \"get_environment\"}", true);
+    const WPE_JsonValue* vignette = wpe_json_at(wpe_json_get(result_of(env), "postfx"), 0);
+    WPE_TEST_ASSERT_EQ_STR("vignette", wpe_json_string(wpe_json_get(vignette, "effect")));
+    WPE_TEST_ASSERT(wpe_json_bool(wpe_json_get(vignette, "enabled"), false));
+    WPE_TEST_ASSERT(wpe_json_get(vignette, "strength") != NULL);
+    wpe_json_free(env);
+    run_ok(editor, "{\"cmd\": \"set_environment\", \"value\": {\"postfx\": []}}");
     run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"extra\"}}");
     run_ok(editor, "{\"cmd\": \"save_scene\", \"path\": \"scenes/saved.scene\"}");
     WPE_TEST_ASSERT(!wpe_editor_dirty(editor));

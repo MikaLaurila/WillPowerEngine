@@ -41,9 +41,18 @@ typedef enum wpe__Pending {
 /* What a path popup did this frame. */
 typedef enum wpe__PopupResult { WPE__POPUP_NONE = 0, WPE__POPUP_OK, WPE__POPUP_CANCEL } wpe__PopupResult;
 
+/* Changes to a list's elements rather than to a leaf. */
+typedef enum wpe__ListOp {
+    WPE__LIST_NONE = 0,
+    WPE__LIST_APPEND,  /* target: the list; appends {"effect": string}. */
+    WPE__LIST_REMOVE,  /* target: the element. */
+    WPE__LIST_MOVE_UP, /* target: the element, which swaps places with the one before it. */
+} wpe__ListOp;
+
 typedef struct wpe__Edit {
-    const WPE_JsonValue* target; /* The leaf being replaced. */
+    const WPE_JsonValue* target; /* The leaf being replaced (or the list or element of list_op). */
     WPE_JsonType type;
+    wpe__ListOp list_op;
     double number;
     bool boolean;
     char string[WPE__UI_PATH];
@@ -265,7 +274,7 @@ static void wpe__ui_entity_command(WPE_EditorUi* ui, const char* name, WPE_Entit
 
 /* Writes `v` with the edited leaf replaced. */
 static void wpe__write_edited(WPE_JsonWriter* w, const WPE_JsonValue* v, const wpe__Edit* edit) {
-    if (v == edit->target) {
+    if (v == edit->target && edit->list_op == WPE__LIST_NONE) {
         switch (edit->type) {
         case WPE_JSON_NUMBER:
             wpe_json_write_double(w, edit->number);
@@ -301,12 +310,30 @@ static void wpe__write_edited(WPE_JsonWriter* w, const WPE_JsonValue* v, const w
     case WPE_JSON_STRING:
         wpe_json_write_string(w, wpe_json_string(v));
         break;
-    case WPE_JSON_ARRAY:
+    case WPE_JSON_ARRAY: {
         wpe_json_write_array_begin(w, true);
-        for (uint32_t i = 0; i < wpe_json_count(v); ++i)
-            wpe__write_edited(w, wpe_json_at(v, i), edit);
+        const uint32_t count = wpe_json_count(v);
+        for (uint32_t i = 0; i < count; ++i) {
+            const WPE_JsonValue* element = wpe_json_at(v, i);
+            if (edit->list_op == WPE__LIST_REMOVE && element == edit->target) continue;
+            if (edit->list_op == WPE__LIST_MOVE_UP && i + 1 < count &&
+                wpe_json_at(v, i + 1) == edit->target) {
+                wpe__write_edited(w, edit->target, edit);
+                wpe__write_edited(w, element, edit);
+                ++i;
+                continue;
+            }
+            wpe__write_edited(w, element, edit);
+        }
+        if (edit->list_op == WPE__LIST_APPEND && v == edit->target) {
+            wpe_json_write_object_begin(w);
+            wpe_json_write_key(w, "effect");
+            wpe_json_write_string(w, edit->string);
+            wpe_json_write_object_end(w);
+        }
         wpe_json_write_array_end(w);
         break;
+    }
     case WPE_JSON_OBJECT:
         wpe_json_write_object_begin(w);
         for (uint32_t i = 0; i < wpe_json_count(v); ++i) {
@@ -416,6 +443,9 @@ static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char*
         break;
     }
     case WPE_JSON_STRING: {
+        /* A post effect's kind names its element ("[0] vignette"); its parameters belong to that kind, so
+         * a different kind is a new effect (removed and added in the list) rather than an edit. */
+        if (strcmp(component, "environment") == 0 && strcmp(key, "effect") == 0) break;
         uint32_t count = 0;
         const char* const* choices = wpe__choices(component, key, &count);
         if (choices && igBeginCombo(key, wpe_json_string(v), 0)) {
@@ -463,13 +493,47 @@ static bool wpe__draw_value(WPE_EditorUi* ui, const char* component, const char*
                 memcpy(edit->vector, values, sizeof values);
             }
         } else if (igTreeNodeEx_Str(key, 0)) {
-            /* Lists (joints, post effects): elements are edited in place. */
+            /* Lists (joints, post effects): elements are edited in place. Post effects can also be added,
+             * removed and reordered (they apply in order). */
+            const bool effects = strcmp(component, "environment") == 0 && strcmp(key, "postfx") == 0;
             for (uint32_t i = 0; i < count; ++i) {
-                char label[16];
-                snprintf(label, sizeof label, "[%u]", i);
+                const WPE_JsonValue* element = wpe_json_at(v, i);
+                char label[48];
+                const char* effect = effects ? wpe_json_string(wpe_json_get(element, "effect")) : NULL;
+                snprintf(label, sizeof label, "[%u]%s%s", i, effect ? " " : "", effect ? effect : "");
                 igPushID_Int((int)i);
-                changed |= wpe__draw_member(ui, component, label, wpe_json_at(v, i), edit, changed);
+                changed |= wpe__draw_member(ui, component, label, element, edit, changed);
+                if (effects) {
+                    wpe__ListOp op = WPE__LIST_NONE;
+                    igIndent(0.0f);
+                    if (i > 0 && igSmallButton("Move up")) op = WPE__LIST_MOVE_UP;
+                    if (i > 0) igSameLine(0.0f, -1.0f);
+                    if (igSmallButton("Remove")) op = WPE__LIST_REMOVE;
+                    igUnindent(0.0f);
+                    if (op != WPE__LIST_NONE && !changed) {
+                        *edit = (wpe__Edit){.target = element, .list_op = op};
+                        ++ui->edit_serial;
+                        changed = true;
+                    }
+                }
                 igPopID();
+            }
+            if (effects) {
+                uint32_t kinds = 0;
+                const char* const* names = wpe__choices("environment", "effect", &kinds);
+                igBeginDisabled(count >= WPE_POSTFX_MAX_EFFECTS);
+                if (igBeginCombo("##add", "Add effect...", 0)) {
+                    for (uint32_t k = 0; k < kinds; ++k) {
+                        if (igSelectable_Bool(names[k], false, 0, (ImVec2_c){0, 0}) && !changed) {
+                            *edit = (wpe__Edit){.target = v, .list_op = WPE__LIST_APPEND};
+                            snprintf(edit->string, sizeof edit->string, "%s", names[k]);
+                            ++ui->edit_serial;
+                            changed = true;
+                        }
+                    }
+                    igEndCombo();
+                }
+                igEndDisabled();
             }
             igTreePop();
         }

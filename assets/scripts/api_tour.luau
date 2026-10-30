@@ -110,6 +110,11 @@ function Tour:on_start()
 	assert(wpe.get_rigidbody(self.pillar) == nil)
 	-- Without a rigid body a collider is static level geometry; this one is a trigger hull from a prefab.
 	wpe.add_collider(self.pillar, { shape = wpe.COLLIDER_CONVEX, model = "box", mesh = 1, trigger = true })
+	-- Without a model, a convex (or mesh) collider takes the shape of the entity's own mesh.
+	-- (An instantiated model's meshes are on the entities of its nodes, under the returned root.)
+	local block = wpe.instantiate("box", vector.create(-9, 3, 9))
+	wpe.add_collider(wpe.children(block)[1], { shape = wpe.COLLIDER_CONVEX, trigger = true })
+	wpe.destroy(block)
 
 	local gravity = wpe.get_gravity()
 	assert(gravity.y < 0)

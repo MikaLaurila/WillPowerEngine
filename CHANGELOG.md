@@ -69,6 +69,13 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Fixed (editor: post effects, mesh colliders)
+- The Environment panel's `postfx` list can be edited: an "Add effect" menu (the effect starts with its
+  default parameters), and Move up and Remove under each effect. An effect's kind is no longer an
+  editable dropdown, which produced effects with the wrong parameters.
+- Convex and mesh colliders without a `model` take the entity's own mesh, in scene files, the editor
+  and `wpe.add_collider`. Before, switching a collider's shape to `mesh` in the editor failed.
+
 ### Fixed (editor: games that capture the mouse)
 - A play test whose game captured the mouse (mouse look) couldn't be stopped with the mouse. Shift+F1
   now frees the mouse whatever the game does (command `release_mouse`), the viewport shows how while

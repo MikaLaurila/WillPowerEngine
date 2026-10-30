@@ -539,6 +539,20 @@ static void test_engine_scene_editing_functions(void) {
     WPE_JsonDocument* mesh = parse_json("{\"model\": \"meshes/box.prim\"}");
     WPE_TEST_ASSERT_OK(wpe_scene_set_component(&ctx, lamp, "mesh", wpe_json_root(mesh)));
     WPE_TEST_ASSERT_OK(wpe_scene_set_component(&ctx, lamp, "mesh", wpe_json_root(mesh))); /* Replace. */
+    /* A mesh or convex collider without a model takes the entity's mesh (and names it when saved). */
+    WPE_JsonDocument* mesh_collider = parse_json("{\"shape\": \"mesh\", \"model\": null}");
+    WPE_TEST_ASSERT_OK(wpe_scene_set_component(&ctx, lamp, "collider", wpe_json_root(mesh_collider)));
+    const WPE_Collider* collider = wpe_ecs_get_component(w.ecs, lamp, WPE_COMP_PHYSICS_COLLIDER);
+    const WPE_MeshRenderer* renderer = wpe_ecs_get_component(w.ecs, lamp, WPE_COMP_MESH);
+    WPE_TEST_ASSERT(collider && collider->shape == WPE_COLLIDER_MESH);
+    WPE_TEST_ASSERT(collider->model == renderer->model_asset && collider->mesh == renderer->mesh);
+    WPE_TEST_ASSERT_OK(wpe_json_writer_create(&writer));
+    WPE_TEST_ASSERT_OK(wpe_scene_save_entity(&ctx, lamp, writer));
+    WPE_TEST_ASSERT_OK(wpe_json_writer_finish(writer, &saved, NULL));
+    const char* saved_collider = strstr(saved, "\"collider\"");
+    WPE_TEST_ASSERT(saved_collider && strstr(saved_collider, "\"model\": \"meshes/box.prim\"") != NULL);
+    wpe_json_writer_destroy(writer);
+    WPE_TEST_ASSERT_OK(wpe_scene_remove_component(&ctx, lamp, "collider"));
     WPE_JsonDocument* name = parse_json("\"renamed\"");
     WPE_TEST_ASSERT_OK(wpe_scene_set_component(&ctx, lamp, "name", wpe_json_root(name)));
     WPE_TEST_ASSERT_EQ_STR("renamed", wpe_scene_get_name(w.ecs, lamp));
@@ -568,7 +582,7 @@ static void test_engine_scene_editing_functions(void) {
     WPE_TEST_ASSERT(strstr(all_text, "\"parent\"") != NULL);
     wpe_json_writer_destroy(all);
 
-    WPE_JsonDocument* docs[] = {parent_doc, lamp_doc, spot, bad, mesh, name, detach, fog};
+    WPE_JsonDocument* docs[] = {parent_doc, lamp_doc, spot, bad, mesh, mesh_collider, name, detach, fog};
     for (size_t i = 0; i < sizeof docs / sizeof docs[0]; ++i)
         wpe_json_free(docs[i]);
     free_world(&w);

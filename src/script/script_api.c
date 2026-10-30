@@ -655,9 +655,15 @@ static int wpe__api_add_collider(lua_State* L) {
         if (collider.model == WPE_ASSET_NONE)
             luaL_errorL(L, "wpe.add_collider: unknown model '%s'", model_name);
     }
-    if ((collider.shape == WPE_COLLIDER_CONVEX || collider.shape == WPE_COLLIDER_MESH) &&
-        !wpe_asset_model(host->assets, collider.model)) {
-        luaL_errorL(L, "wpe.add_collider: convex and mesh colliders need a model");
+    const bool uses_model = collider.shape == WPE_COLLIDER_CONVEX || collider.shape == WPE_COLLIDER_MESH;
+    /* Without a model, the entity's own mesh gives the shape. */
+    const WPE_MeshRenderer* renderer = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_MESH);
+    if (uses_model && !wpe_asset_model(host->assets, collider.model) && renderer && renderer->model) {
+        collider.model = renderer->model_asset;
+        collider.mesh = renderer->mesh;
+    }
+    if (uses_model && !wpe_asset_model(host->assets, collider.model)) {
+        luaL_errorL(L, "wpe.add_collider: convex and mesh colliders need a model (or a mesh on the entity)");
     }
     WPE_Collider* stored = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_PHYSICS_COLLIDER);
     if (stored) {
