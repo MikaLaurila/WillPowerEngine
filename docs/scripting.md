@@ -374,7 +374,7 @@ A slash ([scenes.md](scenes.md): `slash`) is a cubic Bezier curve along which a 
 | `wpe.get_slash(entity) -> table?` | The settings above plus `playing` and `time`, or nil. |
 | `wpe.remove_slash(entity)` | Removes the slash. |
 
-In `scenes/sword.scene`, Q (or the right shoulder button) sends a wave: a crescent slash flying forward with sparks, a radial blur and a blue tint (`scripts/sword_trail.luau`).### UI
+In `scenes/sword.scene`, Q (or the right shoulder button) sends a wave: a standing crescent slash flying off to the right with sparks, a radial blur and a blue tint (`scripts/sword_trail.luau`).### UI
 
 The scene's UI elements (`ui`, `sprite`, `text` and `button` components, see [scenes.md](scenes.md#ui)) are retained: change them and they stay changed. Functions raise when the entity lacks the component they need.
 
