@@ -508,6 +508,7 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double dt) {
     if (result == WPE_RESULT_OK) result = wpe_scene_update_transforms(engine->ecs);
     /* After transforms, so emitters spawn where they are this frame. */
     if (result == WPE_RESULT_OK) result = wpe_particles_update(engine->ecs, engine->jobs, (float)dt);
+    if (result == WPE_RESULT_OK) wpe_trail_update(engine->ecs, (float)dt);
     return result;
 }
 

@@ -1,7 +1,7 @@
 /**
  * @file billboard_internal.h
  * @brief Private: the billboard shader shared by billboard.c, particles.c and scene_render.c, and the
- * particle hooks. Not a public API.
+ * particle and trail hooks. Not a public API.
  */
 #ifndef WPE_GRAPHICS_BILLBOARD_INTERNAL_H
 #define WPE_GRAPHICS_BILLBOARD_INTERNAL_H
@@ -43,5 +43,8 @@ const WPE_ShaderProgram* wpe__shader_billboard(void);
  * asset manager. */
 void wpe__particles_on_add(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data);
 void wpe__particles_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data);
+
+/* The trail's add hook (trail.c): a copy starts without recorded places. */
+void wpe__trail_on_add(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data);
 
 #endif /* WPE_GRAPHICS_BILLBOARD_INTERNAL_H */

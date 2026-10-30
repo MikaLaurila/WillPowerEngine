@@ -1,0 +1,53 @@
+{
+  "format": "wpe.scene",
+  "version": 1,
+  "environment": {
+    "clear_color": [0.1, 0.11, 0.16],
+    "ambient": [0.22, 0.22, 0.28],
+    "fog": {"mode": "linear", "color": [0.1, 0.11, 0.16], "start": 12, "end": 40},
+    "sky": {"mode": "gradient", "zenith": [0.05, 0.06, 0.12], "horizon": [0.22, 0.2, 0.3], "ground": [0.1, 0.1, 0.12],
+            "curve": 0.6, "sun_size": 0, "sun_color": [1, 1, 1], "sun_glow": 0},
+    "shadows": {"enabled": true, "map_size": 1024, "distance": 12}
+  },
+  "camera": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "camera",
+      "transform": {"position": [2.5, 1.9, 4.2], "euler": [-8, 30.7, 0]},
+      "camera": {"fov": 55, "far": 80}
+    },
+    {
+      "id": 2,
+      "name": "moon",
+      "transform": {"euler": [-55, 40, 0]},
+      "light": {"type": "directional", "color": [0.75, 0.8, 1], "intensity": 0.8, "cast_shadows": true}
+    },
+    {
+      "id": 3,
+      "name": "ground",
+      "mesh": {"model": "meshes/ground.prim"},
+      "collider": {"shape": "box", "size": [60, 1, 60], "offset": [0, -0.5, 0]}
+    },
+    {
+      "id": 4,
+      "name": "game",
+      "script": {"path": "scripts/game.luau",
+                 "properties": {"next_scene": "scenes/demo.scene", "title": "Sword trail",
+                                "help": "F,LMB/X slash (it also slashes by itself)"}}
+    },
+    {
+      "id": 5,
+      "name": "swordsman",
+      "transform": {"scale": [0.7, 0.7, 0.7]},
+      "script": {"path": "scripts/sword_trail.luau"}
+    },
+    {
+      "id": 6,
+      "name": "beowulf",
+      "parent": 5,
+      "transform": {},
+      "instance": {"model": "meshes/Beowulf.glb", "animation": 0, "play": true}
+    }
+  ]
+}

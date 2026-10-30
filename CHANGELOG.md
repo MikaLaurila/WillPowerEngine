@@ -69,6 +69,17 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (weapon trails)
+- Component `trail` (`WPE_Trail`, `WPE_COMP_TRAIL` 23): a ribbon between two entities (`base` and `tip`,
+  e.g. points on a blade) through where they were in the last `lifetime` seconds, Catmull-Rom smoothed
+  between samples, fading from `color_start` to `color_end` and narrowing toward the tip at the old end;
+  additive, alpha or cutout. Records while `emitting`. In scene files, the editor and scripts
+  (`wpe.set_trail`, `get_trail`, `clear_trail`, `remove_trail`).
+- Demo `scenes/sword.scene` (after the character scene): Beowulf slashes (fire, or by himself) with the
+  katana drawn and a trail on it; `scripts/sword_trail.luau` adds the blade points under the `right_hand`
+  bone, which carries the skinned katana.
+- Tests: recording, aging, a full trail, copies, clearing, drawing; the trail in the master scene (round
+  trip) and the script functions in its tour.
 ### Changed (cracks look like broken glass)
 - `cracks` now works like broken glass (after the project owner's earlier effect): only pixels near a cut
   change. At the cut the image is pulled across it (a seam, each cut by its own amount), near it the image

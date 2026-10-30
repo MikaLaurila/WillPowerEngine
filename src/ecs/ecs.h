@@ -89,6 +89,7 @@ enum WPE_BuiltinComponent {
     WPE_COMP_CHARACTER = 20, /* Character controllers (physics/physics.h). */
     WPE_COMP_TOGGLE = 21,    /* UI toggles and sliders (ui/ui.h). */
     WPE_COMP_SLIDER = 22,
+    WPE_COMP_TRAIL = 23, /* Weapon trails (graphics/graphics.h). */
     WPE_COMP_USER_FIRST = 32,
 };
 

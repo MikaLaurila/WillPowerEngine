@@ -137,6 +137,8 @@ static void wpe__write_ref(wpe__Saver* s, const char* key, WPE_Entity entity) {
     }
 }
 
+static void wpe__save_trail(wpe__Saver* s, WPE_Entity e); /* With the trail's loader, below. */
+
 static void wpe__write_refs(wpe__Saver* s, const char* key, const WPE_Entity* entities, uint32_t count) {
     wpe_json_write_key(s->w, key);
     wpe_json_write_array_begin(s->w, true);
@@ -338,6 +340,7 @@ void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
     }
     wpe__save_billboard(s, e);
     wpe__save_particles(s, e);
+    wpe__save_trail(s, e);
     const WPE_Animator* animator = wpe_ecs_get_component(ecs, e, WPE_COMP_ANIMATOR);
     if (animator) {
         wpe_json_write_key(w, "animator");
@@ -657,6 +660,71 @@ static bool wpe__read_refs(wpe__Loader* l, const WPE_JsonValue* object, const ch
     return true;
 }
 
+/* ---- Trails --------------------------------------------------------------------------------------- */
+
+static const char* const wpe__trail_blends[] = {"cutout", "alpha", "additive"};
+static_assert(WPE__COUNT(wpe__trail_blends) == WPE_BILLBOARD_ADDITIVE + 1, "trail blend names");
+
+static void wpe__write_color(WPE_JsonWriter* w, const char* key, WPE_Vec4 c) {
+    wpe_json_write_key(w, key);
+    wpe_json_write_array_begin(w, true);
+    for (int i = 0; i < 4; ++i)
+        wpe_json_write_number(w, c.v[i]);
+    wpe_json_write_array_end(w);
+}
+
+static void wpe__save_trail(wpe__Saver* s, WPE_Entity e) {
+    const WPE_Trail* trail = wpe_ecs_get_component(s->context->ecs, e, WPE_COMP_TRAIL);
+    if (!trail) return;
+    WPE_JsonWriter* w = s->w;
+    wpe_json_write_key(w, "trail");
+    wpe_json_write_object_begin(w);
+    wpe__write_ref(s, "base", trail->base);
+    wpe__write_ref(s, "tip", trail->tip);
+    wpe__write_bool(w, "emitting", trail->emitting);
+    wpe__write_number(w, "lifetime", trail->lifetime);
+    wpe__write_color(w, "color_start", trail->color_start);
+    wpe__write_color(w, "color_end", trail->color_end);
+    wpe__write_number(w, "width_end", trail->width_end);
+    wpe__write_integer(w, "smoothing", trail->smoothing);
+    wpe__write_string(w, "blend", wpe__trail_blends[trail->blend]);
+    wpe__write_bool(w, "visible", trail->visible);
+    wpe_json_write_object_end(w);
+}
+
+/* An optional RGBA color (0..1 each). */
+static bool wpe__read_color(wpe__Loader* l, const WPE_JsonValue* object, const char* key, WPE_Vec4* io) {
+    const WPE_JsonValue* v = wpe_json_get(object, key);
+    if (!v) return true;
+    float c[4];
+    if (!wpe__json_read_floats(&l->r, v, key, 4, c)) return false;
+    for (int i = 0; i < 4; ++i) {
+        if (!(c[i] >= 0.0f && c[i] <= 1.0f))
+            return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE, "\"%s\" values must be 0..1", key);
+    }
+    *io = wpe_vec4(c[0], c[1], c[2], c[3]);
+    return true;
+}
+
+static bool wpe__load_trail(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
+    WPE_Trail trail = wpe_trail_default();
+    uint32_t blend = trail.blend;
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "trail", "base", "tip", "emitting", "lifetime", "color_start",
+                                "color_end", "width_end", "smoothing", "blend", "visible") ||
+        !wpe__read_ref_value(l, wpe_json_get(v, "base"), "base", &trail.base) ||
+        !wpe__read_ref_value(l, wpe_json_get(v, "tip"), "tip", &trail.tip) ||
+        !wpe__json_read_bool(&l->r, v, "emitting", &trail.emitting) ||
+        !wpe__json_read_float(&l->r, v, "lifetime", 0.001, 60.0, &trail.lifetime) ||
+        !wpe__read_color(l, v, "color_start", &trail.color_start) ||
+        !wpe__read_color(l, v, "color_end", &trail.color_end) ||
+        !wpe__json_read_float(&l->r, v, "width_end", 0.0, 1.0, &trail.width_end) ||
+        !wpe__json_read_uint(&l->r, v, "smoothing", 1, 8, &trail.smoothing) ||
+        !wpe__json_read_enum(&l->r, v, "blend", wpe__trail_blends, WPE__COUNT(wpe__trail_blends), &blend) ||
+        !wpe__json_read_bool(&l->r, v, "visible", &trail.visible))
+        return false;
+    trail.blend = (WPE_BillboardBlend)blend;
+    return wpe__add(l, v, e, WPE_COMP_TRAIL, &trail, "trail");
+}
 bool wpe__add(wpe__Loader* l, const WPE_JsonValue* at, WPE_Entity e, WPE_ComponentType type, const void* data,
               const char* what) {
     if (!wpe_ecs_is_registered(l->context->ecs, type))
@@ -1278,7 +1346,7 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
     for (uint32_t i = 0; i < count; ++i) {
         const WPE_JsonValue* v = wpe_json_at(entities, i);
         if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "entity", "id", "name", "parent", "transform", "instance",
-                                    "mesh", "camera", "light", "billboard", "particles", "animator",
+                                    "mesh", "camera", "light", "billboard", "particles", "trail", "animator",
                                     "rigidbody", "collider", "character", "audio_source", "ui", "sprite",
                                     "text", "button", "toggle", "slider", "script", "components", "prefab"))
             return false;
@@ -1344,6 +1412,7 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
         {"light", wpe__load_light},
         {"billboard", wpe__load_billboard},
         {"particles", wpe__load_particles},
+        {"trail", wpe__load_trail},
         {"animator", wpe__load_animator},
         {"rigidbody", wpe__load_rigidbody},
         {"collider", wpe__load_collider},
@@ -1500,6 +1569,7 @@ static const struct {
     {"light", WPE_COMP_LIGHT, wpe__load_light},
     {"billboard", WPE_COMP_BILLBOARD, wpe__load_billboard},
     {"particles", WPE_COMP_PARTICLES, wpe__load_particles},
+    {"trail", WPE_COMP_TRAIL, wpe__load_trail},
     {"animator", WPE_COMP_ANIMATOR, wpe__load_animator},
     {"rigidbody", WPE_COMP_PHYSICS_RIGIDBODY, wpe__load_rigidbody},
     {"collider", WPE_COMP_PHYSICS_COLLIDER, wpe__load_collider},
@@ -1621,9 +1691,9 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
     wpe__Loader l = wpe__edit_loader(context, "create_entity");
     /* "id" is accepted and ignored, so a saved entity (wpe_scene_save_entity) can be fed back as a copy. */
     if (!WPE__JSON_CHECK_OBJECT(&l.r, description, "entity", "id", "name", "parent", "transform", "instance",
-                                "mesh", "camera", "light", "billboard", "particles", "animator", "rigidbody",
-                                "collider", "character", "audio_source", "ui", "sprite", "text", "button",
-                                "toggle", "slider", "script", "components", "prefab"))
+                                "mesh", "camera", "light", "billboard", "particles", "trail", "animator",
+                                "rigidbody", "collider", "character", "audio_source", "ui", "sprite", "text",
+                                "button", "toggle", "slider", "script", "components", "prefab"))
         return l.r.result;
     /* A prefab instance starts from its prefab; the description's parts then replace the root's. */
     const WPE_JsonValue* prefab = wpe_json_get(description, "prefab");
@@ -1636,10 +1706,10 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
         if (e == WPE_ENTITY_NULL) return WPE_RESULT_ERROR_CAPACITY;
     }
     /* The scene-file order: identity first, then components, scripts last. */
-    static const char* const order[] = {"name",      "transform", "parent",    "instance",     "mesh",
-                                        "camera",    "light",     "billboard", "particles",    "animator",
-                                        "rigidbody", "collider",  "character", "audio_source", "ui",
-                                        "sprite",    "text",      "button",    "toggle",       "slider"};
+    static const char* const order[] = {
+        "name",         "transform", "parent", "instance", "mesh",      "camera",   "light",
+        "billboard",    "particles", "trail",  "animator", "rigidbody", "collider", "character",
+        "audio_source", "ui",        "sprite", "text",     "button",    "toggle",   "slider"};
     bool ok = true;
     for (size_t i = 0; ok && i < sizeof order / sizeof order[0]; ++i) {
         const WPE_JsonValue* value = wpe_json_get(description, order[i]);

@@ -685,6 +685,91 @@ static WPE_Result wpe__render_particles(WPE_SceneRenderer* sr, WPE_Renderer* ren
     return result;
 }
 
+/* ---- Trails --------------------------------------------------------------------------------------- */
+
+/* The Catmull-Rom curve through b and c (a and d its neighbors) at t in [0, 1]. */
+static WPE_Vec3 wpe__catmull_rom(WPE_Vec3 a, WPE_Vec3 b, WPE_Vec3 c, WPE_Vec3 d, float t) {
+    const float t2 = t * t, t3 = t2 * t;
+    WPE_Vec3 out;
+    for (int k = 0; k < 3; ++k) {
+        out.v[k] = 0.5f * (2.0f * b.v[k] + (c.v[k] - a.v[k]) * t +
+                           (2.0f * a.v[k] - 5.0f * b.v[k] + 4.0f * c.v[k] - d.v[k]) * t2 +
+                           (3.0f * b.v[k] - a.v[k] - 3.0f * c.v[k] + d.v[k]) * t3);
+    }
+    return out;
+}
+
+/* One draw per trail: a ribbon of quads between its two edges through the recorded places, curved between
+ * them, colored and narrowed by age. */
+static WPE_Result wpe__render_trails(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const WPE_Ecs* ecs,
+                                     const wpe__BillboardPass* pass, WPE_SceneRenderStats* stats) {
+    (void)stats;
+    const wpe__Frustum frustum = wpe__frustum_from_matrix(pass->view_projection);
+    WPE_Result result = WPE_RESULT_OK;
+    WPE_EcsIter it = wpe_ecs_query((WPE_Ecs*)ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_TRAIL)});
+    while (wpe_ecs_iter_next(&it) && result == WPE_RESULT_OK) {
+        const WPE_Trail* trail = wpe_ecs_iter_get(&it, WPE_COMP_TRAIL);
+        const uint32_t n = trail->sample_count;
+        if (!trail->visible || n < 2 || !(trail->lifetime > 0.0f)) continue;
+        const uint32_t steps = trail->smoothing < 1 ? 1 : (trail->smoothing > 8 ? 8 : trail->smoothing);
+        const uint32_t points = (n - 1) * steps + 1;
+        WPE_Vec3* base = wpe_arena_alloc(&sr->frame, (size_t)points * 2 * sizeof *base, 0);
+        float* ages = wpe_arena_alloc(&sr->frame, (size_t)points * sizeof *ages, 0);
+        if (!base || !ages) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        WPE_Vec3* tip = base + points;
+        const WPE_TrailSample* s = trail->samples;
+        for (uint32_t i = 0; i + 1 < n; ++i) {
+            const uint32_t a = i > 0 ? i - 1 : 0, d = i + 2 < n ? i + 2 : n - 1;
+            for (uint32_t k = 0; k < steps; ++k) {
+                const float t = (float)k / (float)steps;
+                base[i * steps + k] = wpe__catmull_rom(s[a].base, s[i].base, s[i + 1].base, s[d].base, t);
+                tip[i * steps + k] = wpe__catmull_rom(s[a].tip, s[i].tip, s[i + 1].tip, s[d].tip, t);
+                ages[i * steps + k] = s[i].age + (s[i + 1].age - s[i].age) * t;
+            }
+        }
+        base[points - 1] = s[n - 1].base;
+        tip[points - 1] = s[n - 1].tip;
+        ages[points - 1] = s[n - 1].age;
+        /* Older places narrow toward the tip, and fade from the start color to the end color. */
+        WPE_Aabb box = {.min = tip[0], .max = tip[0]};
+        for (uint32_t p = 0; p < points; ++p) {
+            const float life = fminf(ages[p] / trail->lifetime, 1.0f);
+            const float keep = 1.0f + (trail->width_end - 1.0f) * life;
+            base[p] = wpe_vec3_add(tip[p], wpe_vec3_scale(wpe_vec3_sub(base[p], tip[p]), keep));
+            wpe__grow_box(&box, base[p]);
+            wpe__grow_box(&box, tip[p]);
+        }
+        if (pass->settings->frustum_culling && !wpe__aabb_visible(&frustum, &box)) continue;
+        const uint32_t quads = points - 1;
+        wpe__BillboardVertex* vertices = wpe_arena_alloc(&sr->frame, (size_t)quads * 4 * sizeof *vertices, 0);
+        uint32_t* indices = wpe_arena_alloc(&sr->frame, (size_t)quads * 6 * sizeof *indices, 0);
+        if (!vertices || !indices) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        for (uint32_t q = 0; q < quads; ++q) {
+            const uint32_t p[4] = {q, q, q + 1, q + 1};
+            const bool at_tip[4] = {false, true, true, false};
+            const WPE_Vec3 normal = wpe_vec3_normalize(
+                wpe_vec3_cross(wpe_vec3_sub(tip[q], base[q]), wpe_vec3_sub(base[q + 1], base[q])));
+            for (int v = 0; v < 4; ++v) {
+                const float life = fminf(ages[p[v]] / trail->lifetime, 1.0f);
+                wpe__BillboardVertex* out = &vertices[(size_t)q * 4 + (size_t)v];
+                *out = (wpe__BillboardVertex){.position = at_tip[v] ? tip[p[v]] : base[p[v]],
+                                              .normal = normal,
+                                              .u = life,
+                                              .v = at_tip[v] ? 1.0f : 0.0f};
+                for (int c = 0; c < 4; ++c)
+                    out->color[c] =
+                        trail->color_start.v[c] + (trail->color_end.v[c] - trail->color_start.v[c]) * life;
+            }
+            const uint32_t first = q * 4;
+            const uint32_t quad_indices[6] = {first, first + 1, first + 2, first, first + 2, first + 3};
+            memcpy(&indices[(size_t)q * 6], quad_indices, sizeof quad_indices);
+        }
+        result =
+            wpe__submit_quads(sr, renderer, pass, NULL, trail->blend, false, box, vertices, indices, quads);
+    }
+    return result;
+}
+
 /* ---- Main pass ------------------------------------------------------------------------------------ */
 
 WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const WPE_Ecs* ecs,
@@ -823,7 +908,8 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
     if (result == WPE_RESULT_OK)
         result = wpe__render_sky(renderer, &settings->sky, &view_projection, sun.present, sun.direction);
     if (result == WPE_RESULT_OK && (wpe_ecs_component_count(ecs, WPE_COMP_BILLBOARD) > 0 ||
-                                    wpe_ecs_component_count(ecs, WPE_COMP_PARTICLES) > 0)) {
+                                    wpe_ecs_component_count(ecs, WPE_COMP_PARTICLES) > 0 ||
+                                    wpe_ecs_component_count(ecs, WPE_COMP_TRAIL) > 0)) {
         wpe__BillboardPass pass = {.view = &view,
                                    .view_projection = &view_projection,
                                    .camera_position = camera_position,
@@ -835,6 +921,7 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
         if (wpe__camera_rigid_world(camera_transform, &pass.camera_world)) {
             result = wpe__render_billboards(sr, renderer, ecs, &pass, &stats);
             if (result == WPE_RESULT_OK) result = wpe__render_particles(sr, renderer, ecs, &pass, &stats);
+            if (result == WPE_RESULT_OK) result = wpe__render_trails(sr, renderer, ecs, &pass, &stats);
         }
     }
     if (out_stats) *out_stats = stats;

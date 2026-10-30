@@ -216,7 +216,22 @@ function Tour:on_start()
 	assert(not pcall(wpe.add_postfx, { effect = "bloom" }))
 	wpe.remove_postfx(wave)
 	assert(#wpe.get_postfx() == before)
-	-- Captured frames are image assets by path; slots 1 to 8.
+	-- Trails: a ribbon between two moving entities through where they were lately.
+	local trail_base, trail_tip = wpe.spawn("tour trail base"), wpe.spawn("tour trail tip")
+	wpe.set_position(trail_tip, vector.create(0, 1, 0))
+	wpe.set_trail(trail_base, { base = trail_base, tip = trail_tip, lifetime = 0.3, blend = "alpha",
+		color_start = wpe.color(1, 1, 1, 1), color_end = wpe.color(1, 1, 1, 0), width_end = 0.5, smoothing = 2 })
+	local trail = wpe.get_trail(trail_base)
+	assert(trail.tip == trail_tip and trail.blend == "alpha" and trail.emitting and near(trail.lifetime, 0.3))
+	wpe.set_trail(trail_base, { emitting = false })
+	assert(not wpe.get_trail(trail_base).emitting and wpe.get_trail(trail_base).smoothing == 2)
+	assert(not pcall(wpe.set_trail, trail_base, { blend = "glow" }) and not pcall(wpe.set_trail, trail_base, { lifetime = 0 }))
+	wpe.clear_trail(trail_base)
+	assert(wpe.get_trail(trail_base).samples == 0)
+	wpe.remove_trail(trail_base)
+	assert(wpe.get_trail(trail_base) == nil and not pcall(wpe.clear_trail, trail_base))
+	wpe.destroy(trail_base)
+	wpe.destroy(trail_tip)	-- Captured frames are image assets by path; slots 1 to 8.
 	assert(wpe.capture_screen(2) == "capture/2" and not pcall(wpe.capture_screen, 9))
 	self.cut_phases = {}
 	-- A flashback: grayscale with a warm (sepia) tint, faded in by strength.

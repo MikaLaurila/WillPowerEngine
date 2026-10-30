@@ -102,6 +102,15 @@
       "script": {"path": "scripts/spinner.luau", "properties": {"speed": 1.2}}
     },
     {
+      "id": 46,
+      "name": "trail base",
+      "parent": 12,
+      "transform": {"position": [1.2, 0, 0]},
+      "trail": {"base": 46, "tip": 47, "lifetime": 0.4, "color_start": [1, 0.6, 0.2, 0.9], "color_end": [1, 0.2, 0.1, 0],
+                "width_end": 0.4, "smoothing": 3, "blend": "additive"}
+    },
+    {"id": 47, "name": "trail tip", "parent": 12, "transform": {"position": [2, 0, 0]}},
+    {
       "id": 13,
       "name": "figure",
       "transform": {"position": [-4, 0, 2], "euler": [0, 30, 0]},

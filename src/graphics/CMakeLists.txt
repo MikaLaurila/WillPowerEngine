@@ -8,7 +8,8 @@ add_library(wpe_graphics STATIC
     particles.c
     postfx.c
     scene_render.c
-    sky.c)
+    sky.c
+    trail.c)
 add_library(wpe::graphics ALIAS wpe_graphics)
 
 target_link_libraries(wpe_graphics PUBLIC wpe::core wpe::math wpe::ecs wpe::scene wpe::renderer wpe::assets)

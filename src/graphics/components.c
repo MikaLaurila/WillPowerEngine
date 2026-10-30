@@ -133,6 +133,11 @@ WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs, WPE_AssetManager* asse
           .on_add = wpe__particles_on_add,
           .on_remove = wpe__particles_on_remove,
           .hook_user_data = assets}},
+        {WPE_COMP_TRAIL,
+         {.name = "Trail",
+          .size = sizeof(WPE_Trail),
+          .alignment = alignof(WPE_Trail),
+          .on_add = wpe__trail_on_add}},
     };
     for (size_t i = 0; i < sizeof components / sizeof components[0]; ++i) {
         const WPE_Result result = wpe_ecs_register_component(ecs, components[i].type, &components[i].desc);

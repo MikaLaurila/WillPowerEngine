@@ -350,6 +350,18 @@ Particle emitters ([scenes.md](scenes.md#particles)). A settings table uses the 
 | `wpe.particle_count(entity) -> number` | Live particles. |
 | `wpe.remove_particles(entity)` | Removes the emitter. |
 
+### Trails
+
+Weapon trails ([scenes.md](scenes.md): `trail`): a ribbon between two entities, `base` and `tip`, through the places they passed in the last `lifetime` seconds, smoothed into curves, fading from `color_start` to `color_end`. Put the two entities on what moves, such as points on a blade under the hand bone that carries it (for a skinned weapon, its own node doesn't move), and turn `emitting` on for a swing.
+
+| Function | Description |
+|---|---|
+| `wpe.set_trail(entity, table)` | Changes the fields given, adding a trail (with the defaults) if the entity has none: `base`, `tip` (entities), `emitting`, `visible`, `lifetime`, `width_end`, `smoothing`, `color_start`, `color_end` (`wpe.color`), `blend` (`"additive"`, `"alpha"`, `"cutout"`). Recorded places stay. |
+| `wpe.get_trail(entity) -> table?` | The settings above plus `samples` (places recorded), or nil. |
+| `wpe.clear_trail(entity)` | Forgets the recorded places, so a new swing doesn't join the last. |
+| `wpe.remove_trail(entity)` | Removes the trail. |
+
+`scripts/sword_trail.luau` in `scenes/sword.scene` adds the two points to Beowulf's katana and records each slash.
 ### UI
 
 The scene's UI elements (`ui`, `sprite`, `text` and `button` components, see [scenes.md](scenes.md#ui)) are retained: change them and they stay changed. Functions raise when the entity lacks the component they need.

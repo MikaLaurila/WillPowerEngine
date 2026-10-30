@@ -18,6 +18,8 @@
  * - WPE_COMP_PARTICLES (WPE_ParticleEmitter): emits and simulates particles (wpe_particles_update()),
  *   drawn by wpe_scene_render() as screen-facing quads through the billboard shader, one draw per
  *   emitter. Its particle array is owned by the component (freed by its remove hook).
+ * - WPE_COMP_TRAIL (WPE_Trail): a ribbon between two moving entities (a blade's base and tip) through where
+ *   they were lately (wpe_trail_update()), drawn by wpe_scene_render() through the billboard shader.
  *
  * Asset lifetime: mesh renderers and animators reference their model by asset handle
  * (`model_asset`). Their add hook takes a reference and resolves the cached `model` pointer; their
@@ -256,6 +258,48 @@ void wpe_particles_clear(WPE_Ecs* ecs, WPE_Entity entity);
  */
 WPE_Result wpe_particles_preview(WPE_Ecs* ecs, WPE_Entity entity, float dt);
 
+#define WPE_TRAIL_MAX_SAMPLES 96u
+
+/** Where a trail's two edges were, and how long ago (seconds). */
+typedef struct WPE_TrailSample {
+    WPE_Vec3 base, tip;
+    float age;
+} WPE_TrailSample;
+
+/**
+ * A weapon trail: while `emitting`, it records each frame where the entities `base` and `tip` are, and draws
+ * a ribbon between the two edges through the recent places, smoothed into curves between samples, fading from
+ * color_start (the newest) to color_end (the oldest, `lifetime` seconds ago).
+ */
+typedef struct WPE_Trail {
+    WPE_Entity base, tip;            /* The edges, e.g. points on a blade (WPE_ENTITY_NULL: no trail). */
+    bool emitting;                   /* Recording (a swing); off, the trail fades away. */
+    float lifetime;                  /* Seconds a recorded place lasts: the trail's length in time. */
+    WPE_Vec4 color_start, color_end; /* RGBA at the newest and the oldest end. */
+    float width_end;    /* At the oldest end the ribbon narrows toward the tip to this share (0..1). */
+    uint32_t smoothing; /* Curve segments between samples (1..8; 1 = straight). */
+    WPE_BillboardBlend blend;
+    bool visible;
+    /* Runtime state (read-only; reset by the add hook). Newest first. */
+    WPE_TrailSample samples[WPE_TRAIL_MAX_SAMPLES];
+    uint32_t sample_count;
+} WPE_Trail;
+
+/** @return An additive, emitting, pale blue trail lasting 0.2 s, narrowing to 30% with 4 curve segments,
+ * without edges yet. @thread_safety Any thread */
+WPE_Trail wpe_trail_default(void);
+
+/**
+ * Advances every trail: ages its samples and drops those past their lifetime, then, while emitting, records
+ * where its edges are now (their world transforms, so call it after wpe_scene_update_transforms()).
+ *
+ * @thread_safety Thread owning the world
+ */
+void wpe_trail_update(WPE_Ecs* ecs, float dt);
+
+/** Forgets every recorded place (a teleport, a new swing that shouldn't join the last). @thread_safety Thread
+ * owning the world */
+void wpe_trail_clear(WPE_Ecs* ecs, WPE_Entity entity);
 /** @return A visible, lit, single-sided (as the material says) mesh renderer of `mesh` in `model` that casts
  * and receives shadows, without a skin. @thread_safety Any thread */
 WPE_MeshRenderer wpe_mesh_renderer_default(WPE_AssetHandle model, uint32_t mesh);
@@ -270,7 +314,7 @@ WPE_Light wpe_light_default(WPE_LightType type);
 
 /**
  * Registers WPE_COMP_MESH, WPE_COMP_CAMERA, WPE_COMP_LIGHT, WPE_COMP_ANIMATOR, WPE_COMP_BILLBOARD and
- * WPE_COMP_PARTICLES. Scene components
+ * WPE_COMP_PARTICLES and WPE_COMP_TRAIL. Scene components
  * must be registered too (wpe_scene_register_components()).
  *
  * @param assets Borrowed; must outlive the world (component hooks release model references).

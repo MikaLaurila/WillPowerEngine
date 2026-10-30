@@ -1050,6 +1050,88 @@ static void test_graphics_particles_draw(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* ---- Trails ---------------------------------------------------------------------------------------- */
+
+static WPE_Entity spawn_point(WPE_Ecs* ecs, WPE_Vec3 position) {
+    const WPE_Entity e = wpe_ecs_spawn(ecs);
+    WPE_Transform t = wpe_transform_identity();
+    t.position = position;
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, e, WPE_COMP_TRANSFORM, &t, NULL));
+    return e;
+}
+
+/* A trail records where its edges are each update while emitting, keeps a place for `lifetime`, and draws a
+ * ribbon between the edges through the recent places; a copy starts with none. */
+static void test_graphics_trail_records_and_draws(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 0, 5), wpe_quat_identity());
+    const WPE_Entity base = spawn_point(ecs, wpe_vec3(-1.5f, 0, 0));
+    const WPE_Entity tip = spawn_point(ecs, wpe_vec3(-1.5f, 1.5f, 0));
+    WPE_Trail settings = wpe_trail_default();
+    settings.base = base;
+    settings.tip = tip;
+    settings.lifetime = 0.5f;
+    settings.width_end = 1.0f;
+    settings.color_start = settings.color_end = wpe_vec4(0, 1, 0, 1);
+    settings.blend = WPE_BILLBOARD_CUTOUT;
+    const WPE_Entity holder = spawn_point(ecs, wpe_vec3(0, 0, 0));
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, holder, WPE_COMP_TRAIL, &settings, NULL));
+
+    /* The edges sweep to the right over ten updates: ten places, newest first. */
+    for (int i = 0; i < 10; ++i) {
+        ((WPE_Transform*)wpe_ecs_get_component(ecs, base, WPE_COMP_TRANSFORM))->position.x =
+            -1.5f + 0.3f * (float)i;
+        ((WPE_Transform*)wpe_ecs_get_component(ecs, tip, WPE_COMP_TRANSFORM))->position.x =
+            -1.5f + 0.3f * (float)i;
+        WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
+        wpe_trail_update(ecs, 1.0f / 60.0f);
+    }
+    const WPE_Trail* trail = wpe_ecs_get_component(ecs, holder, WPE_COMP_TRAIL);
+    WPE_TEST_ASSERT_EQ_UINT(10, trail->sample_count);
+    WPE_TEST_ASSERT_NEAR(1.2, trail->samples[0].base.x, 1e-4);
+    WPE_TEST_ASSERT_NEAR(-1.5, trail->samples[9].base.x, 1e-4);
+    WPE_TEST_ASSERT(trail->samples[0].age < trail->samples[9].age);
+
+    /* Drawn: one draw covering the swept band between y = 0 and 1.5, green. */
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_SceneRenderStats stats;
+    const WPE_Framebuffer* fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_renderer_stats(renderer).draws);
+    WPE_TEST_ASSERT(count_color(fb, 0xFF00FF00u) > 100);
+
+    /* Not emitting, it ages away: nothing left after its lifetime, and nothing drawn. */
+    ((WPE_Trail*)wpe_ecs_get_component(ecs, holder, WPE_COMP_TRAIL))->emitting = false;
+    wpe_trail_update(ecs, 0.4f);
+    WPE_TEST_ASSERT(trail->sample_count > 0 && trail->sample_count < 10); /* The oldest went first. */
+    wpe_trail_update(ecs, 0.3f);
+    WPE_TEST_ASSERT_EQ_UINT(0, trail->sample_count);
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(0, count_color(fb, 0xFF00FF00u));
+
+    /* A full trail drops its oldest place; a copy (a duplicate entity) starts empty; clear forgets. */
+    WPE_Trail* live = wpe_ecs_get_component(ecs, holder, WPE_COMP_TRAIL);
+    live->emitting = true;
+    live->lifetime = 60.0f;
+    for (uint32_t i = 0; i < WPE_TRAIL_MAX_SAMPLES + 5; ++i)
+        wpe_trail_update(ecs, 0.001f);
+    WPE_TEST_ASSERT_EQ_UINT(WPE_TRAIL_MAX_SAMPLES, live->sample_count);
+    const WPE_Entity copy = spawn_point(ecs, wpe_vec3(0, 0, 0));
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, copy, WPE_COMP_TRAIL, live, NULL));
+    WPE_TEST_ASSERT_EQ_UINT(0, ((WPE_Trail*)wpe_ecs_get_component(ecs, copy, WPE_COMP_TRAIL))->sample_count);
+    wpe_trail_clear(ecs, holder);
+    WPE_TEST_ASSERT_EQ_UINT(0,
+                            ((WPE_Trail*)wpe_ecs_get_component(ecs, holder, WPE_COMP_TRAIL))->sample_count);
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
 static void test_graphics_scene_render_frustum_culling(void) {
     WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 32);
     const WPE_AssetHandle model = wpe_test_load_model(t.assets, "meshes/damaged_helmet.glb");
@@ -1256,5 +1338,6 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_mesh_shadow_unlit_and_sides),
     WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
     WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),
+    WPE_TEST_CASE(test_graphics_trail_records_and_draws),
     WPE_TEST_CASE(test_graphics_camera_matrices_validation),
     WPE_TEST_CASE(test_graphics_draw2d_text_is_pixel_exact), WPE_TEST_CASE(test_graphics_debug_lines))

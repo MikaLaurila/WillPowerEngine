@@ -2300,6 +2300,123 @@ static int wpe__api_remove_particles(lua_State* L) {
     return 0;
 }
 
+/* ---- Trails ---------------------------------------------------------------------------------------- */
+
+static const char* const wpe__trail_blends[] = {"cutout", "alpha", "additive"};
+
+/* The fields of a trail table over `base` (missing ones keep their values); raises on bad values. */
+static WPE_Trail wpe__check_trail(lua_State* L, int table, WPE_Trail base) {
+    luaL_checktype(L, table, LUA_TTABLE);
+    const char* edges[] = {"base", "tip"};
+    WPE_Entity* targets[] = {&base.base, &base.tip};
+    for (int i = 0; i < 2; ++i) {
+        lua_getfield(L, table, edges[i]);
+        if (!lua_isnil(L, -1)) *targets[i] = wpe__check_entity(L, lua_gettop(L));
+        lua_pop(L, 1);
+    }
+    base.emitting = wpe__field_bool(L, table, "emitting", base.emitting);
+    base.visible = wpe__field_bool(L, table, "visible", base.visible);
+    base.lifetime = wpe__field_number(L, table, "lifetime", base.lifetime);
+    if (!(base.lifetime > 0.0f && base.lifetime <= 60.0f)) luaL_errorL(L, "lifetime must be 0..60 seconds");
+    base.width_end = wpe__field_number(L, table, "width_end", base.width_end);
+    if (!(base.width_end >= 0.0f && base.width_end <= 1.0f)) luaL_errorL(L, "width_end must be 0..1");
+    base.smoothing = wpe__field_count(L, table, "smoothing", 1, 8, base.smoothing);
+    const char* colors[] = {"color_start", "color_end"};
+    WPE_Vec4* color_targets[] = {&base.color_start, &base.color_end};
+    for (int i = 0; i < 2; ++i) {
+        lua_getfield(L, table, colors[i]);
+        if (!lua_isnil(L, -1)) *color_targets[i] = wpe_color_to_vec4(wpe__opt_color(L, -1));
+        lua_pop(L, 1);
+    }
+    lua_getfield(L, table, "blend");
+    if (!lua_isnil(L, -1)) {
+        const char* blend = luaL_checkstring(L, -1);
+        uint32_t found = UINT32_MAX;
+        for (uint32_t i = 0; i < 3; ++i) {
+            if (strcmp(blend, wpe__trail_blends[i]) == 0) found = i;
+        }
+        if (found == UINT32_MAX) luaL_errorL(L, "blend must be \"additive\", \"alpha\" or \"cutout\"");
+        base.blend = (WPE_BillboardBlend)found;
+    }
+    lua_pop(L, 1);
+    return base;
+}
+
+/* Changes (or adds) an entity's trail; recorded places stay. */
+static int wpe__api_set_trail(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_Trail* existing = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_TRAIL);
+    const WPE_Trail settings = wpe__check_trail(L, 2, existing ? *existing : wpe_trail_default());
+    WPE_Trail* live = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_TRAIL); /* Re-fetch. */
+    if (live) {
+        *live = settings; /* Its samples were copied from `live` itself. */
+        return 0;
+    }
+    wpe__check_unrestricted(L, "set_trail");
+    wpe__raise_result(L, "set_trail",
+                      wpe_ecs_add_component(host->ecs, entity, WPE_COMP_TRAIL, &settings, NULL));
+    return 0;
+}
+
+static int wpe__api_get_trail(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_Trail* found = wpe_ecs_get_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_TRAIL);
+    if (!found) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const WPE_Trail t = *found; /* Copy before pushing. */
+    lua_createtable(L, 0, 11);
+    const struct {
+        const char* key;
+        WPE_Entity value;
+    } edges[] = {{"base", t.base}, {"tip", t.tip}};
+    for (size_t i = 0; i < 2; ++i) {
+        if (edges[i].value == WPE_ENTITY_NULL) {
+            lua_pushnil(L);
+        } else {
+            lua_pushnumber(L, edges[i].value);
+        }
+        lua_setfield(L, -2, edges[i].key);
+    }
+    lua_pushboolean(L, t.emitting);
+    lua_setfield(L, -2, "emitting");
+    lua_pushboolean(L, t.visible);
+    lua_setfield(L, -2, "visible");
+    lua_pushnumber(L, t.lifetime);
+    lua_setfield(L, -2, "lifetime");
+    lua_pushnumber(L, t.width_end);
+    lua_setfield(L, -2, "width_end");
+    lua_pushnumber(L, t.smoothing);
+    lua_setfield(L, -2, "smoothing");
+    lua_pushnumber(L, (double)wpe_color_from_vec4(t.color_start));
+    lua_setfield(L, -2, "color_start");
+    lua_pushnumber(L, (double)wpe_color_from_vec4(t.color_end));
+    lua_setfield(L, -2, "color_end");
+    lua_pushstring(L, wpe__trail_blends[t.blend]);
+    lua_setfield(L, -2, "blend");
+    lua_pushnumber(L, t.sample_count);
+    lua_setfield(L, -2, "samples");
+    return 1;
+}
+
+static int wpe__api_clear_trail(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    if (!wpe_ecs_has_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_TRAIL))
+        luaL_errorL(L, "entity 0x%08x has no trail", entity);
+    wpe_trail_clear(wpe__script_host_from(L)->ecs, entity);
+    return 0;
+}
+
+static int wpe__api_remove_trail(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "remove_trail");
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    if (wpe_ecs_has_component(host->ecs, entity, WPE_COMP_TRAIL))
+        wpe__raise_result(L, "remove_trail", wpe_ecs_remove_component(host->ecs, entity, WPE_COMP_TRAIL));
+    return 0;
+}
+
 /* ---- UI -------------------------------------------------------------------------------------------- */
 
 /* The entity's UI component of `type`; raises when it has none. */
@@ -2576,6 +2693,10 @@ static const luaL_Reg wpe__api[] = {
     {"stop_particles", wpe__api_stop_particles},
     {"particle_count", wpe__api_particle_count},
     {"remove_particles", wpe__api_remove_particles},
+    {"set_trail", wpe__api_set_trail},
+    {"get_trail", wpe__api_get_trail},
+    {"clear_trail", wpe__api_clear_trail},
+    {"remove_trail", wpe__api_remove_trail},
     {"get_text", wpe__api_get_text},
     {"set_text", wpe__api_set_text},
     {"set_text_color", wpe__api_set_text_color},

@@ -472,6 +472,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
         {"billboard", "blend", billboard_blends, 3},
         {"particles", "blend", billboard_blends, 3},
         {"particles", "shape", particle_shapes, 3},
+        {"trail", "blend", billboard_blends, 3},
     };
     for (size_t i = 0; i < sizeof table / sizeof table[0]; ++i) {
         if (strcmp(table[i].component, component) == 0 && strcmp(table[i].key, key) == 0) {
@@ -2357,7 +2358,7 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
     static const char* const addable[] = {"transform", "mesh",      "camera",   "light",     "billboard",
                                           "particles", "rigidbody", "collider", "character", "audio_source",
                                           "ui",        "sprite",    "text",     "button",    "toggle",
-                                          "slider",    "script"};
+                                          "slider",    "trail",     "script"};
     igSetNextItemWidth(-1.0f);
     igInputText("##asset_path", ui->add_path, sizeof ui->add_path, 0, NULL, NULL);
     (void)wpe__asset_drop(WPE__ASSET_ANY, ui->add_path,
