@@ -145,7 +145,9 @@ typedef struct WPE_CracksParams {
     float width_pixels;       /* The core's half width (0: no core line). */
     float glow_pixels;        /* The rim's width, on one side of each cut (0: no rim). */
     float bevel_pixels;       /* How far from a cut the image is sheared along it (0: no streaks). */
-    float strength;           /* 0..1: everything above fades with it. */
+    float
+        shear_waves; /* How often the streaks change along a cut, per 100 pixels (0: one slide all along). */
+    float strength;  /* 0..1: everything above fades with it. */
     float core_r, core_g, core_b; /* The color the core blends toward. */
     float glow_r, glow_g, glow_b; /* The rim's tint: added over dark areas, darkened toward over bright. */
 } WPE_CracksParams;

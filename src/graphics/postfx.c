@@ -452,9 +452,10 @@ static float wpe__line_noise(uint32_t seed, uint32_t line, float x) {
 
 /* Like broken glass, only pixels near a cut change; the nearest cut shapes them. Within two pixels of it
  * the image is pulled across the cut (a seam); within the bevel zone it is sheared along the cut by an
- * amount that wanders along it and fades with distance (the streaks of fractured glass); on one side a rim
- * tinted by the glow color darkens bright areas toward it and lights dark ones with it, so it shows on
- * both; and an optional core blends the cut itself toward the core color. */
+ * amount that wanders along it (shear_waves times per 100 pixels; at 0 each cut slides by its own amount) and
+ * fades with distance (the streaks of fractured glass); on one side a rim tinted by the glow color darkens
+ * bright areas toward it and lights dark ones with it, so it shows on both; and an optional core blends the
+ * cut itself toward the core color. */
 static void wpe__cracks_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
                              uint32_t row_begin, uint32_t row_end) {
     (void)pass;
@@ -516,7 +517,9 @@ static void wpe__cracks_pass(const WPE_PostContext* c, const void* params_ptr, u
             float off_x = nx * across + slide_x, off_y = ny * across + slide_y;
             /* The streaks: sheared along the cut. */
             if (d < shear_zone) {
-                const float jitter = wpe__line_noise(p->seed, nearest, along * 0.08f) * 2.0f - 1.0f;
+                const float jitter =
+                    wpe__line_noise(p->seed, nearest, along * fmaxf(p->shear_waves, 0.0f) * 0.01f) * 2.0f -
+                    1.0f;
                 const float shear = jitter * (1.0f - d / shear_zone) * bevel * 0.6f * amount;
                 off_x += line->dx * shear;
                 off_y += line->dy * shear;
@@ -963,6 +966,7 @@ static const WPE_CracksParams wpe__cracks_defaults = {.count = 8.0f,
                                                       .width_pixels = 0.0f,
                                                       .glow_pixels = 5.0f,
                                                       .bevel_pixels = 5.0f,
+                                                      .shear_waves = 8.0f,
                                                       .strength = 1.0f,
                                                       .core_r = 0.05f,
                                                       .core_g = 0.06f,
@@ -1091,6 +1095,7 @@ static const WPE_PostFxParam wpe__cracks_params[] = {
     {"width_pixels", offsetof(WPE_PostFxConfig, cracks.width_pixels), 0, 16, false},
     {"glow_pixels", offsetof(WPE_PostFxConfig, cracks.glow_pixels), 0, 32, false},
     {"bevel_pixels", offsetof(WPE_PostFxConfig, cracks.bevel_pixels), 0, 32, false},
+    {"shear_waves", offsetof(WPE_PostFxConfig, cracks.shear_waves), 0, 100, false},
     {"strength", offsetof(WPE_PostFxConfig, cracks.strength), 0, 1, false},
     {"core_r", offsetof(WPE_PostFxConfig, cracks.core_r), 0, 4, false},
     {"core_g", offsetof(WPE_PostFxConfig, cracks.core_g), 0, 4, false},

@@ -16,6 +16,8 @@
 --   dim = 0.3          how much darker the scene gets during the cuts (0: not at all)
 --   glow               the rim's tint (a vector; bluish by default). The cuts look like broken glass: the
 --                      image is pulled and streaked along them, with the tinted rim on one side
+--   shear_waves = 0    how often the streaks change along a cut, per 100 pixels (0: each cut's edge slides by
+--                      one amount all along it; 8: they waver, breaking into streaks)
 --   core               a color for a line drawn along each cut (none by default; white for cuts of light)
 --   slot = 8           the capture slot the shatter breaks (wpe.capture_screen)
 --   seed               which cuts (random by default)
@@ -36,6 +38,7 @@ local DEFAULTS = {
 	core = vector.create(1.0, 1.0, 1.0),
 	glow = vector.create(0.35, 0.55, 1),
 	slot = 8,
+	shear_waves = 0,
 }
 local FADE_SECONDS = 0.35
 
@@ -67,7 +70,8 @@ function JudgementCut.start(x: number, y: number, options: { [string]: any }?)
 	self.phase = "cutting"
 	self.clock = 0
 	wpe.add_postfx({ effect = "color_adjust", brightness = 0 })
-	local cracks = { effect = "cracks", count = 0, seed = self.seed, center_x = x, center_y = y, spread = self.spread }
+	local cracks = { effect = "cracks", count = 0, seed = self.seed, center_x = x, center_y = y, spread = self.spread,
+		shear_waves = self.shear_waves }
 	local core = options and options.core
 	local glow = options and options.glow
 	if core then

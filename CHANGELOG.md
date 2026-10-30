@@ -87,6 +87,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   new post pass, `wpe_postfx_curve_distort` (a screen polyline with depth), which the engine runs before
   the environment's effects for each slash that asks for it (`wpe_slash_distortions` projects them). The
   sword demo's wave and curve spell use it.
+- Cracks: `shear_waves` sets how often the streak shear changes along a cut (per 100 pixels, 8 as before);
+  at 0 each cut's edge slides by one amount all along it, as in the project owner's original. The
+  Judgement Cut helper uses 0 by default (option `shear_waves`).
 - Tests: the curve, the sweep and its head entity, drawing while playing only; the master scene (round
   trip) and the tour.
 ### Added (weapon trails)
