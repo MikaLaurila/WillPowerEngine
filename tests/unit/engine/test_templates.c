@@ -256,6 +256,79 @@ static void test_templates_first_person_plays(void) {
     remove_project(dir);
 }
 
+/* ---- Third person ---------------------------------------------------------------------------------- */
+
+/* Runs Luau with the game's API; its asserts fail the test. */
+static void check_lua(WPE_Engine* engine, const char* name, const char* code) {
+    WPE_TEST_ASSERT_MSG(wpe_script_host_run(wpe_engine_scripts(engine), name, code) == WPE_RESULT_OK,
+                        "the check '%s' failed (see the log)", name);
+}
+
+/* The figure walks away from the camera and turns to face its way, animated while moving and standing
+ * still otherwise; Space jumps; under the archway's roof the camera moves in rather than through it. */
+static void test_templates_third_person_plays(void) {
+    char dir[256];
+    create_project("third_person", dir, sizeof dir);
+    WPE_Engine* engine = create_engine(dir);
+    WPE_Ecs* ecs = wpe_engine_ecs(engine);
+    const WPE_Entity player = find(ecs, "player");
+    const WPE_Entity camera = find(ecs, "camera");
+    WPE_TEST_ASSERT(player != WPE_ENTITY_NULL && camera == wpe_engine_camera(engine));
+    frames(engine, 15);
+    check_lua(engine, "idle at the start",
+              "local s = wpe.get_script(wpe.find('player'))\n"
+              "assert(s.figure and s.state == 'idle')\n"
+              "assert(wpe.animation_speed(s.figure) == 0)\n");
+    const WPE_Vec3 start = position(ecs, player);
+
+    key(engine, SDL_SCANCODE_W, true);
+    frames(engine, 45);
+    const WPE_Vec3 walked = position(ecs, player);
+    WPE_TEST_ASSERT_MSG(walked.z < start.z - 3.0f && fabsf(walked.x - start.x) < 0.1f,
+                        "the player walked to (%g, %g, %g)", (double)walked.x, (double)walked.y,
+                        (double)walked.z);
+    WPE_TEST_ASSERT(position(ecs, camera).z > walked.z + 2.0f); /* Still behind. */
+    check_lua(engine, "walking",
+              "local s = wpe.get_script(wpe.find('player'))\n"
+              "assert(s.state == 'move' and wpe.get_animation(s.figure).playing)\n"
+              "assert(wpe.animation_speed(s.figure) > 0.5)\n");
+    key(engine, SDL_SCANCODE_W, false);
+    frames(engine, 20);
+    check_lua(engine, "standing again",
+              "local s = wpe.get_script(wpe.find('player'))\n"
+              "assert(s.state == 'idle' and wpe.animation_speed(s.figure) == 0)\n");
+
+    /* D walks right (+X, with the camera behind), and the figure turns to face that way. */
+    key(engine, SDL_SCANCODE_D, true);
+    frames(engine, 30);
+    key(engine, SDL_SCANCODE_D, false);
+    WPE_TEST_ASSERT(position(ecs, player).x > walked.x + 1.5f);
+    check_lua(engine, "facing right",
+              "assert(math.abs(wpe.get_rotation(wpe.find('player')).y + math.pi / 2) < 0.1)\n");
+
+    frames(engine, 10);
+    const float ground = position(ecs, player).y;
+    tap(engine, SDL_SCANCODE_SPACE);
+    frames(engine, 4);
+    WPE_TEST_ASSERT(position(ecs, player).y > ground + 0.3f);
+    frames(engine, 30);
+
+    /* Under the archway (roof from y = 3), a camera looking steeply down would be above the roof: it stays
+     * under it, close to the player. */
+    check_lua(engine, "into the archway",
+              "wpe.set_position(wpe.find('player'), vector.create(-10, 0, 6))\n"
+              "wpe.get_script(wpe.find('camera')).pitch = -0.8\n");
+    frames(engine, 10);
+    const WPE_Vec3 eye = position(ecs, camera);
+    const WPE_Vec3 focus = wpe_vec3_add(position(ecs, player), wpe_vec3(0.0f, 1.5f, 0.0f));
+    WPE_TEST_ASSERT_MSG(eye.y < 3.0f && wpe_vec3_length(wpe_vec3_sub(eye, focus)) < 2.5f,
+                        "the camera is at (%g, %g, %g)", (double)eye.x, (double)eye.y, (double)eye.z);
+    WPE_TEST_ASSERT_EQ_UINT(0, script_errors(engine));
+    wpe_engine_destroy(engine);
+    remove_project(dir);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_templates_create_projects_that_run),
               WPE_TEST_CASE(test_templates_reject_unknown_names),
-              WPE_TEST_CASE(test_templates_first_person_plays))
+              WPE_TEST_CASE(test_templates_first_person_plays),
+              WPE_TEST_CASE(test_templates_third_person_plays))

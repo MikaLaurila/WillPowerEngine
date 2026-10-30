@@ -69,6 +69,15 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (project templates: third person)
+- `third_person` template: an animated figure on a character controller with an orbiting camera (mouse
+  and right-stick look, wheel zoom, a sphere cast that keeps the camera in front of walls), walking
+  relative to the camera, sprinting, jumping and turning to face its way. Idle, move and jump
+  animations are script properties chosen by name, so another character drops in; the move animation
+  plays faster with speed. The level is the first-person one plus an archway. `RiggedFigure.glb`
+  (CC BY 4.0) comes with its attribution.
+- Tests: the figure walks away from the camera, turns, animates only while moving, jumps, and the camera
+  stays under the archway's roof.
 ### Fixed (editor: post effects, mesh colliders)
 - The Environment panel's `postfx` list can be edited: an "Add effect" menu (the effect starts with its
   default parameters), and Move up and Remove under each effect. An effect's kind is no longer an
