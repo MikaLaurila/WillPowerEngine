@@ -1,8 +1,10 @@
 -- A walking character on a character controller: moves relative to the camera (move_x / move_y),
 -- runs (boost), jumps when standing (jump), faces the way it walks, and goes back to its start
 -- (reset, or after a fall). Slopes up to the controller's max_slope are walkable, steeper ones
--- aren't; crates get pushed. "fire" sends a shockwave out from it (post effects driven by script).
+-- aren't; crates get pushed. "fire" sends a shockwave out from it (post effects driven by script);
+-- "special" cuts the space in front of it (Judgement Cut, scripts/lib/judgement_cut.luau).
 local util = require("scripts/lib/util")
+local JudgementCut = require("scripts/lib/judgement_cut")
 
 local Hero = {}
 Hero.properties = { speed = 4, run_speed = 7.5, jump_speed = 6.5, gravity = 18, player = 1 }
@@ -54,6 +56,17 @@ function Hero:on_update(dt)
 	if wpe.action_pressed("fire", self.player) then
 		self.wave = 0
 		wpe.play_sound("sounds/thud.wav", { volume = 0.4, pitch = 0.6 })
+	end
+	if wpe.action_pressed("special", self.player) and not self.cut then
+		-- Where the cuts cross: a point four meters ahead of the hero, at chest height.
+		local ahead = wpe.get_world_position(self.entity) + wpe.forward(self.entity) * 4 + vector.create(0, 1.2, 0)
+		local x, y = wpe.world_to_screen(ahead)
+		local width, height = wpe.screen_size()
+		self.cut = JudgementCut.start(x / width, y / height)
+		wpe.play_sound("sounds/thud.wav", { volume = 0.5, pitch = 1.4 })
+	end
+	if self.cut and not self.cut:update(dt) then
+		self.cut = nil
 	end
 	self:update_wave(dt)
 end

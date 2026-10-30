@@ -6,14 +6,17 @@
  * (the result of the previous pass) and must write every pixel of its rows into `dst`; the chain
  * swaps them after every pass and copies the final result back into the renderer's framebuffer.
  * Effects may also use `aux`, one float per pixel that persists across the passes of the same
- * effect (e.g. SSAO stores raw occlusion in pass 0 and blurs it in pass 1). Rows are split across
+ * effect (e.g. SSAO stores raw occlusion in pass 0 and blurs it in pass 1). An effect that needs work
+ * done once for the whole image first (shatter finds its shards) has a `prepare` function, run alone
+ * before its passes, which fills `scratch_size` bytes the passes then read. Rows are split across
  * the renderer's job system, so pass functions run concurrently on disjoint row ranges and must
  * only write rows [row_begin, row_end) of dst/aux.
  *
  * Built-in effects: SSAO, chromatic aberration, PS1-style dither + color quantization, vignette,
  * color adjustment (brightness/contrast/saturation), grayscale (with a tint, e.g. sepia), depth of field,
- * and the shockwave and radial blur distortions. WPE_PostFxConfig describes any of them as data (scene files,
- * scripts).
+ * the shockwave and radial blur distortions, cracks (straight cuts across the screen) and shatter (the
+ * screen breaking along them). WPE_PostFxConfig
+ * describes any of them as data (scene files, scripts).
  *
  * Usage: wpe_renderer_end_frame() → wpe_postfx_apply() → optionally another renderer frame
  * without clearing for HUD/2D that should not be post-processed.
@@ -29,6 +32,7 @@
 #include <stddef.h>
 
 #include "renderer/renderer.h"
+#include "renderer/texture.h"
 
 /** Camera parameters effects need to linearize depth. */
 typedef struct WPE_PostCamera {
@@ -45,17 +49,23 @@ typedef struct WPE_PostContext {
     uint32_t width;
     uint32_t height;
     WPE_PostCamera camera;
+    const void* scratch; /* What the effect's prepare function wrote (NULL without one). */
 } WPE_PostContext;
 
 /** Processes rows [row_begin, row_end) of one pass. Runs concurrently on disjoint row ranges. */
 typedef void (*WPE_PostPassFn)(const WPE_PostContext* context, const void* params, uint32_t pass,
                                uint32_t row_begin, uint32_t row_end);
 
+/** Runs once, alone, before an effect's passes; fills scratch (the effect's scratch_size bytes). */
+typedef void (*WPE_PostPrepareFn)(const WPE_PostContext* context, const void* params, void* scratch);
+
 typedef struct WPE_PostEffect {
     const char* name;
     WPE_PostPassFn pass;
     uint32_t pass_count;
-    const void* params; /* Borrowed for the duration of wpe_postfx_apply(). */
+    WPE_PostPrepareFn prepare; /* Optional. */
+    size_t scratch_size;       /* Bytes prepare fills (the chain keeps them). */
+    const void* params;        /* Borrowed for the duration of wpe_postfx_apply(). */
     bool enabled;
 } WPE_PostEffect;
 
@@ -116,6 +126,63 @@ typedef struct WPE_GrayscaleParams {
     float tint_r, tint_g, tint_b; /* Multiplies the gray (0..2). */
 } WPE_GrayscaleParams;
 
+/* Cracks ("Judgement Cut"): straight cuts across the screen. Each line crosses near a center point at a
+ * random angle; the image slides along it, opposite ways on its two sides, and the line glows. `count`
+ * lines show (up to WPE_POSTFX_MAX_CRACKS); a fraction grows the newest one out from where it crosses, so
+ * raising count over time draws the cuts in one by one. The same seed, center and spread always give the
+ * same lines (wpe_postfx_crack_lines), so other effects can follow them. */
+#define WPE_POSTFX_MAX_CRACKS 32u
+typedef struct WPE_CracksParams {
+    float count;              /* Lines shown (0..32), the last one partly when fractional. */
+    uint32_t seed;            /* Which lines. */
+    float center_x, center_y; /* Where the cuts cross (fractions of the screen). */
+    float spread;             /* How far from it each line may pass (a fraction of the screen's height). */
+    float offset_pixels;      /* How far the image slides along a cut. */
+    float width_pixels;       /* The bright core's half width. */
+    float glow_pixels;        /* The glow's reach from the line. */
+    float split_pixels;       /* Red and blue drift apart across the lines (color fringes). */
+    float strength;           /* 0..1: everything above fades with it. */
+    float core_r, core_g, core_b; /* The core's color (added light). */
+    float glow_r, glow_g, glow_b; /* The glow's color. */
+} WPE_CracksParams;
+
+/* One crack line in pixels: a point it passes through, its unit direction, and how far it reaches from the
+ * point each way (the whole screen, or less while it grows). */
+typedef struct WPE_CrackLine {
+    float x, y;
+    float dx, dy;
+    float reach;
+} WPE_CrackLine;
+
+/**
+ * The lines a cracks effect draws on a width x height screen, as it draws them.
+ *
+ * @param out At least WPE_POSTFX_MAX_CRACKS lines.
+ * @return How many lines show (those partly grown included).
+ *
+ * @thread_safety Any thread
+ */
+uint32_t wpe_postfx_crack_lines(const WPE_CracksParams* params, uint32_t width, uint32_t height,
+                                WPE_CrackLine* out);
+/* Shatter: the screen breaks along the cracks' lines (the same count, seed, center and spread give the same
+ * lines) into the pieces they enclose, and as `time` runs each piece flies outward, turns and falls. The
+ * pieces show a frame the host captured (`capture` names it; the engine fills in `image`), or the live
+ * frame; behind them the live scene shows, darkened by `background`. At most
+ * WPE_POSTFX_MAX_SHATTER_LINES lines break the screen. */
+#define WPE_POSTFX_MAX_SHATTER_LINES 16u
+typedef struct WPE_ShatterParams {
+    float count;
+    uint32_t seed;
+    float center_x, center_y;
+    float spread;
+    float time;               /* Seconds since the break. */
+    float speed;              /* How fast pieces fly outward (screen heights per second). */
+    float gravity;            /* How fast they fall (screen heights per second, per second). */
+    float spin;               /* The fastest a piece turns (radians per second). */
+    float background;         /* 0: the live scene shows behind the pieces; 1: black. */
+    uint32_t capture;         /* Which of the host's captured frames the pieces show (0: the live frame). */
+    const WPE_Texture* image; /* Not a parameter: the captured frame, set by the host (NULL: live). */
+} WPE_ShatterParams;
 /* Depth of field: what's near `focus_distance` is sharp, and the image blurs with distance from there,
  * in front and behind. Distances are along the view (view units). */
 typedef struct WPE_DepthOfFieldParams {
@@ -155,8 +222,10 @@ typedef enum WPE_PostFxKind {
     WPE_POSTFX_SHOCKWAVE,
     WPE_POSTFX_RADIAL_BLUR,
     WPE_POSTFX_GRAYSCALE,
+    WPE_POSTFX_CRACKS,
+    WPE_POSTFX_SHATTER,
 } WPE_PostFxKind;
-#define WPE_POSTFX_KIND_COUNT 9u
+#define WPE_POSTFX_KIND_COUNT 11u
 
 /** One configured built-in effect; only the parameters matching `kind` are used. */
 typedef struct WPE_PostFxConfig {
@@ -171,6 +240,8 @@ typedef struct WPE_PostFxConfig {
     WPE_ShockwaveParams shockwave;
     WPE_RadialBlurParams radial_blur;
     WPE_GrayscaleParams grayscale;
+    WPE_CracksParams cracks;
+    WPE_ShatterParams shatter;
 } WPE_PostFxConfig;
 
 /** A parameter of an effect kind: its name (in scene files and scripts), where it lives in a
@@ -216,6 +287,8 @@ WPE_PostEffect wpe_postfx_depth_of_field(const WPE_DepthOfFieldParams* params);
 WPE_PostEffect wpe_postfx_shockwave(const WPE_ShockwaveParams* params);
 WPE_PostEffect wpe_postfx_radial_blur(const WPE_RadialBlurParams* params);
 WPE_PostEffect wpe_postfx_grayscale(const WPE_GrayscaleParams* params);
+WPE_PostEffect wpe_postfx_cracks(const WPE_CracksParams* params);
+WPE_PostEffect wpe_postfx_shatter(const WPE_ShatterParams* params);
 
 /** @return Linear view-space depth for a window depth value. @thread_safety Any thread */
 float wpe_postfx_linear_depth(const WPE_PostCamera* camera, float window_depth);

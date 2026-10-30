@@ -442,9 +442,10 @@ static const char* const* wpe__choices(const char* component, const char* key, u
     static const char* const shapes[] = {"box", "sphere", "capsule", "convex", "mesh"};
     static const char* const buses[] = {"effects", "music"};
     static const char* const fogs[] = {"none", "linear", "exponential"};
-    static const char* const effects[] = {"ssao",      "chromatic_aberration", "ps1",
-                                          "vignette",  "color_adjust",         "depth_of_field",
-                                          "shockwave", "radial_blur",          "grayscale"};
+    static const char* const effects[] = {
+        "ssao",      "chromatic_aberration", "ps1",       "vignette", "color_adjust", "depth_of_field",
+        "shockwave", "radial_blur",          "grayscale", "cracks",   "shatter"};
+    static_assert(sizeof effects / sizeof effects[0] == WPE_POSTFX_KIND_COUNT, "every post effect is listed");
     static const char* const aligns[] = {"left", "center", "right"};
     static const char* const valigns[] = {"top", "middle", "bottom"};
     static const char* const billboard_modes[] = {"fixed", "axis_aligned", "axis_aligned_y",

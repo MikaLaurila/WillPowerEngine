@@ -111,6 +111,9 @@ typedef struct WPE_ScriptApp {
     /* The scene's post effects, which scripts may change: the array (room for WPE_POSTFX_MAX_EFFECTS) and,
      * through out_count, its count. */
     WPE_PostFxConfig* (*postfx)(void* user_data, uint32_t** out_count);
+    /* Captures this frame (as the scene renders it, before post effects and 2D) into slot 1..8, and
+     * returns the image asset path that shows it (valid until the host goes), or NULL (logged). */
+    const char* (*capture_screen)(void* user_data, uint32_t slot);
 } WPE_ScriptApp;
 
 typedef struct WPE_ScriptHostDesc {

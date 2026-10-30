@@ -12,7 +12,9 @@
 struct WPE_PostChain {
     WPE_Color* ping;
     float* aux;
-    size_t capacity; /* Pixels. */
+    size_t capacity;         /* Pixels. */
+    void* scratch;           /* For effects' prepare functions; grows to the largest asked for. */
+    size_t scratch_capacity; /* Bytes. */
 };
 
 /* Rows per parallel chunk; fixed so output is independent of the worker count. */
@@ -28,6 +30,7 @@ void wpe_postfx_destroy(WPE_PostChain* chain) {
     if (!chain) return;
     wpe_free(chain->ping);
     wpe_free(chain->aux);
+    wpe_free(chain->scratch);
     wpe_free(chain);
 }
 
@@ -75,12 +78,27 @@ WPE_Result wpe_postfx_apply(WPE_PostChain* chain, WPE_Renderer* renderer, const 
         chain->aux = aux;
         chain->capacity = pixels;
     }
+    for (uint32_t e = 0; e < effect_count; ++e) {
+        if (!effects[e].enabled || !effects[e].prepare || effects[e].scratch_size <= chain->scratch_capacity)
+            continue;
+        void* scratch = wpe_realloc(chain->scratch, effects[e].scratch_size);
+        if (!scratch) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        chain->scratch = scratch;
+        chain->scratch_capacity = effects[e].scratch_size;
+    }
 
     WPE_JobSystem* jobs = wpe_renderer_jobs(renderer);
     WPE_Color* src = fb->color;
     WPE_Color* dst = chain->ping;
     for (uint32_t e = 0; e < effect_count; ++e) {
         if (!effects[e].enabled) continue;
+        const void* scratch = NULL;
+        if (effects[e].prepare) {
+            const WPE_PostContext context = {
+                .src = src, .depth = fb->depth, .width = fb->width, .height = fb->height, .camera = *camera};
+            effects[e].prepare(&context, effects[e].params, chain->scratch);
+            scratch = chain->scratch;
+        }
         for (uint32_t pass = 0; pass < effects[e].pass_count; ++pass) {
             const WPE_PostContext context = {.src = src,
                                              .dst = dst,
@@ -88,7 +106,8 @@ WPE_Result wpe_postfx_apply(WPE_PostChain* chain, WPE_Renderer* renderer, const 
                                              .depth = fb->depth,
                                              .width = fb->width,
                                              .height = fb->height,
-                                             .camera = *camera};
+                                             .camera = *camera,
+                                             .scratch = scratch};
             wpe__PassJob job = {.context = &context, .effect = &effects[e], .pass = pass};
             wpe_jobs_parallel_for(jobs, fb->height, WPE__POSTFX_ROW_GRAIN, wpe__run_pass_rows, &job);
             WPE_Color* swap = src;
@@ -368,6 +387,291 @@ static void wpe__shockwave_pass(const WPE_PostContext* c, const void* params_ptr
     }
 }
 
+/* ---- Cracks ----------------------------------------------------------------------------------------- */
+
+/* A well-mixed 32-bit hash (the "lowbias32" finalizer): the lines come from it, the same everywhere. */
+static uint32_t wpe__hash32(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
+/* A number in [0, 1) for (seed, line, which). */
+static float wpe__crack_random(uint32_t seed, uint32_t line, uint32_t which) {
+    return (float)(wpe__hash32(seed * 0x9E3779B9u ^ wpe__hash32(line * 4u + which)) >> 8) / 16777216.0f;
+}
+
+uint32_t wpe_postfx_crack_lines(const WPE_CracksParams* p, uint32_t width, uint32_t height,
+                                WPE_CrackLine* out) {
+    if (!p || !out || !(p->count > 0.0f)) return 0;
+    const float shown = fminf(p->count, (float)WPE_POSTFX_MAX_CRACKS);
+    const uint32_t count = (uint32_t)ceilf(shown);
+    const float w = (float)width, h = (float)height;
+    const float diagonal = sqrtf(w * w + h * h);
+    for (uint32_t i = 0; i < count; ++i) {
+        /* A point in the disk of radius `spread` around the center (uniform over its area), and an angle. */
+        const float r = sqrtf(wpe__crack_random(p->seed, i, 0)) * p->spread * h;
+        const float around = wpe__crack_random(p->seed, i, 1) * 6.2831853f;
+        const float angle = wpe__crack_random(p->seed, i, 2) * 3.14159265f;
+        const float grown = fminf(shown - (float)i, 1.0f);
+        out[i] = (WPE_CrackLine){.x = p->center_x * w + r * cosf(around),
+                                 .y = p->center_y * h + r * sinf(around),
+                                 .dx = cosf(angle),
+                                 .dy = sinf(angle),
+                                 .reach = diagonal * grown};
+    }
+    return count;
+}
+
+static void wpe__channels(WPE_Color c, float out[3]) {
+    out[0] = (float)((c >> 16) & 0xFFu) / 255.0f;
+    out[1] = (float)((c >> 8) & 0xFFu) / 255.0f;
+    out[2] = (float)(c & 0xFFu) / 255.0f;
+}
+
+/* Each pixel shows the image moved along every cut it's beside (one way on each side), with a glowing
+ * line on the cut and red and blue pulled apart across the nearest one. */
+static void wpe__cracks_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
+                             uint32_t row_begin, uint32_t row_end) {
+    (void)pass;
+    const WPE_CracksParams* p = params_ptr;
+    WPE_CrackLine lines[WPE_POSTFX_MAX_CRACKS];
+    const uint32_t count = p->strength > 0.0f ? wpe_postfx_crack_lines(p, c->width, c->height, lines) : 0;
+    const float width = fmaxf(p->width_pixels, 0.25f), glow = fmaxf(p->glow_pixels, 0.0f);
+    const float core_color[3] = {p->core_r, p->core_g, p->core_b};
+    const float glow_color[3] = {p->glow_r, p->glow_g, p->glow_b};
+    for (uint32_t y = row_begin; y < row_end; ++y) {
+        for (uint32_t x = 0; x < c->width; ++x) {
+            const size_t i = (size_t)y * c->width + x;
+            if (count == 0) {
+                c->dst[i] = c->src[i];
+                continue;
+            }
+            const float px = (float)x + 0.5f, py = (float)y + 0.5f;
+            float shift_x = 0.0f, shift_y = 0.0f, core = 0.0f, shine = 0.0f, fringe = 0.0f;
+            float fringe_x = 0.0f, fringe_y = 0.0f;
+            for (uint32_t l = 0; l < count; ++l) {
+                const WPE_CrackLine* line = &lines[l];
+                const float vx = px - line->x, vy = py - line->y;
+                const float along = vx * line->dx + vy * line->dy;
+                if (fabsf(along) > line->reach) continue;          /* Past the end of a growing line. */
+                const float side = vx * -line->dy + vy * line->dx; /* Signed distance from the line. */
+                const float s = side >= 0.0f ? 1.0f : -1.0f;
+                shift_x += s * line->dx;
+                shift_y += s * line->dy;
+                /* The light fades in over the last pixels of a growing line instead of stopping flat. */
+                const float tip = fminf((line->reach - fabsf(along)) / (width + glow + 1.0f), 1.0f);
+                const float d = fabsf(side);
+                core = fmaxf(core, fmaxf(1.0f - d / width, 0.0f) * tip);
+                if (glow > 0.0f) {
+                    const float g = fmaxf(1.0f - d / (width + glow), 0.0f);
+                    shine = fmaxf(shine, g * g * tip);
+                }
+                const float near = fmaxf(1.0f - d / (width + glow + 1.0f), 0.0f);
+                if (near > fringe) {
+                    fringe = near;
+                    fringe_x = -line->dy * s;
+                    fringe_y = line->dx * s;
+                }
+            }
+            /* The image slides along the cuts: sample against the shift. */
+            const float offset = p->offset_pixels * p->strength;
+            const float sx = px - shift_x * offset, sy = py - shift_y * offset;
+            const float split = p->split_pixels * p->strength * fringe;
+            float rgb[3], red[3], blue[3];
+            wpe__channels(wpe__texel_clamped(c, (int32_t)floorf(sx), (int32_t)floorf(sy)), rgb);
+            wpe__channels(wpe__texel_clamped(c, (int32_t)floorf(sx + fringe_x * split),
+                                             (int32_t)floorf(sy + fringe_y * split)),
+                          red);
+            wpe__channels(wpe__texel_clamped(c, (int32_t)floorf(sx - fringe_x * split),
+                                             (int32_t)floorf(sy - fringe_y * split)),
+                          blue);
+            rgb[0] = red[0];
+            rgb[2] = blue[2];
+            for (int k = 0; k < 3; ++k)
+                rgb[k] = wpe__clamp01(rgb[k] + (core * core_color[k] + shine * glow_color[k]) * p->strength);
+            const float a = (float)((c->src[i] >> 24) & 0xFFu) / 255.0f;
+            c->dst[i] = wpe_color_from_vec4(wpe_vec4(rgb[0], rgb[1], rgb[2], a));
+        }
+    }
+}
+
+/* ---- Shatter ---------------------------------------------------------------------------------------- */
+
+#define WPE__MAX_SHARDS 512u
+#define WPE__SHARD_TABLE 1024u /* Open addressing; twice the shards. */
+
+/* A piece: the pixels on the same side of every line (its mask). It turns about its center and moves. */
+typedef struct wpe__Shard {
+    uint32_t mask;
+    float cx, cy; /* Its center (the average of its pixels). */
+    float radius; /* Reaches every pixel of it from the center. */
+    float ox, oy; /* Where it has moved. */
+    float cs, sn; /* Its turn (cosine, sine). */
+    float order;  /* Pieces with a higher order are drawn over lower ones. */
+} wpe__Shard;
+
+typedef struct wpe__ShardSum {
+    uint32_t mask;
+    uint32_t samples;
+    float sum_x, sum_y, min_x, min_y, max_x, max_y;
+} wpe__ShardSum;
+
+typedef struct wpe__ShatterScratch {
+    uint32_t line_count;
+    float lx[WPE_POSTFX_MAX_SHATTER_LINES], ly[WPE_POSTFX_MAX_SHATTER_LINES]; /* A point on each line. */
+    float nx[WPE_POSTFX_MAX_SHATTER_LINES], ny[WPE_POSTFX_MAX_SHATTER_LINES]; /* Its unit normal. */
+    uint32_t shard_count;
+    wpe__Shard shards[WPE__MAX_SHARDS];
+    wpe__ShardSum table[WPE__SHARD_TABLE]; /* Used while preparing; samples == 0 is empty. */
+} wpe__ShatterScratch;
+
+/* Which side of each line a point is on: the piece it belongs to. */
+static uint32_t wpe__shard_mask(const wpe__ShatterScratch* s, float x, float y) {
+    uint32_t mask = 0;
+    for (uint32_t l = 0; l < s->line_count; ++l) {
+        if ((x - s->lx[l]) * s->nx[l] + (y - s->ly[l]) * s->ny[l] >= 0.0f) mask |= 1u << l;
+    }
+    return mask;
+}
+
+/* Finds the pieces (sampling every other pixel), then where each has moved and turned at `time`. */
+static void wpe__shatter_prepare(const WPE_PostContext* c, const void* params_ptr, void* scratch_ptr) {
+    const WPE_ShatterParams* p = params_ptr;
+    wpe__ShatterScratch* s = scratch_ptr;
+    const WPE_CracksParams lines_params = {.count =
+                                               fminf(ceilf(p->count), (float)WPE_POSTFX_MAX_SHATTER_LINES),
+                                           .seed = p->seed,
+                                           .center_x = p->center_x,
+                                           .center_y = p->center_y,
+                                           .spread = p->spread};
+    WPE_CrackLine lines[WPE_POSTFX_MAX_CRACKS];
+    s->line_count = wpe_postfx_crack_lines(&lines_params, c->width, c->height, lines);
+    for (uint32_t l = 0; l < s->line_count; ++l) {
+        s->lx[l] = lines[l].x;
+        s->ly[l] = lines[l].y;
+        s->nx[l] = -lines[l].dy;
+        s->ny[l] = lines[l].dx;
+    }
+    memset(s->table, 0, sizeof s->table);
+    for (uint32_t y = 0; y < c->height; y += 2) {
+        for (uint32_t x = 0; x < c->width; x += 2) {
+            const float px = (float)x + 0.5f, py = (float)y + 0.5f;
+            const uint32_t mask = wpe__shard_mask(s, px, py);
+            uint32_t slot = wpe__hash32(mask) & (WPE__SHARD_TABLE - 1);
+            for (uint32_t probe = 0; probe < WPE__SHARD_TABLE; ++probe) {
+                wpe__ShardSum* sum = &s->table[slot];
+                if (sum->samples == 0) {
+                    *sum = (wpe__ShardSum){.mask = mask, .min_x = px, .min_y = py, .max_x = px, .max_y = py};
+                }
+                if (sum->mask == mask) {
+                    ++sum->samples;
+                    sum->sum_x += px;
+                    sum->sum_y += py;
+                    sum->min_x = fminf(sum->min_x, px);
+                    sum->min_y = fminf(sum->min_y, py);
+                    sum->max_x = fmaxf(sum->max_x, px);
+                    sum->max_y = fmaxf(sum->max_y, py);
+                    break;
+                }
+                slot = (slot + 1) & (WPE__SHARD_TABLE - 1);
+            }
+        }
+    }
+    const float h = (float)c->height;
+    const float center_x = p->center_x * (float)c->width, center_y = p->center_y * h;
+    s->shard_count = 0;
+    for (uint32_t i = 0; i < WPE__SHARD_TABLE && s->shard_count < WPE__MAX_SHARDS; ++i) {
+        const wpe__ShardSum* sum = &s->table[i];
+        if (sum->samples == 0) continue;
+        wpe__Shard* shard = &s->shards[s->shard_count++];
+        const float cx = sum->sum_x / (float)sum->samples, cy = sum->sum_y / (float)sum->samples;
+        /* Out to the farthest corner of its bounds, plus the sampling gap. */
+        const float far_x = fmaxf(cx - sum->min_x, sum->max_x - cx) + 2.0f;
+        const float far_y = fmaxf(cy - sum->min_y, sum->max_y - cy) + 2.0f;
+        /* Away from where the cuts cross, a little faster or slower each, with a small upward kick. */
+        const uint32_t key = p->seed ^ wpe__hash32(sum->mask + 0x51ED27u);
+        float dx = cx - center_x, dy = cy - center_y;
+        const float length = sqrtf(dx * dx + dy * dy);
+        if (length > 1e-3f) {
+            dx /= length;
+            dy /= length;
+        } else {
+            const float angle = wpe__crack_random(key, 0, 0) * 6.2831853f;
+            dx = cosf(angle);
+            dy = sinf(angle);
+        }
+        const float speed = p->speed * h * (0.6f + 0.8f * wpe__crack_random(key, 0, 1));
+        const float vx = dx * speed, vy = dy * speed - p->speed * h * 0.4f * wpe__crack_random(key, 0, 2);
+        const float t = p->time;
+        const float turn = p->spin * (2.0f * wpe__crack_random(key, 0, 3) - 1.0f) * t;
+        *shard = (wpe__Shard){.mask = sum->mask,
+                              .cx = cx,
+                              .cy = cy,
+                              .radius = sqrtf(far_x * far_x + far_y * far_y),
+                              .ox = vx * t,
+                              .oy = vy * t + 0.5f * p->gravity * h * t * t,
+                              .cs = cosf(turn),
+                              .sn = sinf(turn),
+                              .order = wpe__crack_random(key, 0, 4)};
+    }
+    /* Draw order: highest first, so the first piece found over a pixel is the one on top. */
+    for (uint32_t i = 1; i < s->shard_count; ++i) {
+        const wpe__Shard shard = s->shards[i];
+        uint32_t j = i;
+        for (; j > 0 && s->shards[j - 1].order < shard.order; --j)
+            s->shards[j] = s->shards[j - 1];
+        s->shards[j] = shard;
+    }
+}
+
+/* Each pixel shows the piece now over it (found by moving the pixel back to where that piece was), with a
+ * pale edge along the cut, or the scene behind. */
+static void wpe__shatter_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
+                              uint32_t row_begin, uint32_t row_end) {
+    (void)pass;
+    const WPE_ShatterParams* p = params_ptr;
+    const wpe__ShatterScratch* s = c->scratch;
+    const WPE_TextureLevel* image = p->image ? &p->image->levels[0] : NULL;
+    const float dim = 1.0f - wpe__clamp01(p->background);
+    for (uint32_t y = row_begin; y < row_end; ++y) {
+        for (uint32_t x = 0; x < c->width; ++x) {
+            const size_t i = (size_t)y * c->width + x;
+            const float px = (float)x + 0.5f, py = (float)y + 0.5f;
+            bool covered = false;
+            for (uint32_t k = 0; k < s->shard_count && !covered; ++k) {
+                const wpe__Shard* shard = &s->shards[k];
+                const float qx = px - shard->cx - shard->ox, qy = py - shard->cy - shard->oy;
+                if (qx * qx + qy * qy > shard->radius * shard->radius) continue;
+                const float sx = shard->cx + shard->cs * qx + shard->sn * qy;
+                const float sy = shard->cy - shard->sn * qx + shard->cs * qy;
+                if (!(sx >= 0.0f && sy >= 0.0f && sx < (float)c->width && sy < (float)c->height)) continue;
+                if (wpe__shard_mask(s, sx, sy) != shard->mask) continue;
+                covered = true;
+                WPE_Color color;
+                if (image && image->width > 0 && image->height > 0) {
+                    const uint32_t ix = (uint32_t)(sx * (float)image->width / (float)c->width);
+                    const uint32_t iy = (uint32_t)(sy * (float)image->height / (float)c->height);
+                    color =
+                        image->texels[(size_t)(iy < image->height ? iy : image->height - 1) * image->width +
+                                      (ix < image->width ? ix : image->width - 1)];
+                } else {
+                    color = c->src[(size_t)sy * c->width + (size_t)sx];
+                }
+                /* Glass edges: lighter within a pixel of a cut. */
+                float nearest = 1e9f;
+                for (uint32_t l = 0; l < s->line_count; ++l)
+                    nearest = fminf(nearest, fabsf((sx - s->lx[l]) * s->nx[l] + (sy - s->ly[l]) * s->ny[l]));
+                c->dst[i] = nearest < 1.0f && p->time > 0.0f ? wpe__scale_rgb(color, 1.35f) : color;
+            }
+            if (!covered) c->dst[i] = wpe__scale_rgb(c->src[i], dim);
+        }
+    }
+}
+
 #define WPE__RADIAL_SAMPLES 8
 
 static void wpe__radial_blur_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
@@ -461,6 +765,51 @@ static const WPE_ShockwaveParams wpe__shockwave_defaults = {
     .center_x = 0.5f, .center_y = 0.5f, .radius = 0.3f, .width = 0.08f, .strength_pixels = 6.0f};
 static const WPE_RadialBlurParams wpe__radial_blur_defaults = {
     .center_x = 0.5f, .center_y = 0.5f, .strength = 0.15f};
+static const WPE_CracksParams wpe__cracks_defaults = {.count = 8.0f,
+                                                      .seed = 1,
+                                                      .center_x = 0.5f,
+                                                      .center_y = 0.5f,
+                                                      .spread = 0.15f,
+                                                      .offset_pixels = 2.0f,
+                                                      .width_pixels = 0.8f,
+                                                      .glow_pixels = 3.0f,
+                                                      .split_pixels = 2.0f,
+                                                      .strength = 1.0f,
+                                                      .core_r = 1.0f,
+                                                      .core_g = 1.0f,
+                                                      .core_b = 1.0f,
+                                                      .glow_r = 0.35f,
+                                                      .glow_g = 0.55f,
+                                                      .glow_b = 1.0f};
+
+WPE_PostEffect wpe_postfx_cracks(const WPE_CracksParams* params) {
+    return (WPE_PostEffect){.name = "cracks",
+                            .pass = wpe__cracks_pass,
+                            .pass_count = 1,
+                            .params = params ? params : &wpe__cracks_defaults,
+                            .enabled = true};
+}
+
+static const WPE_ShatterParams wpe__shatter_defaults = {.count = 10.0f,
+                                                        .seed = 1,
+                                                        .center_x = 0.5f,
+                                                        .center_y = 0.5f,
+                                                        .spread = 0.15f,
+                                                        .speed = 0.35f,
+                                                        .gravity = 1.2f,
+                                                        .spin = 2.5f,
+                                                        .background = 0.6f};
+
+WPE_PostEffect wpe_postfx_shatter(const WPE_ShatterParams* params) {
+    return (WPE_PostEffect){.name = "shatter",
+                            .pass = wpe__shatter_pass,
+                            .pass_count = 1,
+                            .prepare = wpe__shatter_prepare,
+                            .scratch_size = sizeof(wpe__ShatterScratch),
+                            .params = params ? params : &wpe__shatter_defaults,
+                            .enabled = true};
+}
+
 static const WPE_GrayscaleParams wpe__grayscale_defaults = {
     .strength = 1.0f, .tint_r = 1.0f, .tint_g = 1.0f, .tint_b = 1.0f};
 
@@ -490,9 +839,11 @@ WPE_PostEffect wpe_postfx_radial_blur(const WPE_RadialBlurParams* params) {
 
 /* ---- Configured effects ----------------------------------------------------------------------------- */
 
-static const char* const wpe__kind_names[WPE_POSTFX_KIND_COUNT] = {
-    "ssao",      "chromatic_aberration", "ps1",      "vignette", "color_adjust", "depth_of_field",
-    "shockwave", "radial_blur",          "grayscale"};
+static const char* const wpe__kind_names[] = {
+    "ssao",      "chromatic_aberration", "ps1",       "vignette", "color_adjust", "depth_of_field",
+    "shockwave", "radial_blur",          "grayscale", "cracks",   "shatter"};
+static_assert(sizeof wpe__kind_names / sizeof wpe__kind_names[0] == WPE_POSTFX_KIND_COUNT,
+              "a name for every effect kind");
 
 /* Each kind's parameters in scene-file order, with the ranges files and scripts may use. */
 static const WPE_PostFxParam wpe__ssao_params[] = {
@@ -532,6 +883,35 @@ static const WPE_PostFxParam wpe__grayscale_params[] = {
     {"tint_r", offsetof(WPE_PostFxConfig, grayscale.tint_r), 0, 2, false},
     {"tint_g", offsetof(WPE_PostFxConfig, grayscale.tint_g), 0, 2, false},
     {"tint_b", offsetof(WPE_PostFxConfig, grayscale.tint_b), 0, 2, false}};
+static const WPE_PostFxParam wpe__cracks_params[] = {
+    {"count", offsetof(WPE_PostFxConfig, cracks.count), 0, WPE_POSTFX_MAX_CRACKS, false},
+    {"seed", offsetof(WPE_PostFxConfig, cracks.seed), 0, 1e6, true},
+    {"center_x", offsetof(WPE_PostFxConfig, cracks.center_x), -1, 2, false},
+    {"center_y", offsetof(WPE_PostFxConfig, cracks.center_y), -1, 2, false},
+    {"spread", offsetof(WPE_PostFxConfig, cracks.spread), 0, 2, false},
+    {"offset_pixels", offsetof(WPE_PostFxConfig, cracks.offset_pixels), 0, 32, false},
+    {"width_pixels", offsetof(WPE_PostFxConfig, cracks.width_pixels), 0.25, 16, false},
+    {"glow_pixels", offsetof(WPE_PostFxConfig, cracks.glow_pixels), 0, 32, false},
+    {"split_pixels", offsetof(WPE_PostFxConfig, cracks.split_pixels), 0, 16, false},
+    {"strength", offsetof(WPE_PostFxConfig, cracks.strength), 0, 1, false},
+    {"core_r", offsetof(WPE_PostFxConfig, cracks.core_r), 0, 4, false},
+    {"core_g", offsetof(WPE_PostFxConfig, cracks.core_g), 0, 4, false},
+    {"core_b", offsetof(WPE_PostFxConfig, cracks.core_b), 0, 4, false},
+    {"glow_r", offsetof(WPE_PostFxConfig, cracks.glow_r), 0, 4, false},
+    {"glow_g", offsetof(WPE_PostFxConfig, cracks.glow_g), 0, 4, false},
+    {"glow_b", offsetof(WPE_PostFxConfig, cracks.glow_b), 0, 4, false}};
+static const WPE_PostFxParam wpe__shatter_params[] = {
+    {"count", offsetof(WPE_PostFxConfig, shatter.count), 0, WPE_POSTFX_MAX_SHATTER_LINES, false},
+    {"seed", offsetof(WPE_PostFxConfig, shatter.seed), 0, 1e6, true},
+    {"center_x", offsetof(WPE_PostFxConfig, shatter.center_x), -1, 2, false},
+    {"center_y", offsetof(WPE_PostFxConfig, shatter.center_y), -1, 2, false},
+    {"spread", offsetof(WPE_PostFxConfig, shatter.spread), 0, 2, false},
+    {"time", offsetof(WPE_PostFxConfig, shatter.time), 0, 1e3, false},
+    {"speed", offsetof(WPE_PostFxConfig, shatter.speed), 0, 10, false},
+    {"gravity", offsetof(WPE_PostFxConfig, shatter.gravity), -10, 10, false},
+    {"spin", offsetof(WPE_PostFxConfig, shatter.spin), 0, 30, false},
+    {"background", offsetof(WPE_PostFxConfig, shatter.background), 0, 1, false},
+    {"capture", offsetof(WPE_PostFxConfig, shatter.capture), 0, 8, true}};
 
 static const struct {
     const WPE_PostFxParam* params;
@@ -542,7 +922,8 @@ static const struct {
     WPE__TABLE(wpe__ps1_params),          WPE__TABLE(wpe__vignette_params),
     WPE__TABLE(wpe__color_adjust_params), WPE__TABLE(wpe__dof_params),
     WPE__TABLE(wpe__shockwave_params),    WPE__TABLE(wpe__radial_blur_params),
-    WPE__TABLE(wpe__grayscale_params),
+    WPE__TABLE(wpe__grayscale_params),    WPE__TABLE(wpe__cracks_params),
+    WPE__TABLE(wpe__shatter_params),
 #undef WPE__TABLE
 };
 
@@ -601,7 +982,9 @@ WPE_PostFxConfig wpe_postfx_config_default(WPE_PostFxKind kind) {
                               .depth_of_field = wpe__dof_defaults,
                               .shockwave = wpe__shockwave_defaults,
                               .radial_blur = wpe__radial_blur_defaults,
-                              .grayscale = wpe__grayscale_defaults};
+                              .grayscale = wpe__grayscale_defaults,
+                              .cracks = wpe__cracks_defaults,
+                              .shatter = wpe__shatter_defaults};
 }
 
 WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* c) {
@@ -633,6 +1016,12 @@ WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* c) {
         break;
     case WPE_POSTFX_GRAYSCALE:
         effect = wpe_postfx_grayscale(&c->grayscale);
+        break;
+    case WPE_POSTFX_CRACKS:
+        effect = wpe_postfx_cracks(&c->cracks);
+        break;
+    case WPE_POSTFX_SHATTER:
+        effect = wpe_postfx_shatter(&c->shatter);
         break;
     }
     effect.enabled = c->enabled;

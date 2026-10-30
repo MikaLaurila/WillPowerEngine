@@ -75,6 +75,10 @@
         {"pad_axis": "right_trigger"},
         {"pad_button": "west"}
       ],
+      "special": [
+        {"key": "q"},
+        {"pad_button": "right_shoulder"}
+      ],
       "boost": [
         {"key": "lshift"},
         {"pad_axis": "left_trigger"},

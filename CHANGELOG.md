@@ -69,6 +69,21 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (Judgement Cut: cracks, shatter, screen capture)
+- Post effect `cracks`: straight cuts across the screen crossing near a point; the image slides along each
+  (opposite ways on its sides), the line glows in its core and glow colors with color fringes, and a
+  fractional `count` grows the newest cut, so scripts draw them in one by one.
+- Post effect `shatter`: the screen breaks along the same lines (same count, seed, center, spread) into
+  the pieces they enclose, which fly outward, turn and fall with `time`, over a darkened live scene.
+- `wpe.capture_screen([slot])`: keeps this frame as the scene renders it (before post effects and 2D) in
+  one of eight slots, as an image asset ("capture/1") for billboards and sprites or for shatter
+  (`capture` parameter).
+- `scripts/lib/judgement_cut.luau` runs the move: cuts drawn in one by one over a dimming scene, a hold,
+  then "shatter", "fade" or "stay". The character demo's hero uses it on Q / right shoulder.
+- Post effects can have a `prepare` function, run once before their passes with scratch memory the chain
+  keeps. Effect name lists check their length at compile time.
+- Tests: crack lines (determinism, placement, growth), glow and slide; shatter in place at time 0, moving
+  later, deterministic; captures hold the pre-post-effect frame; a whole Judgement Cut in the master scene.
 ### Added (editor: performance panel)
 - A Performance panel (docked with the console): the editor's FPS, a graph of the game's frame times, the
   frame split into simulation (of which physics), scene render, post effects and overlay, the scene's draw

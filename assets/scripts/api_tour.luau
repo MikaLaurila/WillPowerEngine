@@ -2,6 +2,7 @@
 -- (scenes/test_full.scene), which the scene test runs for 60 simulated seconds, and a living
 -- reference. Fails loudly via assert. wpe.load_scene and wpe.quit end the scene, so the engine tests
 -- cover them instead.
+local JudgementCut = require("scripts/lib/judgement_cut")
 local Tour = {}
 
 local function near(a, b, eps)
@@ -215,6 +216,9 @@ function Tour:on_start()
 	assert(not pcall(wpe.add_postfx, { effect = "bloom" }))
 	wpe.remove_postfx(wave)
 	assert(#wpe.get_postfx() == before)
+	-- Captured frames are image assets by path; slots 1 to 8.
+	assert(wpe.capture_screen(2) == "capture/2" and not pcall(wpe.capture_screen, 9))
+	self.cut_phases = {}
 	-- A flashback: grayscale with a warm (sepia) tint, faded in by strength.
 	local memory = wpe.add_postfx({ effect = "grayscale", strength = 0.5, tint_b = 0.7 })
 	assert(near(wpe.get_postfx()[memory].strength, 0.5) and near(wpe.get_postfx()[memory].tint_r, 1))
@@ -429,6 +433,19 @@ function Tour:on_update(dt)
 	elseif self.updates == 140 then
 		wpe.remove_character(self.walker)
 		assert(not pcall(wpe.get_character, self.walker))
+	elseif self.updates == 150 then
+		-- A Judgement Cut through every phase (scripts/lib/judgement_cut.luau): cuts, hold, shatter.
+		self.effects_before_cut = #wpe.get_postfx()
+		self.cut = JudgementCut.start(0.5, 0.5, { lines = 6, interval = 0.02, hold = 0.05, shatter_time = 0.3, slot = 4 })
+	elseif self.updates == 260 then
+		assert(self.cut_phases.cutting and self.cut_phases.holding and self.cut_phases.shattering, "every phase ran")
+		assert(self.cut == nil and #wpe.get_postfx() == self.effects_before_cut, "the cut ended and cleaned up")
+	end
+	if self.cut then
+		self.cut_phases[self.cut.phase] = true
+		if not self.cut:update(dt) then
+			self.cut = nil
+		end
 	end
 	self.coin_frames[wpe.get_billboard(self.coin).frame] = true
 	assert(wpe.time() >= 0 and wpe.frame() >= 0)

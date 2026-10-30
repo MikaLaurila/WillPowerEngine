@@ -876,6 +876,45 @@ static void test_engine_falls_back_to_the_builtin_font(void) {
     wpe_engine_destroy(engine);
 }
 
+/* wpe.capture_screen keeps the frame as the scene rendered it: here red, while post-processing turns the
+ * screen gray. The capture is an image asset by its path. */
+static void test_engine_captures_the_frame_before_post_effects(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/capture/scenes"));
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/capture/scripts"));
+    write_text(ROOT "/capture/project.json",
+               "{\"format\": \"wpe.project\", \"version\": 1, \"name\": \"Capture\", \"start_scene\": "
+               "\"scenes/main.scene\", \"display\": {\"width\": 32, \"height\": 24}}\n");
+    write_text(ROOT "/capture/scenes/main.scene",
+               "{\"format\": \"wpe.scene\", \"version\": 1,\n"
+               " \"environment\": {\"clear_color\": [1, 0, 0], \"postfx\": [{\"effect\": \"grayscale\"}]},\n"
+               " \"entities\": [{\"id\": 1, \"name\": \"eye\", \"transform\": {}, \"camera\": {}},\n"
+               "              {\"id\": 2, \"name\": \"grabber\", \"script\": {\"path\": "
+               "\"scripts/grab.luau\"}}]}\n");
+    write_text(ROOT "/capture/scripts/grab.luau",
+               "local S = {}\n"
+               "function S:on_update(dt)\n"
+               "  if self.done then return end\n"
+               "  self.done = true\n"
+               "  assert(wpe.capture_screen() == 'capture/1' and wpe.capture_screen(3) == 'capture/3')\n"
+               "  assert(not pcall(wpe.capture_screen, 0) and not pcall(wpe.capture_screen, 9))\n"
+               "end\n"
+               "return S\n");
+    WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_engine_create(
+        &(WPE_EngineDesc){.project_dir = ROOT "/capture", .headless = true, .workers = 2}, &engine));
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(wpe_engine_scripts(engine)).errors);
+    const WPE_Color shown = wpe_renderer_framebuffer(wpe_engine_renderer(engine))->color[0];
+    WPE_TEST_ASSERT(((shown >> 16) & 0xFFu) == (shown & 0xFFu)); /* Gray on screen... */
+    WPE_AssetHandle capture = WPE_ASSET_NONE;
+    WPE_TEST_ASSERT_OK(wpe_asset_load(wpe_engine_assets(engine), WPE_ASSET_IMAGE, "capture/1", &capture));
+    const WPE_Texture* texture = wpe_asset_image(wpe_engine_assets(engine), capture);
+    WPE_TEST_ASSERT(texture && texture->levels[0].width == 32 && texture->levels[0].height == 24);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFF0000u, texture->levels[0].texels[0]); /* ...red in the capture. */
+    wpe_asset_release(wpe_engine_assets(engine), capture);
+    wpe_engine_destroy(engine);
+}
+
 static void test_engine_runs_scenes_headless(void) {
     write_tiny_game();
     WPE_Engine* engine = NULL;
@@ -975,6 +1014,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_engine_scene_rejects_mistakes_and_rolls_back),
     WPE_TEST_CASE(test_engine_scene_game_components), WPE_TEST_CASE(test_engine_scene_editing_functions),
     WPE_TEST_CASE(test_engine_scene_save_filter), WPE_TEST_CASE(test_engine_embedded_edit_mode),
+    WPE_TEST_CASE(test_engine_captures_the_frame_before_post_effects),
     WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts),
     WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
     WPE_TEST_CASE(test_engine_creates_new_projects), WPE_TEST_CASE(test_engine_export_embeds_the_project))

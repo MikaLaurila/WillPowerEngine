@@ -294,6 +294,7 @@ The scene's post effects (its file's `postfx` list, see [scenes.md](scenes.md)) 
 | `wpe.set_postfx(which, {...})` | Changes an effect's `enabled` and parameters. `which` is a 1-based index or an effect name (the first effect of that kind). |
 | `wpe.add_postfx({effect = name, ...}) -> index` | Appends an effect (at most 8 in all). |
 | `wpe.remove_postfx(which)` | Removes an effect; later ones move up. |
+| `wpe.capture_screen([slot = 1]) -> path` | Keeps this frame, as the scene renders it (before post effects, the UI and 2D drawing), in a slot 1..8, and returns its image asset path (`"capture/1"`). Use it as any image (billboards, sprites) or break it with a `shatter` effect (`capture = 1`). Capturing a slot again replaces its picture. |
 
 Two effects are made for scripts to animate: `shockwave` (a ring warping the image outward from `center_x`, `center_y` (fractions of the screen), at `radius` (fractions of its height), `width` thick, pushing `strength_pixels`) and `radial_blur` (smearing toward `center_x`, `center_y` by `strength`, 0..1). A hit that ripples out from the player:
 
@@ -309,6 +310,8 @@ function Hero:hit_wave(t) -- t from 0 to 1 over a few tenths of a second
 		radius = 0.05 + 0.5 * t, strength_pixels = 8 * (1 - t) })
 end
 ```
+
+**Judgement Cut.** `cracks` draws straight cuts across the screen that cross near a point, the image sliding along each; raising its `count` over time draws them in one by one. `shatter` breaks the screen along the same lines (same `count`, `seed`, `center_x`, `center_y`, `spread`) and lets the pieces fly and fall as its `time` runs, showing a captured frame. `scripts/lib/judgement_cut.luau` runs the whole move: `local cut = JudgementCut.start(x, y, {lines = 10, ending = "shatter"})`, then `cut:update(dt)` each frame until it returns false. Its endings are `"shatter"`, `"fade"` and `"stay"` (until `cut:stop()`), and it takes colors, timings and a dimming of the scene. The hero in `scenes/character.scene` uses it on Q (or the right shoulder button).
 
 `scripts/hero.luau` in `scenes/character.scene` does this on the fire button, with a radial blur. For a flashback, fade in `grayscale` by raising its `strength` from 0 to 1 (a tint such as `tint_g = 0.9, tint_b = 0.7` makes it sepia), perhaps with a `vignette`. Effects run in C over every pixel; scripts choose and drive them, but can't run their own per-pixel code (Luau would be far too slow for that).
 

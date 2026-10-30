@@ -1700,6 +1700,20 @@ static int wpe__api_screen_size(lua_State* L) {
     return 2;
 }
 
+/* wpe.capture_screen([slot = 1]) -> image path: this frame as the scene renders it (before post effects and
+ * 2D), kept in a slot until captured again. */
+static int wpe__api_capture_screen(lua_State* L) {
+    const WPE_ScriptApp* app =
+        wpe__app(L, wpe__script_host_from(L)->app.capture_screen != NULL, "capture_screen");
+    const double slot = luaL_optnumber(L, 1, 1.0);
+    if (!(slot >= 1.0 && slot <= 8.0 && slot == floor(slot)))
+        luaL_errorL(L, "wpe.capture_screen: slots are 1 to 8");
+    const char* path = app->capture_screen(app->user_data, (uint32_t)slot);
+    if (!path) luaL_errorL(L, "wpe.capture_screen: the frame can't be captured (see the log)");
+    lua_pushstring(L, path);
+    return 1;
+}
+
 /* wpe.world_to_screen(position) -> x, y, in_front: where a world point shows on screen, in pixels (from the
  * top-left), through the current camera. */
 static int wpe__api_world_to_screen(lua_State* L) {
@@ -2542,6 +2556,7 @@ static const luaL_Reg wpe__api[] = {
     {"set_camera", wpe__api_set_camera},
     {"get_camera", wpe__api_get_camera},
     {"screen_size", wpe__api_screen_size},
+    {"capture_screen", wpe__api_capture_screen},
     {"world_to_screen", wpe__api_world_to_screen},
     {"get_postfx", wpe__api_get_postfx},
     {"set_postfx", wpe__api_set_postfx},

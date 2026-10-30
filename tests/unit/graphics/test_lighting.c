@@ -607,6 +607,115 @@ static void test_lighting_postfx_grayscale(void) {
     wpe_postfx_destroy(chain);
 }
 
+/* Cracks: the same seed gives the same lines, each crossing near the center; a fractional count grows the
+ * newest; lines glow where they are and leave the rest alone; the image slides along them. */
+static void test_lighting_postfx_cracks(void) {
+    WPE_CracksParams params = wpe_postfx_config_default(WPE_POSTFX_CRACKS).cracks;
+    params.count = 5.5f;
+    WPE_CrackLine a[WPE_POSTFX_MAX_CRACKS], b[WPE_POSTFX_MAX_CRACKS];
+    WPE_TEST_ASSERT_EQ_UINT(6, wpe_postfx_crack_lines(&params, S, S, a));
+    WPE_TEST_ASSERT_EQ_UINT(6, wpe_postfx_crack_lines(&params, S, S, b));
+    WPE_TEST_ASSERT(memcmp(a, b, sizeof a[0] * 6) == 0);
+    const float diagonal = sqrtf(2.0f) * (float)S;
+    for (int i = 0; i < 6; ++i) {
+        /* Within spread (in heights) of the center, measured across the line. */
+        const float across = fabsf((S * 0.5f - a[i].x) * -a[i].dy + (S * 0.5f - a[i].y) * a[i].dx);
+        WPE_TEST_ASSERT(across <= params.spread * S + 1e-3f);
+        WPE_TEST_ASSERT_NEAR(1.0, sqrt(a[i].dx * a[i].dx + a[i].dy * a[i].dy), 1e-4);
+        WPE_TEST_ASSERT_NEAR(i < 5 ? diagonal : diagonal * 0.5f, a[i].reach, 1e-3);
+    }
+    params.seed = 2;
+    wpe_postfx_crack_lines(&params, S, S, b);
+    WPE_TEST_ASSERT(memcmp(a, b, sizeof a[0] * 6) != 0);
+    params.count = 0.0f;
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_postfx_crack_lines(&params, S, S, b));
+
+    /* One line, no slide or fringes: it lights the pixels on it, and those far away keep their color. */
+    WPE_PostChain* chain = NULL;
+    WPE_TEST_ASSERT_OK(wpe_postfx_create(&chain));
+    params = wpe_postfx_config_default(WPE_POSTFX_CRACKS).cracks;
+    params.count = 1.0f;
+    params.offset_pixels = 0.0f;
+    params.split_pixels = 0.0f;
+    WPE_PostEffect effect = wpe_postfx_cracks(&params);
+    WPE_Renderer* r = filled_renderer(0xFF404040u);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(r);
+    WPE_CrackLine line;
+    wpe_postfx_crack_lines(&params, S, S, &line);
+    uint32_t lit = 0, kept = 0, changed = 0;
+    for (uint32_t y = 0; y < S; ++y) {
+        for (uint32_t x = 0; x < S; ++x) {
+            const float d =
+                fabsf(((float)x + 0.5f - line.x) * -line.dy + ((float)y + 0.5f - line.y) * line.dx);
+            const WPE_Color c = fb->color[y * S + x];
+            if (d < 0.3f) lit += ((c >> 8) & 0xFFu) > 0x80u;
+            if (d > params.width_pixels + params.glow_pixels + 1.0f) {
+                ++kept;
+                changed += c != 0xFF404040u;
+            }
+        }
+    }
+    WPE_TEST_ASSERT(lit > S / 2);
+    WPE_TEST_ASSERT(kept > S * S / 2);
+    WPE_TEST_ASSERT_EQ_UINT(0, changed);
+    wpe_renderer_destroy(r);
+
+    /* With a slide and no light, the stripes move near the line: the image is cut. */
+    params.offset_pixels = 3.0f;
+    params.strength = 1.0f;
+    params.core_r = params.core_g = params.core_b = 0.0f;
+    params.glow_r = params.glow_g = params.glow_b = 0.0f;
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    WPE_TEST_ASSERT(changed_pixels(wpe_renderer_framebuffer(r), 0, S, 0, S) > 0);
+    wpe_renderer_destroy(r);
+    /* Strength 0: untouched. */
+    params.strength = 0.0f;
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(wpe_renderer_framebuffer(r), 0, S, 0, S));
+    wpe_renderer_destroy(r);
+    wpe_postfx_destroy(chain);
+}
+
+/* Shatter: at time 0 every piece is still in place (the image is unchanged); later they have moved, and
+ * where none is left the background (black at 1) shows. The same seed gives the same pieces. */
+static void test_lighting_postfx_shatter(void) {
+    WPE_PostChain* chain = NULL;
+    WPE_TEST_ASSERT_OK(wpe_postfx_create(&chain));
+    WPE_ShatterParams params = wpe_postfx_config_default(WPE_POSTFX_SHATTER).shatter;
+    params.background = 1.0f;
+    const WPE_PostEffect effect = wpe_postfx_shatter(&params);
+    WPE_TEST_ASSERT(effect.prepare != NULL && effect.scratch_size > 0);
+
+    WPE_Renderer* r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    /* Pieces too thin to be sampled may show the background: allow a few pixels. */
+    WPE_TEST_ASSERT(changed_pixels(wpe_renderer_framebuffer(r), 0, S, 0, S) < S * S / 100);
+    wpe_renderer_destroy(r);
+
+    params.time = 0.8f;
+    r = filled_renderer(0xFFFFFFFFu);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(r);
+    uint32_t black = 0;
+    for (uint32_t i = 0; i < S * S; ++i)
+        black += (fb->color[i] & 0x00FFFFFFu) == 0;
+    WPE_TEST_ASSERT_MSG(black > S * S / 10, "only %u pixels uncovered", black);
+    /* Again: the same picture. */
+    WPE_Color* first = wpe_alloc((size_t)S * S * sizeof *first);
+    WPE_TEST_ASSERT(first != NULL);
+    memcpy(first, fb->color, (size_t)S * S * sizeof *first);
+    wpe_renderer_destroy(r);
+    r = filled_renderer(0xFFFFFFFFu);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    WPE_TEST_ASSERT(memcmp(first, wpe_renderer_framebuffer(r)->color, (size_t)S * S * sizeof *first) == 0);
+    wpe_free(first);
+    wpe_renderer_destroy(r);
+    wpe_postfx_destroy(chain);
+}
+
 /* Effect configs as data: names, parameters, clamping, and the effect they make. */
 static void test_lighting_postfx_configs(void) {
     WPE_PostFxKind kind;
@@ -647,4 +756,5 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_lighting_postfx_color_effects),
     WPE_TEST_CASE(test_lighting_postfx_ssao_darkens_creases_only),
     WPE_TEST_CASE(test_lighting_postfx_depth_of_field), WPE_TEST_CASE(test_lighting_postfx_distortions),
-    WPE_TEST_CASE(test_lighting_postfx_grayscale), WPE_TEST_CASE(test_lighting_postfx_configs))
+    WPE_TEST_CASE(test_lighting_postfx_grayscale), WPE_TEST_CASE(test_lighting_postfx_cracks),
+    WPE_TEST_CASE(test_lighting_postfx_shatter), WPE_TEST_CASE(test_lighting_postfx_configs))

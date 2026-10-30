@@ -23,6 +23,7 @@
 #define WPE__GRID_HALF_LINES 50 /* Grid lines on each side of the center. */
 #define WPE__GRID_PIECE 5.0f    /* Grid line pieces, in spacings (each fades on its own). */
 #define WPE__AUDIO_CHUNK_FRAMES 1024u
+#define WPE__CAPTURE_SLOTS 8u /* wpe.capture_screen slots (and shatter's capture parameter). */
 
 struct WPE_Engine {
     WPE_ProjectSettings project;
@@ -50,9 +51,14 @@ struct WPE_Engine {
     WPE_FixedStep clock;
     char music[WPE_VFS_PATH_MAX]; /* Track started by the current scene ("" = none). */
     char pending_scene[WPE_VFS_PATH_MAX];
-    char save_dir[1024];              /* "" until a script needs it (see wpe__app_save_directory). */
-    bool save_dir_made;               /* save_dir exists (made on first use). */
-    WPE_AssetHandle sky;              /* The loaded sky image (wpe__resolve_sky). */
+    char save_dir[1024]; /* "" until a script needs it (see wpe__app_save_directory). */
+    bool save_dir_made;  /* save_dir exists (made on first use). */
+    WPE_AssetHandle sky; /* The loaded sky image (wpe__resolve_sky). */
+    /* Captured frames (wpe.capture_screen), image assets "capture/1".. that the engine owns. */
+    WPE_AssetHandle captures[WPE__CAPTURE_SLOTS];
+    WPE_Texture* capture_textures[WPE__CAPTURE_SLOTS];
+    uint32_t captures_pending; /* Slots to fill from this frame (bit per slot). */
+    char capture_path[32];
     char sky_image[WPE_VFS_PATH_MAX]; /* Its path. */
     bool quit;
     bool embedded;        /* The host forwards events and shows the framebuffer. */
@@ -117,6 +123,36 @@ static const char* wpe__app_save_directory(void* user_data) {
     return engine->save_dir;
 }
 
+/* A capture slot's image asset, made the first time (showing the last finished frame until this frame's
+ * scene pass fills it). */
+static const char* wpe__app_capture_screen(void* user_data, uint32_t slot) {
+    WPE_Engine* engine = user_data;
+    if (slot < 1 || slot > WPE__CAPTURE_SLOTS) {
+        wpe_log_error("capture slots are 1 to %u (not %u)", WPE__CAPTURE_SLOTS, slot);
+        return NULL;
+    }
+    const uint32_t i = slot - 1;
+    char name[32];
+    snprintf(name, sizeof name, "capture/%u", slot);
+    if (!engine->capture_textures[i]) {
+        const WPE_Framebuffer* fb = wpe_renderer_framebuffer(engine->renderer);
+        WPE_Texture* texture = NULL;
+        WPE_Result result = wpe_texture_create(
+            &(WPE_TextureDesc){.width = fb->width, .height = fb->height, .texels = fb->color, .srgb = true},
+            &texture);
+        if (result == WPE_RESULT_OK)
+            result = wpe_asset_add(engine->assets, WPE_ASSET_IMAGE, name, texture, &engine->captures[i]);
+        if (result != WPE_RESULT_OK) {
+            wpe_log_error("cannot make the capture image '%s': %s", name, wpe_result_to_string(result));
+            wpe_texture_destroy(texture);
+            return NULL;
+        }
+        engine->capture_textures[i] = texture;
+    }
+    engine->captures_pending |= 1u << i;
+    snprintf(engine->capture_path, sizeof engine->capture_path, "%s", name);
+    return engine->capture_path;
+}
 static WPE_PostFxConfig* wpe__app_postfx(void* user_data, uint32_t** out_count) {
     WPE_Engine* engine = user_data;
     *out_count = &engine->environment.postfx_count;
@@ -248,7 +284,8 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                    .screen_size = wpe__app_screen_size,
                                    .instantiate = wpe__app_instantiate,
                                    .save_directory = wpe__app_save_directory,
-                                   .postfx = wpe__app_postfx};
+                                   .postfx = wpe__app_postfx,
+                                   .capture_screen = wpe__app_capture_screen};
         result =
             wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = engine->ecs,
                                                          .assets = engine->assets,
@@ -332,6 +369,8 @@ void wpe_engine_destroy(WPE_Engine* engine) {
     wpe_prefab_cache_destroy(engine->prefabs);
     wpe_asset_release(engine->assets, engine->font);
     wpe_asset_release(engine->assets, engine->sky);
+    for (uint32_t i = 0; i < WPE__CAPTURE_SLOTS; ++i)
+        wpe_asset_release(engine->assets, engine->captures[i]); /* The asset owns the texture. */
     wpe_asset_manager_destroy(engine->assets);
     wpe_vfs_destroy(engine->vfs);
     wpe_input_destroy(engine->input);
@@ -568,6 +607,27 @@ static void wpe__resolve_sky(WPE_Engine* engine) {
     env->render.sky.panorama = wpe_asset_image(engine->assets, engine->sky);
 }
 
+/* Fills the capture slots scripts asked for with the frame as the scene rendered it, and gives shatter
+ * effects the frames they name. */
+static void wpe__fill_captures(WPE_Engine* engine) {
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(engine->renderer);
+    for (uint32_t i = 0; i < WPE__CAPTURE_SLOTS; ++i) {
+        WPE_Texture* texture = engine->capture_textures[i];
+        if (!(engine->captures_pending & (1u << i)) || !texture) continue;
+        if (texture->levels[0].width == fb->width && texture->levels[0].height == fb->height) {
+            (void)wpe_texture_update(texture, fb->color); /* Same size and no mips: can't fail. */
+        } else {
+            wpe_log_warn("capture %u keeps its old frame: the screen changed size", i + 1);
+        }
+    }
+    engine->captures_pending = 0;
+    WPE_SceneEnvironment* env = &engine->environment;
+    for (uint32_t i = 0; i < env->postfx_count; ++i) {
+        WPE_ShatterParams* shatter = &env->postfx[i].shatter;
+        const uint32_t slot = shatter->capture;
+        shatter->image = slot >= 1 && slot <= WPE__CAPTURE_SLOTS ? engine->capture_textures[slot - 1] : NULL;
+    }
+}
 /* Milliseconds since *mark, which moves to now. */
 static double wpe__ms_since(double* mark) {
     const double now = wpe_platform_time_seconds();
@@ -593,6 +653,7 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
     const WPE_Result ended = wpe_renderer_end_frame(engine->renderer);
     if (result == WPE_RESULT_OK) result = ended;
     engine->stats.scene = wpe_renderer_stats(engine->renderer); /* Before the overlay frame resets them. */
+    wpe__fill_captures(engine);
     engine->stats.render_ms = wpe__ms_since(&mark);
 
     const WPE_Camera* cam = wpe_ecs_get_component(engine->ecs, camera, WPE_COMP_CAMERA);
