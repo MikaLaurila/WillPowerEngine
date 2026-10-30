@@ -505,6 +505,8 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double dt) {
     if (result == WPE_RESULT_OK) result = wpe_script_host_update(engine->scripts, (float)dt);
     if (result == WPE_RESULT_OK) result = wpe_animation_update(engine->ecs, (float)dt);
     if (result == WPE_RESULT_OK) wpe_billboard_update(engine->ecs, (float)dt);
+    /* Before transforms: a slash's head entity moves, and emitters on it emit from there this frame. */
+    if (result == WPE_RESULT_OK) wpe_slash_update(engine->ecs, (float)dt);
     if (result == WPE_RESULT_OK) result = wpe_scene_update_transforms(engine->ecs);
     /* After transforms, so emitters spawn where they are this frame. */
     if (result == WPE_RESULT_OK) result = wpe_particles_update(engine->ecs, engine->jobs, (float)dt);

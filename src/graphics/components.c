@@ -138,6 +138,7 @@ WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs, WPE_AssetManager* asse
           .size = sizeof(WPE_Trail),
           .alignment = alignof(WPE_Trail),
           .on_add = wpe__trail_on_add}},
+        {WPE_COMP_SLASH, {.name = "Slash", .size = sizeof(WPE_Slash), .alignment = alignof(WPE_Slash)}},
     };
     for (size_t i = 0; i < sizeof components / sizeof components[0]; ++i) {
         const WPE_Result result = wpe_ecs_register_component(ecs, components[i].type, &components[i].desc);

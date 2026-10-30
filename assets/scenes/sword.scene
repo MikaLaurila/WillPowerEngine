@@ -34,7 +34,7 @@
       "name": "game",
       "script": {"path": "scripts/game.luau",
                  "properties": {"next_scene": "scenes/demo.scene", "title": "Sword trail",
-                                "help": "F,LMB/X slash (it also slashes by itself)"}}
+                                "help": "F,LMB/X slash (it also slashes by itself);Q/RB slash wave (a Bezier slash)"}}
     },
     {
       "id": 5,

@@ -770,6 +770,78 @@ static WPE_Result wpe__render_trails(WPE_SceneRenderer* sr, WPE_Renderer* render
     return result;
 }
 
+/* ---- Slashes -------------------------------------------------------------------------------------- */
+
+/* One draw per playing slash: its visible piece of the curve as a camera-facing ribbon, thin at both ends
+ * (a sine across its length), colored from tail to head. */
+static WPE_Result wpe__render_slashes(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const WPE_Ecs* ecs,
+                                      const wpe__BillboardPass* pass) {
+    const wpe__Frustum frustum = wpe__frustum_from_matrix(pass->view_projection);
+    WPE_Result result = WPE_RESULT_OK;
+    WPE_EcsIter it = wpe_ecs_query((WPE_Ecs*)ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_SLASH) |
+                                                                        WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    while (wpe_ecs_iter_next(&it) && result == WPE_RESULT_OK) {
+        const WPE_Slash* slash = wpe_ecs_iter_get(&it, WPE_COMP_SLASH);
+        const WPE_Transform* t = wpe_ecs_iter_get(&it, WPE_COMP_TRANSFORM);
+        if (!slash->visible || !slash->playing) continue;
+        const float duration = slash->duration > 1e-4f ? slash->duration : 1e-4f;
+        const float sweep = slash->time / duration * (1.0f + slash->length);
+        const float head = fminf(sweep, 1.0f), tail = fmaxf(sweep - slash->length, 0.0f);
+        if (!(head > tail)) continue;
+        const uint32_t segments = slash->segments < 2 ? 2 : (slash->segments > 64 ? 64 : slash->segments);
+        const uint32_t points = segments + 1;
+        WPE_Vec3* centers = wpe_arena_alloc(&sr->frame, (size_t)points * sizeof *centers, 0);
+        wpe__BillboardVertex* vertices =
+            wpe_arena_alloc(&sr->frame, (size_t)segments * 4 * sizeof *vertices, 0);
+        uint32_t* indices = wpe_arena_alloc(&sr->frame, (size_t)segments * 6 * sizeof *indices, 0);
+        if (!centers || !vertices || !indices) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        for (uint32_t k = 0; k < points; ++k) {
+            const float along = tail + (head - tail) * (float)k / (float)segments;
+            centers[k] = wpe_mat4_transform_point(&t->world, wpe_slash_point(slash, along));
+        }
+        /* Each point's half width across the ribbon: across the curve and facing the camera. */
+        WPE_Vec3 sides[65];
+        WPE_Aabb box = {.min = centers[0], .max = centers[0]};
+        for (uint32_t k = 0; k < points; ++k) {
+            const WPE_Vec3 ahead = centers[k + 1 < points ? k + 1 : k];
+            const WPE_Vec3 behind = centers[k > 0 ? k - 1 : k];
+            const WPE_Vec3 tangent = wpe_vec3_sub(ahead, behind);
+            const WPE_Vec3 to_camera = wpe_vec3_sub(pass->camera_position, centers[k]);
+            WPE_Vec3 side = wpe_vec3_cross(tangent, to_camera);
+            const float length = wpe_vec3_length(side);
+            const float u = (float)k / (float)segments;
+            const float half = slash->width * 0.5f * sinf(u * WPE_PI);
+            side = length > 1e-9f ? wpe_vec3_scale(side, half / length) : wpe_vec3(0, 0, 0);
+            sides[k] = side;
+            wpe__grow_box(&box, wpe_vec3_add(centers[k], side));
+            wpe__grow_box(&box, wpe_vec3_sub(centers[k], side));
+        }
+        if (pass->settings->frustum_culling && !wpe__aabb_visible(&frustum, &box)) continue;
+        for (uint32_t q = 0; q < segments; ++q) {
+            const uint32_t p[4] = {q, q, q + 1, q + 1};
+            const float side_sign[4] = {-1.0f, 1.0f, 1.0f, -1.0f};
+            const WPE_Vec3 normal = wpe_vec3_normalize(wpe_vec3_sub(pass->camera_position, centers[q]));
+            for (int v = 0; v < 4; ++v) {
+                const float u = (float)p[v] / (float)segments; /* 0 at the tail, 1 at the head. */
+                wpe__BillboardVertex* out = &vertices[(size_t)q * 4 + (size_t)v];
+                *out = (wpe__BillboardVertex){
+                    .position = wpe_vec3_add(centers[p[v]], wpe_vec3_scale(sides[p[v]], side_sign[v])),
+                    .normal = normal,
+                    .u = u,
+                    .v = side_sign[v] > 0.0f ? 1.0f : 0.0f};
+                for (int c = 0; c < 4; ++c)
+                    out->color[c] =
+                        slash->color_tail.v[c] + (slash->color_head.v[c] - slash->color_tail.v[c]) * u;
+            }
+            const uint32_t first = q * 4;
+            const uint32_t quad_indices[6] = {first, first + 1, first + 2, first, first + 2, first + 3};
+            memcpy(&indices[(size_t)q * 6], quad_indices, sizeof quad_indices);
+        }
+        result = wpe__submit_quads(sr, renderer, pass, NULL, slash->blend, false, box, vertices, indices,
+                                   segments);
+    }
+    return result;
+}
 /* ---- Main pass ------------------------------------------------------------------------------------ */
 
 WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const WPE_Ecs* ecs,
@@ -909,7 +981,8 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
         result = wpe__render_sky(renderer, &settings->sky, &view_projection, sun.present, sun.direction);
     if (result == WPE_RESULT_OK && (wpe_ecs_component_count(ecs, WPE_COMP_BILLBOARD) > 0 ||
                                     wpe_ecs_component_count(ecs, WPE_COMP_PARTICLES) > 0 ||
-                                    wpe_ecs_component_count(ecs, WPE_COMP_TRAIL) > 0)) {
+                                    wpe_ecs_component_count(ecs, WPE_COMP_TRAIL) > 0 ||
+                                    wpe_ecs_component_count(ecs, WPE_COMP_SLASH) > 0)) {
         wpe__BillboardPass pass = {.view = &view,
                                    .view_projection = &view_projection,
                                    .camera_position = camera_position,
@@ -922,6 +995,7 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             result = wpe__render_billboards(sr, renderer, ecs, &pass, &stats);
             if (result == WPE_RESULT_OK) result = wpe__render_particles(sr, renderer, ecs, &pass, &stats);
             if (result == WPE_RESULT_OK) result = wpe__render_trails(sr, renderer, ecs, &pass, &stats);
+            if (result == WPE_RESULT_OK) result = wpe__render_slashes(sr, renderer, ecs, &pass);
         }
     }
     if (out_stats) *out_stats = stats;

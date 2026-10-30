@@ -231,7 +231,20 @@ function Tour:on_start()
 	wpe.remove_trail(trail_base)
 	assert(wpe.get_trail(trail_base) == nil and not pcall(wpe.clear_trail, trail_base))
 	wpe.destroy(trail_base)
-	wpe.destroy(trail_tip)	-- Captured frames are image assets by path; slots 1 to 8.
+	wpe.destroy(trail_tip)	-- Slashes: a ribbon sweeping along a Bezier curve when played; its head entity follows the head.
+	local slash, slash_head = wpe.spawn("tour slash"), wpe.spawn("tour slash head")
+	wpe.set_parent(slash_head, slash, false)
+	wpe.set_slash(slash, { points = { vector.create(0, 0, 0), vector.create(1, 1, 0), vector.create(2, 1, 0), vector.create(3, 0, 0) },
+		width = 0.2, length = 0.4, duration = 0.25, head = slash_head, blend = "alpha", segments = 8 })
+	local info = wpe.get_slash(slash)
+	assert(not info.playing and info.head == slash_head and info.blend == "alpha" and info.segments == 8)
+	assert(near(info.points[4].x, 3) and near(info.length, 0.4))
+	wpe.play_slash(slash)
+	assert(wpe.get_slash(slash).playing and wpe.get_slash(slash).time == 0)
+	assert(not pcall(wpe.set_slash, slash, { length = 0 }) and not pcall(wpe.set_slash, slash, { points = { vector.create(0, 0, 0) } }))
+	wpe.remove_slash(slash)
+	assert(wpe.get_slash(slash) == nil and not pcall(wpe.play_slash, slash))
+	wpe.destroy(slash)	-- Captured frames are image assets by path; slots 1 to 8.
 	assert(wpe.capture_screen(2) == "capture/2" and not pcall(wpe.capture_screen, 9))
 	self.cut_phases = {}
 	-- A flashback: grayscale with a warm (sepia) tint, faded in by strength.

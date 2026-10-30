@@ -111,6 +111,15 @@
     },
     {"id": 47, "name": "trail tip", "parent": 12, "transform": {"position": [2, 0, 0]}},
     {
+      "id": 48,
+      "name": "slash",
+      "transform": {"position": [3, 1, -2]},
+      "slash": {"points": [[-1, 0, 0], [-0.5, 0.6, 0], [0.5, 0.6, 0], [1, 0, 0]], "width": 0.3, "length": 0.6,
+                "duration": 0.5, "color_head": [1, 1, 1, 1], "color_tail": [0.4, 0.6, 1, 0], "segments": 16,
+                "head": 49, "playing": true}
+    },
+    {"id": 49, "name": "slash sparks", "parent": 48, "transform": {}},
+    {
       "id": 13,
       "name": "figure",
       "transform": {"position": [-4, 0, 2], "euler": [0, 30, 0]},

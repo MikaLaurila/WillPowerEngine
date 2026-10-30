@@ -1132,6 +1132,62 @@ static void test_graphics_trail_records_and_draws(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* A slash sweeps along its curve when played: drawn while playing (a ribbon, thin at both ends), its head
+ * entity following the head, and gone at the end. */
+static void test_graphics_slash_sweeps(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 0, 5), wpe_quat_identity());
+    const WPE_Entity e = spawn_point(ecs, wpe_vec3(0, 0, 0));
+    const WPE_Entity sparks = spawn_point(ecs, wpe_vec3(0, 0, 0));
+    WPE_TEST_ASSERT_OK(wpe_scene_set_parent(ecs, sparks, e, false));
+    WPE_Slash settings = wpe_slash_default();
+    settings.points[0] = wpe_vec3(-2, 0, 0);
+    settings.points[1] = wpe_vec3(-1, 1, 0);
+    settings.points[2] = wpe_vec3(1, 1, 0);
+    settings.points[3] = wpe_vec3(2, 0, 0);
+    settings.width = 0.6f;
+    settings.duration = 1.0f;
+    settings.length = 0.5f;
+    settings.color_head = settings.color_tail = wpe_vec4(1, 0, 1, 1);
+    settings.blend = WPE_BILLBOARD_CUTOUT;
+    settings.head = sparks;
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, e, WPE_COMP_SLASH, &settings, NULL));
+    /* The curve's ends and middle. */
+    WPE_TEST_ASSERT_NEAR(-2.0, wpe_slash_point(&settings, 0.0f).x, 1e-5);
+    WPE_TEST_ASSERT_NEAR(0.75, wpe_slash_point(&settings, 0.5f).y, 1e-5);
+
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_SceneRenderStats stats;
+    /* Not playing: nothing. */
+    WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
+    const WPE_Framebuffer* fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(0, count_color(fb, 0xFFFF00FFu));
+    /* Playing, a third of the way: the head (at 0.5 of the curve) leads, and the sparks are there. */
+    wpe_slash_play(ecs, e);
+    wpe_slash_update(ecs, 1.0f / 3.0f);
+    const WPE_Vec3 head = ((WPE_Transform*)wpe_ecs_get_component(ecs, sparks, WPE_COMP_TRANSFORM))->position;
+    WPE_TEST_ASSERT_NEAR(0.0, head.x, 1e-4);
+    WPE_TEST_ASSERT_NEAR(0.75, head.y, 1e-4);
+    WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_renderer_stats(renderer).draws);
+    WPE_TEST_ASSERT(count_color(fb, 0xFFFF00FFu) > 20);
+    /* Done after its duration: stopped and not drawn. */
+    wpe_slash_update(ecs, 0.7f);
+    WPE_TEST_ASSERT(!((WPE_Slash*)wpe_ecs_get_component(ecs, e, WPE_COMP_SLASH))->playing);
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(0, count_color(fb, 0xFFFF00FFu));
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
 static void test_graphics_scene_render_frustum_culling(void) {
     WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 32);
     const WPE_AssetHandle model = wpe_test_load_model(t.assets, "meshes/damaged_helmet.glb");
@@ -1338,6 +1394,6 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_mesh_shadow_unlit_and_sides),
     WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
     WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),
-    WPE_TEST_CASE(test_graphics_trail_records_and_draws),
+    WPE_TEST_CASE(test_graphics_trail_records_and_draws), WPE_TEST_CASE(test_graphics_slash_sweeps),
     WPE_TEST_CASE(test_graphics_camera_matrices_validation),
     WPE_TEST_CASE(test_graphics_draw2d_text_is_pixel_exact), WPE_TEST_CASE(test_graphics_debug_lines))

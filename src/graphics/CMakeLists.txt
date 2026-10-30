@@ -9,6 +9,7 @@ add_library(wpe_graphics STATIC
     postfx.c
     scene_render.c
     sky.c
+    slash.c
     trail.c)
 add_library(wpe::graphics ALIAS wpe_graphics)
 

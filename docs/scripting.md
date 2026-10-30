@@ -362,7 +362,19 @@ Weapon trails ([scenes.md](scenes.md): `trail`): a ribbon between two entities, 
 | `wpe.remove_trail(entity)` | Removes the trail. |
 
 `scripts/sword_trail.luau` in `scenes/sword.scene` adds the two points to Beowulf's katana and records each slash.
-### UI
+
+### Slashes
+
+A slash ([scenes.md](scenes.md): `slash`) is a cubic Bezier curve along which a glowing ribbon sweeps when played: thin at both ends, full in the middle, facing the camera. Use it for sword waves, magic cuts and claw marks; move its entity while it plays to make it fly. A `head` entity (a child of the slash's entity) is moved to the sweep's head, so a particle emitter there leaves sparks along the curve. Screen distortion and tints come from post effects (`radial_blur`, `shockwave`, `grayscale` with a tint) driven alongside.
+
+| Function | Description |
+|---|---|
+| `wpe.set_slash(entity, table)` | Changes the fields given, adding a slash if the entity has none: `points` (four vectors), `width`, `length`, `duration`, `segments`, `color_head`, `color_tail` (`wpe.color`), `blend`, `head` (entity), `visible`. |
+| `wpe.play_slash(entity)` | Plays it from the start. |
+| `wpe.get_slash(entity) -> table?` | The settings above plus `playing` and `time`, or nil. |
+| `wpe.remove_slash(entity)` | Removes the slash. |
+
+In `scenes/sword.scene`, Q (or the right shoulder button) sends a wave: a crescent slash flying forward with sparks, a radial blur and a blue tint (`scripts/sword_trail.luau`).### UI
 
 The scene's UI elements (`ui`, `sprite`, `text` and `button` components, see [scenes.md](scenes.md#ui)) are retained: change them and they stay changed. Functions raise when the entity lacks the component they need.
 

@@ -2417,6 +2417,132 @@ static int wpe__api_remove_trail(lua_State* L) {
     return 0;
 }
 
+/* ---- Slashes --------------------------------------------------------------------------------------- */
+
+static WPE_Slash wpe__check_slash(lua_State* L, int table, WPE_Slash base) {
+    luaL_checktype(L, table, LUA_TTABLE);
+    lua_getfield(L, table, "points");
+    if (!lua_isnil(L, -1)) {
+        luaL_checktype(L, -1, LUA_TTABLE);
+        if (lua_objlen(L, -1) != 4) luaL_errorL(L, "points must be four vectors");
+        for (int i = 0; i < 4; ++i) {
+            lua_rawgeti(L, -1, i + 1);
+            base.points[i] = wpe__check_vec3(L, lua_gettop(L));
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    base.width = wpe__field_number(L, table, "width", base.width);
+    base.length = wpe__field_number(L, table, "length", base.length);
+    base.duration = wpe__field_number(L, table, "duration", base.duration);
+    if (!(base.width >= 0.0f)) luaL_errorL(L, "width must not be negative");
+    if (!(base.length > 0.0f && base.length <= 1.0f)) luaL_errorL(L, "length must be 0..1 (above 0)");
+    if (!(base.duration > 0.0f && base.duration <= 60.0f)) luaL_errorL(L, "duration must be 0..60 seconds");
+    base.segments = wpe__field_count(L, table, "segments", 2, 64, base.segments);
+    base.visible = wpe__field_bool(L, table, "visible", base.visible);
+    const char* colors[] = {"color_head", "color_tail"};
+    WPE_Vec4* color_targets[] = {&base.color_head, &base.color_tail};
+    for (int i = 0; i < 2; ++i) {
+        lua_getfield(L, table, colors[i]);
+        if (!lua_isnil(L, -1)) *color_targets[i] = wpe_color_to_vec4(wpe__opt_color(L, -1));
+        lua_pop(L, 1);
+    }
+    lua_getfield(L, table, "head");
+    if (!lua_isnil(L, -1)) base.head = wpe__check_entity(L, lua_gettop(L));
+    lua_pop(L, 1);
+    lua_getfield(L, table, "blend");
+    if (!lua_isnil(L, -1)) {
+        const char* blend = luaL_checkstring(L, -1);
+        uint32_t found = UINT32_MAX;
+        for (uint32_t i = 0; i < 3; ++i) {
+            if (strcmp(blend, wpe__trail_blends[i]) == 0) found = i;
+        }
+        if (found == UINT32_MAX) luaL_errorL(L, "blend must be \"additive\", \"alpha\" or \"cutout\"");
+        base.blend = (WPE_BillboardBlend)found;
+    }
+    lua_pop(L, 1);
+    return base;
+}
+
+/* Changes (or adds) an entity's slash; a sweep in progress goes on. */
+static int wpe__api_set_slash(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_Slash* existing = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SLASH);
+    const WPE_Slash settings = wpe__check_slash(L, 2, existing ? *existing : wpe_slash_default());
+    WPE_Slash* live = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SLASH); /* Re-fetch. */
+    if (live) {
+        *live = settings;
+        return 0;
+    }
+    wpe__check_unrestricted(L, "set_slash");
+    wpe__raise_result(L, "set_slash",
+                      wpe_ecs_add_component(host->ecs, entity, WPE_COMP_SLASH, &settings, NULL));
+    return 0;
+}
+
+static int wpe__api_get_slash(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_Slash* found = wpe_ecs_get_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_SLASH);
+    if (!found) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const WPE_Slash s = *found; /* Copy before pushing. */
+    lua_createtable(L, 0, 12);
+    lua_createtable(L, 4, 0);
+    for (int i = 0; i < 4; ++i) {
+        wpe__push_vec3(L, s.points[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    lua_setfield(L, -2, "points");
+    const struct {
+        const char* key;
+        double value;
+    } numbers[] = {{"width", s.width},
+                   {"length", s.length},
+                   {"duration", s.duration},
+                   {"segments", s.segments},
+                   {"time", s.time}};
+    for (size_t i = 0; i < sizeof numbers / sizeof numbers[0]; ++i) {
+        lua_pushnumber(L, numbers[i].value);
+        lua_setfield(L, -2, numbers[i].key);
+    }
+    lua_pushboolean(L, s.playing);
+    lua_setfield(L, -2, "playing");
+    lua_pushboolean(L, s.visible);
+    lua_setfield(L, -2, "visible");
+    lua_pushnumber(L, (double)wpe_color_from_vec4(s.color_head));
+    lua_setfield(L, -2, "color_head");
+    lua_pushnumber(L, (double)wpe_color_from_vec4(s.color_tail));
+    lua_setfield(L, -2, "color_tail");
+    lua_pushstring(L, wpe__trail_blends[s.blend]);
+    lua_setfield(L, -2, "blend");
+    if (s.head == WPE_ENTITY_NULL) {
+        lua_pushnil(L);
+    } else {
+        lua_pushnumber(L, s.head);
+    }
+    lua_setfield(L, -2, "head");
+    return 1;
+}
+
+static int wpe__api_play_slash(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    if (!wpe_ecs_has_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_SLASH))
+        luaL_errorL(L, "entity 0x%08x has no slash", entity);
+    wpe_slash_play(wpe__script_host_from(L)->ecs, entity);
+    return 0;
+}
+
+static int wpe__api_remove_slash(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "remove_slash");
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    if (wpe_ecs_has_component(host->ecs, entity, WPE_COMP_SLASH))
+        wpe__raise_result(L, "remove_slash", wpe_ecs_remove_component(host->ecs, entity, WPE_COMP_SLASH));
+    return 0;
+}
+
 /* ---- UI -------------------------------------------------------------------------------------------- */
 
 /* The entity's UI component of `type`; raises when it has none. */
@@ -2697,6 +2823,10 @@ static const luaL_Reg wpe__api[] = {
     {"get_trail", wpe__api_get_trail},
     {"clear_trail", wpe__api_clear_trail},
     {"remove_trail", wpe__api_remove_trail},
+    {"set_slash", wpe__api_set_slash},
+    {"get_slash", wpe__api_get_slash},
+    {"play_slash", wpe__api_play_slash},
+    {"remove_slash", wpe__api_remove_slash},
     {"get_text", wpe__api_get_text},
     {"set_text", wpe__api_set_text},
     {"set_text_color", wpe__api_set_text_color},

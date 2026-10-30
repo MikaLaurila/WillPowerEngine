@@ -69,6 +69,15 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (Bezier slashes)
+- Component `slash` (`WPE_Slash`, `WPE_COMP_SLASH` 24): a ribbon sweeping along a cubic Bezier curve when
+  played, `length` of it visible at a time, thin at both ends and full in the middle, facing the camera,
+  colored from tail to head. A `head` child follows the sweep (sparks from a particle emitter on it). In
+  scene files, the editor and scripts (`wpe.set_slash`, `play_slash`, `get_slash`, `remove_slash`).
+- The sword demo's Q / right shoulder sends a wave: a crescent slash flying forward with sparks, a radial
+  blur and a blue tint.
+- Tests: the curve, the sweep and its head entity, drawing while playing only; the master scene (round
+  trip) and the tour.
 ### Added (weapon trails)
 - Component `trail` (`WPE_Trail`, `WPE_COMP_TRAIL` 23): a ribbon between two entities (`base` and `tip`,
   e.g. points on a blade) through where they were in the last `lifetime` seconds, Catmull-Rom smoothed

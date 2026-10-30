@@ -20,6 +20,8 @@
  *   emitter. Its particle array is owned by the component (freed by its remove hook).
  * - WPE_COMP_TRAIL (WPE_Trail): a ribbon between two moving entities (a blade's base and tip) through where
  *   they were lately (wpe_trail_update()), drawn by wpe_scene_render() through the billboard shader.
+ * - WPE_COMP_SLASH (WPE_Slash): a slash sweeping along a Bezier curve (wpe_slash_update()), drawn by
+ *   wpe_scene_render() as a camera-facing ribbon, thin at both ends.
  *
  * Asset lifetime: mesh renderers and animators reference their model by asset handle
  * (`model_asset`). Their add hook takes a reference and resolves the cached `model` pointer; their
@@ -300,6 +302,42 @@ void wpe_trail_update(WPE_Ecs* ecs, float dt);
 /** Forgets every recorded place (a teleport, a new swing that shouldn't join the last). @thread_safety Thread
  * owning the world */
 void wpe_trail_clear(WPE_Ecs* ecs, WPE_Entity entity);
+/**
+ * A slash: a cubic Bezier curve (four control points in the entity's space) along which a glowing ribbon
+ * sweeps when played. The visible piece is `length` of the curve long: its head runs from the start to the
+ * end over `duration` seconds and its tail follows until the slash is gone. The ribbon faces the camera and
+ * is `width` wide in its middle, thin at both ends; its color goes from color_tail to color_head.
+ */
+typedef struct WPE_Slash {
+    WPE_Vec3 points[4];              /* Control points in the entity's space (start, two handles, end). */
+    float width;                     /* Widest, in the middle of the visible piece (world units). */
+    float length;                    /* The visible piece's share of the curve (0..1]. */
+    float duration;                  /* Seconds for the whole sweep. */
+    WPE_Vec4 color_head, color_tail; /* RGBA at the leading and trailing ends. */
+    WPE_BillboardBlend blend;
+    uint32_t segments; /* Quads along the visible piece (2..64). */
+    WPE_Entity head;   /* Optional: a child of the entity moved to the head as it sweeps (sparks, a light). */
+    bool visible;
+    bool playing; /* Sweeping; it stops (and disappears) at the end. */
+    float time;   /* Seconds into the sweep. */
+} WPE_Slash;
+
+/** @return A 1.2 m crescent in the entity's XY plane, 0.25 m wide, sweeping in 0.3 s with half of it visible,
+ * additive white-blue, not playing. @thread_safety Any thread */
+WPE_Slash wpe_slash_default(void);
+
+/** @return The point at `t` (0..1) along a slash's curve, in the entity's space. @thread_safety Any thread */
+WPE_Vec3 wpe_slash_point(const WPE_Slash* slash, float t);
+
+/** Plays a slash from the start. @thread_safety Thread owning the world */
+void wpe_slash_play(WPE_Ecs* ecs, WPE_Entity entity);
+
+/**
+ * Advances playing slashes and moves each one's `head` entity to where its head is.
+ *
+ * @thread_safety Thread owning the world
+ */
+void wpe_slash_update(WPE_Ecs* ecs, float dt);
 /** @return A visible, lit, single-sided (as the material says) mesh renderer of `mesh` in `model` that casts
  * and receives shadows, without a skin. @thread_safety Any thread */
 WPE_MeshRenderer wpe_mesh_renderer_default(WPE_AssetHandle model, uint32_t mesh);
@@ -314,7 +352,7 @@ WPE_Light wpe_light_default(WPE_LightType type);
 
 /**
  * Registers WPE_COMP_MESH, WPE_COMP_CAMERA, WPE_COMP_LIGHT, WPE_COMP_ANIMATOR, WPE_COMP_BILLBOARD and
- * WPE_COMP_PARTICLES and WPE_COMP_TRAIL. Scene components
+ * WPE_COMP_PARTICLES, WPE_COMP_TRAIL and WPE_COMP_SLASH. Scene components
  * must be registered too (wpe_scene_register_components()).
  *
  * @param assets Borrowed; must outlive the world (component hooks release model references).
