@@ -1156,6 +1156,25 @@ static void test_graphics_slash_sweeps(void) {
     /* The curve's ends and middle. */
     WPE_TEST_ASSERT_NEAR(-2.0, wpe_slash_point(&settings, 0.0f).x, 1e-5);
     WPE_TEST_ASSERT_NEAR(0.75, wpe_slash_point(&settings, 0.5f).y, 1e-5);
+    /* Evenly along a lopsided curve: halfway by length, not by parameter. */
+    WPE_Slash lopsided = settings;
+    lopsided.points[1] = wpe_vec3(-1.9f, 0.1f, 0);
+    lopsided.points[2] = wpe_vec3(-1.8f, 0.2f, 0);
+    const WPE_Vec3 middle = wpe_slash_point_along(&lopsided, 0.5f);
+    float first = 0.0f, second = 0.0f;
+    WPE_Vec3 previous = lopsided.points[0];
+    for (int i = 1; i <= 400; ++i) {
+        const WPE_Vec3 p = wpe_slash_point(&lopsided, (float)i / 400.0f);
+        const float step = wpe_vec3_length(wpe_vec3_sub(p, previous));
+        if (p.x <= middle.x)
+            first += step;
+        else
+            second += step;
+        previous = p;
+    }
+    WPE_TEST_ASSERT_NEAR(1.0, first / second, 0.03);
+    lopsided.even = false;
+    WPE_TEST_ASSERT(wpe_vec3_length(wpe_vec3_sub(wpe_slash_point_along(&lopsided, 0.5f), middle)) > 0.2f);
 
     WPE_Renderer* renderer = NULL;
     WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));

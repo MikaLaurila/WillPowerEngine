@@ -6,7 +6,8 @@
 -- Each slash shows the drawn katana (hiding the one in the saya), records the trail while the slash plays,
 -- then goes back to Idle with the katana sheathed. Fire slashes; with `auto` it also slashes by itself.
 -- Special (Q, right shoulder) slashes and sends a wave: a Bezier slash (a crescent drawn as it flies)
--- with sparks on its head, a short radial blur and a blue tint.
+-- with sparks on its head, a short radial blur and a blue tint. Spell (E, left shoulder) draws a big curve from his
+-- hand over to the ground, a faint line along which a red emitter travels, leaving blobs on the curve.
 local util = require("scripts/lib/util")
 
 local SwordTrail = {}
@@ -20,6 +21,7 @@ local SLASHES = { "Slash0", "Slash1", "Slash2", "Slash3", "Slash4", "Slash5" }
 local WAVE_SECONDS = 0.7
 local WAVE_SPEED = 5 -- meters per second
 local WAVE_DELAY = 0.15 -- seconds into the swing it leaves the blade
+local SPELL_SECONDS = 1.8
 
 -- The entity at or below `root` that plays the model's animations (has an Animator), or nil.
 local function find_animated(root: number): number?
@@ -60,6 +62,51 @@ function SwordTrail:on_start()
 	self.wait = 0.6
 	self:sheathe(true)
 	self:make_wave()
+	self:make_spell()
+end
+
+-- The spell: a slash used as a faint line (thin, see-through, the whole curve showing), and red blobs left
+-- along it by an emitter on its head as the head travels the curve at an even speed.
+function SwordTrail:make_spell()
+	self.spell = wpe.spawn("spell curve")
+	local blobs = wpe.spawn("spell blobs")
+	wpe.set_parent(blobs, self.spell, false)
+	wpe.set_slash(self.spell, {
+		width = 0.06, length = 1, duration = SPELL_SECONDS, segments = 48, head = blobs, even = true,
+		color_head = wpe.color(1, 1, 1, 0.45), color_tail = wpe.color(1, 1, 1, 0.05),
+	})
+	wpe.set_particles(blobs, {
+		playing = false, rate = 11, lifetime = { 0.7, 1 }, speed = { 0, 0.12 }, spread = math.pi, size = { 0.3, 0.08 },
+		color_start = wpe.color(1, 0.25, 0.2, 1), color_end = wpe.color(0.8, 0.05, 0.05, 0),
+	})
+	self.blobs = blobs
+end
+
+-- Lays the curve from his hand up and over to the ground on the screen's right, and plays it.
+function SwordTrail:cast_spell()
+	local _, right = util.camera_axes()
+	local base = wpe.get_world_position(self.entity)
+	local up = vector.create(0, 1, 0)
+	wpe.set_slash(self.spell, {
+		points = { base + right * 0.3 + up * 1.4, base + right * 0.6 + up * 3.1, base + right * 2.7 + up * 2.9, base + right * 3 + up * 0.05 },
+	})
+	wpe.play_slash(self.spell)
+	wpe.set_particles(self.blobs, { playing = true })
+	self.spell_time = 0
+end
+
+function SwordTrail:update_spell(dt)
+	if not self.spell_time then
+		return
+	end
+	self.spell_time += dt
+	-- The head reaches the end halfway through (the whole curve shows, then fades from the start).
+	if self.spell_time >= SPELL_SECONDS * 0.5 then
+		wpe.set_particles(self.blobs, { playing = false })
+	end
+	if self.spell_time >= SPELL_SECONDS then
+		self.spell_time = nil
+	end
 end
 
 -- The wave: a standing crescent bulging forward (along its local +Z, its flight), and sparks that follow its
@@ -150,6 +197,10 @@ end
 
 function SwordTrail:on_update(dt)
 	self:update_wave(dt)
+	self:update_spell(dt)
+	if wpe.action_pressed("spell") and not self.spell_time then
+		self:cast_spell()
+	end
 	if self.slashing then
 		if not wpe.get_animation(self.figure).playing then
 			-- The swing ended: the trail fades out, the katana goes back to the saya.

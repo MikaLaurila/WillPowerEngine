@@ -75,6 +75,10 @@
         {"pad_axis": "right_trigger"},
         {"pad_button": "west"}
       ],
+      "spell": [
+        {"key": "e"},
+        {"pad_button": "left_shoulder"}
+      ],
       "special": [
         {"key": "q"},
         {"pad_button": "right_shoulder"}

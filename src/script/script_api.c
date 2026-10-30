@@ -2440,6 +2440,7 @@ static WPE_Slash wpe__check_slash(lua_State* L, int table, WPE_Slash base) {
     if (!(base.duration > 0.0f && base.duration <= 60.0f)) luaL_errorL(L, "duration must be 0..60 seconds");
     base.segments = wpe__field_count(L, table, "segments", 2, 64, base.segments);
     base.visible = wpe__field_bool(L, table, "visible", base.visible);
+    base.even = wpe__field_bool(L, table, "even", base.even);
     const char* colors[] = {"color_head", "color_tail"};
     WPE_Vec4* color_targets[] = {&base.color_head, &base.color_tail};
     for (int i = 0; i < 2; ++i) {
@@ -2512,6 +2513,8 @@ static int wpe__api_get_slash(lua_State* L) {
     lua_setfield(L, -2, "playing");
     lua_pushboolean(L, s.visible);
     lua_setfield(L, -2, "visible");
+    lua_pushboolean(L, s.even);
+    lua_setfield(L, -2, "even");
     lua_pushnumber(L, (double)wpe_color_from_vec4(s.color_head));
     lua_setfield(L, -2, "color_head");
     lua_pushnumber(L, (double)wpe_color_from_vec4(s.color_tail));

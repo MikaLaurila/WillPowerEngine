@@ -17,6 +17,7 @@ WPE_Slash wpe_slash_default(void) {
                        .blend = WPE_BILLBOARD_ADDITIVE,
                        .segments = 24,
                        .head = WPE_ENTITY_NULL,
+                       .even = true,
                        .visible = true,
                        .playing = false};
 }
@@ -30,6 +31,29 @@ WPE_Vec3 wpe_slash_point(const WPE_Slash* slash, float t) {
     return p;
 }
 
+#define WPE__SLASH_LENGTH_SAMPLES 32
+
+WPE_Vec3 wpe_slash_point_along(const WPE_Slash* slash, float along) {
+    along = along < 0.0f ? 0.0f : (along > 1.0f ? 1.0f : along);
+    if (!slash->even) return wpe_slash_point(slash, along);
+    /* The curve's length at evenly spaced parameters, then the parameter where `along` of it is reached. */
+    float lengths[WPE__SLASH_LENGTH_SAMPLES + 1];
+    lengths[0] = 0.0f;
+    WPE_Vec3 previous = slash->points[0];
+    for (int i = 1; i <= WPE__SLASH_LENGTH_SAMPLES; ++i) {
+        const WPE_Vec3 p = wpe_slash_point(slash, (float)i / WPE__SLASH_LENGTH_SAMPLES);
+        lengths[i] = lengths[i - 1] + wpe_vec3_length(wpe_vec3_sub(p, previous));
+        previous = p;
+    }
+    const float goal = along * lengths[WPE__SLASH_LENGTH_SAMPLES];
+    if (!(lengths[WPE__SLASH_LENGTH_SAMPLES] > 1e-9f)) return wpe_slash_point(slash, along);
+    int i = 1;
+    while (i < WPE__SLASH_LENGTH_SAMPLES && lengths[i] < goal)
+        ++i;
+    const float span = lengths[i] - lengths[i - 1];
+    const float f = span > 1e-9f ? (goal - lengths[i - 1]) / span : 0.0f;
+    return wpe_slash_point(slash, ((float)(i - 1) + f) / WPE__SLASH_LENGTH_SAMPLES);
+}
 void wpe_slash_play(WPE_Ecs* ecs, WPE_Entity entity) {
     WPE_Slash* slash = ecs ? wpe_ecs_get_component(ecs, entity, WPE_COMP_SLASH) : NULL;
     if (!slash) return;
@@ -53,6 +77,6 @@ void wpe_slash_update(WPE_Ecs* ecs, float dt) {
         const float head = fminf(slash->time / duration * (1.0f + slash->length), 1.0f);
         WPE_Transform* follower = wpe_ecs_get_component(ecs, slash->head, WPE_COMP_TRANSFORM);
         if (follower && wpe_scene_get_parent(ecs, slash->head) == it.entity)
-            follower->position = wpe_slash_point(slash, head);
+            follower->position = wpe_slash_point_along(slash, head);
     }
 }

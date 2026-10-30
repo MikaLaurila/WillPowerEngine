@@ -750,6 +750,7 @@ static void wpe__save_slash(wpe__Saver* s, WPE_Entity e) {
     wpe__write_string(w, "blend", wpe__trail_blends[slash->blend]);
     wpe__write_integer(w, "segments", slash->segments);
     wpe__write_ref(s, "head", slash->head);
+    wpe__write_bool(w, "even", slash->even);
     wpe__write_bool(w, "visible", slash->visible);
     wpe__write_bool(w, "playing", slash->playing);
     wpe_json_write_object_end(w);
@@ -759,7 +760,7 @@ static bool wpe__load_slash(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v
     WPE_Slash slash = wpe_slash_default();
     uint32_t blend = slash.blend;
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "slash", "points", "width", "length", "duration", "color_head",
-                                "color_tail", "blend", "segments", "head", "visible", "playing") ||
+                                "color_tail", "blend", "segments", "head", "even", "visible", "playing") ||
         !wpe__json_read_float(&l->r, v, "width", 0.0, 1e4, &slash.width) ||
         !wpe__json_read_float(&l->r, v, "length", 0.001, 1.0, &slash.length) ||
         !wpe__json_read_float(&l->r, v, "duration", 0.001, 60.0, &slash.duration) ||
@@ -768,6 +769,7 @@ static bool wpe__load_slash(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v
         !wpe__json_read_enum(&l->r, v, "blend", wpe__trail_blends, WPE__COUNT(wpe__trail_blends), &blend) ||
         !wpe__json_read_uint(&l->r, v, "segments", 2, 64, &slash.segments) ||
         !wpe__read_ref_value(l, wpe_json_get(v, "head"), "head", &slash.head) ||
+        !wpe__json_read_bool(&l->r, v, "even", &slash.even) ||
         !wpe__json_read_bool(&l->r, v, "visible", &slash.visible) ||
         !wpe__json_read_bool(&l->r, v, "playing", &slash.playing))
         return false;

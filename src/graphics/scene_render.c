@@ -797,7 +797,7 @@ static WPE_Result wpe__render_slashes(WPE_SceneRenderer* sr, WPE_Renderer* rende
         if (!centers || !vertices || !indices) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
         for (uint32_t k = 0; k < points; ++k) {
             const float along = tail + (head - tail) * (float)k / (float)segments;
-            centers[k] = wpe_mat4_transform_point(&t->world, wpe_slash_point(slash, along));
+            centers[k] = wpe_mat4_transform_point(&t->world, wpe_slash_point_along(slash, along));
         }
         /* Each point's half width across the ribbon: across the curve and facing the camera. */
         WPE_Vec3 sides[65];

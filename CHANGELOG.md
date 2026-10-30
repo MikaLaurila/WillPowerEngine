@@ -76,6 +76,10 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   scene files, the editor and scripts (`wpe.set_slash`, `play_slash`, `get_slash`, `remove_slash`).
 - The sword demo's Q / right shoulder sends a wave a moment into the swing: a standing crescent slash
   flying off to the right with sparks, a radial blur and a blue tint.
+- Slashes sweep at an even speed along the curve (by its length, `even`, on by default), so a head entity
+  travels it steadily. The sword demo's E / left shoulder casts a curve spell: a faint line from Beowulf's
+  hand over to the ground with red blobs left along it by the traveling emitter (after the project
+  owner's earlier effect).
 - Tests: the curve, the sweep and its head entity, drawing while playing only; the master scene (round
   trip) and the tour.
 ### Added (weapon trails)

@@ -317,17 +317,23 @@ typedef struct WPE_Slash {
     WPE_BillboardBlend blend;
     uint32_t segments; /* Quads along the visible piece (2..64). */
     WPE_Entity head;   /* Optional: a child of the entity moved to the head as it sweeps (sparks, a light). */
+    bool even;         /* Sweep at an even speed along the curve (else at the curve parameter's pace). */
     bool visible;
     bool playing; /* Sweeping; it stops (and disappears) at the end. */
     float time;   /* Seconds into the sweep. */
 } WPE_Slash;
 
-/** @return A 1.2 m crescent in the entity's XY plane, 0.25 m wide, sweeping in 0.3 s with half of it visible,
- * additive white-blue, not playing. @thread_safety Any thread */
+/** @return A 1.2 m crescent in the entity's XY plane, 0.25 m wide, sweeping evenly in 0.3 s with half of it
+ * visible, additive white-blue, not playing. @thread_safety Any thread */
 WPE_Slash wpe_slash_default(void);
 
 /** @return The point at `t` (0..1) along a slash's curve, in the entity's space. @thread_safety Any thread */
 WPE_Vec3 wpe_slash_point(const WPE_Slash* slash, float t);
+
+/** @return The point `along` (0..1) of the way along a slash's curve, in the entity's space: by length when
+ * `even`, else at the curve parameter `along`. The sweep and its head go this way. @thread_safety Any thread
+ */
+WPE_Vec3 wpe_slash_point_along(const WPE_Slash* slash, float along);
 
 /** Plays a slash from the start. @thread_safety Thread owning the world */
 void wpe_slash_play(WPE_Ecs* ecs, WPE_Entity entity);
