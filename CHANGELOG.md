@@ -69,6 +69,13 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (console clear, grayscale)
+- Editor console: typing `clear`, `cls` or `clr` empties it (command `clear_log`, which also empties the
+  `log` command's lines).
+- Post effect `grayscale`: the image's brightness alone, mixed in by `strength` (fade into a flashback)
+  and multiplied by a tint (`tint_r`, `tint_g`, `tint_b`; warm for sepia). In scene files, scripts
+  (`wpe.add_postfx({effect = "grayscale"})`) and the editor's effect list.
+- Tests: clearing the log; grayscale's luma, strength and tint.
 ### Added (project templates: racing)
 - `racing` template: an arcade car (a sphere rigid body driven by a script: throttle, brake and reverse,
   speed-scaled steering, adjustable grip and a handbrake for drifts) on a walled eight-sided circuit, a

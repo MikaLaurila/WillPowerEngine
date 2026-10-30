@@ -215,6 +215,10 @@ function Tour:on_start()
 	assert(not pcall(wpe.add_postfx, { effect = "bloom" }))
 	wpe.remove_postfx(wave)
 	assert(#wpe.get_postfx() == before)
+	-- A flashback: grayscale with a warm (sepia) tint, faded in by strength.
+	local memory = wpe.add_postfx({ effect = "grayscale", strength = 0.5, tint_b = 0.7 })
+	assert(near(wpe.get_postfx()[memory].strength, 0.5) and near(wpe.get_postfx()[memory].tint_r, 1))
+	wpe.remove_postfx(memory)
 
 	-- Screen positions: a point straight ahead of the camera is in the middle of the screen.
 	local camera = wpe.get_camera()

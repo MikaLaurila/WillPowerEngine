@@ -61,6 +61,7 @@ struct WPE_Editor {
     WPE_LogSinkId log_sink;
     wpe__LogLine log[WPE__EDITOR_LOG_LINES];
     uint64_t log_written; /* Total lines ever written (index = n % WPE__EDITOR_LOG_LINES). */
+    uint64_t log_cleared; /* Lines before this position are hidden (clear_log). */
 };
 
 /* Scene context for saving and editing (excludes the editor's helpers). */
@@ -93,9 +94,12 @@ WPE_Result wpe__editor_new_scene(WPE_Editor* editor);
 WPE_Result wpe__editor_load_scene(WPE_Editor* editor, const char* path);
 WPE_Result wpe__editor_save_scene(WPE_Editor* editor, const char* path);
 
-/* Copies log lines written since `since` (at most `max`) through `fn`; returns the new position. */
+/* Copies log lines written since `since` (at most `max`, none from before the last clear) through `fn`;
+ * returns the new position. */
 uint64_t wpe__editor_log_since(WPE_Editor* editor, uint64_t since, uint32_t max,
                                void (*fn)(const wpe__LogLine* line, void* user_data), void* user_data);
 uint64_t wpe__editor_log_position(WPE_Editor* editor);
+/* Hides the lines logged so far (the console's clear). */
+void wpe__editor_log_clear(WPE_Editor* editor);
 
 #endif /* WPE_EDITOR_EDITOR_INTERNAL_H */

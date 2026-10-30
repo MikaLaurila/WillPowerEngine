@@ -11,8 +11,9 @@
  * only write rows [row_begin, row_end) of dst/aux.
  *
  * Built-in effects: SSAO, chromatic aberration, PS1-style dither + color quantization, vignette,
- * color adjustment (brightness/contrast/saturation), depth of field, and the shockwave and radial
- * blur distortions. WPE_PostFxConfig describes any of them as data (scene files, scripts).
+ * color adjustment (brightness/contrast/saturation), grayscale (with a tint, e.g. sepia), depth of field,
+ * and the shockwave and radial blur distortions. WPE_PostFxConfig describes any of them as data (scene files,
+ * scripts).
  *
  * Usage: wpe_renderer_end_frame() → wpe_postfx_apply() → optionally another renderer frame
  * without clearing for HUD/2D that should not be post-processed.
@@ -108,6 +109,13 @@ typedef struct WPE_ColorAdjustParams {
     float saturation; /* 0 = grayscale, 1 = unchanged. */
 } WPE_ColorAdjustParams;
 
+/* Grayscale (flashbacks, memories): the image's brightness alone, times a tint ({1, 1, 1}: gray; warmer for
+ * sepia), mixed in by strength, so a script can fade into it. */
+typedef struct WPE_GrayscaleParams {
+    float strength;               /* 0 = unchanged, 1 = fully gray. */
+    float tint_r, tint_g, tint_b; /* Multiplies the gray (0..2). */
+} WPE_GrayscaleParams;
+
 /* Depth of field: what's near `focus_distance` is sharp, and the image blurs with distance from there,
  * in front and behind. Distances are along the view (view units). */
 typedef struct WPE_DepthOfFieldParams {
@@ -146,8 +154,9 @@ typedef enum WPE_PostFxKind {
     WPE_POSTFX_DEPTH_OF_FIELD,
     WPE_POSTFX_SHOCKWAVE,
     WPE_POSTFX_RADIAL_BLUR,
+    WPE_POSTFX_GRAYSCALE,
 } WPE_PostFxKind;
-#define WPE_POSTFX_KIND_COUNT 8u
+#define WPE_POSTFX_KIND_COUNT 9u
 
 /** One configured built-in effect; only the parameters matching `kind` are used. */
 typedef struct WPE_PostFxConfig {
@@ -161,6 +170,7 @@ typedef struct WPE_PostFxConfig {
     WPE_DepthOfFieldParams depth_of_field;
     WPE_ShockwaveParams shockwave;
     WPE_RadialBlurParams radial_blur;
+    WPE_GrayscaleParams grayscale;
 } WPE_PostFxConfig;
 
 /** A parameter of an effect kind: its name (in scene files and scripts), where it lives in a
@@ -205,6 +215,7 @@ WPE_PostEffect wpe_postfx_color_adjust(const WPE_ColorAdjustParams* params);
 WPE_PostEffect wpe_postfx_depth_of_field(const WPE_DepthOfFieldParams* params);
 WPE_PostEffect wpe_postfx_shockwave(const WPE_ShockwaveParams* params);
 WPE_PostEffect wpe_postfx_radial_blur(const WPE_RadialBlurParams* params);
+WPE_PostEffect wpe_postfx_grayscale(const WPE_GrayscaleParams* params);
 
 /** @return Linear view-space depth for a window depth value. @thread_safety Any thread */
 float wpe_postfx_linear_depth(const WPE_PostCamera* camera, float window_depth);

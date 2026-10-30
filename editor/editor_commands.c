@@ -1046,6 +1046,11 @@ static WPE_Result wpe__cmd_log(wpe__Call* call) {
     return WPE_RESULT_OK;
 }
 
+static WPE_Result wpe__cmd_clear_log(wpe__Call* call) {
+    wpe__editor_log_clear(call->editor);
+    return wpe__null(call, WPE_RESULT_OK);
+}
+
 static WPE_Result wpe__cmd_quit(wpe__Call* call) {
     const WPE_Result result = wpe__guard_unsaved(call, "quit");
     if (result == WPE_RESULT_OK) call->editor->quit_requested = true;
@@ -1115,6 +1120,7 @@ static const struct {
     {"list_assets", wpe__cmd_list_assets, "{prefix?} -> asset paths"},
     {"export", wpe__cmd_export, "{output, runtime?} -> {files, bytes}"},
     {"log", wpe__cmd_log, "{count = 50} -> recent log lines"},
+    {"clear_log", wpe__cmd_clear_log, "{}: hide the lines logged so far (the console's clear, cls, clr)"},
     {"quit", wpe__cmd_quit,
      "{discard = false} close the editor window (refused with unsaved changes unless discard)"},
 };

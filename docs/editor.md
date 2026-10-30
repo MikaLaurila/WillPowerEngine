@@ -96,6 +96,7 @@ Entities and components use the **scene-file schema** ([scenes.md](scenes.md)), 
 | `list_assets` | `{prefix?}` → asset paths |
 | `export` | `{output, runtime?}` → `{files, bytes}`: exports the game (runtime/export, [runtime.md](runtime.md)) |
 | `log` | `{count = 50}` → recent log lines |
+| `clear_log` | `{}`: hides the lines logged so far (the console runs it for `clear`, `cls` and `clr`) |
 | `quit` | `{discard?}`: closes the editor window (refused while the scene has unsaved changes, unless `"discard": true`) |
 
 Any command may carry `"coalesce": key`. Consecutive edits with the same key form one undo step; the window uses this so that dragging a slider is one step.

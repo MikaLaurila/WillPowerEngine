@@ -146,6 +146,20 @@ static void test_editor_edits_with_undo_and_redo(void) {
     wpe_json_free(run(editor, "[1]", false));
     wpe_log_set_stderr_enabled(true);
 
+    /* clear_log hides what was logged so far; later lines still show. */
+    WPE_JsonDocument* lines = run(editor, "{\"cmd\": \"log\"}", true);
+    WPE_TEST_ASSERT(wpe_json_count(result_of(lines)) > 0);
+    wpe_json_free(lines);
+    run_ok(editor, "{\"cmd\": \"clear_log\"}");
+    lines = run(editor, "{\"cmd\": \"log\"}", true);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_json_count(result_of(lines)));
+    wpe_json_free(lines);
+    wpe_log_info("after the clear");
+    lines = run(editor, "{\"cmd\": \"log\"}", true);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_json_count(result_of(lines)));
+    WPE_TEST_ASSERT(strstr(wpe_json_string(wpe_json_at(result_of(lines), 0)), "after the clear") != NULL);
+    wpe_json_free(lines);
+
     snprintf(command, sizeof command, "{\"cmd\": \"duplicate_entity\", \"id\": %u}", lamp);
     run_ok(editor, command);
     WPE_TEST_ASSERT_EQ_UINT(4, entity_count(editor));

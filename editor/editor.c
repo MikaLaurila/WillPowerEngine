@@ -35,11 +35,17 @@ uint64_t wpe__editor_log_position(WPE_Editor* editor) {
     return position;
 }
 
+void wpe__editor_log_clear(WPE_Editor* editor) {
+    SDL_LockMutex(editor->log_mutex);
+    editor->log_cleared = editor->log_written;
+    SDL_UnlockMutex(editor->log_mutex);
+}
+
 uint64_t wpe__editor_log_since(WPE_Editor* editor, uint64_t since, uint32_t max,
                                void (*fn)(const wpe__LogLine* line, void* user_data), void* user_data) {
     SDL_LockMutex(editor->log_mutex);
     const uint64_t end = editor->log_written;
-    uint64_t start = since;
+    uint64_t start = since > editor->log_cleared ? since : editor->log_cleared;
     if (end - start > WPE__EDITOR_LOG_LINES) start = end - WPE__EDITOR_LOG_LINES; /* Older lines are gone. */
     if (end - start > max) start = end - max;
     for (uint64_t i = start; i < end; ++i)

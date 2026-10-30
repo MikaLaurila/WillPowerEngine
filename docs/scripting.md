@@ -310,7 +310,7 @@ function Hero:hit_wave(t) -- t from 0 to 1 over a few tenths of a second
 end
 ```
 
-`scripts/hero.luau` in `scenes/character.scene` does this on the fire button, with a radial blur. Effects run in C over every pixel; scripts choose and drive them, but can't run their own per-pixel code (Luau would be far too slow for that).
+`scripts/hero.luau` in `scenes/character.scene` does this on the fire button, with a radial blur. For a flashback, fade in `grayscale` by raising its `strength` from 0 to 1 (a tint such as `tint_g = 0.9, tint_b = 0.7` makes it sepia), perhaps with a `vignette`. Effects run in C over every pixel; scripts choose and drive them, but can't run their own per-pixel code (Luau would be far too slow for that).
 
 ### 2D drawing
 

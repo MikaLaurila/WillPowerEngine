@@ -563,6 +563,50 @@ static void test_lighting_postfx_distortions(void) {
     wpe_postfx_destroy(chain);
 }
 
+/* The red, green and blue of a pixel, 0..255. */
+static void channels(WPE_Color c, uint32_t out[3]) {
+    out[0] = (c >> 16) & 0xFFu;
+    out[1] = (c >> 8) & 0xFFu;
+    out[2] = c & 0xFFu;
+}
+
+/* Grayscale keeps brightness (luma), mixes in by strength, and tints the gray. */
+static void test_lighting_postfx_grayscale(void) {
+    WPE_PostChain* chain = NULL;
+    WPE_TEST_ASSERT_OK(wpe_postfx_create(&chain));
+    uint32_t rgb[3];
+
+    /* Pure red: gray at its luma, 0.299 of full. */
+    WPE_GrayscaleParams params = {.strength = 1.0f, .tint_r = 1.0f, .tint_g = 1.0f, .tint_b = 1.0f};
+    WPE_PostEffect effect = wpe_postfx_grayscale(&params);
+    WPE_Renderer* r = filled_renderer(0xFFFF0000u);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    channels(wpe_renderer_framebuffer(r)->color[100], rgb);
+    WPE_TEST_ASSERT(rgb[0] == rgb[1] && rgb[1] == rgb[2]);
+    WPE_TEST_ASSERT_NEAR(76.0, (double)rgb[0], 1.0);
+    wpe_renderer_destroy(r);
+
+    /* Half strength: halfway from red to that gray. */
+    params.strength = 0.5f;
+    r = filled_renderer(0xFFFF0000u);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    channels(wpe_renderer_framebuffer(r)->color[100], rgb);
+    WPE_TEST_ASSERT_NEAR(165.0, (double)rgb[0], 1.0);
+    WPE_TEST_ASSERT_NEAR(38.0, (double)rgb[1], 1.0);
+    wpe_renderer_destroy(r);
+
+    /* A tint colors the gray (sepia-like: no blue). */
+    params = (WPE_GrayscaleParams){.strength = 1.0f, .tint_r = 1.0f, .tint_g = 0.5f, .tint_b = 0.0f};
+    r = filled_renderer(0xFFFF0000u);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    channels(wpe_renderer_framebuffer(r)->color[100], rgb);
+    WPE_TEST_ASSERT_NEAR(76.0, (double)rgb[0], 1.0);
+    WPE_TEST_ASSERT_NEAR(38.0, (double)rgb[1], 1.0);
+    WPE_TEST_ASSERT_EQ_UINT(0, rgb[2]);
+    wpe_renderer_destroy(r);
+    wpe_postfx_destroy(chain);
+}
+
 /* Effect configs as data: names, parameters, clamping, and the effect they make. */
 static void test_lighting_postfx_configs(void) {
     WPE_PostFxKind kind;
@@ -593,16 +637,14 @@ static void test_lighting_postfx_configs(void) {
     WPE_TEST_ASSERT(!wpe_postfx_from_config(&ps1).enabled);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_lighting_attenuation_shape),
-              WPE_TEST_CASE(test_lighting_shadow_visibility_pcf),
-              WPE_TEST_CASE(test_lighting_point_light_pool), WPE_TEST_CASE(test_lighting_spot_cone),
-              WPE_TEST_CASE(test_lighting_more_lights_than_object_limit),
-              WPE_TEST_CASE(test_lighting_directional_shadow),
-              WPE_TEST_CASE(test_lighting_fog_and_default_sun),
-              WPE_TEST_CASE(test_lighting_subdivision_near_camera),
-              WPE_TEST_CASE(test_lighting_procedural_models),
-              WPE_TEST_CASE(test_lighting_generated_tangents_are_orthonormal),
-              WPE_TEST_CASE(test_lighting_postfx_color_effects),
-              WPE_TEST_CASE(test_lighting_postfx_ssao_darkens_creases_only),
-              WPE_TEST_CASE(test_lighting_postfx_depth_of_field),
-              WPE_TEST_CASE(test_lighting_postfx_distortions), WPE_TEST_CASE(test_lighting_postfx_configs))
+WPE_TEST_MAIN(
+    WPE_TEST_CASE(test_lighting_attenuation_shape), WPE_TEST_CASE(test_lighting_shadow_visibility_pcf),
+    WPE_TEST_CASE(test_lighting_point_light_pool), WPE_TEST_CASE(test_lighting_spot_cone),
+    WPE_TEST_CASE(test_lighting_more_lights_than_object_limit),
+    WPE_TEST_CASE(test_lighting_directional_shadow), WPE_TEST_CASE(test_lighting_fog_and_default_sun),
+    WPE_TEST_CASE(test_lighting_subdivision_near_camera), WPE_TEST_CASE(test_lighting_procedural_models),
+    WPE_TEST_CASE(test_lighting_generated_tangents_are_orthonormal),
+    WPE_TEST_CASE(test_lighting_postfx_color_effects),
+    WPE_TEST_CASE(test_lighting_postfx_ssao_darkens_creases_only),
+    WPE_TEST_CASE(test_lighting_postfx_depth_of_field), WPE_TEST_CASE(test_lighting_postfx_distortions),
+    WPE_TEST_CASE(test_lighting_postfx_grayscale), WPE_TEST_CASE(test_lighting_postfx_configs))

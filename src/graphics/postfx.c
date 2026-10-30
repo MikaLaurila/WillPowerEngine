@@ -260,6 +260,23 @@ static void wpe__color_adjust_pass(const WPE_PostContext* c, const void* params_
     }
 }
 
+static void wpe__grayscale_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
+                                uint32_t row_begin, uint32_t row_end) {
+    (void)pass;
+    const WPE_GrayscaleParams* p = params_ptr;
+    const float tint[3] = {p->tint_r, p->tint_g, p->tint_b};
+    for (uint32_t y = row_begin; y < row_end; ++y) {
+        for (uint32_t x = 0; x < c->width; ++x) {
+            const size_t i = (size_t)y * c->width + x;
+            WPE_Vec4 v = wpe_color_to_vec4(c->src[i]);
+            const float luma = 0.299f * v.x + 0.587f * v.y + 0.114f * v.z;
+            for (int k = 0; k < 3; ++k)
+                v.v[k] = wpe__clamp01(v.v[k] + (luma * tint[k] - v.v[k]) * p->strength);
+            c->dst[i] = wpe_color_from_vec4(v);
+        }
+    }
+}
+
 /* ---- Depth of field ----------------------------------------------------------------------------------- */
 
 #define WPE__DOF_MAX_RADIUS 16
@@ -444,6 +461,16 @@ static const WPE_ShockwaveParams wpe__shockwave_defaults = {
     .center_x = 0.5f, .center_y = 0.5f, .radius = 0.3f, .width = 0.08f, .strength_pixels = 6.0f};
 static const WPE_RadialBlurParams wpe__radial_blur_defaults = {
     .center_x = 0.5f, .center_y = 0.5f, .strength = 0.15f};
+static const WPE_GrayscaleParams wpe__grayscale_defaults = {
+    .strength = 1.0f, .tint_r = 1.0f, .tint_g = 1.0f, .tint_b = 1.0f};
+
+WPE_PostEffect wpe_postfx_grayscale(const WPE_GrayscaleParams* params) {
+    return (WPE_PostEffect){.name = "grayscale",
+                            .pass = wpe__grayscale_pass,
+                            .pass_count = 1,
+                            .params = params ? params : &wpe__grayscale_defaults,
+                            .enabled = true};
+}
 
 WPE_PostEffect wpe_postfx_shockwave(const WPE_ShockwaveParams* params) {
     return (WPE_PostEffect){.name = "shockwave",
@@ -464,8 +491,8 @@ WPE_PostEffect wpe_postfx_radial_blur(const WPE_RadialBlurParams* params) {
 /* ---- Configured effects ----------------------------------------------------------------------------- */
 
 static const char* const wpe__kind_names[WPE_POSTFX_KIND_COUNT] = {
-    "ssao",         "chromatic_aberration", "ps1",       "vignette",
-    "color_adjust", "depth_of_field",       "shockwave", "radial_blur"};
+    "ssao",      "chromatic_aberration", "ps1",      "vignette", "color_adjust", "depth_of_field",
+    "shockwave", "radial_blur",          "grayscale"};
 
 /* Each kind's parameters in scene-file order, with the ranges files and scripts may use. */
 static const WPE_PostFxParam wpe__ssao_params[] = {
@@ -500,15 +527,22 @@ static const WPE_PostFxParam wpe__radial_blur_params[] = {
     {"center_x", offsetof(WPE_PostFxConfig, radial_blur.center_x), -1, 2, false},
     {"center_y", offsetof(WPE_PostFxConfig, radial_blur.center_y), -1, 2, false},
     {"strength", offsetof(WPE_PostFxConfig, radial_blur.strength), 0, 1, false}};
+static const WPE_PostFxParam wpe__grayscale_params[] = {
+    {"strength", offsetof(WPE_PostFxConfig, grayscale.strength), 0, 1, false},
+    {"tint_r", offsetof(WPE_PostFxConfig, grayscale.tint_r), 0, 2, false},
+    {"tint_g", offsetof(WPE_PostFxConfig, grayscale.tint_g), 0, 2, false},
+    {"tint_b", offsetof(WPE_PostFxConfig, grayscale.tint_b), 0, 2, false}};
 
 static const struct {
     const WPE_PostFxParam* params;
     uint32_t count;
 } wpe__kind_params[WPE_POSTFX_KIND_COUNT] = {
 #define WPE__TABLE(t) {t, (uint32_t)(sizeof(t) / sizeof((t)[0]))}
-    WPE__TABLE(wpe__ssao_params),      WPE__TABLE(wpe__chromatic_params),    WPE__TABLE(wpe__ps1_params),
-    WPE__TABLE(wpe__vignette_params),  WPE__TABLE(wpe__color_adjust_params), WPE__TABLE(wpe__dof_params),
-    WPE__TABLE(wpe__shockwave_params), WPE__TABLE(wpe__radial_blur_params),
+    WPE__TABLE(wpe__ssao_params),         WPE__TABLE(wpe__chromatic_params),
+    WPE__TABLE(wpe__ps1_params),          WPE__TABLE(wpe__vignette_params),
+    WPE__TABLE(wpe__color_adjust_params), WPE__TABLE(wpe__dof_params),
+    WPE__TABLE(wpe__shockwave_params),    WPE__TABLE(wpe__radial_blur_params),
+    WPE__TABLE(wpe__grayscale_params),
 #undef WPE__TABLE
 };
 
@@ -566,7 +600,8 @@ WPE_PostFxConfig wpe_postfx_config_default(WPE_PostFxKind kind) {
                               .color_adjust = wpe__color_adjust_defaults,
                               .depth_of_field = wpe__dof_defaults,
                               .shockwave = wpe__shockwave_defaults,
-                              .radial_blur = wpe__radial_blur_defaults};
+                              .radial_blur = wpe__radial_blur_defaults,
+                              .grayscale = wpe__grayscale_defaults};
 }
 
 WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* c) {
@@ -595,6 +630,9 @@ WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* c) {
         break;
     case WPE_POSTFX_RADIAL_BLUR:
         effect = wpe_postfx_radial_blur(&c->radial_blur);
+        break;
+    case WPE_POSTFX_GRAYSCALE:
+        effect = wpe_postfx_grayscale(&c->grayscale);
         break;
     }
     effect.enabled = c->enabled;

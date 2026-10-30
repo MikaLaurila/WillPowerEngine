@@ -354,8 +354,9 @@ static const char* const* wpe__choices(const char* component, const char* key, u
     static const char* const shapes[] = {"box", "sphere", "capsule", "convex", "mesh"};
     static const char* const buses[] = {"effects", "music"};
     static const char* const fogs[] = {"none", "linear", "exponential"};
-    static const char* const effects[] = {"ssao",         "chromatic_aberration", "ps1",       "vignette",
-                                          "color_adjust", "depth_of_field",       "shockwave", "radial_blur"};
+    static const char* const effects[] = {"ssao",      "chromatic_aberration", "ps1",
+                                          "vignette",  "color_adjust",         "depth_of_field",
+                                          "shockwave", "radial_blur",          "grayscale"};
     static const char* const aligns[] = {"left", "center", "right"};
     static const char* const valigns[] = {"top", "middle", "bottom"};
     static const char* const billboard_modes[] = {"fixed", "axis_aligned", "axis_aligned_y",
@@ -375,7 +376,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
         {"audio_source", "bus", buses, 2},
         {"fog", "mode", fogs, 3}, /* The environment's objects go by their own names (wpe__draw_value). */
         {"sky", "mode", skies, 3},
-        {"environment", "effect", effects, 8},
+        {"environment", "effect", effects, (uint32_t)(sizeof effects / sizeof effects[0])},
         {"text", "align", aligns, 3},
         {"text", "valign", valigns, 3},
         {"billboard", "mode", billboard_modes, 4},
@@ -2338,6 +2339,24 @@ static void wpe__console_line(const wpe__LogLine* line, void* user_data) {
     igTextColored(color, "%s", line->text);
 }
 
+/* Whether the console's input is "clear", "cls" or "clr" (any case, spaces around allowed). */
+static bool wpe__is_clear_word(const char* text) {
+    while (*text == ' ')
+        ++text;
+    size_t length = strlen(text);
+    while (length > 0 && text[length - 1] == ' ')
+        --length;
+    static const char* const words[] = {"clear", "cls", "clr"};
+    for (size_t i = 0; i < sizeof words / sizeof words[0]; ++i) {
+        if (strlen(words[i]) != length) continue;
+        bool same = true;
+        for (size_t c = 0; c < length && same; ++c)
+            same = (text[c] | 0x20) == words[i][c]; /* ASCII lowercase; the words are letters only. */
+        if (same) return true;
+    }
+    return false;
+}
+
 static void wpe__ui_console(WPE_EditorUi* ui) {
     if (!igBegin("Console", NULL, 0)) {
         igEnd();
@@ -2349,8 +2368,15 @@ static void wpe__ui_console(WPE_EditorUi* ui) {
                                    ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
     igSameLine(0, -1);
     if ((igButton("Run", (ImVec2_c){80, 0}) || enter) && ui->command[0]) {
-        wpe__ui_run(ui, ui->command);
-        wpe_log_info("> %s", ui->command);
+        if (wpe__is_clear_word(ui->command)) {
+            /* The shell words for clearing the screen: an empty console, without the command echoed. */
+            wpe__ui_simple(ui, "clear_log");
+            ui->reply[0] = '\0';
+            ui->command[0] = '\0';
+        } else {
+            wpe__ui_run(ui, ui->command);
+            wpe_log_info("> %s", ui->command);
+        }
     }
     if (ui->reply[0]) igTextWrapped("%s", ui->reply);
     igSeparator();
