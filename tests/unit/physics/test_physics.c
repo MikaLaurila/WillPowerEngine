@@ -1032,6 +1032,53 @@ static void test_physics_character_pushes_bodies_and_enters_triggers(void) {
     destroy_world(&f);
 }
 
+/* Game code moving a character (a respawn) is a jump, not a walk: triggers between the two places never
+ * see it, whether it walks on from there before the step or not. (A body sent across with velocity would
+ * need several steps for a long way, Box3D capping its speed, and stop inside wide triggers on the way.) */
+static void test_physics_character_teleports_past_triggers(void) {
+    Fixture f = make_world(GRAVITY);
+    spawn_ground(f.ecs);
+    WPE_Collider zone = wpe_collider_default(WPE_COLLIDER_BOX);
+    zone.size = wpe_vec3(5.0f, 2.0f, 4.0f); /* x from 4 to 9. */
+    zone.is_trigger = true;
+    const WPE_Entity trigger = spawn_static(f.ecs, wpe_vec3(6.5f, 1.0f, 0.0f), zone);
+    const WPE_Entity e = spawn_character(&f, wpe_vec3(0.0f, 0.0f, 0.0f));
+    WPE_Vec3 v = walk(&f, e, wpe_vec3(0, 0, 0), wpe_vec3(0, 0, 0), 0.3f, true);
+
+    /* Walking into it enters it, and a respawn (back to the start, walking on from there) leaves it. */
+    int entries = 0;
+    for (int i = 0; i < (int)(4.0f / DT) && entries == 0; ++i) {
+        v = walk(&f, e, v, wpe_vec3(3.0f, 0, 0), DT, true);
+        entries += has_event(&f, WPE_PHYSICS_TRIGGER_ENTER, trigger, e);
+    }
+    WPE_TEST_ASSERT_EQ_INT(1, entries);
+    transform_of(f.ecs, e)->position = wpe_vec3(0.0f, 0.0f, 0.0f);
+    bool exited = false;
+    for (int i = 0; i < 30; ++i) {
+        v = walk(&f, e, v, wpe_vec3(0, 0, 0), DT, true);
+        entries += has_event(&f, WPE_PHYSICS_TRIGGER_ENTER, trigger, e);
+        exited = exited || has_event(&f, WPE_PHYSICS_TRIGGER_EXIT, trigger, e);
+    }
+    WPE_TEST_ASSERT(exited && transform_of(f.ecs, e)->position.x < 0.1f);
+
+    /* Moved past it, then walking on: the walk starts at the new place. */
+    transform_of(f.ecs, e)->position = wpe_vec3(20.0f, 0.0f, 0.0f);
+    for (int i = 0; i < 10; ++i) {
+        v = walk(&f, e, v, wpe_vec3(0.5f, 0, 0), DT, true);
+        entries += has_event(&f, WPE_PHYSICS_TRIGGER_ENTER, trigger, e);
+    }
+    WPE_TEST_ASSERT(transform_of(f.ecs, e)->position.x > 20.0f);
+
+    /* Moved back without a walk before the step. */
+    transform_of(f.ecs, e)->position = wpe_vec3(0.0f, 0.0f, 0.0f);
+    for (int i = 0; i < 5; ++i) {
+        WPE_TEST_ASSERT_OK(wpe_physics_step(f.physics, DT));
+        entries += has_event(&f, WPE_PHYSICS_TRIGGER_ENTER, trigger, e);
+    }
+    WPE_TEST_ASSERT_EQ_INT(1, entries); /* Only the walk in. */
+    destroy_world(&f);
+}
+
 static void test_physics_character_component_lifecycle(void) {
     Fixture f = make_world(GRAVITY);
     const WPE_Entity e = spawn_character(&f, wpe_vec3(0.0f, 0.0f, 0.0f));
@@ -1069,6 +1116,7 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_physics_shape_casts_overlaps_and_filters),
               WPE_TEST_CASE(test_physics_character_slopes), WPE_TEST_CASE(test_physics_character_steps),
               WPE_TEST_CASE(test_physics_character_jumps_into_a_ceiling),
               WPE_TEST_CASE(test_physics_character_pushes_bodies_and_enters_triggers),
+              WPE_TEST_CASE(test_physics_character_teleports_past_triggers),
               WPE_TEST_CASE(test_physics_character_component_lifecycle),
               WPE_TEST_CASE(test_physics_create_validates_world),
               WPE_TEST_CASE(test_physics_create_bodies_and_initial_velocity),

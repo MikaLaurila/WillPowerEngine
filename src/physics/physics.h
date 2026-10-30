@@ -153,6 +153,8 @@ typedef struct WPE_CharacterController {
     uint64_t wpe__body;
     uint8_t wpe__state;
     bool wpe__target_move;
+    bool wpe__moved;        /* wpe_character_move() ran since the last step... */
+    WPE_Vec3 wpe__moved_to; /* ...and left the entity at this world position. */
 } WPE_CharacterController;
 
 typedef struct WPE_PhysicsDesc {

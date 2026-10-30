@@ -520,6 +520,29 @@ static void wpe__follow_kinematic(b3BodyId body, const wpe__Pose* pose, float dt
     }
 }
 
+/* Brings a character's body to its entity. Where wpe_character_move() put the entity, the body moves
+ * there over the step (with velocity, pushing what it walks into); anywhere else, game code moved it (a
+ * respawn, a teleport), and the body jumps there: moving it through the level would enter every
+ * trigger on the way. */
+static void wpe__teleport_character(WPE_CharacterController* c, const wpe__Pose* pose) {
+    const b3BodyId body = b3LoadBodyId(c->wpe__body);
+    b3Body_SetTransform(body, wpe__b3_vec(pose->position), wpe__b3_quat(pose->rotation));
+    b3Body_SetLinearVelocity(body, (b3Vec3){0.0f, 0.0f, 0.0f});
+    c->wpe__target_move = false;
+}
+
+static void wpe__follow_character(WPE_CharacterController* c, const wpe__Pose* pose, float dt) {
+    const b3BodyId body = b3LoadBodyId(c->wpe__body);
+    const b3WorldTransform walked_to = {.p = wpe__b3_vec(c->wpe__moved_to),
+                                        .q = wpe__b3_quat(pose->rotation)};
+    if (!wpe__pose_differs(pose, b3Body_GetTransform(body)) ||
+        (c->wpe__moved && !wpe__pose_differs(pose, walked_to))) {
+        wpe__follow_kinematic(body, pose, dt, &c->wpe__target_move);
+        return;
+    }
+    wpe__teleport_character(c, pose);
+}
+
 /* Character controllers (defined with the character code below). */
 static void wpe__ensure_character(WPE_Physics* physics, WPE_Entity entity, WPE_CharacterController* c);
 static void wpe__release_character(WPE_Physics* physics, WPE_CharacterController* c);
@@ -634,6 +657,7 @@ static void wpe__character_on_add(WPE_Ecs* ecs, WPE_Entity entity, void* compone
     c->wpe__body = 0;
     c->wpe__state = WPE__STATE_PENDING;
     c->wpe__target_move = false;
+    c->wpe__moved = false;
 }
 
 static void wpe__character_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
@@ -775,7 +799,8 @@ WPE_Result wpe_physics_step(WPE_Physics* physics, float dt) {
         wpe__ensure_character(physics, it.entity, c);
         wpe__Pose pose;
         if (c->wpe__state == WPE__STATE_CREATED && wpe__character_pose(physics, it.entity, &pose))
-            wpe__follow_kinematic(b3LoadBodyId(c->wpe__body), &pose, dt, &c->wpe__target_move);
+            wpe__follow_character(c, &pose, dt);
+        c->wpe__moved = false;
     }
 
     b3World_Step(physics->world, dt, physics->substeps);
@@ -1146,6 +1171,7 @@ static void wpe__release_character(WPE_Physics* physics, WPE_CharacterController
     if (c->wpe__state == WPE__STATE_CREATED) wpe__destroy_b3_body(physics, c->wpe__body);
     c->wpe__body = 0;
     c->wpe__target_move = false;
+    c->wpe__moved = false;
     c->wpe__state = WPE__STATE_PENDING;
 }
 
@@ -1343,7 +1369,16 @@ WPE_Result wpe_character_move(WPE_Physics* physics, WPE_Entity entity, WPE_Vec3 
         return WPE_RESULT_ERROR_INVALID_ARG;
     }
     wpe__Pose pose;
-    if (!wpe__world_pose(physics->ecs, entity, &pose)) return WPE_RESULT_ERROR_INVALID_ARG;
+    if (!wpe__character_pose(physics, entity, &pose)) return WPE_RESULT_ERROR_INVALID_ARG;
+    if (c->wpe__state == WPE__STATE_CREATED) {
+        /* Not where the body (or this step's earlier move) left it: game code moved it, so the walk
+         * starts from there, and the body must not be dragged across the gap. */
+        const b3BodyId body = b3LoadBodyId(c->wpe__body);
+        const b3WorldTransform left_at =
+            c->wpe__moved ? (b3WorldTransform){.p = wpe__b3_vec(c->wpe__moved_to), .q = b3Quat_identity}
+                          : b3Body_GetTransform(body);
+        if (wpe__pose_differs(&pose, left_at)) wpe__teleport_character(c, &pose);
+    }
 
     const b3Capsule mover = wpe__character_mover(c);
     const float min_up = cosf(c->max_slope * (WPE_PI / 180.0f)) - 1e-4f;
@@ -1405,7 +1440,10 @@ WPE_Result wpe_character_move(WPE_Physics* physics, WPE_Entity entity, WPE_Vec3 
     c->ground_normal = ground >= 0 ? planes->ground_normal : wpe_vec3(0.0f, 1.0f, 0.0f);
     c->ground = ground >= 0 ? planes->ground_entity : WPE_ENTITY_NULL;
     wpe_free(planes);
-    wpe__set_world_position(physics, entity, wpe_vec3_add(pose.position, wpe_vec3_sub(position, start)));
+    const WPE_Vec3 moved_to = wpe_vec3_add(pose.position, wpe_vec3_sub(position, start));
+    wpe__set_world_position(physics, entity, moved_to);
+    c->wpe__moved = true;
+    c->wpe__moved_to = moved_to;
     if (out_velocity) *out_velocity = v;
     return WPE_RESULT_OK;
 }

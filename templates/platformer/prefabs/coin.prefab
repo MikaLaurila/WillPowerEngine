@@ -1,0 +1,19 @@
+{
+  "format": "wpe.prefab",
+  "version": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "coin",
+      "collider": {"shape": "sphere", "size": [0.4, 0, 0], "trigger": true},
+      "script": {"path": "scripts/coin.luau"}
+    },
+    {
+      "id": 2,
+      "name": "coin mesh",
+      "parent": 1,
+      "transform": {"scale": [0.6, 0.6, 0.15]},
+      "mesh": {"model": "meshes/coin.prim", "cast_shadows": false}
+    }
+  ]
+}

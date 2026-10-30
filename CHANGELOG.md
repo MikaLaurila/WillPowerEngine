@@ -69,6 +69,20 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (project templates: platformer)
+- `platformer` template: a 2.5D side-scroller. The hero runs along one plane on a character controller
+  with jump buffering, coyote time, variable jump height and squash and stretch; a side camera looks
+  ahead. Coins (a prefab instanced across the level) with a counter and sparkle bursts, spikes, a moving
+  platform the hero rides, a checkpoint, and a goal that shows the time and restarts the level. Scripts
+  talk through `wpe.send` messages.
+- Tests: coins and their count, tapped versus held jumps, spikes and pits sending the hero back to the
+  last checkpoint, riding the platform, finishing and restarting.
+
+### Fixed (character controllers moved by game code)
+- A character moved by game code (a respawn, a teleport) was carried to its new place with velocity, and
+  Box3D caps body speed, so over long distances it took several steps and entered triggers on the way
+  (a respawned platformer hero was hurt by spikes it never touched). Its body now jumps to positions that
+  `wpe_character_move()` didn't produce, and walks keep moving it with velocity (pushing crates).
 ### Added (project templates: third person)
 - `third_person` template: an animated figure on a character controller with an orbiting camera (mouse
   and right-stick look, wheel zoom, a sphere cast that keeps the camera in front of walls), walking

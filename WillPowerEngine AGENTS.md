@@ -297,6 +297,7 @@ return MyEntity
   - On walkable ground a downward velocity is dropped and the character snaps down instead, so it doesn't slide downhill.
   - Dynamic bodies are soft (it may sink in `WPE__PUSH_DEPTH`, and sweeps ignore them), so its kinematic body pushes them.
   - Steps: a held-back grounded move is retried lifted by `step_height` and set down again; an edge under the capsule counts as ground when the surface inside it is walkable.
+  - Walks and teleports: the body follows a walk (to where `wpe_character_move()` left the entity) with velocity over the step, so it pushes bodies; any other change of the entity's position is game code moving it, and the body is placed there directly (at the next move or step). Sending it across with velocity would take several steps for long distances (Box3D caps body speed) and enter every trigger on the way.
 - NOTE: limitation. The solver is single-threaded, because Box3D's task API needs asynchronous tasks that the job system doesn't provide yet. Colliders don't combine across the hierarchy into compound bodies.
 
 **Script host responsibilities:**

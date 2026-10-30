@@ -328,7 +328,96 @@ static void test_templates_third_person_plays(void) {
     remove_project(dir);
 }
 
+/* ---- Platformer ------------------------------------------------------------------------------------ */
+
+/* The highest the player gets within `count` frames. */
+static float highest(WPE_Engine* engine, WPE_Entity player, uint32_t count) {
+    float top = -1e9f;
+    for (uint32_t i = 0; i < count; ++i) {
+        frames(engine, 1);
+        top = fmaxf(top, position(wpe_engine_ecs(engine), player).y);
+    }
+    return top;
+}
+
+/* Running right collects coins; a held jump goes higher than a tapped one; spikes and pits send the player
+ * back to the last checkpoint; the moving platform carries it; the goal finishes the level and Jump starts
+ * it over. */
+static void test_templates_platformer_plays(void) {
+    char dir[256];
+    create_project("platformer", dir, sizeof dir);
+    WPE_Engine* engine = create_engine(dir);
+    WPE_Ecs* ecs = wpe_engine_ecs(engine);
+    WPE_Entity player = find(ecs, "player");
+    WPE_TEST_ASSERT(player != WPE_ENTITY_NULL);
+    frames(engine, 15);
+    check_lua(engine, "fifteen coins", "assert(wpe.get_script(wpe.find('player')).total_coins == 15)\n");
+
+    /* The first three coins hang just above the run. */
+    key(engine, SDL_SCANCODE_D, true);
+    frames(engine, 40);
+    key(engine, SDL_SCANCODE_D, false);
+    frames(engine, 15);
+    WPE_TEST_ASSERT(position(ecs, player).x > 4.5f && fabsf(position(ecs, player).z) < 1e-3f);
+    check_lua(engine, "three coins", "assert(wpe.get_script(wpe.find('player')).coins == 3)\n");
+
+    /* Holding jump goes higher than tapping it. */
+    check_lua(engine, "back to the start", "wpe.set_position(wpe.find('player'), vector.create(1, 0, 0))\n");
+    frames(engine, 10);
+    tap(engine, SDL_SCANCODE_SPACE);
+    const float tapped = highest(engine, player, 30);
+    key(engine, SDL_SCANCODE_SPACE, true);
+    const float held = highest(engine, player, 30);
+    key(engine, SDL_SCANCODE_SPACE, false);
+    frames(engine, 10);
+    WPE_TEST_ASSERT_MSG(tapped > 0.2f && held > 1.3f && held > tapped + 0.5f,
+                        "a tapped jump reached %g, a held one %g", (double)tapped, (double)held);
+
+    /* Spikes: back to the start (the first checkpoint). */
+    check_lua(engine, "onto the spikes",
+              "wpe.set_position(wpe.find('player'), vector.create(20.7, 1.5, 0))\n");
+    frames(engine, 30);
+    WPE_TEST_ASSERT_MSG(position(ecs, player).x < 1.5f, "the spikes left the player at x %g",
+                        (double)position(ecs, player).x);
+
+    /* The moving platform carries the player standing on it. */
+    check_lua(engine, "onto the moving platform",
+              "local p = wpe.get_world_position(wpe.find('moving platform'))\n"
+              "wpe.set_position(wpe.find('player'), p + vector.create(0, 0.3, 0))\n");
+    frames(engine, 3);
+    const float boarded = position(ecs, player).x;
+    frames(engine, 20);
+    const WPE_Vec3 carried = position(ecs, player);
+    WPE_TEST_ASSERT_MSG(fabsf(carried.x - boarded) > 0.5f && carried.y > -0.1f && carried.y < 0.3f,
+                        "on the platform the player went from x %g to (%g, %g)", (double)boarded,
+                        (double)carried.x, (double)carried.y);
+
+    /* A checkpoint: falling into a pit after it comes back there. */
+    check_lua(engine, "through the checkpoint",
+              "wpe.set_position(wpe.find('player'), vector.create(35.5, 0.1, 0))\n");
+    frames(engine, 5);
+    check_lua(engine, "into the pit", "wpe.set_position(wpe.find('player'), vector.create(30, -12, 0))\n");
+    frames(engine, 5);
+    WPE_TEST_ASSERT_NEAR(35.5, position(ecs, player).x, 0.3);
+
+    /* The goal finishes the level; Jump starts it over with no coins. */
+    check_lua(engine, "to the goal", "wpe.set_position(wpe.find('player'), vector.create(56, 2.5, 0))\n");
+    frames(engine, 5);
+    check_lua(engine, "finished", "assert(wpe.get_script(wpe.find('player')).finished)\n");
+    tap(engine, SDL_SCANCODE_SPACE);
+    frames(engine, 5);
+    player = find(ecs, "player");
+    WPE_TEST_ASSERT(position(ecs, player).x < 1.0f);
+    check_lua(engine, "started over",
+              "local s = wpe.get_script(wpe.find('player'))\n"
+              "assert(not s.finished and s.coins == 0 and s.total_coins == 15)\n");
+    WPE_TEST_ASSERT_EQ_UINT(0, script_errors(engine));
+    wpe_engine_destroy(engine);
+    remove_project(dir);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_templates_create_projects_that_run),
               WPE_TEST_CASE(test_templates_reject_unknown_names),
               WPE_TEST_CASE(test_templates_first_person_plays),
-              WPE_TEST_CASE(test_templates_third_person_plays))
+              WPE_TEST_CASE(test_templates_third_person_plays),
+              WPE_TEST_CASE(test_templates_platformer_plays))
