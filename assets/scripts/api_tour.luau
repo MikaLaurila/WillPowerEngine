@@ -254,6 +254,13 @@ function Tour:on_start()
 	local memory = wpe.add_postfx({ effect = "grayscale", strength = 0.5, tint_b = 0.7 })
 	assert(near(wpe.get_postfx()[memory].strength, 0.5) and near(wpe.get_postfx()[memory].tint_r, 1))
 	wpe.remove_postfx(memory)
+	-- Texture filtering for the whole scene: Nintendo 64 style three-point, then back as it was.
+	local filter = wpe.get_texture_filter()
+	assert(filter == "material")
+	wpe.set_texture_filter("three_point")
+	assert(wpe.get_texture_filter() == "three_point")
+	assert(not pcall(wpe.set_texture_filter, "trilinear") and not pcall(wpe.set_texture_filter))
+	wpe.set_texture_filter(filter)
 
 	-- Screen positions: a point straight ahead of the camera is in the middle of the screen.
 	local camera = wpe.get_camera()

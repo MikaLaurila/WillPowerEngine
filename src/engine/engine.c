@@ -159,6 +159,10 @@ static WPE_PostFxConfig* wpe__app_postfx(void* user_data, uint32_t** out_count) 
     *out_count = &engine->environment.postfx_count;
     return engine->environment.postfx;
 }
+static WPE_SceneRenderSettings* wpe__app_render_settings(void* user_data) {
+    WPE_Engine* engine = user_data;
+    return &engine->environment.render;
+}
 
 static WPE_SceneContext wpe__context(const WPE_Engine* engine) {
     return (WPE_SceneContext){
@@ -286,6 +290,7 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                    .instantiate = wpe__app_instantiate,
                                    .save_directory = wpe__app_save_directory,
                                    .postfx = wpe__app_postfx,
+                                   .render_settings = wpe__app_render_settings,
                                    .capture_screen = wpe__app_capture_screen};
         result =
             wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = engine->ecs,

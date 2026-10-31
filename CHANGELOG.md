@@ -75,8 +75,11 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Scene environment `texture_filter` (`"material"`, the default, `"nearest"`, `"bilinear"` or
   `"three_point"`) replaces the filter of every material texture (`WPE_SceneRenderSettings.texture_filtering`);
   it's in the editor's Environment panel. Mip filtering stays as the model's samplers set it.
+- Luau: `wpe.set_texture_filter(name)` and `wpe.get_texture_filter()` switch it while the game runs
+  (until the scene is loaded again), through the new `WPE_ScriptApp.render_settings`.
+  `wpe_texture_filtering_name`/`_from_name` give the names.
 - `model_viewer --three-point`.
-- Tests: three-point sampling (corners, both halves, the diagonal, edges).
+- Tests: three-point sampling (corners, both halves, the diagonal, edges); the API tour switches filters.
 
 ### Added (Bezier slashes)
 - Component `slash` (`WPE_Slash`, `WPE_COMP_SLASH` 24): a ribbon sweeping along a cubic Bezier curve when

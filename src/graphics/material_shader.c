@@ -1,6 +1,7 @@
 #include "graphics/material_shader.h"
 
 #include <math.h>
+#include <string.h>
 
 #include "renderer/texture.h"
 
@@ -21,6 +22,25 @@ enum {
 };
 
 static_assert(WPE__V_COUNT <= WPE_MAX_VARYINGS, "material varyings exceed the renderer limit");
+
+static const char* const wpe__filtering_names[] = {"material", "nearest", "bilinear", "three_point"};
+static_assert(sizeof wpe__filtering_names / sizeof wpe__filtering_names[0] ==
+                  WPE_TEXTURE_FILTERING_THREE_POINT + 1,
+              "texture filtering names out of sync with WPE_TextureFiltering");
+
+const char* wpe_texture_filtering_name(WPE_TextureFiltering filtering) {
+    return (uint32_t)filtering <= WPE_TEXTURE_FILTERING_THREE_POINT ? wpe__filtering_names[filtering] : NULL;
+}
+
+bool wpe_texture_filtering_from_name(const char* name, WPE_TextureFiltering* out_filtering) {
+    for (uint32_t i = 0; name && i <= WPE_TEXTURE_FILTERING_THREE_POINT; ++i) {
+        if (strcmp(wpe__filtering_names[i], name) == 0) {
+            *out_filtering = (WPE_TextureFiltering)i;
+            return true;
+        }
+    }
+    return false;
+}
 
 float wpe_material_shininess(float glossiness) {
     const float g = glossiness < 0.0f ? 0.0f : (glossiness > 1.0f ? 1.0f : glossiness);

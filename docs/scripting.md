@@ -294,6 +294,8 @@ The scene's post effects (its file's `postfx` list, see [scenes.md](scenes.md)) 
 | `wpe.set_postfx(which, {...})` | Changes an effect's `enabled` and parameters. `which` is a 1-based index or an effect name (the first effect of that kind). |
 | `wpe.add_postfx({effect = name, ...}) -> index` | Appends an effect (at most 8 in all). |
 | `wpe.remove_postfx(which)` | Removes an effect; later ones move up. |
+| `wpe.set_texture_filter(name)` | Filters every material texture one way: `"material"` (as each model says), `"nearest"`, `"bilinear"` or `"three_point"` (Nintendo 64 style); the scene file's `texture_filter`. Like the effects, it lasts until the scene is loaded again. |
+| `wpe.get_texture_filter() -> name` | The current texture filter. |
 | `wpe.capture_screen([slot = 1]) -> path` | Keeps this frame, as the scene renders it (before post effects, the UI and 2D drawing), in a slot 1..8, and returns its image asset path (`"capture/1"`). Use it as any image (billboards, sprites) or break it with a `shatter` effect (`capture = 1`). Capturing a slot again replaces its picture. |
 
 Two effects are made for scripts to animate: `shockwave` (a ring warping the image outward from `center_x`, `center_y` (fractions of the screen), at `radius` (fractions of its height), `width` thick, pushing `strength_pixels`) and `radial_blur` (smearing toward `center_x`, `center_y` by `strength`, 0..1). A hit that ripples out from the player:

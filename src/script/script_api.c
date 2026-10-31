@@ -1864,6 +1864,31 @@ static int wpe__api_remove_postfx(lua_State* L) {
     return 0;
 }
 
+/* ---- Render settings ------------------------------------------------------------------------------- */
+
+static WPE_SceneRenderSettings* wpe__render_settings(lua_State* L, const char* function) {
+    const WPE_ScriptApp* app = wpe__app(L, wpe__script_host_from(L)->app.render_settings != NULL, function);
+    return app->render_settings(app->user_data);
+}
+
+static int wpe__api_set_texture_filter(lua_State* L) {
+    WPE_SceneRenderSettings* settings = wpe__render_settings(L, "set_texture_filter");
+    WPE_TextureFiltering filtering;
+    if (!wpe_texture_filtering_from_name(luaL_checkstring(L, 1), &filtering))
+        luaL_errorL(L,
+                    "wpe.set_texture_filter: '%s' is not \"material\", \"nearest\", \"bilinear\" or "
+                    "\"three_point\"",
+                    lua_tostring(L, 1));
+    settings->texture_filtering = filtering;
+    return 0;
+}
+
+static int wpe__api_get_texture_filter(lua_State* L) {
+    const WPE_SceneRenderSettings* settings = wpe__render_settings(L, "get_texture_filter");
+    lua_pushstring(L, wpe_texture_filtering_name(settings->texture_filtering));
+    return 1;
+}
+
 /* ---- 2D drawing ------------------------------------------------------------------------------------ */
 
 static WPE_Draw2D* wpe__draw2d(lua_State* L) {
@@ -2817,6 +2842,8 @@ static const luaL_Reg wpe__api[] = {
     {"set_postfx", wpe__api_set_postfx},
     {"add_postfx", wpe__api_add_postfx},
     {"remove_postfx", wpe__api_remove_postfx},
+    {"set_texture_filter", wpe__api_set_texture_filter},
+    {"get_texture_filter", wpe__api_get_texture_filter},
     {"color", wpe__api_color},
     {"draw_text", wpe__api_draw_text},
     {"draw_rect", wpe__api_draw_rect},

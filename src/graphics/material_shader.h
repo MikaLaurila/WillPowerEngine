@@ -114,6 +114,14 @@ const WPE_ShaderProgram* wpe_shader_material_depth(bool alpha_masked);
  */
 float wpe_fog_factor(const WPE_FogParams* fog, float distance);
 
+/** @return The filtering's name in scene files and scripts ("material", "nearest", "bilinear",
+ * "three_point"), or NULL for an invalid value. @thread_safety Any thread */
+const char* wpe_texture_filtering_name(WPE_TextureFiltering filtering);
+
+/** Looks up a filtering by its name (wpe_texture_filtering_name). @return false for an unknown name.
+ * @thread_safety Any thread */
+bool wpe_texture_filtering_from_name(const char* name, WPE_TextureFiltering* out_filtering);
+
 /** @return Blinn-Phong exponent for a glossiness in [0, 1] (2 at 0, 2048 at 1). @thread_safety Any thread */
 float wpe_material_shininess(float glossiness);
 
