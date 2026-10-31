@@ -365,4 +365,16 @@ WPE_Result wpe_script_host_run(WPE_ScriptHost* host, const char* chunk_name, con
 bool wpe_script_check_syntax(const char* source, size_t size, uint32_t* out_line, char* out_message,
                              size_t message_size);
 
+/**
+ * Lists what the `wpe` table holds (functions and constants), sorted by name: for editors' completion. `name`
+ * is valid only during the call.
+ *
+ * @return How many were listed.
+ *
+ * @thread_safety Main thread
+ */
+uint32_t wpe_script_host_list_api(WPE_ScriptHost* host,
+                                  void (*fn)(const char* name, bool function, void* user_data),
+                                  void* user_data);
+
 #endif /* WPE_SCRIPT_SCRIPT_H */

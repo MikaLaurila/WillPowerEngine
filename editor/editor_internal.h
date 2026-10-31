@@ -49,7 +49,7 @@ struct WPE_Editor {
     double since_reload; /* Seconds since scripts were last checked for changes. */
     /* A script the "open_script" command asked the script panel to show ("" when none), and the line. */
     char open_script[WPE_VFS_PATH_MAX];
-    uint32_t open_script_line;
+    uint32_t open_script_line, open_script_column;
 
     wpe__Snapshot undo[WPE__EDITOR_UNDO_MAX];
     uint32_t undo_count;

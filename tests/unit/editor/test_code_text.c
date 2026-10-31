@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "editor/api_docs.h"
 #include "editor/code_text.h"
 
 static void set(WPE_CodeText* t, const char* text) {
@@ -216,7 +217,35 @@ static void test_code_text_tokenizer(void) {
     WPE_TEST_ASSERT(count == 2 && few[1].start + few[1].length == 9);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_code_text_lines_and_positions),
+static void test_code_text_api_docs(void) {
+    const char* markdown =
+        "# Scripting\n"
+        "### Tweens\n"
+        "| Function | Description |\n"
+        "|---|---|\n"
+        "| `wpe.tween(entity, {...}) -> id` | **Eases** a [transform](scenes.md#x): `a \\| b`<br>next |\n"
+        "| `wpe.get_ui_offsets(e) -> x` / `wpe.set_ui_offsets(e, x)` | The offsets. |\n"
+        "### UI\n"
+        "| `wpe.tween(other)` | A second row for a name keeps the first. |\n"
+        "| `not wpe.code` | Ignored. |\n";
+    WPE_ApiDocs docs;
+    WPE_TEST_ASSERT(wpe_api_docs_parse(markdown, strlen(markdown), &docs));
+    WPE_TEST_ASSERT_EQ_UINT(3, docs.count);
+    WPE_TEST_ASSERT_EQ_STR("get_ui_offsets", docs.docs[0].name); /* Sorted by name. */
+    const WPE_ApiDoc* tween = wpe_api_docs_find(&docs, "tween", 5);
+    WPE_TEST_ASSERT(tween != NULL);
+    WPE_TEST_ASSERT_EQ_STR("wpe.tween(entity, {...}) -> id", tween->signature);
+    WPE_TEST_ASSERT_EQ_STR("Eases a transform: a | b next", tween->summary); /* Plain text. */
+    WPE_TEST_ASSERT_EQ_STR("Tweens", tween->section);
+    const WPE_ApiDoc* set = wpe_api_docs_find(&docs, "set_ui_offsets", 14);
+    WPE_TEST_ASSERT(set && strcmp(set->signature, "wpe.set_ui_offsets(e, x)") == 0 &&
+                    strcmp(set->summary, "The offsets.") == 0);
+    WPE_TEST_ASSERT(wpe_api_docs_find(&docs, "tweens", 6) == NULL &&
+                    wpe_api_docs_find(&docs, "twee", 4) == NULL);
+    wpe_api_docs_free(&docs);
+}
+
+WPE_TEST_MAIN(WPE_TEST_CASE(test_code_text_api_docs), WPE_TEST_CASE(test_code_text_lines_and_positions),
               WPE_TEST_CASE(test_code_text_typing_and_undo), WPE_TEST_CASE(test_code_text_auto_indent),
               WPE_TEST_CASE(test_code_text_erase_and_indent), WPE_TEST_CASE(test_code_text_moves_and_search),
               WPE_TEST_CASE(test_code_text_tokenizer))

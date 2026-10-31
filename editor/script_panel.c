@@ -13,6 +13,7 @@
 #include "core/alloc.h"
 #include "core/json.h"
 #include "core/log.h"
+#include "editor/api_docs.h"
 #include "editor/code_text.h"
 #include "editor/editor_internal.h"
 
@@ -54,8 +55,28 @@ typedef struct wpe__Doc {
     bool follow_cursor;     /* Keep the cursor in view after this frame's keys. */
 } wpe__Doc;
 
+#define WPE__COMPLETION_MAX 64u /* Suggestions listed at once. */
+#define WPE__API_NAME_MAX 48u
+
+/* A name of the `wpe` table, as the running VM has it. */
+typedef struct wpe__ApiName {
+    char name[WPE__API_NAME_MAX];
+    bool function;
+} wpe__ApiName;
+
 struct WPE_ScriptPanel {
     WPE_Editor* editor;
+    WPE_ApiDocs api_docs; /* Signatures and descriptions from docs/scripting.md. */
+    wpe__ApiName* api;    /* The wpe table's names (read once from the script host). */
+    uint32_t api_count;
+    bool api_read;
+    /* Completion after "wpe.": the list, where the typed name starts, the highlighted entry. */
+    bool completing;
+    size_t completion_start;
+    uint32_t matches[WPE__COMPLETION_MAX];
+    uint32_t match_count;
+    uint32_t selected;
+    float cursor_x, cursor_y, line_h; /* Where the cursor was drawn (screen), for the popups. */
     wpe__Doc* docs[WPE__MAX_DOCS];
     uint32_t count;
     int active;        /* Index of the shown tab, or -1. */
@@ -171,7 +192,7 @@ static void wpe__close_doc(WPE_ScriptPanel* panel, int index) {
     if (panel->active >= (int)panel->count) panel->active = (int)panel->count - 1;
 }
 
-bool wpe_script_panel_open(WPE_ScriptPanel* panel, const char* path, uint32_t line) {
+bool wpe_script_panel_open(WPE_ScriptPanel* panel, const char* path, uint32_t line, uint32_t column) {
     if (!panel || !path) return false;
     int index = wpe__find_doc(panel, path);
     if (index < 0) {
@@ -208,9 +229,10 @@ bool wpe_script_panel_open(WPE_ScriptPanel* panel, const char* path, uint32_t li
     wpe__Doc* doc = panel->docs[index];
     if (line > 0) {
         const uint32_t target = line - 1 < doc->text.line_count ? line - 1 : doc->text.line_count - 1;
-        /* From the line's start, Home goes to its first non-blank character. */
-        wpe_code_text_set_cursor(&doc->text, wpe_code_text_offset(&doc->text, target, 0), false);
-        if (doc->text.cursor != doc->text.length && doc->text.text[doc->text.cursor] != '\n')
+        wpe_code_text_set_cursor(&doc->text,
+                                 wpe_code_text_offset(&doc->text, target, column ? column - 1 : 0), false);
+        /* Without a column: from the line's start, Home goes to its first non-blank character. */
+        if (!column && doc->text.cursor != doc->text.length && doc->text.text[doc->text.cursor] != '\n')
             wpe_code_text_move(&doc->text, WPE_CODE_HOME, false, 0);
         doc->scroll_to_line = target;
     }
@@ -229,6 +251,8 @@ WPE_ScriptPanel* wpe_script_panel_create(WPE_Editor* editor) {
     panel->editor = editor;
     panel->active = panel->select_tab = panel->closing = -1;
     panel->log_seen = wpe__editor_log_position(editor);
+    if (!wpe_api_docs_parse_builtin(&panel->api_docs))
+        wpe_log_warn("the Script panel has no API help (out of memory)");
     return panel;
 }
 
@@ -236,6 +260,8 @@ void wpe_script_panel_destroy(WPE_ScriptPanel* panel) {
     if (!panel) return;
     for (uint32_t i = 0; i < panel->count; ++i)
         wpe__free_doc(panel->docs[i]);
+    wpe_api_docs_free(&panel->api_docs);
+    wpe_free(panel->api);
     wpe_free(panel);
 }
 
@@ -393,6 +419,200 @@ static void wpe__find_next(WPE_ScriptPanel* panel, wpe__Doc* doc, bool forward) 
 /* ---- Keyboard --------------------------------------------------------------------------------------------
  */
 
+/* Completion and API help. */
+
+static void wpe__collect_api(const char* name, bool function, void* user_data) {
+    WPE_ScriptPanel* panel = user_data;
+    if (strlen(name) >= WPE__API_NAME_MAX) return;
+    wpe__ApiName* api = wpe_realloc(panel->api, (size_t)(panel->api_count + 1) * sizeof *api);
+    if (!api) return;
+    panel->api = api;
+    snprintf(api[panel->api_count].name, WPE__API_NAME_MAX, "%s", name);
+    api[panel->api_count].function = function;
+    ++panel->api_count;
+}
+
+/* The wpe table's names, read from the running script host the first time they are needed. */
+static void wpe__read_api(WPE_ScriptPanel* panel) {
+    if (panel->api_read) return;
+    panel->api_read = true;
+    wpe_script_host_list_api(wpe_engine_scripts(panel->editor->engine), wpe__collect_api, panel);
+}
+
+static bool wpe__ident(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+/* Where the name after "wpe." being typed at the cursor starts, or SIZE_MAX when the cursor isn't in one. */
+static size_t wpe__completion_context(const WPE_CodeText* t) {
+    size_t start = t->cursor;
+    while (start > 0 && wpe__ident(t->text[start - 1]))
+        --start;
+    if (start < 4 || memcmp(t->text + start - 4, "wpe.", 4) != 0) return SIZE_MAX;
+    if (start > 4 && (wpe__ident(t->text[start - 5]) || t->text[start - 5] == '.')) return SIZE_MAX;
+    return start;
+}
+
+static bool wpe__starts_with(const char* name, const char* prefix, size_t length) {
+    for (size_t i = 0; i < length; ++i)
+        if (name[i] == '\0' || (name[i] | 0x20) != (prefix[i] | 0x20)) return false;
+    return true;
+}
+
+static bool wpe__contains(const char* name, const char* part, size_t length) {
+    for (const char* at = name; *at; ++at)
+        if (wpe__starts_with(at, part, length)) return true;
+    return false;
+}
+
+/* The suggestions for what is typed after "wpe.": names that start with it first, then those containing it.
+ */
+static void wpe__update_matches(WPE_ScriptPanel* panel, const wpe__Doc* doc) {
+    wpe__read_api(panel);
+    const char* typed = doc->text.text + panel->completion_start;
+    const size_t length = doc->text.cursor - panel->completion_start;
+    panel->match_count = 0;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (uint32_t i = 0; i < panel->api_count && panel->match_count < WPE__COMPLETION_MAX; ++i) {
+            const bool starts = wpe__starts_with(panel->api[i].name, typed, length);
+            if (pass == 0 ? starts
+                          : (!starts && length > 0 && wpe__contains(panel->api[i].name, typed, length)))
+                panel->matches[panel->match_count++] = i;
+        }
+    }
+    /* Exactly what is typed: nothing left to suggest. */
+    if (panel->match_count == 1 && strlen(panel->api[panel->matches[0]].name) == length)
+        panel->match_count = 0;
+    if (panel->match_count == 0) panel->completing = false;
+    if (panel->selected >= panel->match_count) panel->selected = 0;
+}
+
+/* Puts the highlighted suggestion in place of what was typed (with "(" after a function). */
+static void wpe__accept(WPE_ScriptPanel* panel, wpe__Doc* doc) {
+    if (!panel->completing || panel->match_count == 0) return;
+    const wpe__ApiName* api = &panel->api[panel->matches[panel->selected]];
+    WPE_CodeText* t = &doc->text;
+    size_t end = t->cursor;
+    while (end < t->length && wpe__ident(t->text[end])) /* The rest of a name the cursor is inside. */
+        ++end;
+    wpe_code_text_set_cursor(t, panel->completion_start, false);
+    wpe_code_text_set_cursor(t, end, true);
+    wpe_code_text_insert(t, api->name, strlen(api->name));
+    if (api->function && (t->cursor >= t->length || t->text[t->cursor] != '('))
+        wpe_code_text_insert(t, "(", 1);
+    panel->completing = false;
+    doc->check_wait = WPE__CHECK_DELAY;
+    doc->follow_cursor = true;
+}
+
+/* The documented `wpe.` function at `offset` (in a name preceded by "wpe."), or NULL. */
+static const WPE_ApiDoc* wpe__doc_at(const WPE_ScriptPanel* panel, const WPE_CodeText* t, size_t offset) {
+    size_t start = offset, end = offset;
+    while (start > 0 && wpe__ident(t->text[start - 1]))
+        --start;
+    while (end < t->length && wpe__ident(t->text[end]))
+        ++end;
+    if (end == start || start < 4 || memcmp(t->text + start - 4, "wpe.", 4) != 0) return NULL;
+    return wpe_api_docs_find(&panel->api_docs, t->text + start, end - start);
+}
+
+/* The `wpe.` function whose call's parentheses the cursor is inside (on its line), or NULL. */
+static const WPE_ApiDoc* wpe__call_at_cursor(const WPE_ScriptPanel* panel, const WPE_CodeText* t) {
+    const size_t line_start = t->line_starts[wpe_code_text_line_of(t, t->cursor)];
+    int depth = 0;
+    for (size_t i = t->cursor; i > line_start; --i) {
+        const char c = t->text[i - 1];
+        if (c == ')') {
+            ++depth;
+        } else if (c == '(' && depth-- == 0) {
+            return i - 1 > line_start ? wpe__doc_at(panel, t, i - 2) : NULL;
+        }
+    }
+    return NULL;
+}
+
+/* A help box: the signature in the accent color, then the description, wrapped. */
+static void wpe__doc_text(const WPE_ApiDoc* doc) {
+    igPushTextWrapPos(igGetFontSize() * 34.0f);
+    igTextColored((ImVec4_c){0.93f, 0.60f, 0.22f, 1.0f}, "%s", doc->signature);
+    igTextUnformatted(doc->summary, NULL);
+    if (doc->section[0]) igTextDisabled("%s (docs/scripting.md)", doc->section);
+    igPopTextWrapPos();
+}
+
+/* The popups' look: lighter than the code, with a border. Pair with wpe__pop_style(). */
+static void wpe__push_style(void) {
+    igPushStyleColor_U32(ImGuiCol_WindowBg, WPE__COL(34, 37, 45, 250));
+    igPushStyleColor_U32(ImGuiCol_Border, WPE__COL(238, 153, 56, 120));
+    igPushStyleVar_Float(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2_c){8.0f, 6.0f});
+}
+
+static void wpe__pop_style(void) {
+    igPopStyleVar(2);
+    igPopStyleColor(2);
+}
+
+static const ImGuiWindowFlags wpe__popup_flags =
+    ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+    ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+
+/* The suggestion list under the cursor, with the highlighted entry's help beside it. */
+static void wpe__completion_popup(WPE_ScriptPanel* panel, wpe__Doc* doc) {
+    if (!panel->completing || panel->match_count == 0) return;
+    igSetNextWindowPos((ImVec2_c){panel->cursor_x, panel->cursor_y + panel->line_h}, 0, (ImVec2_c){0, 0});
+    wpe__push_style();
+    if (igBegin("##wpe_completion", NULL, wpe__popup_flags)) {
+        igBeginGroup();
+        const uint32_t shown = panel->match_count < 12 ? panel->match_count : 12;
+        /* Twelve at a time, scrolled to the highlighted entry. */
+        const uint32_t first = panel->selected >= shown ? panel->selected - shown + 1 : 0;
+        for (uint32_t i = first; i < first + shown && i < panel->match_count; ++i) {
+            const wpe__ApiName* api = &panel->api[panel->matches[i]];
+            char label[WPE__API_NAME_MAX + 8];
+            snprintf(label, sizeof label, "%s%s", api->name, api->function ? "()" : "");
+            if (igSelectable_Bool(label, i == panel->selected, 0, (ImVec2_c){200, 0})) {
+                panel->selected = i;
+                wpe__accept(panel, doc);
+                panel->focus_code = true;
+            }
+        }
+        if (panel->match_count > shown) igTextDisabled("%u more", panel->match_count - shown);
+        igEndGroup();
+        if (panel->completing && panel->selected < panel->match_count) {
+            const wpe__ApiName* api = &panel->api[panel->matches[panel->selected]];
+            const WPE_ApiDoc* help = wpe_api_docs_find(&panel->api_docs, api->name, strlen(api->name));
+            igSameLine(0, -1);
+            igBeginGroup();
+            if (help) {
+                wpe__doc_text(help);
+            } else if (api->function) {
+                igTextDisabled("wpe.%s(...)", api->name);
+            } else {
+                igTextDisabled("wpe.%s: a constant", api->name);
+            }
+            igEndGroup();
+        }
+    }
+    igEnd();
+    wpe__pop_style();
+}
+
+/* The signature of the call the cursor is in, just above its line. */
+static void wpe__signature_popup(WPE_ScriptPanel* panel, const wpe__Doc* doc) {
+    if (panel->completing || !panel->focused) return;
+    const WPE_ApiDoc* help = wpe__call_at_cursor(panel, &doc->text);
+    if (!help) return;
+    igSetNextWindowPos((ImVec2_c){panel->cursor_x, panel->cursor_y - 4.0f}, 0, (ImVec2_c){0.0f, 1.0f});
+    wpe__push_style();
+    if (igBegin("##wpe_signature", NULL, wpe__popup_flags | ImGuiWindowFlags_NoInputs))
+        igTextColored((ImVec4_c){0.93f, 0.60f, 0.22f, 1.0f}, "%s", help->signature);
+    igEnd();
+    wpe__pop_style();
+}
+
+/* Keyboard. */
+
 static bool wpe__key(ImGuiKey key) {
     return igIsKeyPressed_Bool(key, true);
 }
@@ -403,6 +623,16 @@ static void wpe__keyboard(WPE_ScriptPanel* panel, wpe__Doc* doc, uint32_t page) 
     const bool ctrl = io->KeyCtrl, shift = io->KeyShift;
     const uint64_t before = t->version;
     const size_t cursor_before = t->cursor;
+    /* The suggestion list takes up/down, Enter, Tab and Esc while it is open. */
+    const bool listing = panel->completing && panel->match_count > 0;
+    if (listing) {
+        if (wpe__key(ImGuiKey_DownArrow)) panel->selected = (panel->selected + 1) % panel->match_count;
+        if (wpe__key(ImGuiKey_UpArrow))
+            panel->selected = (panel->selected + panel->match_count - 1) % panel->match_count;
+        if (wpe__key(ImGuiKey_Enter) || wpe__key(ImGuiKey_KeypadEnter) || wpe__key(ImGuiKey_Tab))
+            wpe__accept(panel, doc);
+        if (igIsKeyPressed_Bool(ImGuiKey_Escape, false)) panel->completing = false;
+    }
     static const struct {
         ImGuiKey key;
         WPE_CodeMove plain, with_ctrl;
@@ -414,13 +644,16 @@ static void wpe__keyboard(WPE_ScriptPanel* panel, wpe__Doc* doc, uint32_t page) 
                  {ImGuiKey_End, WPE_CODE_END, WPE_CODE_FINISH},
                  {ImGuiKey_PageUp, WPE_CODE_PAGE_UP, WPE_CODE_PAGE_UP},
                  {ImGuiKey_PageDown, WPE_CODE_PAGE_DOWN, WPE_CODE_PAGE_DOWN}};
-    for (size_t i = 0; i < sizeof moves / sizeof moves[0]; ++i)
-        if (wpe__key(moves[i].key))
+    for (size_t i = 0; i < sizeof moves / sizeof moves[0]; ++i) {
+        const bool vertical = moves[i].key == ImGuiKey_UpArrow || moves[i].key == ImGuiKey_DownArrow;
+        if (wpe__key(moves[i].key) && !(listing && vertical))
             wpe_code_text_move(t, ctrl ? moves[i].with_ctrl : moves[i].plain, shift, page);
-    if (wpe__key(ImGuiKey_Enter) || wpe__key(ImGuiKey_KeypadEnter)) wpe_code_text_newline(t);
+    }
+    if (!listing && (wpe__key(ImGuiKey_Enter) || wpe__key(ImGuiKey_KeypadEnter))) wpe_code_text_newline(t);
     if (wpe__key(ImGuiKey_Backspace)) wpe_code_text_erase(t, false);
     if (wpe__key(ImGuiKey_Delete)) wpe_code_text_erase(t, true);
-    if (wpe__key(ImGuiKey_Tab)) wpe_code_text_indent(t, shift);
+    if (!listing && wpe__key(ImGuiKey_Tab)) wpe_code_text_indent(t, shift);
+    const bool ask = ctrl && igIsKeyPressed_Bool(ImGuiKey_Space, false); /* Ctrl+Space: suggest now. */
     if (ctrl) {
         if (igIsKeyPressed_Bool(ImGuiKey_A, false)) wpe_code_text_select_all(t);
         if (igIsKeyPressed_Bool(ImGuiKey_C, false)) wpe__copy_selection(t);
@@ -446,7 +679,9 @@ static void wpe__keyboard(WPE_ScriptPanel* panel, wpe__Doc* doc, uint32_t page) 
                 !memchr(t->text + start, '\n', end - start))
                 snprintf(panel->find, sizeof panel->find, "%.*s", (int)(end - start), t->text + start);
         }
-    } else {
+    }
+    bool typed = false;
+    if (!ctrl) {
         /* Typed characters (UTF-16 or UTF-32 code units from the backend), as UTF-8. */
         for (int i = 0; i < io->InputQueueCharacters.Size; ++i) {
             const uint32_t c = (uint32_t)io->InputQueueCharacters.Data[i];
@@ -473,12 +708,24 @@ static void wpe__keyboard(WPE_ScriptPanel* panel, wpe__Doc* doc, uint32_t page) 
                 n = 4;
             }
             wpe_code_text_insert(t, utf8, n);
+            typed = true;
         }
     }
     io->InputQueueCharacters.Size = 0; /* Typed into the code: nothing else gets them. */
     if (igIsKeyPressed_Bool(ImGuiKey_F3, true)) wpe__find_next(panel, doc, !shift);
     if (t->version != before) doc->check_wait = WPE__CHECK_DELAY;
     if (t->version != before || t->cursor != cursor_before) doc->follow_cursor = true;
+    /* Suggestions open as a name after "wpe." is typed (or on Ctrl+Space), follow the typing, and close when
+     * the cursor leaves the name. */
+    const size_t context = wpe__completion_context(t);
+    if (context == SIZE_MAX) {
+        panel->completing = false;
+    } else if (typed || ask || (panel->completing && (t->version != before || t->cursor != cursor_before))) {
+        if (!panel->completing) panel->selected = 0;
+        panel->completing = true;
+        panel->completion_start = context;
+        wpe__update_matches(panel, doc);
+    }
 }
 
 /* ---- The code view --------------------------------------------------------------------------------------
@@ -628,17 +875,32 @@ static void wpe__code_view(WPE_ScriptPanel* panel, wpe__Doc* doc) {
                 wpe__draw_run(draw, text_x, y + 1.0f, char_w, line + tokens[k].start, tokens[k].length,
                               wpe__visual_column(line, tokens[k].start), wpe__token_colors[tokens[k].kind]);
         (void)column;
-        /* The cursor. */
-        if (i == cursor_line && panel->focused && blink) {
+        /* The cursor (where the suggestion and signature popups go). */
+        if (i == cursor_line) {
             const float x = text_x + (float)wpe__visual_column(line, t->cursor - line_start) * char_w;
-            ImDrawList_AddRectFilled(draw, (ImVec2_c){x, y}, (ImVec2_c){x + 2.0f, y + line_h},
-                                     WPE__COL(238, 153, 56, 255), 0.0f, 0);
+            panel->cursor_x = x;
+            panel->cursor_y = y;
+            panel->line_h = line_h;
+            if (panel->focused && blink)
+                ImDrawList_AddRectFilled(draw, (ImVec2_c){x, y}, (ImVec2_c){x + 2.0f, y + line_h},
+                                         WPE__COL(238, 153, 56, 255), 0.0f, 0);
+        }
+    }
+    /* Hovering a `wpe.` function shows its help. */
+    if (hovered && !panel->dragging && mouse.x >= text_x && mouse_line >= 0 &&
+        mouse_line < (int64_t)t->line_count && !panel->completing) {
+        const WPE_ApiDoc* help = wpe__doc_at(panel, t, mouse_offset);
+        if (help && igBeginTooltip()) {
+            wpe__doc_text(help);
+            igEndTooltip();
         }
     }
     /* The scrollable size: every line, as wide as the widest. */
     igDummy((ImVec2_c){gutter + (float)(doc->widest + 8) * char_w,
                        (float)t->line_count * line_h + view_h * 0.5f});
     igEndChild();
+    wpe__completion_popup(panel, doc);
+    wpe__signature_popup(panel, doc);
 }
 
 /* ---- Prompts ------------------------------------------------------------------------------------------- */
@@ -709,7 +971,8 @@ void wpe_script_panel_draw(WPE_ScriptPanel* panel) {
     WPE_Editor* editor = panel->editor;
     /* A script the open_script command asked for. */
     if (editor->open_script[0]) {
-        wpe_script_panel_open(panel, editor->open_script, editor->open_script_line);
+        wpe_script_panel_open(panel, editor->open_script, editor->open_script_line,
+                              editor->open_script_column);
         editor->open_script[0] = '\0';
     }
     panel->log_seen =

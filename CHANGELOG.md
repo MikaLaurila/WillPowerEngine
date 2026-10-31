@@ -69,6 +69,18 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (editor: script completion and API help)
+- Completion after `wpe.`: matching functions and constants (prefix matches first, then substring),
+  with the highlighted entry's signature and description; ↑/↓, Enter/Tab inserts (and `(` after a
+  function), Esc, Ctrl+Space. Hovering a `wpe.` function shows its help; inside a call's parentheses the
+  signature shows above the line.
+- The names come from the running VM (`wpe_script_host_list_api`); signatures and descriptions from
+  docs/scripting.md, embedded in the editor at configure time and parsed by `editor/api_docs.{h,c}`.
+- `open_script` takes a `column`.
+- Tests: the docs parser (several functions in a cell, escaped pipes, links, sections, duplicates keep
+  the first row), and every function scripts can call is documented with a signature; the command-line
+  test draws the signature popup.
+
 ### Added (editor: Script panel)
 - A Luau code editor in the editor (a tab behind the viewport): files in tabs with unsaved marks, syntax
   highlighting (keywords, constants, numbers, strings, comments, libraries; long comments and strings

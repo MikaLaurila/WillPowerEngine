@@ -203,7 +203,7 @@ CI (`.github/workflows/ci.yml`) builds Debug and Release on Linux GCC 14 (with A
     - Keep GPU vertices interleaved: SDL's software renderer steps through UVs with the color stride.
   - `wpe_editor` is a console program, so PowerShell waits for it and captures its output.
   - The `tools_editor_cli` test drives it like an agent would.
-  - The Script panel (`editor/script_panel.c`) is a custom widget over `editor/code_text.c` (a UI-free text model with its own tests): ImGui draw lists, monospace font, `ImGuiWindowFlags_NoNavInputs` so Tab and arrows edit. Files go through `read_file`/`write_file`/`check_script`; `open_script` sets `editor->open_script`, which the panel picks up. While it has the keyboard, `wpe__ui_shortcuts` stays quiet.
+  - The Script panel (`editor/script_panel.c`) is a custom widget over `editor/code_text.c` (a UI-free text model with its own tests): ImGui draw lists, monospace font, `ImGuiWindowFlags_NoNavInputs` so Tab and arrows edit. Files go through `read_file`/`write_file`/`check_script`; `open_script` sets `editor->open_script`, which the panel picks up. While it has the keyboard, `wpe__ui_shortcuts` stays quiet. Completion lists the VM's `wpe` table (`wpe_script_host_list_api`); help comes from docs/scripting.md (embedded by editor/CMakeLists.txt, parsed by `editor/api_docs.c`). `test_editor_every_api_function_is_documented` fails when a new `wpe` function has no `` | `wpe.name(...)` | `` row in scripting.md.
   - cimgui/Dear ImGui come from two pinned archives copied into `build/cimgui/` (`wpe_dep_cimgui`, which needs `imgui_demo.cpp`).
 
 ## Conventions that are easy to get wrong

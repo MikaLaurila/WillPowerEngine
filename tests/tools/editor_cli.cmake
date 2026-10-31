@@ -23,8 +23,8 @@ file(WRITE "${WORK}/commands.jsonl"
 {\"cmd\": \"save_scene\", \"path\": \"scenes/made.scene\"}
 {\"cmd\": \"screenshot\", \"target\": \"editor\", \"path\": \"${WORK}/editor.png\"}
 {\"cmd\": \"screenshot\", \"path\": \"${WORK}/game.png\"}
-{\"cmd\": \"write_file\", \"path\": \"scripts/broken.luau\", \"text\": \"--[[ a long\\ncomment ]] local t = {\\n\\tname = \\\"x\\\",\\n\\tvalue = 0x1F,\\nif\\n\"}
-{\"cmd\": \"open_script\", \"path\": \"scripts/broken.luau\", \"line\": 3}
+{\"cmd\": \"write_file\", \"path\": \"scripts/broken.luau\", \"text\": \"--[[ a long\\ncomment ]] local t = {\\n\\tname = wpe.find(\\\"x\\\"),\\n\\tvalue = 0x1F,\\nif\\n\"}
+{\"cmd\": \"open_script\", \"path\": \"scripts/broken.luau\", \"line\": 3, \"column\": 19}
 {\"cmd\": \"frames\", \"count\": 3}
 {\"cmd\": \"screenshot\", \"target\": \"editor\", \"path\": \"${WORK}/script.png\"}
 ")

@@ -193,6 +193,56 @@ bool wpe_script_check_syntax(const char* source, size_t size, uint32_t* out_line
     return ok;
 }
 
+typedef struct wpe__ListOp {
+    void (*fn)(const char* name, bool function, void* user_data);
+    void* user_data;
+    uint32_t count; /* out */
+} wpe__ListOp;
+
+static int wpe__compare_api_names(const void* a, const void* b) {
+    return strcmp(*(const char* const*)a, *(const char* const*)b);
+}
+
+/* Protected: collects the wpe table's string keys, sorts them and hands them out. */
+static int wpe__op_list_api(lua_State* L) {
+    wpe__ListOp* op = lua_touserdata(L, 1);
+    lua_getglobal(L, "wpe");
+    if (!lua_istable(L, -1)) return 0;
+    const int table = lua_gettop(L);
+    int count = 0;
+    lua_pushnil(L);
+    while (lua_next(L, table)) {
+        lua_pop(L, 1);
+        count += lua_type(L, -1) == LUA_TSTRING;
+    }
+    /* The names stay alive as the table's keys while they are sorted and handed out. */
+    const char** names = lua_newuserdata(L, (size_t)(count ? count : 1) * sizeof *names);
+    int n = 0;
+    lua_pushnil(L);
+    while (lua_next(L, table)) {
+        lua_pop(L, 1);
+        if (lua_type(L, -1) == LUA_TSTRING && n < count) names[n++] = lua_tostring(L, -1);
+    }
+    qsort(names, (size_t)n, sizeof *names, wpe__compare_api_names);
+    for (int i = 0; i < n; ++i) {
+        lua_getfield(L, table, names[i]);
+        const bool function = lua_isfunction(L, -1);
+        lua_pop(L, 1);
+        op->fn(names[i], function, op->user_data);
+    }
+    op->count = (uint32_t)n;
+    return 0;
+}
+
+uint32_t wpe_script_host_list_api(WPE_ScriptHost* host,
+                                  void (*fn)(const char* name, bool function, void* user_data),
+                                  void* user_data) {
+    if (!host || !fn) return 0;
+    wpe__ListOp op = {.fn = fn, .user_data = user_data};
+    if (lua_cpcall(host->L, wpe__op_list_api, &op) != 0) lua_pop(host->L, 1);
+    return op.count;
+}
+
 static WPE_Result wpe__load_bytecode(WPE_ScriptHost* host, const char* path, const char* bytecode,
                                      size_t size, int existing_meta_ref, wpe__LoadOp* out_op) {
     char chunk_name[WPE__SCRIPT_PATH_MAX + 1];

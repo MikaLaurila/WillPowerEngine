@@ -2322,7 +2322,7 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
                 if (script) {
                     const char* script_path = wpe_json_string(wpe_json_get(value, "path"));
                     if (script_path && igSmallButton("Edit script"))
-                        wpe_script_panel_open(ui->scripts, script_path, 0);
+                        wpe_script_panel_open(ui->scripts, script_path, 0, 0);
                 }
                 if (script && wpe__ui_script_properties(ui, entity)) property_sent = true;
                 if (strcmp(key, "collider") == 0 && igSmallButton("Fit to meshes")) command = "fit_collider";
@@ -2507,7 +2507,7 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
             } else if (image) {
                 wpe__ui_create_element(ui, "image", path);
             } else if (wpe__has_suffix(path, ".luau")) {
-                wpe_script_panel_open(ui->scripts, path, 0);
+                wpe_script_panel_open(ui->scripts, path, 0, 0);
             }
         }
         /* Models, prefabs and images can be placed in the viewport; they, sounds and scripts can be dropped
@@ -2566,7 +2566,8 @@ static void wpe__console_line(const wpe__LogLine* line, void* user_data) {
     igPopStyleColor(1);
     if (igIsItemHovered(0)) {
         igSetTooltip("Double-click: open %s at line %u", path, at);
-        if (igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) wpe_script_panel_open(ui->scripts, path, at);
+        if (igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left))
+            wpe_script_panel_open(ui->scripts, path, at, 0);
     }
 }
 

@@ -25,9 +25,10 @@ WPE_ScriptPanel* wpe_script_panel_create(WPE_Editor* editor);
 
 void wpe_script_panel_destroy(WPE_ScriptPanel* panel);
 
-/** Opens a script in a tab (or switches to it) and shows `line` (1-based; 0 keeps the place).
- * @return false when it can't be read (logged). */
-bool wpe_script_panel_open(WPE_ScriptPanel* panel, const char* path, uint32_t line);
+/** Opens a script in a tab (or switches to it) and shows `line` (1-based; 0 keeps the place), with the cursor
+ * at `column` (1-based characters; 0: the line's first non-blank). @return false when it can't be read
+ * (logged). */
+bool wpe_script_panel_open(WPE_ScriptPanel* panel, const char* path, uint32_t line, uint32_t column);
 
 /** Draws the "Script" window (and its prompts). Call once per UI frame. */
 void wpe_script_panel_draw(WPE_ScriptPanel* panel);

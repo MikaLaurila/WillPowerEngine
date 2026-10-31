@@ -5,7 +5,9 @@
 #include <string.h>
 
 #include "core/alloc.h"
+#include "editor/api_docs.h"
 #include "editor/editor.h"
+#include "engine/engine.h"
 #include "platform/platform.h"
 #include "scene/scene.h"
 
@@ -518,6 +520,44 @@ static void test_editor_script_files(void) {
     wpe_editor_destroy(editor);
 }
 
+typedef struct ApiCheck {
+    const WPE_ApiDocs* docs;
+    uint32_t functions, missing;
+    char missing_names[2048];
+} ApiCheck;
+
+static void check_documented(const char* name, bool function, void* user_data) {
+    ApiCheck* check = user_data;
+    if (!function) return;
+    ++check->functions;
+    if (wpe_api_docs_find(check->docs, name, strlen(name))) return;
+    ++check->missing;
+    const size_t used = strlen(check->missing_names);
+    snprintf(check->missing_names + used, sizeof check->missing_names - used, " %s", name);
+}
+
+/* The Script panel's help comes from docs/scripting.md: every function scripts can call is documented there,
+ * with a signature (so completion shows it). */
+static void test_editor_every_api_function_is_documented(void) {
+    WPE_Editor* editor = open_editor();
+    WPE_ApiDocs docs;
+    WPE_TEST_ASSERT(wpe_api_docs_parse_builtin(&docs));
+    WPE_TEST_ASSERT(docs.count > 100);
+    const WPE_ApiDoc* tween = wpe_api_docs_find(&docs, "tween", 5);
+    WPE_TEST_ASSERT(tween && strncmp(tween->signature, "wpe.tween(", 10) == 0 &&
+                    strstr(tween->summary, "Eases"));
+    WPE_TEST_ASSERT_EQ_STR("Tweens", tween->section);
+    WPE_TEST_ASSERT(wpe_api_docs_find(&docs, "twee", 4) == NULL); /* Whole names only. */
+    ApiCheck check = {.docs = &docs};
+    const uint32_t listed =
+        wpe_script_host_list_api(wpe_engine_scripts(wpe_editor_engine(editor)), check_documented, &check);
+    WPE_TEST_ASSERT(listed > check.functions && check.functions > 100); /* Constants too. */
+    WPE_TEST_ASSERT_MSG(check.missing == 0, "%u undocumented wpe functions:%s", check.missing,
+                        check.missing_names);
+    wpe_api_docs_free(&docs);
+    wpe_editor_destroy(editor);
+}
+
 /* The entity named `name` (ids change with undo). */
 static WPE_Entity entity_named(WPE_Editor* editor, const char* name) {
     WPE_JsonDocument* list = run(editor, "{\"cmd\": \"list_entities\"}", true);
@@ -996,7 +1036,8 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
     WPE_TEST_CASE(test_editor_view_settings_and_overlays), WPE_TEST_CASE(test_editor_physics_follows_edits),
     WPE_TEST_CASE(test_editor_hot_reloads_scripts), WPE_TEST_CASE(test_editor_script_files),
-    WPE_TEST_CASE(test_editor_script_properties), WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
+    WPE_TEST_CASE(test_editor_every_api_function_is_documented), WPE_TEST_CASE(test_editor_script_properties),
+    WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
     WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
     WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
     WPE_TEST_CASE(test_editor_play_mode_restores_the_scene))

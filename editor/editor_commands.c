@@ -318,15 +318,18 @@ static WPE_Result wpe__cmd_write_file(wpe__Call* call) {
 static WPE_Result wpe__cmd_open_script(wpe__Call* call) {
     const char* path = wpe__string_arg(call, "path");
     const double line = wpe_json_number(wpe_json_get(call->args, "line"), 0.0);
+    const double column = wpe_json_number(wpe_json_get(call->args, "column"), 0.0);
     if (!path || !wpe_vfs_path_is_valid(path) || !wpe__ends_with(path, ".luau") ||
         !wpe_vfs_exists(wpe_engine_vfs(call->editor->engine), path))
         return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
                                          "\"path\" must be the asset path of an existing script (.luau)"));
-    if (!(line >= 0.0 && line <= (double)UINT32_MAX) || line != floor(line))
-        return wpe__null(call,
-                         wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"line\" must be a line number"));
+    if (!(line >= 0.0 && line <= (double)UINT32_MAX) || line != floor(line) ||
+        !(column >= 0.0 && column <= (double)UINT32_MAX) || column != floor(column))
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                                         "\"line\" and \"column\" must be whole numbers from 1"));
     snprintf(call->editor->open_script, sizeof call->editor->open_script, "%s", path);
     call->editor->open_script_line = (uint32_t)line;
+    call->editor->open_script_column = (uint32_t)column;
     return wpe__null(call, WPE_RESULT_OK);
 }
 
@@ -1286,7 +1289,8 @@ static const struct {
      "{path, text}: save a script (.luau) into the project (reloaded at once with hot reload on)"},
     {"check_script", wpe__cmd_check_script,
      "{text} -> {ok, line?, message?}: compile Luau without running it"},
-    {"open_script", wpe__cmd_open_script, "{path, line = 0}: show a script in the editor's Script panel"},
+    {"open_script", wpe__cmd_open_script,
+     "{path, line = 0, column = 0}: show a script in the editor's Script panel (the cursor at line:column)"},
     {"export", wpe__cmd_export, "{output, runtime?} -> {files, bytes}"},
     {"log", wpe__cmd_log, "{count = 50} -> recent log lines"},
     {"clear_log", wpe__cmd_clear_log, "{}: hide the lines logged so far (the console's clear, cls, clr)"},
