@@ -41,7 +41,7 @@ jobs:
         if: failure()
         run: |
           touch build.log test.log
-          grep -hE "error:|undefined reference|FAILED:|\[ FAIL \]|    FAIL |runtime error|ERROR: AddressSanitizer|ERROR: LeakSanitizer" build.log test.log \
+          grep -hE "error:|undefined reference|FAILED:|\*\*\*|\[ FAIL \]|    FAIL |runtime error|ERROR: AddressSanitizer|ERROR: LeakSanitizer" build.log test.log \
             | head -n 25 | sed -e 's/%/%25/g' -e 's/^/::error::/' || true
 
   windows:
@@ -74,5 +74,5 @@ jobs:
         if: failure()
         run: |
           touch build.log test.log
-          grep -hE "error:|undefined reference|FAILED:|\[ FAIL \]|    FAIL " build.log test.log \
+          grep -hE "error:|undefined reference|FAILED:|\*\*\*|\[ FAIL \]|    FAIL " build.log test.log \
             | head -n 25 | sed -e 's/%/%25/g' -e 's/^/::error::/' || true
