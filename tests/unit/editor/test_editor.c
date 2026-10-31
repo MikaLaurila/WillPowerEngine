@@ -7,9 +7,11 @@
 #include "core/alloc.h"
 #include "editor/api_docs.h"
 #include "editor/editor.h"
+#include "editor/editor_internal.h"
 #include "engine/engine.h"
 #include "platform/platform.h"
 #include "scene/scene.h"
+#include "script/script.h"
 
 #define ROOT "editor_scratch"
 
@@ -517,6 +519,55 @@ static void test_editor_script_files(void) {
     /* open_script asks the UI to show a file (here: just checked). */
     run_ok(editor, "{\"cmd\": \"open_script\", \"path\": \"scripts/mover.luau\", \"line\": 2}");
     wpe_json_free(run(editor, "{\"cmd\": \"open_script\", \"path\": \"scripts/none.luau\"}", false));
+    wpe_editor_destroy(editor);
+}
+
+/* new_script: each template compiles, names come from the file name, and existing files are kept. */
+static void test_editor_new_script(void) {
+    remove(ROOT "/project/scripts/enemy_spawner.luau");
+    remove(ROOT "/project/scripts/door_trigger.luau");
+    remove(ROOT "/project/scripts/menu_button.luau");
+    remove(ROOT "/project/scripts/lib/my_tools.luau");
+    WPE_Editor* editor = open_editor();
+    static const char* const made[][3] = {
+        {"scripts/enemy_spawner.luau", "behavior", "EnemySpawner:on_update(dt"},
+        {"scripts/door_trigger.luau", "physics", "DoorTrigger:on_trigger_enter("},
+        {"scripts/menu_button.luau", "ui", "MenuButton:on_click()"},
+        {"scripts/lib/my_tools.luau", "module", "require(\"scripts/lib/my_tools\")"},
+    };
+    for (size_t i = 0; i < sizeof made / sizeof made[0]; ++i) {
+        char command[256];
+        snprintf(command, sizeof command, "{\"cmd\": \"new_script\", \"path\": \"%s\", \"template\": \"%s\"}",
+                 made[i][0], made[i][1]);
+        WPE_JsonDocument* reply = run(editor, command, true);
+        WPE_TEST_ASSERT_EQ_STR(made[i][0], wpe_json_string(wpe_json_get(result_of(reply), "path")));
+        wpe_json_free(reply);
+        WPE_TEST_ASSERT_EQ_STR(made[i][0], editor->open_script); /* The Script panel shows it. */
+        snprintf(command, sizeof command, "{\"cmd\": \"read_file\", \"path\": \"%s\"}", made[i][0]);
+        reply = run(editor, command, true);
+        const char* text = wpe_json_string(wpe_json_get(result_of(reply), "text"));
+        WPE_TEST_ASSERT(text && strstr(text, made[i][2]));
+        uint32_t line = 0;
+        char message[256];
+        WPE_TEST_ASSERT(wpe_script_check_syntax(text, strlen(text), &line, message, sizeof message));
+        wpe_json_free(reply);
+        /* Asking again keeps the file. */
+        snprintf(command, sizeof command, "{\"cmd\": \"new_script\", \"path\": \"%s\"}", made[i][0]);
+        wpe_json_free(run(editor, command, false));
+    }
+    /* The module works as written. */
+    run_ok(editor,
+           "{\"cmd\": \"run_lua\", \"code\": \"assert(require('scripts/lib/my_tools').example(3) == 3)\"}");
+    /* The behavior runs on an entity. */
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"spawner\", \"script\": {\"path\": "
+                   "\"scripts/enemy_spawner.luau\"}}}");
+    run_ok(editor, "{\"cmd\": \"play\"}");
+    run_ok(editor, "{\"cmd\": \"frames\", \"count\": 3}");
+    run_ok(editor, "{\"cmd\": \"stop\"}");
+    wpe_json_free(run(
+        editor, "{\"cmd\": \"new_script\", \"path\": \"scripts/x.luau\", \"template\": \"nope\"}", false));
+    wpe_json_free(run(editor, "{\"cmd\": \"new_script\", \"path\": \"scripts/x.txt\"}", false));
+    wpe_json_free(run(editor, "{\"cmd\": \"new_script\", \"path\": \"../x.luau\"}", false));
     wpe_editor_destroy(editor);
 }
 
@@ -1036,8 +1087,8 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
     WPE_TEST_CASE(test_editor_view_settings_and_overlays), WPE_TEST_CASE(test_editor_physics_follows_edits),
     WPE_TEST_CASE(test_editor_hot_reloads_scripts), WPE_TEST_CASE(test_editor_script_files),
-    WPE_TEST_CASE(test_editor_every_api_function_is_documented), WPE_TEST_CASE(test_editor_script_properties),
-    WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
+    WPE_TEST_CASE(test_editor_new_script), WPE_TEST_CASE(test_editor_every_api_function_is_documented),
+    WPE_TEST_CASE(test_editor_script_properties), WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
     WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
     WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
     WPE_TEST_CASE(test_editor_play_mode_restores_the_scene))

@@ -36,6 +36,9 @@ void wpe_script_panel_draw(WPE_ScriptPanel* panel);
 /** @return Whether the code has the keyboard (the editor's own shortcuts then stay quiet). */
 bool wpe_script_panel_focused(const WPE_ScriptPanel* panel);
 
+/** @return Whether the panel's New script button was pressed since the last call (the UI owns the dialog). */
+bool wpe_script_panel_take_new_request(WPE_ScriptPanel* panel);
+
 /** @return Whether any open script has unsaved changes. */
 bool wpe_script_panel_dirty(const WPE_ScriptPanel* panel);
 

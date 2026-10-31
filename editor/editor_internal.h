@@ -105,4 +105,12 @@ uint64_t wpe__editor_log_position(WPE_Editor* editor);
 /* Hides the lines logged so far (the console's clear). */
 void wpe__editor_log_clear(WPE_Editor* editor);
 
+/* The templates of the new_script command (and the UI's New script dialog). */
+typedef struct wpe__ScriptTemplate {
+    const char* name;
+    const char* description;
+} wpe__ScriptTemplate;
+#define WPE__EDITOR_SCRIPT_TEMPLATES 4u
+extern const wpe__ScriptTemplate wpe__editor_script_templates[WPE__EDITOR_SCRIPT_TEMPLATES];
+
 #endif /* WPE_EDITOR_EDITOR_INTERNAL_H */

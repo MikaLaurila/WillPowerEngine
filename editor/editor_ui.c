@@ -123,6 +123,11 @@ struct WPE_EditorUi {
     bool prefab_popup;
     WPE_Entity prefab_entity;
     char prefab_path[WPE__UI_PATH];
+    /* "New script": the path, the template, and why the last try failed. */
+    bool new_script_popup;
+    char new_script_path[WPE__UI_PATH];
+    int new_script_template;
+    char new_script_error[256];
     bool unsaved_popup;
     bool pending_after_save;
     bool layout_built;
@@ -2472,6 +2477,8 @@ static void wpe__clear_assets(WPE_EditorUi* ui) {
     ui->asset_count = 0;
 }
 
+static void wpe__ui_ask_new_script(WPE_EditorUi* ui);
+
 static void wpe__ui_assets(WPE_EditorUi* ui) {
     if (!igBegin("Assets", NULL, 0)) {
         igEnd();
@@ -2483,6 +2490,8 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
         ui->assets_stale = false;
     }
     if (igButton("Refresh", (ImVec2_c){0, 0})) ui->assets_stale = true;
+    igSameLine(0, -1);
+    if (igButton("New script", (ImVec2_c){0, 0})) wpe__ui_ask_new_script(ui);
     igSameLine(0, -1);
     igSetNextItemWidth(-1.0f);
     igInputText("##filter", ui->asset_filter, sizeof ui->asset_filter, 0, NULL, NULL);
@@ -2898,8 +2907,66 @@ static wpe__PopupResult wpe__ui_path_popup(bool* request, const char* title, con
     return result;
 }
 
+/* Opens the New script dialog with a free name in scripts/. */
+static void wpe__ui_ask_new_script(WPE_EditorUi* ui) {
+    const WPE_Vfs* vfs = wpe_engine_vfs(wpe_editor_engine(ui->editor));
+    snprintf(ui->new_script_path, sizeof ui->new_script_path, "scripts/new_script.luau");
+    for (int i = 2; i < 100 && wpe_vfs_exists(vfs, ui->new_script_path); ++i)
+        snprintf(ui->new_script_path, sizeof ui->new_script_path, "scripts/new_script_%d.luau", i);
+    ui->new_script_error[0] = '\0';
+    ui->new_script_popup = true;
+}
+
+/* The New script dialog: a path and a template; the script opens in the Script panel. */
+static void wpe__ui_new_script_popup(WPE_EditorUi* ui) {
+    if (ui->new_script_popup) {
+        igOpenPopup_Str("New script", 0);
+        ui->new_script_popup = false;
+    }
+    if (!igBeginPopupModal("New script", NULL, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    igTextUnformatted("Script asset path (.luau):", NULL);
+    igSetNextItemWidth(420.0f);
+    const bool enter = igInputText("##path", ui->new_script_path, sizeof ui->new_script_path,
+                                   ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
+    igTextUnformatted("Template:", NULL);
+    for (int i = 0; i < (int)WPE__EDITOR_SCRIPT_TEMPLATES; ++i) {
+        igRadioButton_IntPtr(wpe__editor_script_templates[i].name, &ui->new_script_template, i);
+        igSameLine(140.0f, -1.0f);
+        igTextDisabled("%s", wpe__editor_script_templates[i].description);
+    }
+    if (ui->new_script_error[0])
+        igTextColored((ImVec4_c){1.0f, 0.45f, 0.4f, 1.0f}, "%s", ui->new_script_error);
+    if ((igButton("Create", (ImVec2_c){120, 0}) || enter) && ui->new_script_path[0]) {
+        WPE_JsonWriter* w = wpe__ui_begin("new_script");
+        if (w) {
+            wpe_json_write_key(w, "path");
+            wpe_json_write_string(w, ui->new_script_path);
+            wpe_json_write_key(w, "template");
+            wpe_json_write_string(w, wpe__editor_script_templates[ui->new_script_template].name);
+        }
+        if (wpe__ui_send(ui, w) == WPE_RESULT_OK) {
+            ui->assets_stale = true;
+            igCloseCurrentPopup();
+        } else {
+            /* The reply says why ("already exists", a bad path); the dialog stays open to fix it. */
+            WPE_JsonDocument* reply = NULL;
+            const char* error = NULL;
+            if (wpe_json_parse(ui->reply, strlen(ui->reply), &reply, NULL) == WPE_RESULT_OK)
+                error = wpe_json_string(wpe_json_get(wpe_json_root(reply), "error"));
+            snprintf(ui->new_script_error, sizeof ui->new_script_error, "%s",
+                     error ? error : "cannot create it");
+            wpe_json_free(reply);
+        }
+    }
+    igSameLine(0, -1);
+    if (igButton("Cancel", (ImVec2_c){120, 0})) igCloseCurrentPopup();
+    igEndPopup();
+}
+
 static void wpe__ui_popups(WPE_EditorUi* ui) {
     wpe__ui_unsaved_popup(ui);
+    if (wpe_script_panel_take_new_request(ui->scripts)) wpe__ui_ask_new_script(ui);
+    wpe__ui_new_script_popup(ui);
     if (wpe__ui_path_popup(&ui->open_scene_popup, "Open scene", "Scene asset path:", ui->scene_path,
                            sizeof ui->scene_path) == WPE__POPUP_OK)
         wpe__ui_guard(ui, WPE__PENDING_LOAD, ui->scene_path);

@@ -14,6 +14,7 @@ static const unsigned char wpe__scripting_docs[] = {${wpe_docs_bytes}0};
 
 add_library(wpe_editor_core STATIC
     api_docs.c
+    code_symbols.c
     code_text.c
     editor.c
     editor_commands.c

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "editor/api_docs.h"
+#include "editor/code_symbols.h"
 #include "editor/code_text.h"
 
 static void set(WPE_CodeText* t, const char* text) {
@@ -245,7 +246,143 @@ static void test_code_text_api_docs(void) {
     wpe_api_docs_free(&docs);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_code_text_api_docs), WPE_TEST_CASE(test_code_text_lines_and_positions),
+static bool has(const WPE_CodeSymbols* symbols, const char* name, WPE_CodeSymbolKind kind) {
+    const WPE_CodeSymbol* s = wpe_code_symbols_find(symbols, name, strlen(name));
+    return s && s->kind == kind;
+}
+
+/* Where completion applies: names, simple members, not comments, strings, numbers or new names. */
+static void test_code_text_completion_context(void) {
+    const char* text = "local speed = 1 -- spe\nprint(\"wpe.lo\", self.spe, a.b.c, 1.5, x..y)\nlocal ne";
+    const size_t length = strlen(text);
+    const char* at = strstr(text, "= 1");
+    WPE_CodeCompletion c = wpe_code_completion_at(text, length, (size_t)(at - text)); /* After "speed ". */
+    WPE_TEST_ASSERT_EQ_INT(WPE_CODE_COMPLETE_NAME, c.kind);
+    at = strstr(text, "-- spe") + 6;
+    WPE_TEST_ASSERT_EQ_INT(WPE_CODE_COMPLETE_NONE,
+                           wpe_code_completion_at(text, length, (size_t)(at - text)).kind);
+    at = strstr(text, "wpe.lo") + 6;
+    WPE_TEST_ASSERT_EQ_INT(WPE_CODE_COMPLETE_NONE,
+                           wpe_code_completion_at(text, length, (size_t)(at - text)).kind);
+    at = strstr(text, "self.spe") + 8;
+    c = wpe_code_completion_at(text, length, (size_t)(at - text));
+    WPE_TEST_ASSERT_EQ_INT(WPE_CODE_COMPLETE_MEMBER, c.kind);
+    WPE_TEST_ASSERT(c.object_length == 4 && strncmp(text + c.object_start, "self", 4) == 0 &&
+                    c.separator == '.');
+    WPE_TEST_ASSERT_EQ_UINT((size_t)(at - text) - 3, c.start);
+    at = strstr(text, "a.b.c") + 5;
+    WPE_TEST_ASSERT_EQ_INT(WPE_CODE_COMPLETE_NONE,
+                           wpe_code_completion_at(text, length, (size_t)(at - text)).kind);
+    at = strstr(text, "1.5") + 3;
+    WPE_TEST_ASSERT_EQ_INT(WPE_CODE_COMPLETE_NONE,
+                           wpe_code_completion_at(text, length, (size_t)(at - text)).kind);
+    at = strstr(text, "x..y") + 4;
+    WPE_TEST_ASSERT_EQ_INT(WPE_CODE_COMPLETE_NONE,
+                           wpe_code_completion_at(text, length, (size_t)(at - text)).kind);
+    WPE_TEST_ASSERT_EQ_INT(WPE_CODE_COMPLETE_NONE,
+                           wpe_code_completion_at(text, length, length).kind); /* local ne */
+    c = wpe_code_completion_at("obj:me", 6, 6);
+    WPE_TEST_ASSERT(c.kind == WPE_CODE_COMPLETE_MEMBER && c.separator == ':' && c.start == 4);
+}
+
+/* Names in scope at a point: closed blocks drop theirs, parameters and loop variables, methods' self. */
+static void test_code_text_symbols_in_scope(void) {
+    const char* text = "local util = require(\"scripts/lib/util\")\n"
+                       "local Hero = {}\n"
+                       "local function helper(a: number, b)\n"
+                       "\tlocal inner = a\n"
+                       "end\n"
+                       "function Hero:on_update(dt: number)\n"
+                       "\tfor i, v in ipairs({}) do\n"
+                       "\t\tlocal in_loop = i\n"
+                       "\tend\n"
+                       "\tif dt > 0 then\n"
+                       "\t\tlocal step: {number}, other = {}, nil\n"
+                       "\telse\n"
+                       "\t\tlocal fallback = 0\n"
+                       "\t\t|\n"
+                       "\tend\n"
+                       "end\n"
+                       "local later = 1\n";
+    const size_t cursor = (size_t)(strchr(text, '|') - text);
+    WPE_CodeSymbols s = {0};
+    WPE_TEST_ASSERT(wpe_code_symbols_in_scope(text, strlen(text), cursor, &s));
+    WPE_TEST_ASSERT_EQ_STR("Hero", s.self_class);
+    WPE_TEST_ASSERT(has(&s, "util", WPE_CODE_SYMBOL_LOCAL) && has(&s, "Hero", WPE_CODE_SYMBOL_LOCAL));
+    WPE_TEST_ASSERT_EQ_STR("scripts/lib/util", wpe_code_symbols_find(&s, "util", 4)->module);
+    WPE_TEST_ASSERT(has(&s, "helper", WPE_CODE_SYMBOL_FUNCTION) && has(&s, "dt", WPE_CODE_SYMBOL_PARAMETER));
+    WPE_TEST_ASSERT(has(&s, "fallback", WPE_CODE_SYMBOL_LOCAL));
+    WPE_TEST_ASSERT_EQ_UINT(13, wpe_code_symbols_find(&s, "fallback", 8)->line);
+    /* Out of scope here: the helper's parameters and locals, the loop's, the then-branch's; not yet: later.
+     */
+    static const char* const gone[] = {"a",       "b",    "inner", "i",     "v",
+                                       "in_loop", "step", "other", "later", "number"};
+    for (size_t i = 0; i < sizeof gone / sizeof gone[0]; ++i)
+        WPE_TEST_ASSERT(wpe_code_symbols_find(&s, gone[i], strlen(gone[i])) == NULL);
+    WPE_TEST_ASSERT_EQ_STR("fallback", s.items[0].name); /* Innermost first. */
+    wpe_code_symbols_free(&s);
+
+    /* Inside the loop and the then-branch. */
+    const char* loop = strstr(text, "local in_loop");
+    WPE_TEST_ASSERT(wpe_code_symbols_in_scope(text, strlen(text), (size_t)(loop - text), &s));
+    WPE_TEST_ASSERT(has(&s, "i", WPE_CODE_SYMBOL_LOCAL) && has(&s, "v", WPE_CODE_SYMBOL_LOCAL));
+    wpe_code_symbols_free(&s);
+    const char* branch = strstr(text, "\telse");
+    WPE_TEST_ASSERT(wpe_code_symbols_in_scope(text, strlen(text), (size_t)(branch - text), &s));
+    WPE_TEST_ASSERT(has(&s, "step", WPE_CODE_SYMBOL_LOCAL) && has(&s, "other", WPE_CODE_SYMBOL_LOCAL));
+    wpe_code_symbols_free(&s);
+    /* After the method: self is gone. */
+    WPE_TEST_ASSERT(wpe_code_symbols_in_scope(text, strlen(text), strlen(text), &s));
+    WPE_TEST_ASSERT_EQ_STR("", s.self_class);
+    WPE_TEST_ASSERT(has(&s, "later", WPE_CODE_SYMBOL_LOCAL) && !wpe_code_symbols_find(&s, "dt", 2));
+    wpe_code_symbols_free(&s);
+}
+
+/* A table's members, a class's properties, a module's returned table, the libraries. */
+static void test_code_text_symbols_members(void) {
+    const char* text = "local Hero = {}\n"
+                       "Hero.properties = { speed = 1, label = \"x\", nested = { deep = 2 } }\n"
+                       "local SPEEDS = { walk = 2, run = function() end }\n"
+                       "function Hero:on_start() self.health = 3; self:heal(1) end\n"
+                       "function Hero.helper() end\n"
+                       "Hero.count = 0\n"
+                       "print(other.Hero.fake)\n"
+                       "-- Hero.commented\n"
+                       "return Hero\n";
+    const size_t length = strlen(text);
+    WPE_CodeSymbols s = {0};
+    WPE_TEST_ASSERT(wpe_code_symbols_members(text, length, "Hero", 4, &s));
+    WPE_TEST_ASSERT(has(&s, "on_start", WPE_CODE_SYMBOL_METHOD) &&
+                    has(&s, "helper", WPE_CODE_SYMBOL_FUNCTION));
+    WPE_TEST_ASSERT(has(&s, "count", WPE_CODE_SYMBOL_FIELD) && has(&s, "properties", WPE_CODE_SYMBOL_FIELD));
+    WPE_TEST_ASSERT(!wpe_code_symbols_find(&s, "fake", 4) && !wpe_code_symbols_find(&s, "commented", 9));
+    wpe_code_symbols_free(&s);
+    WPE_TEST_ASSERT(wpe_code_symbols_members(text, length, "self", 4, &s));
+    WPE_TEST_ASSERT(has(&s, "health", WPE_CODE_SYMBOL_FIELD) && has(&s, "heal", WPE_CODE_SYMBOL_METHOD));
+    wpe_code_symbols_free(&s);
+    WPE_TEST_ASSERT(wpe_code_symbols_members(text, length, "SPEEDS", 6, &s));
+    WPE_TEST_ASSERT(has(&s, "walk", WPE_CODE_SYMBOL_FIELD) && has(&s, "run", WPE_CODE_SYMBOL_FUNCTION));
+    wpe_code_symbols_free(&s);
+    WPE_TEST_ASSERT(wpe_code_symbols_properties(text, length, "Hero", 4, &s));
+    WPE_TEST_ASSERT_EQ_UINT(3, s.count); /* speed, label, nested; not deep. */
+    WPE_TEST_ASSERT(has(&s, "speed", WPE_CODE_SYMBOL_FIELD) && has(&s, "nested", WPE_CODE_SYMBOL_FIELD));
+    wpe_code_symbols_free(&s);
+    char name[WPE_CODE_SYMBOL_NAME_MAX];
+    WPE_TEST_ASSERT(wpe_code_symbols_returned(text, length, name, sizeof name));
+    WPE_TEST_ASSERT_EQ_STR("Hero", name);
+    WPE_TEST_ASSERT(!wpe_code_symbols_returned("return {}", 9, name, sizeof name));
+    WPE_TEST_ASSERT(wpe_code_symbols_library("math", 4, &s));
+    WPE_TEST_ASSERT(has(&s, "floor", WPE_CODE_SYMBOL_FUNCTION) && has(&s, "pi", WPE_CODE_SYMBOL_CONSTANT));
+    WPE_TEST_ASSERT(!wpe_code_symbols_library("mat", 3, &s));
+    WPE_TEST_ASSERT(wpe_code_symbols_globals(&s));
+    WPE_TEST_ASSERT(has(&s, "wpe", WPE_CODE_SYMBOL_LIBRARY) && has(&s, "ipairs", WPE_CODE_SYMBOL_FUNCTION) &&
+                    has(&s, "end", WPE_CODE_SYMBOL_KEYWORD));
+    wpe_code_symbols_free(&s);
+}
+
+WPE_TEST_MAIN(WPE_TEST_CASE(test_code_text_completion_context),
+              WPE_TEST_CASE(test_code_text_symbols_in_scope), WPE_TEST_CASE(test_code_text_symbols_members),
+              WPE_TEST_CASE(test_code_text_api_docs), WPE_TEST_CASE(test_code_text_lines_and_positions),
               WPE_TEST_CASE(test_code_text_typing_and_undo), WPE_TEST_CASE(test_code_text_auto_indent),
               WPE_TEST_CASE(test_code_text_erase_and_indent), WPE_TEST_CASE(test_code_text_moves_and_search),
               WPE_TEST_CASE(test_code_text_tokenizer))

@@ -279,6 +279,8 @@ static WPE_Result wpe__cmd_read_file(wpe__Call* call) {
     return text ? WPE_RESULT_OK : WPE_RESULT_ERROR_OUT_OF_MEMORY;
 }
 
+static WPE_Result wpe__write_script(wpe__Call* call, const char* path, const char* text);
+
 /* Scripts are written into the project directory (scenes and prefabs have their own commands). Saving a
  * script with hot reload on reloads it right away. */
 static WPE_Result wpe__cmd_write_file(wpe__Call* call) {
@@ -288,9 +290,192 @@ static WPE_Result wpe__cmd_write_file(wpe__Call* call) {
         return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
                                          "\"path\" must be the asset path of a script (.luau)"));
     if (!text) return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"text\" is required"));
+    return wpe__null(call, wpe__write_script(call, path, text));
+}
+
+/* ---- New scripts ------------------------------------------------------------------------------------------
+ */
+
+const wpe__ScriptTemplate wpe__editor_script_templates[WPE__EDITOR_SCRIPT_TEMPLATES] = {
+    {"behavior", "An entity's behavior: properties, on_start and on_update"},
+    {"physics", "Collision and trigger callbacks"},
+    {"ui", "A button's on_click and a toggle's or slider's on_change"},
+    {"module", "Shared functions for require()"},
+};
+
+/* The templates' text: "$Class" is the script's class name, "$module" its module name, "$path" the require
+ * path. */
+static const char* const wpe__template_texts[] = {
+    /* behavior */
+    "-- $Class: what this script does.\n"
+    "local $Class = {}\n"
+    "-- Declared properties: every entity using the script gets them, and the inspector shows them.\n"
+    "$Class.properties = {\n"
+    "\tspeed = 1,\n"
+    "}\n"
+    "\n"
+    "-- Once, before the first on_update. self.entity is the entity the script is on.\n"
+    "function $Class:on_start()\n"
+    "end\n"
+    "\n"
+    "-- Every frame; dt is the frame's time in seconds.\n"
+    "function $Class:on_update(dt: number)\n"
+    "end\n"
+    "\n"
+    "-- More callbacks: on_fixed_update(dt), on_destroy(), on_reload(), on_collision_enter(other),\n"
+    "-- on_trigger_enter(other), on_click(), on_change(value), on_animation_state(state),\n"
+    "-- on_animation_event(name). See docs/scripting.md.\n"
+    "\n"
+    "return $Class\n",
+    /* physics */
+    "-- $Class: reacts to touching other bodies and to trigger volumes. The entity needs a collider\n"
+    "-- (a trigger collider for the trigger callbacks).\n"
+    "local $Class = {}\n"
+    "$Class.properties = {}\n"
+    "\n"
+    "function $Class:on_collision_enter(other: number)\n"
+    "end\n"
+    "\n"
+    "function $Class:on_collision_exit(other: number)\n"
+    "end\n"
+    "\n"
+    "function $Class:on_trigger_enter(other: number)\n"
+    "end\n"
+    "\n"
+    "function $Class:on_trigger_exit(other: number)\n"
+    "end\n"
+    "\n"
+    "return $Class\n",
+    /* ui */
+    "-- $Class: a UI element's behavior. Clicks come from a button on the entity; a toggle or a slider\n"
+    "-- also reports the player's changes (on_change, before on_click).\n"
+    "local $Class = {}\n"
+    "$Class.properties = {}\n"
+    "\n"
+    "function $Class:on_click()\n"
+    "end\n"
+    "\n"
+    "function $Class:on_change(value)\n"
+    "end\n"
+    "\n"
+    "return $Class\n",
+    /* module */
+    "-- $module: functions shared between scripts. Load it with\n"
+    "--   local $module = require(\"$path\")\n"
+    "-- A module runs once; every require returns the same table.\n"
+    "local $module = {}\n"
+    "\n"
+    "function $module.example(value: number): number\n"
+    "\treturn value\n"
+    "end\n"
+    "\n"
+    "return $module\n",
+};
+static_assert(sizeof wpe__template_texts / sizeof wpe__template_texts[0] == WPE__EDITOR_SCRIPT_TEMPLATES,
+              "one text per script template");
+
+/* A Luau name from the file's base name: other characters become "_", and a leading digit gets one;
+ * `pascal` makes "enemy_spawner" "EnemySpawner". */
+static void wpe__script_name(const char* path, bool pascal, char* out, size_t size) {
+    const char* base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    const char* dot = strrchr(base, '.');
+    const size_t length = dot ? (size_t)(dot - base) : strlen(base);
+    size_t n = 0;
+    bool upper = true;
+    for (size_t i = 0; i < length && n + 2 < size; ++i) {
+        char c = base[i];
+        const bool word = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+        if (pascal) {
+            if (!word) {
+                upper = true;
+                continue;
+            }
+            if (upper && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+            upper = false;
+        } else if (!word) {
+            c = '_';
+        }
+        if (n == 0 && c >= '0' && c <= '9') out[n++] = '_';
+        out[n++] = c;
+    }
+    if (n == 0) {
+        snprintf(out, size, "%s", pascal ? "Script" : "module");
+        return;
+    }
+    out[n] = '\0';
+}
+
+/* {path, template = "behavior"} -> {path}: a new script from a template (refused when the file exists),
+ * opened in the Script panel. */
+static WPE_Result wpe__cmd_new_script(wpe__Call* call) {
+    const char* path = wpe__string_arg(call, "path");
+    const char* name = wpe__string_arg(call, "template");
+    if (!path || !wpe_vfs_path_is_valid(path) || !wpe__ends_with(path, ".luau") || strlen(path) <= 5)
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                                         "\"path\" must be the asset path of a script (.luau)"));
+    size_t index = 0;
+    const size_t template_count = WPE__EDITOR_SCRIPT_TEMPLATES;
+    if (name) {
+        while (index < template_count && strcmp(wpe__editor_script_templates[index].name, name) != 0)
+            ++index;
+        if (index == template_count)
+            return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                                             "unknown template '%s' (behavior, physics, ui, module)", name));
+    }
+    if (wpe_vfs_exists(wpe_engine_vfs(call->editor->engine), path))
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "'%s' already exists", path));
+    char class_name[64], module_name[64], require_path[WPE_VFS_PATH_MAX];
+    wpe__script_name(path, true, class_name, sizeof class_name);
+    wpe__script_name(path, false, module_name, sizeof module_name);
+    snprintf(require_path, sizeof require_path, "%.*s", (int)(strlen(path) - 5), path);
+    /* Fills in the names. */
+    const char* source = wpe__template_texts[index];
+    size_t capacity = strlen(source) * 2 + 256, n = 0;
+    char* text = wpe_alloc(capacity);
+    if (!text) return wpe__null(call, WPE_RESULT_ERROR_OUT_OF_MEMORY);
+    static const char* const keys[] = {"$Class", "$module", "$path"};
+    const char* values[] = {class_name, module_name, require_path};
+    for (const char* at = source; *at;) {
+        const char* value = NULL;
+        size_t key_length = 0;
+        for (size_t k = 0; k < sizeof keys / sizeof keys[0] && !value; ++k) {
+            key_length = strlen(keys[k]);
+            if (strncmp(at, keys[k], key_length) == 0) value = values[k];
+        }
+        const size_t add = value ? strlen(value) : 1;
+        if (n + add + 1 > capacity) {
+            capacity = (n + add + 1) * 2;
+            char* grown = wpe_realloc(text, capacity);
+            if (!grown) {
+                wpe_free(text);
+                return wpe__null(call, WPE_RESULT_ERROR_OUT_OF_MEMORY);
+            }
+            text = grown;
+        }
+        memcpy(text + n, value ? value : at, add);
+        n += add;
+        at += value ? key_length : 1;
+    }
+    text[n] = '\0';
+    const WPE_Result result = wpe__write_script(call, path, text);
+    wpe_free(text);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    snprintf(call->editor->open_script, sizeof call->editor->open_script, "%s", path);
+    call->editor->open_script_line = 0;
+    call->editor->open_script_column = 0;
+    wpe_json_write_object_begin(call->w);
+    wpe_json_write_key(call->w, "path");
+    wpe_json_write_string(call->w, path);
+    wpe_json_write_object_end(call->w);
+    return WPE_RESULT_OK;
+}
+
+/* Writes a script into the project directory (creating its folder); with hot reload on, it is reloaded. */
+static WPE_Result wpe__write_script(wpe__Call* call, const char* path, const char* text) {
     char os_path[2048], folder[2048];
     if (snprintf(os_path, sizeof os_path, "%s/%s", call->editor->project_dir, path) >= (int)sizeof os_path)
-        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "the path is too long"));
+        return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "the path is too long");
     memcpy(folder, os_path, sizeof folder);
     char* slash = strrchr(folder, '/');
     if (slash) *slash = '\0';
@@ -302,7 +487,7 @@ static WPE_Result wpe__cmd_write_file(wpe__Call* call) {
         const WPE_Result closed = wpe_file_close(file);
         if (result == WPE_RESULT_OK) result = closed;
     }
-    if (result != WPE_RESULT_OK) return wpe__null(call, wpe__fail(call, result, "cannot write '%s'", path));
+    if (result != WPE_RESULT_OK) return wpe__fail(call, result, "cannot write '%s'", path);
     wpe_log_info("saved %s", path);
     if (call->editor->view.hot_reload) {
         /* Reloaded now, whatever the file clock says (a quick save can keep the same timestamp). A module
@@ -311,7 +496,7 @@ static WPE_Result wpe__cmd_write_file(wpe__Call* call) {
         if (wpe_script_host_reload(scripts, path) == WPE_RESULT_ERROR_NOT_FOUND)
             wpe_script_host_reload_changed(scripts);
     }
-    return wpe__null(call, WPE_RESULT_OK);
+    return WPE_RESULT_OK;
 }
 
 /* Shows a script in the script panel (the UI opens it on its next frame). */
@@ -1287,6 +1472,9 @@ static const struct {
      "{path} -> {text}: a text asset (.luau, .json, .scene, .prefab, .prim, ...)"},
     {"write_file", wpe__cmd_write_file,
      "{path, text}: save a script (.luau) into the project (reloaded at once with hot reload on)"},
+    {"new_script", wpe__cmd_new_script,
+     "{path, template = \"behavior\"|\"physics\"|\"ui\"|\"module\"} -> {path}: a script from a template, "
+     "opened in the Script panel (refused when the file exists)"},
     {"check_script", wpe__cmd_check_script,
      "{text} -> {ok, line?, message?}: compile Luau without running it"},
     {"open_script", wpe__cmd_open_script,

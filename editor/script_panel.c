@@ -14,6 +14,7 @@
 #include "core/json.h"
 #include "core/log.h"
 #include "editor/api_docs.h"
+#include "editor/code_symbols.h"
 #include "editor/code_text.h"
 #include "editor/editor_internal.h"
 
@@ -70,9 +71,13 @@ struct WPE_ScriptPanel {
     wpe__ApiName* api;    /* The wpe table's names (read once from the script host). */
     uint32_t api_count;
     bool api_read;
-    /* Completion after "wpe.": the list, where the typed name starts, the highlighted entry. */
+    /* Completion: what is being completed, its candidates, the shown matches (indices into the candidates),
+     * the highlighted one; `exact`: what is typed is already a whole candidate (Enter then starts a line). */
     bool completing;
-    size_t completion_start;
+    WPE_CodeCompletion context;
+    bool api_list; /* The candidates are the wpe table's (their help comes from the docs). */
+    WPE_CodeSymbols candidates;
+    bool exact;
     uint32_t matches[WPE__COMPLETION_MAX];
     uint32_t match_count;
     uint32_t selected;
@@ -81,13 +86,14 @@ struct WPE_ScriptPanel {
     float cursor_x, cursor_y, line_h; /* Where the cursor was drawn (screen), for the popups. */
     wpe__Doc* docs[WPE__MAX_DOCS];
     uint32_t count;
-    int active;        /* Index of the shown tab, or -1. */
-    int select_tab;    /* A tab to bring to the front next frame, or -1. */
-    bool focus_code;   /* Give the code the keyboard next frame. */
-    bool focused;      /* The code had the keyboard this frame. */
-    bool dragging;     /* A mouse selection is being dragged. */
-    bool show_window;  /* Bring the panel to the front next frame. */
-    uint64_t log_seen; /* Log lines already scanned for runtime errors. */
+    int active;         /* Index of the shown tab, or -1. */
+    int select_tab;     /* A tab to bring to the front next frame, or -1. */
+    bool focus_code;    /* Give the code the keyboard next frame. */
+    bool focused;       /* The code had the keyboard this frame. */
+    bool dragging;      /* A mouse selection is being dragged. */
+    bool show_window;   /* Bring the panel to the front next frame. */
+    bool new_requested; /* The New script button was pressed. */
+    uint64_t log_seen;  /* Log lines already scanned for runtime errors. */
     /* Find bar. */
     bool find_open, find_focus;
     char find[128];
@@ -264,11 +270,18 @@ void wpe_script_panel_destroy(WPE_ScriptPanel* panel) {
         wpe__free_doc(panel->docs[i]);
     wpe_api_docs_free(&panel->api_docs);
     wpe_free(panel->api);
+    wpe_code_symbols_free(&panel->candidates);
     wpe_free(panel);
 }
 
 bool wpe_script_panel_focused(const WPE_ScriptPanel* panel) {
     return panel && panel->focused;
+}
+
+bool wpe_script_panel_take_new_request(WPE_ScriptPanel* panel) {
+    if (!panel || !panel->new_requested) return false;
+    panel->new_requested = false;
+    return true;
 }
 
 bool wpe_script_panel_dirty(const WPE_ScriptPanel* panel) {
@@ -445,14 +458,96 @@ static bool wpe__ident(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 }
 
-/* Where the name after "wpe." being typed at the cursor starts, or SIZE_MAX when the cursor isn't in one. */
-static size_t wpe__completion_context(const WPE_CodeText* t) {
-    size_t start = t->cursor;
-    while (start > 0 && wpe__ident(t->text[start - 1]))
-        --start;
-    if (start < 4 || memcmp(t->text + start - 4, "wpe.", 4) != 0) return SIZE_MAX;
-    if (start > 4 && (wpe__ident(t->text[start - 5]) || t->text[start - 5] == '.')) return SIZE_MAX;
-    return start;
+/* A project text file through the read_file command (NULL when it can't be read); free it. */
+static char* wpe__read_text(WPE_ScriptPanel* panel, const char* path) {
+    WPE_JsonWriter* w = wpe__command("read_file");
+    if (!w) return NULL;
+    wpe_json_write_key(w, "path");
+    wpe_json_write_string(w, path);
+    const WPE_JsonValue* result = NULL;
+    WPE_JsonDocument* reply = wpe__run(panel, w, &result);
+    const char* text = wpe_json_string(wpe_json_get(result, "text"));
+    char* copy = NULL;
+    if (text) {
+        const size_t n = strlen(text);
+        copy = wpe_alloc(n + 1);
+        if (copy) memcpy(copy, text, n + 1);
+    }
+    wpe_json_free(reply);
+    return copy;
+}
+
+/* The members of a `require`d module: the fields and functions of the table its file returns. */
+static bool wpe__module_members(WPE_ScriptPanel* panel, const char* module, WPE_CodeSymbols* out) {
+    char path[WPE_VFS_PATH_MAX];
+    const size_t n = strlen(module);
+    snprintf(path, sizeof path, "%s%s", module, n > 5 && strcmp(module + n - 5, ".luau") == 0 ? "" : ".luau");
+    char* text = wpe__read_text(panel, path);
+    if (!text) return true;
+    char name[WPE_CODE_SYMBOL_NAME_MAX];
+    bool ok = true;
+    if (wpe_code_symbols_returned(text, strlen(text), name, sizeof name))
+        ok = wpe_code_symbols_members(text, strlen(text), name, strlen(name), out);
+    wpe_free(text);
+    return ok;
+}
+
+/* Fills the candidates for the completion context: the wpe table's names after "wpe."; self's properties,
+ * fields and methods after "self."; a library's, a module's or a local table's members after "name."; and
+ * otherwise the names in scope, the globals and the keywords. */
+static bool wpe__collect_candidates(WPE_ScriptPanel* panel, const wpe__Doc* doc) {
+    const WPE_CodeText* t = &doc->text;
+    const WPE_CodeCompletion* c = &panel->context;
+    WPE_CodeSymbols* out = &panel->candidates;
+    out->count = 0;
+    panel->api_list = false;
+    if (c->kind == WPE_CODE_COMPLETE_NAME) {
+        if (!wpe_code_symbols_in_scope(t->text, t->length, t->cursor, out)) return false;
+        if (out->self_class[0] && !wpe_code_symbols_add(out, "self", 4, WPE_CODE_SYMBOL_LOCAL, 0))
+            return false;
+        return wpe_code_symbols_globals(out);
+    }
+    const char* object = t->text + c->object_start;
+    const size_t length = c->object_length;
+    if (length == 3 && memcmp(object, "wpe", 3) == 0) {
+        wpe__read_api(panel);
+        panel->api_list = true;
+        for (uint32_t i = 0; i < panel->api_count; ++i) {
+            const WPE_CodeSymbolKind kind =
+                panel->api[i].function ? WPE_CODE_SYMBOL_FUNCTION : WPE_CODE_SYMBOL_CONSTANT;
+            if (!wpe_code_symbols_add(out, panel->api[i].name, strlen(panel->api[i].name), kind, 0))
+                return false;
+        }
+        return true;
+    }
+    if (wpe_code_symbols_library(object, length, out)) return true;
+    /* The members are read from the file without the separator and what is typed after it: the unfinished
+     * name isn't a member yet, and neither is what happens to follow on the next line. */
+    const size_t cut_start = c->object_start + c->object_length;
+    const size_t text_length = t->length - (t->cursor - cut_start);
+    char* text = wpe_alloc(text_length + 1);
+    if (!text) return false;
+    memcpy(text, t->text, cut_start);
+    memcpy(text + cut_start, t->text + t->cursor, t->length - t->cursor);
+    text[text_length] = '\0';
+    WPE_CodeSymbols scope = {0};
+    bool ok = wpe_code_symbols_in_scope(t->text, t->length, t->cursor, &scope);
+    if (length == 4 && memcmp(object, "self", 4) == 0) {
+        /* An instance: its entity, the class's declared properties, what the file does with self, and the
+         * class's own functions. */
+        const char* cls = scope.self_class;
+        ok = ok && wpe_code_symbols_add(out, "entity", 6, WPE_CODE_SYMBOL_FIELD, 0) &&
+             wpe_code_symbols_properties(text, text_length, cls, strlen(cls), out) &&
+             wpe_code_symbols_members(text, text_length, "self", 4, out) &&
+             wpe_code_symbols_members(text, text_length, cls, strlen(cls), out);
+    } else {
+        ok = ok && wpe_code_symbols_members(text, text_length, object, length, out);
+        const WPE_CodeSymbol* local = wpe_code_symbols_find(&scope, object, length);
+        if (ok && local && local->module[0]) ok = wpe__module_members(panel, local->module, out);
+    }
+    wpe_code_symbols_free(&scope);
+    wpe_free(text);
+    return ok;
 }
 
 static bool wpe__starts_with(const char* name, const char* prefix, size_t length) {
@@ -467,24 +562,30 @@ static bool wpe__contains(const char* name, const char* part, size_t length) {
     return false;
 }
 
-/* The suggestions for what is typed after "wpe.": names that start with it first, then those containing it.
- */
+/* The suggestions for what is typed: candidates that start with it first, then those containing it. */
 static void wpe__update_matches(WPE_ScriptPanel* panel, const wpe__Doc* doc) {
-    wpe__read_api(panel);
-    const char* typed = doc->text.text + panel->completion_start;
-    const size_t length = doc->text.cursor - panel->completion_start;
     panel->match_count = 0;
+    panel->exact = false;
+    if (!wpe__collect_candidates(panel, doc)) wpe_log_warn("completion: out of memory");
+    const WPE_CodeSymbols* candidates = &panel->candidates;
+    const char* typed = doc->text.text + panel->context.start;
+    const size_t length = doc->text.cursor - panel->context.start;
     for (int pass = 0; pass < 2; ++pass) {
-        for (uint32_t i = 0; i < panel->api_count && panel->match_count < WPE__COMPLETION_MAX; ++i) {
-            const bool starts = wpe__starts_with(panel->api[i].name, typed, length);
-            if (pass == 0 ? starts
-                          : (!starts && length > 0 && wpe__contains(panel->api[i].name, typed, length)))
+        for (uint32_t i = 0; i < candidates->count && panel->match_count < WPE__COMPLETION_MAX; ++i) {
+            const WPE_CodeSymbol* s = &candidates->items[i];
+            /* After ":" only functions can be called. */
+            if (panel->context.separator == ':' && s->kind != WPE_CODE_SYMBOL_METHOD &&
+                s->kind != WPE_CODE_SYMBOL_FUNCTION)
+                continue;
+            const bool starts = wpe__starts_with(s->name, typed, length);
+            if (pass == 0 ? starts : (!starts && length > 0 && wpe__contains(s->name, typed, length)))
                 panel->matches[panel->match_count++] = i;
+            if (pass == 0 && strlen(s->name) == length && memcmp(s->name, typed, length) == 0)
+                panel->exact = true;
         }
     }
     /* Exactly what is typed: nothing left to suggest. */
-    if (panel->match_count == 1 && strlen(panel->api[panel->matches[0]].name) == length)
-        panel->match_count = 0;
+    if (panel->match_count == 1 && panel->exact) panel->match_count = 0;
     if (panel->match_count == 0) panel->completing = false;
     if (panel->selected >= panel->match_count) panel->selected = 0;
     panel->list_follow = true; /* New matches: show the highlighted one. */
@@ -493,16 +594,16 @@ static void wpe__update_matches(WPE_ScriptPanel* panel, const wpe__Doc* doc) {
 /* Puts the highlighted suggestion in place of what was typed (with "(" after a function). */
 static void wpe__accept(WPE_ScriptPanel* panel, wpe__Doc* doc) {
     if (!panel->completing || panel->match_count == 0) return;
-    const wpe__ApiName* api = &panel->api[panel->matches[panel->selected]];
+    const WPE_CodeSymbol* s = &panel->candidates.items[panel->matches[panel->selected]];
     WPE_CodeText* t = &doc->text;
     size_t end = t->cursor;
     while (end < t->length && wpe__ident(t->text[end])) /* The rest of a name the cursor is inside. */
         ++end;
-    wpe_code_text_set_cursor(t, panel->completion_start, false);
+    wpe_code_text_set_cursor(t, panel->context.start, false);
     wpe_code_text_set_cursor(t, end, true);
-    wpe_code_text_insert(t, api->name, strlen(api->name));
-    if (api->function && (t->cursor >= t->length || t->text[t->cursor] != '('))
-        wpe_code_text_insert(t, "(", 1);
+    wpe_code_text_insert(t, s->name, strlen(s->name));
+    const bool call = s->kind == WPE_CODE_SYMBOL_FUNCTION || s->kind == WPE_CODE_SYMBOL_METHOD;
+    if (call && (t->cursor >= t->length || t->text[t->cursor] != '(')) wpe_code_text_insert(t, "(", 1);
     panel->completing = false;
     doc->check_wait = WPE__CHECK_DELAY;
     doc->follow_cursor = true;
@@ -583,9 +684,10 @@ static void wpe__completion_popup(WPE_ScriptPanel* panel, wpe__Doc* doc) {
         uint32_t help_index = panel->selected; /* The hovered entry's help, else the highlighted one's. */
         igBeginGroup();
         for (uint32_t i = panel->list_first; i < panel->list_first + shown && i < panel->match_count; ++i) {
-            const wpe__ApiName* api = &panel->api[panel->matches[i]];
-            char label[WPE__API_NAME_MAX + 8];
-            snprintf(label, sizeof label, "%s%s", api->name, api->function ? "()" : "");
+            const WPE_CodeSymbol* s = &panel->candidates.items[panel->matches[i]];
+            const bool call = s->kind == WPE_CODE_SYMBOL_FUNCTION || s->kind == WPE_CODE_SYMBOL_METHOD;
+            char label[WPE_CODE_SYMBOL_NAME_MAX + 16];
+            snprintf(label, sizeof label, "%s%s##%u", s->name, call ? "()" : "", i);
             if (igSelectable_Bool(label, i == panel->selected, 0, (ImVec2_c){200, 0})) {
                 panel->selected = i;
                 wpe__accept(panel, doc);
@@ -598,16 +700,34 @@ static void wpe__completion_popup(WPE_ScriptPanel* panel, wpe__Doc* doc) {
                            panel->match_count);
         igEndGroup();
         if (panel->completing && help_index < panel->match_count) {
-            const wpe__ApiName* api = &panel->api[panel->matches[help_index]];
-            const WPE_ApiDoc* help = wpe_api_docs_find(&panel->api_docs, api->name, strlen(api->name));
+            const WPE_CodeSymbol* s = &panel->candidates.items[panel->matches[help_index]];
+            const WPE_ApiDoc* help =
+                panel->api_list ? wpe_api_docs_find(&panel->api_docs, s->name, strlen(s->name)) : NULL;
             igSameLine(0, -1);
             igBeginGroup();
             if (help) {
                 wpe__doc_text(help);
-            } else if (api->function) {
-                igTextDisabled("wpe.%s(...)", api->name);
             } else {
-                igTextDisabled("wpe.%s: a constant", api->name);
+                static const char* const kinds[] = {
+                    [WPE_CODE_SYMBOL_LOCAL] = "local",       [WPE_CODE_SYMBOL_PARAMETER] = "parameter",
+                    [WPE_CODE_SYMBOL_FUNCTION] = "function", [WPE_CODE_SYMBOL_METHOD] = "method",
+                    [WPE_CODE_SYMBOL_FIELD] = "field",       [WPE_CODE_SYMBOL_CONSTANT] = "constant",
+                    [WPE_CODE_SYMBOL_LIBRARY] = "library",   [WPE_CODE_SYMBOL_KEYWORD] = "keyword"};
+                const WPE_CodeCompletion* c = &panel->context;
+                if (c->kind == WPE_CODE_COMPLETE_MEMBER) {
+                    igTextColored((ImVec4_c){0.93f, 0.60f, 0.22f, 1.0f}, "%.*s%c%s", (int)c->object_length,
+                                  doc->text.text + c->object_start, c->separator, s->name);
+                } else {
+                    igTextColored((ImVec4_c){0.93f, 0.60f, 0.22f, 1.0f}, "%s", s->name);
+                }
+                if (strcmp(s->name, "self") == 0 && panel->candidates.self_class[0]) {
+                    igTextDisabled("this instance of %s", panel->candidates.self_class);
+                } else if (s->line) {
+                    igTextDisabled("%s, line %u", kinds[s->kind], s->line);
+                } else {
+                    igTextDisabled("%s", kinds[s->kind]);
+                }
+                if (s->module[0]) igTextDisabled("require(\"%s\")", s->module);
             }
             igEndGroup();
         }
@@ -641,16 +761,19 @@ static void wpe__keyboard(WPE_ScriptPanel* panel, wpe__Doc* doc, uint32_t page) 
     const bool ctrl = io->KeyCtrl, shift = io->KeyShift;
     const uint64_t before = t->version;
     const size_t cursor_before = t->cursor;
-    /* The suggestion list takes up/down, Enter, Tab and Esc while it is open. */
+    /* The suggestion list takes up/down, Enter, Tab and Esc while it is open. When what is typed is already
+     * a whole name (`end`, a local), Enter starts a new line instead; Tab still takes the suggestion. */
     const bool listing = panel->completing && panel->match_count > 0;
+    const bool enter = wpe__key(ImGuiKey_Enter) || wpe__key(ImGuiKey_KeypadEnter);
+    const bool enter_accepts = listing && !panel->exact;
     if (listing) {
         if (wpe__key(ImGuiKey_DownArrow) || wpe__key(ImGuiKey_UpArrow)) panel->list_follow = true;
         if (wpe__key(ImGuiKey_DownArrow)) panel->selected = (panel->selected + 1) % panel->match_count;
         if (wpe__key(ImGuiKey_UpArrow))
             panel->selected = (panel->selected + panel->match_count - 1) % panel->match_count;
-        if (wpe__key(ImGuiKey_Enter) || wpe__key(ImGuiKey_KeypadEnter) || wpe__key(ImGuiKey_Tab))
-            wpe__accept(panel, doc);
-        if (igIsKeyPressed_Bool(ImGuiKey_Escape, false)) panel->completing = false;
+        if ((enter && enter_accepts) || wpe__key(ImGuiKey_Tab)) wpe__accept(panel, doc);
+        if (igIsKeyPressed_Bool(ImGuiKey_Escape, false) || (enter && !enter_accepts))
+            panel->completing = false;
     }
     static const struct {
         ImGuiKey key;
@@ -668,7 +791,7 @@ static void wpe__keyboard(WPE_ScriptPanel* panel, wpe__Doc* doc, uint32_t page) 
         if (wpe__key(moves[i].key) && !(listing && vertical))
             wpe_code_text_move(t, ctrl ? moves[i].with_ctrl : moves[i].plain, shift, page);
     }
-    if (!listing && (wpe__key(ImGuiKey_Enter) || wpe__key(ImGuiKey_KeypadEnter))) wpe_code_text_newline(t);
+    if (enter && !enter_accepts) wpe_code_text_newline(t);
     if (wpe__key(ImGuiKey_Backspace)) wpe_code_text_erase(t, false);
     if (wpe__key(ImGuiKey_Delete)) wpe_code_text_erase(t, true);
     if (!listing && wpe__key(ImGuiKey_Tab)) wpe_code_text_indent(t, shift);
@@ -734,15 +857,19 @@ static void wpe__keyboard(WPE_ScriptPanel* panel, wpe__Doc* doc, uint32_t page) 
     if (igIsKeyPressed_Bool(ImGuiKey_F3, true)) wpe__find_next(panel, doc, !shift);
     if (t->version != before) doc->check_wait = WPE__CHECK_DELAY;
     if (t->version != before || t->cursor != cursor_before) doc->follow_cursor = true;
-    /* Suggestions open as a name after "wpe." is typed (or on Ctrl+Space), follow the typing, and close when
-     * the cursor leaves the name. */
-    const size_t context = wpe__completion_context(t);
-    if (context == SIZE_MAX) {
+    /* Suggestions open as a member after "name." or a plain name of two letters is typed (or on Ctrl+Space),
+     * follow the typing, and close when the cursor leaves the name. */
+    const WPE_CodeCompletion context = wpe_code_completion_at(t->text, t->length, t->cursor);
+    const size_t typed_length = t->cursor - context.start;
+    const bool possible =
+        context.kind == WPE_CODE_COMPLETE_MEMBER ||
+        (context.kind == WPE_CODE_COMPLETE_NAME && (ask || typed_length >= (panel->completing ? 1u : 2u)));
+    if (!possible) {
         panel->completing = false;
     } else if (typed || ask || (panel->completing && (t->version != before || t->cursor != cursor_before))) {
         if (!panel->completing) panel->selected = 0;
         panel->completing = true;
-        panel->completion_start = context;
+        panel->context = context;
         wpe__update_matches(panel, doc);
     }
 }
@@ -1019,6 +1146,7 @@ void wpe_script_panel_draw(WPE_ScriptPanel* panel) {
         igTextDisabled(
             "No script open. Double-click a .luau file in Assets, use the inspector's Edit button,");
         igTextDisabled("or double-click an error naming a script in the Console.");
+        if (igButton("New script", (ImVec2_c){0, 0})) panel->new_requested = true;
     }
     if (panel->count > 0 &&
         igBeginTabBar("##scripts", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs)) {
@@ -1040,6 +1168,9 @@ void wpe_script_panel_draw(WPE_ScriptPanel* panel) {
                     panel->find_open = !panel->find_open;
                     panel->find_focus = panel->find_open;
                 }
+                igSameLine(0, -1);
+                if (igButton("New", (ImVec2_c){0, 0})) panel->new_requested = true;
+                if (igIsItemHovered(0)) igSetTooltip("A new script from a template");
                 igSameLine(0, -1);
                 igTextDisabled("Ln %u, Col %u", wpe_code_text_line_of(&doc->text, doc->text.cursor) + 1,
                                wpe_code_text_column(&doc->text, doc->text.cursor) + 1);

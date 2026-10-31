@@ -69,6 +69,20 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (editor: new scripts from templates, completion for the script's own names)
+- `new_script {path, template}`: a script from a template (`behavior`, `physics`, `ui`, `module`), its
+  class or module named after the file (`enemy_spawner.luau` declares `EnemySpawner`), opened in the
+  Script panel; refused when the file exists. The UI asks for the path and template from the Script
+  panel's **New** button or **New script** in Assets.
+- Completion beyond `wpe.`: `self.` lists the declared properties, the fields the file sets on `self` and
+  the class's functions (`self:` only methods); `name.` a local table's fields and functions, a
+  `require`d module's (read from its file) or a library's (`math`, `string`, `table`, `vector`, ...).
+  Plain names (from two letters) list the locals in scope (innermost first, with their line),
+  parameters, `self` in methods, globals and keywords. When the typed text is already a whole name,
+  Enter starts a new line instead of inserting.
+- `editor/code_symbols.{h,c}`: a small Luau lexer and scans for this (scopes follow the block keywords,
+  so unfinished code works too); unit tests cover the context rules, scopes and members.
+
 ### Added (editor: script completion and API help)
 - Completion after `wpe.`: matching functions and constants (prefix matches first, then substring),
   with the highlighted entry's signature and description; ↑/↓, Enter/Tab inserts (and `(` after a
