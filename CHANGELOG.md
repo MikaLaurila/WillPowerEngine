@@ -72,7 +72,8 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ### Added (editor: script completion and API help)
 - Completion after `wpe.`: matching functions and constants (prefix matches first, then substring),
   with the highlighted entry's signature and description; ↑/↓, Enter/Tab inserts (and `(` after a
-  function), Esc, Ctrl+Space. Hovering a `wpe.` function shows its help; inside a call's parentheses the
+  function), Esc, Ctrl+Space. The mouse wheel scrolls the list, and hovering an entry shows its help
+  (the counter under it shows which entries are in view). Hovering a `wpe.` function shows its help; inside a call's parentheses the
   signature shows above the line.
 - The names come from the running VM (`wpe_script_host_list_api`); signatures and descriptions from
   docs/scripting.md, embedded in the editor at configure time and parsed by `editor/api_docs.{h,c}`.

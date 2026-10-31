@@ -76,6 +76,8 @@ struct WPE_ScriptPanel {
     uint32_t matches[WPE__COMPLETION_MAX];
     uint32_t match_count;
     uint32_t selected;
+    uint32_t list_first; /* The first suggestion shown (the wheel scrolls the list). */
+    bool list_follow;    /* Scroll the list to the highlighted entry (after the keyboard moved it). */
     float cursor_x, cursor_y, line_h; /* Where the cursor was drawn (screen), for the popups. */
     wpe__Doc* docs[WPE__MAX_DOCS];
     uint32_t count;
@@ -485,6 +487,7 @@ static void wpe__update_matches(WPE_ScriptPanel* panel, const wpe__Doc* doc) {
         panel->match_count = 0;
     if (panel->match_count == 0) panel->completing = false;
     if (panel->selected >= panel->match_count) panel->selected = 0;
+    panel->list_follow = true; /* New matches: show the highlighted one. */
 }
 
 /* Puts the highlighted suggestion in place of what was typed (with "(" after a function). */
@@ -563,11 +566,23 @@ static void wpe__completion_popup(WPE_ScriptPanel* panel, wpe__Doc* doc) {
     igSetNextWindowPos((ImVec2_c){panel->cursor_x, panel->cursor_y + panel->line_h}, 0, (ImVec2_c){0, 0});
     wpe__push_style();
     if (igBegin("##wpe_completion", NULL, wpe__popup_flags)) {
-        igBeginGroup();
+        /* Twelve at a time: the wheel scrolls them, the keyboard brings the highlighted one into view. */
         const uint32_t shown = panel->match_count < 12 ? panel->match_count : 12;
-        /* Twelve at a time, scrolled to the highlighted entry. */
-        const uint32_t first = panel->selected >= shown ? panel->selected - shown + 1 : 0;
-        for (uint32_t i = first; i < first + shown && i < panel->match_count; ++i) {
+        const uint32_t last_first = panel->match_count - shown;
+        if (panel->list_follow) {
+            if (panel->selected < panel->list_first) panel->list_first = panel->selected;
+            if (panel->selected >= panel->list_first + shown) panel->list_first = panel->selected - shown + 1;
+            panel->list_follow = false;
+        }
+        const float wheel = igGetIO_Nil()->MouseWheel;
+        if (wheel != 0.0f && igIsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
+            const int64_t moved = (int64_t)panel->list_first - (int64_t)(wheel * 3.0f);
+            panel->list_first = moved < 0 ? 0 : (uint32_t)moved;
+        }
+        if (panel->list_first > last_first) panel->list_first = last_first;
+        uint32_t help_index = panel->selected; /* The hovered entry's help, else the highlighted one's. */
+        igBeginGroup();
+        for (uint32_t i = panel->list_first; i < panel->list_first + shown && i < panel->match_count; ++i) {
             const wpe__ApiName* api = &panel->api[panel->matches[i]];
             char label[WPE__API_NAME_MAX + 8];
             snprintf(label, sizeof label, "%s%s", api->name, api->function ? "()" : "");
@@ -576,11 +591,14 @@ static void wpe__completion_popup(WPE_ScriptPanel* panel, wpe__Doc* doc) {
                 wpe__accept(panel, doc);
                 panel->focus_code = true;
             }
+            if (igIsItemHovered(0)) help_index = i;
         }
-        if (panel->match_count > shown) igTextDisabled("%u more", panel->match_count - shown);
+        if (panel->match_count > shown)
+            igTextDisabled("%u-%u of %u (wheel scrolls)", panel->list_first + 1, panel->list_first + shown,
+                           panel->match_count);
         igEndGroup();
-        if (panel->completing && panel->selected < panel->match_count) {
-            const wpe__ApiName* api = &panel->api[panel->matches[panel->selected]];
+        if (panel->completing && help_index < panel->match_count) {
+            const wpe__ApiName* api = &panel->api[panel->matches[help_index]];
             const WPE_ApiDoc* help = wpe_api_docs_find(&panel->api_docs, api->name, strlen(api->name));
             igSameLine(0, -1);
             igBeginGroup();
@@ -626,6 +644,7 @@ static void wpe__keyboard(WPE_ScriptPanel* panel, wpe__Doc* doc, uint32_t page) 
     /* The suggestion list takes up/down, Enter, Tab and Esc while it is open. */
     const bool listing = panel->completing && panel->match_count > 0;
     if (listing) {
+        if (wpe__key(ImGuiKey_DownArrow) || wpe__key(ImGuiKey_UpArrow)) panel->list_follow = true;
         if (wpe__key(ImGuiKey_DownArrow)) panel->selected = (panel->selected + 1) % panel->match_count;
         if (wpe__key(ImGuiKey_UpArrow))
             panel->selected = (panel->selected + panel->match_count - 1) % panel->match_count;
