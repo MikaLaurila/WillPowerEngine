@@ -69,6 +69,24 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (animation state machines)
+- `graphics/anim_states.h`: graphs of parameters (numbers, bools, buffered triggers), states (an
+  animation, loop, speed, an optional speed parameter, events at clip times) and ordered transitions
+  (from a state or any; conditions on parameters; `exit` at a point of the clip; `window`, a span of it in
+  which the transition may fire; fade; restart). Component `WPE_AnimStates` (`WPE_COMP_ANIM_STATES` 26)
+  runs one on the entity's animator: its add hook copies the graph, its remove hook frees it.
+  `wpe_anim_states_update` fires transitions before the animation update, `wpe_anim_states_scan` finds the
+  events after it; both queue notices.
+- Luau: `wpe.set_anim_states(entity, graph)`, `anim_set`, `anim_trigger`, `anim_get`, `anim_state`,
+  `anim_play`, `remove_anim_states`; the builder's script gets `on_animation_state(state)` and
+  `on_animation_event(name)` (`wpe_script_host_dispatch_animation`, after the animation update).
+- Demo: Beowulf's sword scene runs on a state machine: Fire starts Slash0, pressing again late in a swing
+  chains the next (a combo to Slash5, with input buffering), the trail and katana follow the states; by
+  itself it plays the whole combo. Properties `slash_speed` and `combo_window`.
+- Tests: a graph on Beowulf's clips frame by frame (start state, speed parameter, a trigger lapsing, any
+  transitions, a press buffered into a combo window, events firing once, exits, entering by name,
+  copies owning their graph, bad graphs refused); the API tour builds one and hears its events.
+
 ### Added (tweens and scene transitions)
 - Tweens (`wpe.tween`, `wpe.tween_value`, `cancel_tween`, `stop_tweens`, `is_tweening`): a transform's
   position, rotation (shorter arc, overshoot allowed) and scale, or any number through a function,

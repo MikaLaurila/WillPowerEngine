@@ -9,6 +9,7 @@
 #include "core/debug.h"
 #include "core/fixed_step.h"
 #include "core/log.h"
+#include "graphics/anim_states.h"
 #include "graphics/animation.h"
 #include "graphics/debug_lines.h"
 #include "graphics/draw2d.h"
@@ -574,7 +575,14 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
     }
     engine->stats.fixed_steps = steps;
     if (result == WPE_RESULT_OK) result = wpe_script_host_update(engine->scripts, (float)dt);
+    /* State machines pick clips from what the scripts set, the animators play them, then the events the clips
+     * passed reach the scripts. */
+    if (result == WPE_RESULT_OK) wpe_anim_states_update(engine->ecs, (float)dt);
     if (result == WPE_RESULT_OK) result = wpe_animation_update(engine->ecs, (float)dt);
+    if (result == WPE_RESULT_OK) {
+        wpe_anim_states_scan(engine->ecs);
+        result = wpe_script_host_dispatch_animation(engine->scripts);
+    }
     if (result == WPE_RESULT_OK) wpe_billboard_update(engine->ecs, (float)dt);
     if (result == WPE_RESULT_OK) wpe_surface_update(engine->ecs, (float)dt);
     /* Before transforms: a slash's head entity moves, and emitters on it emit from there this frame. */

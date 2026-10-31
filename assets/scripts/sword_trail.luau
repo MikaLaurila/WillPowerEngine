@@ -3,8 +3,10 @@
 -- "blade_base" and "blade_tip" made in Blender (parented to the bone), or, for a model without them, points
 -- added here (in the hand's own space the blade runs along +Z, from the guard to the tip at about 1.95).
 --
--- Each slash shows the drawn katana (hiding the one in the saya), records the trail while the slash plays,
--- then goes back to Idle with the katana sheathed. Fire slashes; with `auto` it also slashes by itself.
+-- His animation runs on a state machine (wpe.set_anim_states): Fire triggers "attack"; from Idle that starts
+-- Slash0, and pressing again late in a swing chains the next one (Slash0 to Slash5: a combo), else the swing
+-- ends back in Idle. Entering a slash shows the drawn katana (hiding the one in the saya) and records the
+-- trail; Idle sheathes it again (on_animation_state). With `auto` it also slashes by itself.
 -- Special (Q, right shoulder) slashes and sends a wave: a Bezier slash (a crescent drawn as it flies)
 -- with sparks on its head, a short radial blur and a blue tint. Spell (E, left shoulder) draws a big curve from his
 -- hand over to the ground, a faint line along which a red emitter travels, leaving blobs on the curve.
@@ -15,6 +17,8 @@ SwordTrail.properties = {
 	auto = true, -- slash by itself every `interval` seconds
 	interval = 2.2,
 	fade = 0.15, -- crossfade between animations, seconds
+	slash_speed = 1, -- playback rate of the swings (below 1: slower)
+	combo_window = 0.45, -- how far into a swing (0..1) the next attack is taken for the combo
 }
 
 local SLASHES = { "Slash0", "Slash1", "Slash2", "Slash3", "Slash4", "Slash5" }
@@ -58,11 +62,53 @@ function SwordTrail:on_start()
 		base = base, tip = tip, emitting = false, lifetime = 0.22, width_end = 0.25,
 		color_start = wpe.color(0.8, 0.9, 1, 0.85), color_end = wpe.color(0.35, 0.45, 1, 0),
 	})
-	self.next_slash = 1
 	self.wait = 0.6
 	self:sheathe(true)
+	self:make_states()
 	self:make_wave()
 	self:make_spell()
+end
+
+-- The state machine: Idle, and the six slashes chained into a combo. An attack in Idle starts the first; one
+-- late in a swing (from `combo_window` of it on) goes on to the next; a swing that ends goes back to Idle.
+function SwordTrail:make_states()
+	local states = { Idle = { clip = "Idle", loop = true } }
+	local transitions = { { from = "Idle", to = SLASHES[1], when = { "attack" }, fade = self.fade } }
+	for i, name in SLASHES do
+		states[name] = { clip = name, speed = self.slash_speed }
+		local next_slash = SLASHES[i + 1]
+		if next_slash then
+			table.insert(transitions, {
+				from = name, to = next_slash, when = { "attack" }, window = { self.combo_window, 1 }, fade = self.fade,
+			})
+		end
+		table.insert(transitions, { from = name, to = "Idle", exit = 1, fade = self.fade })
+	end
+	wpe.set_anim_states(self.figure, {
+		params = { attack = "trigger" },
+		states = states,
+		start = "Idle",
+		transitions = transitions,
+		buffer = 0.25, -- an attack pressed this early still counts
+	})
+end
+
+-- Each swing: the drawn katana and a fresh trail. Back in Idle: the trail fades, the katana goes home.
+function SwordTrail:on_animation_state(state: string)
+	if state == "Idle" then
+		wpe.set_trail(self.entity, { emitting = false })
+		self:sheathe(true)
+		if self.swinging then
+			self.wait = self.interval -- A pause after a combo (not when it first stands there).
+		end
+		self.swinging = false
+		self.auto_combo = false
+	else
+		self.swinging = true
+		wpe.clear_trail(self.entity) -- a new swing doesn't join the last
+		wpe.set_trail(self.entity, { emitting = true })
+		self:sheathe(false)
+	end
 end
 
 -- The spell: a slash used as a faint line (thin, see-through, the whole curve showing), and red blobs left
@@ -187,40 +233,29 @@ function SwordTrail:sheathe(sheathed: boolean)
 	end
 end
 
-function SwordTrail:slash()
-	local name = SLASHES[self.next_slash]
-	self.next_slash = self.next_slash % #SLASHES + 1
-	wpe.play_animation(self.figure, name, false, self.fade)
-	wpe.clear_trail(self.entity) -- a new swing doesn't join the last
-	wpe.set_trail(self.entity, { emitting = true })
-	self:sheathe(false)
-	self.slashing = true
-end
-
 function SwordTrail:on_update(dt)
 	self:update_wave(dt)
 	self:update_spell(dt)
 	if wpe.action_pressed("spell") and not self.spell_time then
 		self:cast_spell()
 	end
-	if self.slashing then
-		if not wpe.get_animation(self.figure).playing then
-			-- The swing ended: the trail fades out, the katana goes back to the saya.
-			self.slashing = false
-			wpe.set_trail(self.entity, { emitting = false })
-			wpe.play_animation(self.figure, "Idle", true, self.fade)
-			self:sheathe(true)
-			self.wait = self.interval
-		end
-	elseif wpe.action_pressed("fire") then
-		self:slash()
+	-- The state machine decides what an attack does: start a swing, chain the next, or wait in the buffer.
+	if wpe.action_pressed("fire") then
+		wpe.anim_trigger(self.figure, "attack")
 	elseif wpe.action_pressed("special") and not self.wave_pending then
-		self:slash()
+		wpe.anim_trigger(self.figure, "attack")
 		self:send_wave()
-	elseif self.auto then
+	elseif self.auto_combo then
+		-- Keeps the combo going; not in its last swing, where a buffered attack would start it over from Idle.
+		if wpe.anim_state(self.figure) ~= SLASHES[#SLASHES] then
+			wpe.anim_trigger(self.figure, "attack")
+		end
+	elseif self.auto and wpe.anim_state(self.figure) == "Idle" then
 		self.wait -= dt
 		if self.wait <= 0 then
-			self:slash()
+			-- By itself it plays the whole combo.
+			self.auto_combo = true
+			wpe.anim_trigger(self.figure, "attack")
 		end
 	end
 end

@@ -3,6 +3,7 @@
 
 #include "assets/font.h"
 #include "assets/procedural.h"
+#include "graphics/anim_states.h"
 #include "graphics/animation.h"
 #include "graphics/debug_lines.h"
 #include "graphics/draw2d.h"
@@ -251,6 +252,196 @@ static void test_graphics_animation_crossfade_between_clips(void) {
     WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, length));
     WPE_TEST_ASSERT(!animator->playing);
     WPE_TEST_ASSERT_NEAR(length, animator->time, 0);
+
+    wpe_ecs_destroy(ecs);
+    wpe_asset_release(t.assets, handle);
+    wpe_test_assets_destroy(&t);
+}
+
+/* ---- Animation state machines ------------------------------------------------------------------------ */
+
+static void anim_step(WPE_Ecs* ecs, float dt) {
+    wpe_anim_states_update(ecs, dt);
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, dt));
+    wpe_anim_states_scan(ecs);
+}
+
+/* How many notices of a kind (and, for events, name) are queued; clears the queue when `drain`. */
+static uint32_t anim_notices(WPE_AnimStates* st, WPE_AnimNoticeKind kind, const char* name, bool drain) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < st->queue_count; ++i) {
+        if (st->queue[i].kind != kind) continue;
+        const char* what = kind == WPE_ANIM_NOTICE_EVENT ? st->graph->events[st->queue[i].index].name
+                                                         : st->graph->states[st->queue[i].index].name;
+        n += !name || strcmp(what, name) == 0;
+    }
+    if (drain) st->queue_count = 0;
+    return n;
+}
+
+static float anim_progress(const WPE_Animator* animator) {
+    return animator->time / animator->model->animations[animator->animation].duration;
+}
+
+static void test_graphics_anim_states(void) {
+    WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 0);
+    const WPE_AssetHandle handle = wpe_test_load_model(t.assets, "meshes/Beowulf.glb");
+    const WPE_Model* model = wpe_asset_model(t.assets, handle);
+    const uint32_t idle = wpe_model_find_animation(model, "Idle"),
+                   run = wpe_model_find_animation(model, "Run");
+    const uint32_t slash0 = wpe_model_find_animation(model, "Slash0");
+    const uint32_t slash1 = wpe_model_find_animation(model, "Slash1");
+    const float length0 = model->animations[slash0].duration;
+    WPE_TEST_ASSERT(length0 > 0.5f && model->animations[slash1].duration > 0.1f);
+
+    /* Idle <-> Run by speed (the run's rate follows it), any -> Slash0 on attack while armed, Slash0 ->
+     * Slash1 on attack late in the swing (the combo), both back to Idle at their ends. Slash0 has events. */
+    const WPE_AnimParam params[] = {{.name = "speed", .type = WPE_ANIM_PARAM_NUMBER},
+                                    {.name = "attack", .type = WPE_ANIM_PARAM_TRIGGER},
+                                    {.name = "armed", .type = WPE_ANIM_PARAM_BOOL}};
+    const WPE_AnimEvent events[] = {{.name = "hit", .time = length0 * 0.4f}, {.name = "start", .time = 0.0f}};
+    const WPE_AnimState states[] = {
+        {.name = "Idle", .animation = idle, .loop = true, .speed = 1, .speed_param = WPE_ANIM_ANY},
+        {.name = "Run", .animation = run, .loop = true, .speed = 0.5f, .speed_param = 0},
+        {.name = "Slash0",
+         .animation = slash0,
+         .speed = 1,
+         .speed_param = WPE_ANIM_ANY,
+         .first_event = 0,
+         .event_count = 2},
+        {.name = "Slash1", .animation = slash1, .speed = 1, .speed_param = WPE_ANIM_ANY}};
+    const WPE_AnimCondition conditions[] = {{.param = 1, .compare = WPE_ANIM_IS_SET},
+                                            {.param = 0, .compare = WPE_ANIM_GREATER, .value = 0.5f},
+                                            {.param = 0, .compare = WPE_ANIM_LESS_EQUAL, .value = 0.5f},
+                                            {.param = 1, .compare = WPE_ANIM_IS_SET},
+                                            {.param = 2, .compare = WPE_ANIM_IS_SET}};
+#define T(f, t_, e, ws, c0, cn)                                                                              \
+    {                                                                                                        \
+        .from = (f), .to = (t_), .fade = 0.1f, .exit = (e), .window_start = (ws), .window_end = 1.0f,        \
+        .first_condition = (c0), .condition_count = (cn)                                                     \
+    }
+    const WPE_AnimTransition transitions[] = {
+        T(2, 3, -1.0f, 0.3f, 0, 1), T(2, 0, 1.0f, 0.0f, 0, 0),  T(3, 0, 1.0f, 0.0f, 0, 0),
+        T(0, 1, -1.0f, 0.0f, 1, 1), T(1, 0, -1.0f, 0.0f, 2, 1), T(WPE_ANIM_ANY, 2, -1.0f, 0.0f, 3, 2)};
+#undef T
+    WPE_AnimGraph* graph = NULL;
+    WPE_TEST_ASSERT_OK(wpe_anim_graph_create(&(WPE_AnimGraphDesc){.params = params,
+                                                                  .param_count = 3,
+                                                                  .states = states,
+                                                                  .state_count = 4,
+                                                                  .transitions = transitions,
+                                                                  .transition_count = 6,
+                                                                  .conditions = conditions,
+                                                                  .condition_count = 5,
+                                                                  .events = events,
+                                                                  .event_count = 2,
+                                                                  .trigger_buffer = 0.2f},
+                                             &graph));
+    WPE_TEST_ASSERT_EQ_STR("start", graph->events[0].name); /* Sorted by time. */
+
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_Entity root = WPE_ENTITY_NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(
+        ecs, t.assets, handle, &(WPE_InstantiateOptions){.animation = run, .play = false}, &root));
+    WPE_TEST_ASSERT_OK(
+        wpe_ecs_add_component(ecs, root, WPE_COMP_ANIM_STATES, &(WPE_AnimStates){.graph = graph}, NULL));
+    wpe_anim_graph_destroy(graph); /* The component has its own copy. */
+    WPE_AnimStates* st = wpe_ecs_get_component(ecs, root, WPE_COMP_ANIM_STATES);
+    WPE_Animator* animator = wpe_ecs_get_component(ecs, root, WPE_COMP_ANIMATOR);
+    const float dt = 1.0f / 30.0f;
+
+    /* The first update enters the start state. */
+    anim_step(ecs, dt);
+    WPE_TEST_ASSERT_EQ_UINT(0, st->state);
+    WPE_TEST_ASSERT_EQ_UINT(idle, animator->animation);
+    WPE_TEST_ASSERT_EQ_UINT(1, anim_notices(st, WPE_ANIM_NOTICE_STATE, "Idle", true));
+
+    /* Speed: Idle -> Run, played at half the speed parameter. */
+    WPE_TEST_ASSERT(wpe_anim_states_set(st, "speed", 2.0f));
+    anim_step(ecs, dt);
+    WPE_TEST_ASSERT_EQ_UINT(run, animator->animation);
+    WPE_TEST_ASSERT_NEAR(1.0, animator->speed, 1e-6);
+    WPE_TEST_ASSERT(wpe_anim_states_set(st, "speed", 3.0f));
+    anim_step(ecs, dt);
+    WPE_TEST_ASSERT_NEAR(1.5, animator->speed, 1e-6);
+
+    /* An attack while unarmed lapses after the buffer time. */
+    WPE_TEST_ASSERT(wpe_anim_states_trigger(st, "attack"));
+    for (int i = 0; i < 7; ++i)
+        anim_step(ecs, dt);
+    WPE_TEST_ASSERT_EQ_UINT(1, st->state);
+    WPE_TEST_ASSERT_NEAR(0.0, st->values[1], 0);
+
+    /* Armed, it slashes from any state; the trigger is used up; "start" fires at once, "hit" once. */
+    WPE_TEST_ASSERT(wpe_anim_states_set(st, "armed", 5.0f)); /* Bools are 0 or 1. */
+    WPE_TEST_ASSERT_NEAR(1.0, st->values[2], 0);
+    WPE_TEST_ASSERT(wpe_anim_states_trigger(st, "attack"));
+    anim_step(ecs, dt);
+    WPE_TEST_ASSERT_EQ_UINT(slash0, animator->animation);
+    WPE_TEST_ASSERT_NEAR(0.0, st->values[1], 0);
+    WPE_TEST_ASSERT_EQ_UINT(1, anim_notices(st, WPE_ANIM_NOTICE_STATE, "Slash0", false));
+    WPE_TEST_ASSERT_EQ_UINT(1, anim_notices(st, WPE_ANIM_NOTICE_EVENT, "start", true));
+    uint32_t hits = 0;
+    /* Up to 0.1 s before the combo window opens (at 30% of the swing). */
+    while (anim_progress(animator) < 0.3f - 0.1f / length0) {
+        anim_step(ecs, dt);
+        hits += anim_notices(st, WPE_ANIM_NOTICE_EVENT, "hit", true);
+    }
+    /* Pressed a little early, the attack waits in the buffer and fires as the window opens. */
+    WPE_TEST_ASSERT(wpe_anim_states_trigger(st, "attack"));
+    while (st->state == 2) {
+        WPE_TEST_ASSERT(st->values[1] > 0.0f); /* Still buffered. */
+        WPE_TEST_ASSERT(anim_progress(animator) < 0.3f + dt / length0);
+        anim_step(ecs, dt);
+        hits += anim_notices(st, WPE_ANIM_NOTICE_EVENT, "hit", false);
+    }
+    WPE_TEST_ASSERT_EQ_UINT(3, st->state);
+    WPE_TEST_ASSERT_EQ_UINT(slash1, animator->animation);
+    WPE_TEST_ASSERT_EQ_UINT(0, hits); /* The combo left Slash0 before its hit (at 40%). */
+
+    /* At its end, back to Idle (speed 0 now, so it stays). */
+    WPE_TEST_ASSERT(wpe_anim_states_set(st, "speed", 0.0f));
+    for (int i = 0; i < 60 && st->state == 3; ++i)
+        anim_step(ecs, dt);
+    WPE_TEST_ASSERT_EQ_UINT(0, st->state);
+    WPE_TEST_ASSERT_EQ_UINT(idle, animator->animation);
+
+    /* Slash0 again, played through this time: "hit" fires exactly once. */
+    WPE_TEST_ASSERT(wpe_anim_states_trigger(st, "attack"));
+    st->queue_count = 0;
+    hits = 0;
+    for (int i = 0; i < 60 && (i == 0 || st->state == 2); ++i) {
+        anim_step(ecs, dt);
+        hits += anim_notices(st, WPE_ANIM_NOTICE_EVENT, "hit", true);
+    }
+    WPE_TEST_ASSERT_EQ_UINT(1, hits);
+    WPE_TEST_ASSERT_EQ_UINT(0, st->state);
+
+    /* Entering a state by name; what the setters refuse. */
+    WPE_TEST_ASSERT(wpe_anim_states_enter(ecs, root, "Run", 0.2f));
+    WPE_TEST_ASSERT_EQ_UINT(run, animator->animation);
+    WPE_TEST_ASSERT(!wpe_anim_states_enter(ecs, root, "Fly", 0.2f));
+    WPE_TEST_ASSERT(!wpe_anim_states_set(st, "attack", 1.0f) && !wpe_anim_states_set(st, "nope", 1.0f));
+    WPE_TEST_ASSERT(!wpe_anim_states_trigger(st, "speed") && !wpe_anim_states_set(st, "speed", NAN));
+
+    /* A copied component owns its own graph (both free theirs). */
+    WPE_AnimStates copy = *st;
+    const WPE_Entity other = wpe_ecs_spawn(ecs);
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, other, WPE_COMP_ANIM_STATES, &copy, NULL));
+    WPE_TEST_ASSERT(((WPE_AnimStates*)wpe_ecs_get_component(ecs, other, WPE_COMP_ANIM_STATES))->graph !=
+                    st->graph);
+
+    /* Broken descriptions are refused. */
+    wpe_log_set_stderr_enabled(false);
+    WPE_AnimGraph* bad = NULL;
+    WPE_TEST_ASSERT_EQ_INT(
+        WPE_RESULT_ERROR_INVALID_ARG,
+        wpe_anim_graph_create(&(WPE_AnimGraphDesc){.states = states, .state_count = 4, .start = 4}, &bad));
+    WPE_TEST_ASSERT_EQ_INT(
+        WPE_RESULT_ERROR_INVALID_ARG,
+        wpe_anim_graph_create(&(WPE_AnimGraphDesc){.states = states, .state_count = 2}, &bad));
+    wpe_log_set_stderr_enabled(true);
+    WPE_TEST_ASSERT(bad == NULL);
 
     wpe_ecs_destroy(ecs);
     wpe_asset_release(t.assets, handle);
@@ -1627,7 +1818,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
     WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),
     WPE_TEST_CASE(test_graphics_trail_records_and_draws), WPE_TEST_CASE(test_graphics_slash_sweeps),
-    WPE_TEST_CASE(test_graphics_surface_update_wraps),
+    WPE_TEST_CASE(test_graphics_anim_states), WPE_TEST_CASE(test_graphics_surface_update_wraps),
     WPE_TEST_CASE(test_graphics_water_wave_is_periodic_with_matching_slopes),
     WPE_TEST_CASE(test_graphics_uv_offset_and_water_render), WPE_TEST_CASE(test_graphics_transition_shapes),
     WPE_TEST_CASE(test_graphics_camera_matrices_validation),

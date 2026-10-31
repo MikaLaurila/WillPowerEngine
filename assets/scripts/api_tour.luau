@@ -289,6 +289,31 @@ function Tour:on_start()
 	wpe.set_time_scale(1)
 	assert(not pcall(wpe.set_time_scale, -1) and not pcall(wpe.slow_motion, 0.5, 0) and not pcall(wpe.hit_stop, 0))
 	assert(not pcall(wpe.slow_motion, -1, 1) and not pcall(wpe.slow_motion, 0.5, 1, -1))
+	-- Animation state machines: a figure that walks (at a pace) and holds still on a trigger while not calm.
+	self.dancer = wpe.instantiate("figure")
+	self.anim_steps, self.anim_seen = 0, {}
+	wpe.set_anim_states(self.dancer, {
+		params = { pace = 1, go = "trigger", calm = true },
+		states = {
+			Walk = { clip = 1, loop = true, speed_param = "pace", events = { step = { 0.05, 0.3 } } },
+			Hold = { clip = 1, speed = 0 },
+		},
+		start = "Walk",
+		transitions = {
+			{ from = "Walk", to = "Hold", when = { "go", { "pace", ">", 0.5 }, "!calm" }, fade = 0.1 },
+			{ from = "Hold", to = "Walk", when = { "calm" } },
+		},
+	})
+	assert(wpe.anim_state(self.dancer) == nil) -- Its first update enters the start state.
+	wpe.anim_set(self.dancer, "pace", 2)
+	assert(wpe.anim_get(self.dancer, "pace") == 2 and wpe.anim_get(self.dancer, "calm") == true)
+	assert(not pcall(wpe.anim_set, self.dancer, "go", 1) and not pcall(wpe.anim_trigger, self.dancer, "pace"))
+	assert(not pcall(wpe.anim_get, self.dancer, "nope") and not pcall(wpe.anim_state, self.entity))
+	assert(not pcall(wpe.set_anim_states, self.dancer, { states = { A = { clip = "no such clip" } } }))
+	assert(not pcall(wpe.set_anim_states, self.dancer, { states = { A = { clip = 1 } }, transitions = { { from = "A", to = "B" } } }))
+	assert(not pcall(wpe.set_anim_states, self.dancer, { params = { x = 0 }, states = { A = { clip = 1 } },
+		transitions = { { from = "A", to = "A", when = { { "x", "=>", 1 } } } } }))
+	assert(not pcall(wpe.set_anim_states, self.entity, { states = { A = { clip = 1 } } })) -- no model there
 	-- Tweens: a transform eased to a target (the newest tween of a property takes it over), and any number.
 	local mover = wpe.spawn("tour mover")
 	local arrived = false
@@ -529,6 +554,21 @@ function Tour:on_update(dt)
 		assert(self.cut_phases.cutting and self.cut_phases.holding and self.cut_phases.shattering, "every phase ran")
 		assert(self.cut == nil and #wpe.get_postfx() == self.effects_before_cut, "the cut ended and cleaned up")
 	end
+	-- The state machine: steps heard while walking; a trigger (with the other conditions) stops it.
+	if self.updates == 30 then
+		assert(self.anim_seen.Walk and self.anim_steps > 0, "the walk should have entered and stepped")
+		assert(select(2, wpe.anim_state(self.dancer)) > 0)
+		wpe.anim_set(self.dancer, "calm", false)
+		wpe.anim_trigger(self.dancer, "go")
+	elseif self.updates == 31 then
+		assert(wpe.anim_state(self.dancer) == "Hold" and self.anim_seen.Hold, "the trigger should have stopped it")
+		assert(wpe.anim_get(self.dancer, "go") == false, "the trigger is used up")
+		wpe.anim_play(self.dancer, "Walk", 0)
+		assert(wpe.anim_state(self.dancer) == "Walk" and not pcall(wpe.anim_play, self.dancer, "Fly"))
+	elseif self.updates == 32 then
+		wpe.remove_anim_states(self.dancer)
+		assert(not pcall(wpe.anim_state, self.dancer))
+	end
 	if self.cut then
 		self.cut_phases[self.cut.phase] = true
 		if not self.cut:update(dt) then
@@ -544,6 +584,17 @@ end
 -- Called by wpe.send and wpe.broadcast in on_start.
 function Tour:add(a, b)
 	return a + b
+end
+
+-- From the dancer's state machine.
+function Tour:on_animation_event(name)
+	if name == "step" then
+		self.anim_steps += 1
+	end
+end
+
+function Tour:on_animation_state(state)
+	self.anim_seen[state] = true
 end
 
 function Tour:on_tour_ping(value)

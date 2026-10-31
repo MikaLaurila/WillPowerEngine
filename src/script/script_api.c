@@ -13,6 +13,7 @@
 #include "core/alloc.h"
 #include "core/json.h"
 #include "core/log.h"
+#include "graphics/anim_states.h"
 #include "graphics/animation.h"
 #include "graphics/graphics.h"
 #include "graphics/scene_render.h"
@@ -2875,6 +2876,438 @@ static int wpe__api_remove_slash(lua_State* L) {
     return 0;
 }
 
+/* ---- Animation state machines ----------------------------------------------------------------------- */
+
+#define WPE__ANIM_MAX_STATES 64u
+#define WPE__ANIM_MAX_TRANSITIONS 128u
+#define WPE__ANIM_MAX_CONDITIONS 512u
+#define WPE__ANIM_MAX_EVENTS 256u
+
+/* The entity at or below `entity` (depth first) that has component `type`, or WPE_ENTITY_NULL. */
+static WPE_Entity wpe__find_below(WPE_Ecs* ecs, WPE_Entity entity, WPE_ComponentType type) {
+    WPE_Entity stack[WPE__TREE_MESHES];
+    uint32_t top = 0;
+    stack[top++] = entity;
+    while (top > 0) {
+        const WPE_Entity e = stack[--top];
+        if (wpe_ecs_has_component(ecs, e, type)) return e;
+        const WPE_Hierarchy* node = wpe_ecs_get_component(ecs, e, WPE_COMP_HIERARCHY);
+        for (WPE_Entity c = node ? node->first_child : WPE_ENTITY_NULL;
+             c != WPE_ENTITY_NULL && top < WPE__TREE_MESHES;) {
+            stack[top++] = c;
+            const WPE_Hierarchy* child = wpe_ecs_get_component(ecs, c, WPE_COMP_HIERARCHY);
+            c = child ? child->next_sibling : WPE_ENTITY_NULL;
+        }
+    }
+    return WPE_ENTITY_NULL;
+}
+
+/* The state machine at or below an entity; raises when there is none. */
+static WPE_AnimStates* wpe__check_anim(lua_State* L, int index, const char* function,
+                                       WPE_Entity* out_entity) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_Entity entity = wpe__find_below(host->ecs, wpe__check_entity(L, index), WPE_COMP_ANIM_STATES);
+    WPE_AnimStates* st = entity ? wpe_ecs_get_component(host->ecs, entity, WPE_COMP_ANIM_STATES) : NULL;
+    if (!st || !st->graph)
+        luaL_errorL(L, "wpe.%s: no animation states there (wpe.set_anim_states)", function);
+    if (out_entity) *out_entity = entity;
+    return st;
+}
+
+/* Copies a name into a fixed field, raising when it doesn't fit or is empty. */
+static void wpe__anim_name(lua_State* L, char out[WPE_ANIM_NAME_MAX], const char* name, const char* what) {
+    const size_t length = strlen(name);
+    if (length == 0 || length >= WPE_ANIM_NAME_MAX)
+        luaL_errorL(L, "wpe.set_anim_states: %s '%s' must be 1..%u characters", what, name,
+                    WPE_ANIM_NAME_MAX - 1);
+    memcpy(out, name, length + 1);
+}
+
+/* The string keys of the table at `index`, sorted (so states and parameters get the same order every time).
+ * Leaves a Luau table of them on the stack; returns how many. */
+static uint32_t wpe__sorted_keys(lua_State* L, int index, uint32_t max, const char* what) {
+    lua_newtable(L);
+    const int keys = lua_gettop(L);
+    uint32_t count = 0;
+    lua_pushnil(L);
+    while (lua_next(L, index)) {
+        lua_pop(L, 1);
+        if (lua_type(L, -1) != LUA_TSTRING) luaL_errorL(L, "wpe.set_anim_states: %s are named", what);
+        if (++count > max) luaL_errorL(L, "wpe.set_anim_states: more than %u %s", max, what);
+        lua_pushvalue(L, -1);
+        lua_rawseti(L, keys, (int)count);
+    }
+    /* Insertion sort by name (counts are small). */
+    for (uint32_t i = 2; i <= count; ++i) {
+        for (uint32_t k = i; k > 1; --k) {
+            lua_rawgeti(L, keys, (int)k - 1);
+            lua_rawgeti(L, keys, (int)k);
+            const bool swap = strcmp(lua_tostring(L, -2), lua_tostring(L, -1)) > 0;
+            if (swap) {
+                lua_rawseti(L, keys, (int)k - 1);
+                lua_rawseti(L, keys, (int)k);
+            } else {
+                lua_pop(L, 2);
+                break;
+            }
+        }
+    }
+    return count;
+}
+
+/* Reads one condition of a transition's `when` list (the item on the stack's top). */
+static WPE_AnimCondition wpe__anim_condition(lua_State* L, const WPE_AnimParam* params,
+                                             uint32_t param_count) {
+    const char* name = NULL;
+    WPE_AnimCondition c = {.compare = WPE_ANIM_IS_SET};
+    const int item = lua_gettop(L);
+    if (lua_type(L, item) == LUA_TSTRING) {
+        name = lua_tostring(L, item);
+        if (name[0] == '!') {
+            c.compare = WPE_ANIM_IS_NOT_SET;
+            ++name;
+        }
+    } else {
+        luaL_checktype(L, item, LUA_TTABLE);
+        lua_rawgeti(L, item, 1);
+        lua_rawgeti(L, item, 2);
+        lua_rawgeti(L, item, 3);
+        name = luaL_checkstring(L, -3);
+        static const struct {
+            const char* op;
+            WPE_AnimCompare compare;
+        } ops[] = {{">", WPE_ANIM_GREATER},     {"<", WPE_ANIM_LESS},   {">=", WPE_ANIM_GREATER_EQUAL},
+                   {"<=", WPE_ANIM_LESS_EQUAL}, {"==", WPE_ANIM_EQUAL}, {"~=", WPE_ANIM_NOT_EQUAL}};
+        const char* op = luaL_checkstring(L, -2);
+        bool found = false;
+        for (size_t i = 0; i < sizeof ops / sizeof ops[0] && !found; ++i) {
+            if (strcmp(ops[i].op, op) == 0) {
+                c.compare = ops[i].compare;
+                found = true;
+            }
+        }
+        if (!found) luaL_errorL(L, "wpe.set_anim_states: unknown comparison '%s' (> < >= <= == ~=)", op);
+        if (lua_isboolean(L, -1)) {
+            c.value = lua_toboolean(L, -1) ? 1.0f : 0.0f;
+        } else {
+            const double value = luaL_checknumber(L, -1);
+            if (!isfinite(value)) luaL_errorL(L, "wpe.set_anim_states: a condition's value must be finite");
+            c.value = (float)value;
+        }
+    }
+    c.param = WPE_ANIM_ANY;
+    for (uint32_t p = 0; p < param_count; ++p)
+        if (strcmp(params[p].name, name) == 0) c.param = p;
+    if (c.param == WPE_ANIM_ANY)
+        luaL_errorL(L, "wpe.set_anim_states: a condition names '%s', not a parameter", name);
+    lua_settop(L, item);
+    return c;
+}
+
+static uint32_t wpe__anim_state_index(lua_State* L, const WPE_AnimState* states, uint32_t count,
+                                      const char* name, bool any_allowed) {
+    if (any_allowed && strcmp(name, "any") == 0) return WPE_ANIM_ANY;
+    for (uint32_t i = 0; i < count; ++i)
+        if (strcmp(states[i].name, name) == 0) return i;
+    luaL_errorL(L, "wpe.set_anim_states: no state called '%s'", name);
+    return 0;
+}
+
+/* wpe.set_anim_states(entity, {params, states, start, transitions, buffer, listener}) */
+static int wpe__api_set_anim_states(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "set_anim_states");
+    const WPE_Entity root = wpe__check_entity(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    const WPE_Entity target = wpe__find_below(host->ecs, root, WPE_COMP_ANIMATOR);
+    const WPE_Animator* animator =
+        target ? wpe_ecs_get_component(host->ecs, target, WPE_COMP_ANIMATOR) : NULL;
+    if (!animator || !animator->model)
+        luaL_errorL(L, "wpe.set_anim_states: entity 0x%08x has no animated model at or below it", root);
+    const WPE_Model* model = animator->model;
+    /* Scratch arrays live in userdata, so an error part-way leaves nothing behind. */
+    WPE_AnimParam* params = lua_newuserdata(L, WPE_ANIM_MAX_PARAMS * sizeof *params);
+    WPE_AnimState* states = lua_newuserdata(L, WPE__ANIM_MAX_STATES * sizeof *states);
+    WPE_AnimTransition* transitions = lua_newuserdata(L, WPE__ANIM_MAX_TRANSITIONS * sizeof *transitions);
+    WPE_AnimCondition* conditions = lua_newuserdata(L, WPE__ANIM_MAX_CONDITIONS * sizeof *conditions);
+    WPE_AnimEvent* events = lua_newuserdata(L, WPE__ANIM_MAX_EVENTS * sizeof *events);
+    uint32_t param_count = 0, state_count = 0, transition_count = 0, condition_count = 0, event_count = 0;
+
+    /* params = {name = default number | default bool | "trigger"} */
+    lua_getfield(L, 2, "params");
+    if (!lua_isnil(L, -1)) {
+        luaL_checktype(L, -1, LUA_TTABLE);
+        const int table = lua_gettop(L);
+        param_count = wpe__sorted_keys(L, table, WPE_ANIM_MAX_PARAMS, "parameters");
+        for (uint32_t i = 0; i < param_count; ++i) {
+            lua_rawgeti(L, -1, (int)i + 1);
+            WPE_AnimParam* p = &params[i];
+            *p = (WPE_AnimParam){0};
+            wpe__anim_name(L, p->name, lua_tostring(L, -1), "parameter");
+            lua_gettable(L, table);
+            if (lua_isboolean(L, -1)) {
+                p->type = WPE_ANIM_PARAM_BOOL;
+                p->value = lua_toboolean(L, -1) ? 1.0f : 0.0f;
+            } else if (lua_type(L, -1) == LUA_TSTRING && strcmp(lua_tostring(L, -1), "trigger") == 0) {
+                p->type = WPE_ANIM_PARAM_TRIGGER;
+            } else if (lua_type(L, -1) == LUA_TNUMBER && isfinite(lua_tonumber(L, -1))) {
+                p->type = WPE_ANIM_PARAM_NUMBER;
+                p->value = (float)lua_tonumber(L, -1);
+            } else {
+                luaL_errorL(L, "wpe.set_anim_states: parameter '%s' must be a number, a bool or \"trigger\"",
+                            p->name);
+            }
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1); /* The keys. */
+    }
+    lua_pop(L, 1);
+
+    /* states = {name = {clip, loop, speed, speed_param, events = {name = time | {times}}}} */
+    lua_getfield(L, 2, "states");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    const int state_table = lua_gettop(L);
+    state_count = wpe__sorted_keys(L, state_table, WPE__ANIM_MAX_STATES, "states");
+    if (state_count == 0) luaL_errorL(L, "wpe.set_anim_states: give at least one state");
+    for (uint32_t i = 0; i < state_count; ++i) {
+        lua_rawgeti(L, -1, (int)i + 1);
+        WPE_AnimState* s = &states[i];
+        *s = (WPE_AnimState){.speed = 1.0f, .speed_param = WPE_ANIM_ANY, .first_event = event_count};
+        wpe__anim_name(L, s->name, lua_tostring(L, -1), "state");
+        lua_gettable(L, state_table);
+        luaL_checktype(L, -1, LUA_TTABLE);
+        const int state = lua_gettop(L);
+        lua_getfield(L, state, "clip");
+        if (lua_type(L, -1) == LUA_TNUMBER) {
+            const double index = lua_tonumber(L, -1);
+            if (!(index >= 1.0 && index <= (double)model->animation_count && index == floor(index)))
+                luaL_errorL(L, "wpe.set_anim_states: state '%s' plays animation %g, which isn't there",
+                            s->name, index);
+            s->animation = (uint32_t)index - 1;
+        } else {
+            const char* clip = luaL_checkstring(L, -1);
+            s->animation = wpe_model_find_animation(model, clip);
+            if (s->animation == WPE_MODEL_NONE)
+                luaL_errorL(L, "wpe.set_anim_states: the model has no animation '%s' (state '%s')", clip,
+                            s->name);
+        }
+        lua_pop(L, 1);
+        s->loop = wpe__field_bool(L, state, "loop", false);
+        s->speed = wpe__field_number(L, state, "speed", 1.0f);
+        if (!isfinite(s->speed)) luaL_errorL(L, "wpe.set_anim_states: state '%s' has a bad speed", s->name);
+        lua_getfield(L, state, "speed_param");
+        if (!lua_isnil(L, -1)) {
+            const char* name = luaL_checkstring(L, -1);
+            for (uint32_t p = 0; p < param_count; ++p)
+                if (strcmp(params[p].name, name) == 0) s->speed_param = p;
+            if (s->speed_param == WPE_ANIM_ANY || params[s->speed_param].type != WPE_ANIM_PARAM_NUMBER)
+                luaL_errorL(L, "wpe.set_anim_states: state '%s' speed_param '%s' is not a number parameter",
+                            s->name, name);
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, state, "events");
+        if (!lua_isnil(L, -1)) {
+            luaL_checktype(L, -1, LUA_TTABLE);
+            const int event_table = lua_gettop(L);
+            lua_pushnil(L);
+            while (lua_next(L, event_table)) {
+                if (lua_type(L, -2) != LUA_TSTRING) luaL_errorL(L, "wpe.set_anim_states: events are named");
+                const char* name = lua_tostring(L, -2);
+                /* One time, or a list of them (footsteps). */
+                const bool list = lua_type(L, -1) == LUA_TTABLE;
+                const int times = list ? (int)lua_objlen(L, -1) : 1;
+                for (int k = 1; k <= times; ++k) {
+                    if (list) lua_rawgeti(L, -1, k);
+                    const double time = luaL_checknumber(L, -1);
+                    if (list) lua_pop(L, 1);
+                    if (!(time >= 0.0) || !isfinite(time))
+                        luaL_errorL(L, "wpe.set_anim_states: event '%s' needs a time of 0 or more", name);
+                    if (event_count >= WPE__ANIM_MAX_EVENTS)
+                        luaL_errorL(L, "wpe.set_anim_states: more than %u events", WPE__ANIM_MAX_EVENTS);
+                    events[event_count] = (WPE_AnimEvent){.time = (float)time};
+                    wpe__anim_name(L, events[event_count].name, name, "event");
+                    ++event_count;
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        s->event_count = event_count - s->first_event;
+        lua_pop(L, 1); /* The state's table. */
+    }
+    lua_pop(L, 2); /* The keys and the states. */
+
+    uint32_t start = 0;
+    lua_getfield(L, 2, "start");
+    if (!lua_isnil(L, -1))
+        start = wpe__anim_state_index(L, states, state_count, luaL_checkstring(L, -1), false);
+    lua_pop(L, 1);
+
+    /* transitions = {{from, to, when = {...}, fade, exit, window = {start, end}, restart}, ...} in priority
+     * order */
+    lua_getfield(L, 2, "transitions");
+    if (!lua_isnil(L, -1)) {
+        luaL_checktype(L, -1, LUA_TTABLE);
+        const int list = lua_gettop(L);
+        const int count = (int)lua_objlen(L, list);
+        if (count > (int)WPE__ANIM_MAX_TRANSITIONS)
+            luaL_errorL(L, "wpe.set_anim_states: more than %u transitions", WPE__ANIM_MAX_TRANSITIONS);
+        for (int i = 1; i <= count; ++i) {
+            lua_rawgeti(L, list, i);
+            luaL_checktype(L, -1, LUA_TTABLE);
+            const int tt = lua_gettop(L);
+            WPE_AnimTransition* t = &transitions[transition_count++];
+            *t = (WPE_AnimTransition){.exit = -1.0f, .window_end = 1.0f, .first_condition = condition_count};
+            lua_getfield(L, tt, "from");
+            t->from = wpe__anim_state_index(L, states, state_count, luaL_checkstring(L, -1), true);
+            lua_getfield(L, tt, "to");
+            t->to = wpe__anim_state_index(L, states, state_count, luaL_checkstring(L, -1), false);
+            lua_pop(L, 2);
+            t->fade = wpe__field_number(L, tt, "fade", 0.15f);
+            t->exit = wpe__field_number(L, tt, "exit", -1.0f);
+            t->restart = wpe__field_bool(L, tt, "restart", false);
+            if (!(t->fade >= 0.0f && t->fade <= 60.0f) || !isfinite(t->exit))
+                luaL_errorL(L, "wpe.set_anim_states: transition %d has a bad fade or exit", i);
+            lua_getfield(L, tt, "window");
+            if (!lua_isnil(L, -1)) {
+                luaL_checktype(L, -1, LUA_TTABLE);
+                lua_rawgeti(L, -1, 1);
+                lua_rawgeti(L, -2, 2);
+                t->window_start = (float)luaL_checknumber(L, -2);
+                t->window_end = (float)luaL_checknumber(L, -1);
+                if (!(t->window_start <= t->window_end) || !isfinite(t->window_start) ||
+                    !isfinite(t->window_end))
+                    luaL_errorL(L, "wpe.set_anim_states: transition %d's window must be {start, end}", i);
+                lua_pop(L, 2);
+            }
+            lua_pop(L, 1);
+            lua_getfield(L, tt, "when");
+            if (!lua_isnil(L, -1)) {
+                luaL_checktype(L, -1, LUA_TTABLE);
+                const int when = lua_gettop(L);
+                const int n = (int)lua_objlen(L, when);
+                for (int k = 1; k <= n; ++k) {
+                    if (condition_count >= WPE__ANIM_MAX_CONDITIONS)
+                        luaL_errorL(L, "wpe.set_anim_states: more than %u conditions",
+                                    WPE__ANIM_MAX_CONDITIONS);
+                    lua_rawgeti(L, when, k);
+                    conditions[condition_count++] = wpe__anim_condition(L, params, param_count);
+                    lua_pop(L, 1);
+                }
+            }
+            lua_pop(L, 1);
+            t->condition_count = condition_count - t->first_condition;
+            lua_pop(L, 1); /* The transition. */
+        }
+    }
+    lua_pop(L, 1);
+
+    const float buffer = wpe__field_number(L, 2, "buffer", 0.2f);
+    if (!(buffer >= 0.0f && buffer <= 10.0f))
+        luaL_errorL(L, "wpe.set_anim_states: buffer must be 0..10 seconds");
+    WPE_Entity listener = host->current_entity;
+    lua_getfield(L, 2, "listener");
+    if (!lua_isnil(L, -1)) listener = wpe__check_entity(L, lua_gettop(L));
+    lua_pop(L, 1);
+
+    /* Everything is checked: no errors are raised while the graph is held. */
+    WPE_AnimGraph* graph = NULL;
+    const WPE_Result made = wpe_anim_graph_create(&(WPE_AnimGraphDesc){.params = params,
+                                                                       .param_count = param_count,
+                                                                       .states = states,
+                                                                       .state_count = state_count,
+                                                                       .transitions = transitions,
+                                                                       .transition_count = transition_count,
+                                                                       .conditions = conditions,
+                                                                       .condition_count = condition_count,
+                                                                       .events = events,
+                                                                       .event_count = event_count,
+                                                                       .start = start,
+                                                                       .trigger_buffer = buffer},
+                                                  &graph);
+    WPE_Result result = made;
+    if (result == WPE_RESULT_OK && wpe_ecs_has_component(host->ecs, target, WPE_COMP_ANIM_STATES))
+        result = wpe_ecs_remove_component(host->ecs, target, WPE_COMP_ANIM_STATES);
+    if (result == WPE_RESULT_OK)
+        result = wpe_ecs_add_component(host->ecs, target, WPE_COMP_ANIM_STATES,
+                                       &(WPE_AnimStates){.graph = graph, .listener = listener}, NULL);
+    wpe_anim_graph_destroy(graph); /* The component made its own copy. */
+    wpe__raise_result(L, "set_anim_states", result);
+    return 0;
+}
+
+static int wpe__api_remove_anim_states(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "remove_anim_states");
+    const WPE_Entity entity = wpe__find_below(host->ecs, wpe__check_entity(L, 1), WPE_COMP_ANIM_STATES);
+    if (entity)
+        wpe__raise_result(L, "remove_anim_states",
+                          wpe_ecs_remove_component(host->ecs, entity, WPE_COMP_ANIM_STATES));
+    return 0;
+}
+
+/* wpe.anim_set(entity, name, number | bool) */
+static int wpe__api_anim_set(lua_State* L) {
+    WPE_AnimStates* st = wpe__check_anim(L, 1, "anim_set", NULL);
+    const char* name = luaL_checkstring(L, 2);
+    const double value = lua_isboolean(L, 3) ? (lua_toboolean(L, 3) ? 1.0 : 0.0) : luaL_checknumber(L, 3);
+    if (!wpe_anim_states_set(st, name, (float)value))
+        luaL_errorL(L, "wpe.anim_set: '%s' is not a number or bool parameter (or the value isn't finite)",
+                    name);
+    return 0;
+}
+
+static int wpe__api_anim_trigger(lua_State* L) {
+    WPE_AnimStates* st = wpe__check_anim(L, 1, "anim_trigger", NULL);
+    const char* name = luaL_checkstring(L, 2);
+    if (!wpe_anim_states_trigger(st, name)) luaL_errorL(L, "wpe.anim_trigger: '%s' is not a trigger", name);
+    return 0;
+}
+
+/* wpe.anim_get(entity, name) -> number (bools: true/false, triggers: whether set) */
+static int wpe__api_anim_get(lua_State* L) {
+    const WPE_AnimStates* st = wpe__check_anim(L, 1, "anim_get", NULL);
+    const char* name = luaL_checkstring(L, 2);
+    const uint32_t p = wpe_anim_graph_find_param(st->graph, name);
+    if (p == WPE_ANIM_ANY) luaL_errorL(L, "wpe.anim_get: no parameter '%s'", name);
+    switch (st->graph->params[p].type) {
+    case WPE_ANIM_PARAM_BOOL:
+        lua_pushboolean(L, st->values[p] != 0.0f);
+        break;
+    case WPE_ANIM_PARAM_TRIGGER:
+        lua_pushboolean(L, st->values[p] > 0.0f);
+        break;
+    case WPE_ANIM_PARAM_NUMBER:
+    default:
+        lua_pushnumber(L, st->values[p]);
+        break;
+    }
+    return 1;
+}
+
+/* wpe.anim_state(entity) -> state name (nil before its first update), seconds in it */
+static int wpe__api_anim_state(lua_State* L) {
+    const WPE_AnimStates* st = wpe__check_anim(L, 1, "anim_state", NULL);
+    if (st->state >= st->graph->state_count) {
+        lua_pushnil(L);
+        lua_pushnumber(L, 0);
+    } else {
+        lua_pushstring(L, st->graph->states[st->state].name);
+        lua_pushnumber(L, st->state_time);
+    }
+    return 2;
+}
+
+/* wpe.anim_play(entity, state, fade = 0.15) */
+static int wpe__api_anim_play(lua_State* L) {
+    WPE_Entity entity = WPE_ENTITY_NULL;
+    wpe__check_anim(L, 1, "anim_play", &entity);
+    const char* state = luaL_checkstring(L, 2);
+    const double fade = luaL_optnumber(L, 3, 0.15);
+    if (!(fade >= 0.0 && fade <= 60.0)) luaL_errorL(L, "wpe.anim_play: fade must be 0..60 seconds");
+    if (!wpe_anim_states_enter(wpe__script_host_from(L)->ecs, entity, state, (float)fade))
+        luaL_errorL(L, "wpe.anim_play: no state '%s'", state);
+    return 0;
+}
+
 /* ---- Water ----------------------------------------------------------------------------------------- */
 
 /* Changes (or adds) an entity's water; its waves go on from where they are. */
@@ -3125,6 +3558,13 @@ static const luaL_Reg wpe__api[] = {
     {"get_uv_scroll", wpe__api_get_uv_scroll},
     {"set_uv_offset", wpe__api_set_uv_offset},
     {"get_uv_offset", wpe__api_get_uv_offset},
+    {"set_anim_states", wpe__api_set_anim_states},
+    {"remove_anim_states", wpe__api_remove_anim_states},
+    {"anim_set", wpe__api_anim_set},
+    {"anim_trigger", wpe__api_anim_trigger},
+    {"anim_get", wpe__api_anim_get},
+    {"anim_state", wpe__api_anim_state},
+    {"anim_play", wpe__api_anim_play},
     {"set_water", wpe__api_set_water},
     {"get_water", wpe__api_get_water},
     {"remove_water", wpe__api_remove_water},

@@ -10,6 +10,7 @@ add_library(wpe_graphics STATIC
     scene_render.c
     sky.c
     slash.c
+    anim_states.c
     trail.c
     transition.c
     water.c)

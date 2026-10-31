@@ -136,6 +136,56 @@ Entity handles are numbers. Passing a handle that isn't alive raises an error. V
 | `wpe.time() -> seconds` | Accumulated game time from updates (it runs slower in slow motion, see [Game feel](#game-feel-slow-motion-hit-stop-shake)). |
 | `wpe.frame() -> number` | Number of completed updates. |
 
+### Animation state machines
+
+Rather than starting animations by hand and polling for their ends, describe a character's animation once: its **states** (each plays one of the model's animations), the **parameters** game code sets (numbers, bools, triggers) and the **transitions** between states. Each update, after `on_update`, the first transition whose conditions hold crossfades into its state; the script hears about it and about the events its clips pass. The machine sits on the model's animator (found at or below the entity given), belongs to nothing else and is not saved in scene files: build it in `on_start`.
+
+| Function | Description |
+|---|---|
+| `wpe.set_anim_states(entity, graph)` | Builds a state machine (replacing one already there) from the table below. Raises on anything wrong in it (an animation the model doesn't have, a transition to a state that isn't there). |
+| `wpe.anim_set(entity, name, value)` | Sets a number or bool parameter. |
+| `wpe.anim_trigger(entity, name)` | Sets a trigger: it stays set for the graph's `buffer` seconds (0.2), or until a transition fires on it. Press an attack a little early and it still counts. |
+| `wpe.anim_get(entity, name) -> value` | A parameter: a number, or true/false for bools and triggers (set or not). |
+| `wpe.anim_state(entity) -> name, seconds` | The current state and how long it has run (nil before its first update). |
+| `wpe.anim_play(entity, state, [fade = 0.15])` | Enters a state now, whatever the transitions say (a hit reaction from a damage message). |
+| `wpe.remove_anim_states(entity)` | Removes the machine; the animator keeps playing what it played. |
+
+The graph:
+
+- `params = {name = value}`: a number (its starting value), a bool, or `"trigger"`.
+- `states = {Name = {clip, loop = false, speed = 1, speed_param, events}}`: `clip` is an animation's name or 1-based index; `speed` the playback rate (below 1 slows a clip down without re-exporting it); `speed_param` a number parameter the rate is multiplied by (a run cycle keeping pace with the character); `events = {name = seconds}` or `{name = {seconds, ...}}` (footsteps), times into the clip, when playing forwards.
+- `start`: the first state (the first by name if left out).
+- `transitions = {{from, to, when, exit, window, fade = 0.15, restart = false}, ...}`, tried in order (earlier ones win). `from` is a state or `"any"`. `when` is a list of conditions, all of which must hold: `"name"` (a bool true, a trigger set), `"!name"` (not), or `{"name", op, value}` with `>`, `<`, `>=`, `<=`, `==`, `~=`. `exit` waits until the clip is that far through (a fraction: 1 at its end). `window = {from, to}` allows it only while the clip is between those fractions (a combo's next attack is taken late in the swing). A transition from `"any"` skips the state it leads to unless `restart` (a hit reaction playing again on another hit).
+- `buffer`: seconds a trigger stays set (0.2). `listener`: whose script hears the callbacks (the script that built it).
+
+The listener's script gets `on_animation_state(state)` when a state is entered and `on_animation_event(name)` when a clip passes an event, both right after the animation update.
+
+```lua
+-- Beowulf's sword combo (scenes/sword.scene, scripts/sword_trail.luau, shortened).
+wpe.set_anim_states(self.figure, {
+	params = { attack = "trigger", speed = 0 },
+	states = {
+		Idle = { clip = "Idle", loop = true },
+		Run = { clip = "Run", loop = true, speed_param = "speed", speed = 0.25 },
+		Slash0 = { clip = "Slash0", events = { hit = 0.2 } },
+		Slash1 = { clip = "Slash1" },
+	},
+	start = "Idle",
+	transitions = {
+		{ from = "Idle", to = "Run", when = { { "speed", ">", 0.3 } } },
+		{ from = "Run", to = "Idle", when = { { "speed", "<=", 0.3 } } },
+		{ from = "Idle", to = "Slash0", when = { "attack" }, fade = 0.1 },
+		{ from = "Slash0", to = "Slash1", when = { "attack" }, window = { 0.45, 1 } }, -- the combo
+		{ from = "Slash0", to = "Idle", exit = 1 },
+		{ from = "Slash1", to = "Idle", exit = 1 },
+	},
+})
+-- Each frame: wpe.anim_set(self.figure, "speed", speed); on a press: wpe.anim_trigger(self.figure, "attack")
+function Hero:on_animation_event(name)
+	if name == "hit" then self:deal_damage() end
+end
+```
+
 ### Timers
 
 | Function | Description |

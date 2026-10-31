@@ -4,6 +4,7 @@
 #include "core/alloc.h"
 #include "core/debug.h"
 #include "core/log.h"
+#include "graphics/anim_states.h"
 #include "graphics/billboard_internal.h"
 
 /* ---- Hooks ---------------------------------------------------------------------------------------- */
@@ -53,6 +54,31 @@ static void wpe__animator_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* compo
     wpe_free(animator->node_entities);
     animator->node_entities = NULL;
     animator->node_count = 0;
+}
+
+/* The component gets its own copy of the graph it was given, and starts over (enters its start state). */
+static void wpe__anim_states_on_add(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
+    (void)ecs;
+    (void)user_data;
+    WPE_AnimStates* st = component;
+    st->graph = wpe_anim_graph_clone(st->graph);
+    if (!st->graph) wpe_log_error("out of memory for the animation states of entity 0x%08x", entity);
+    st->state = WPE_ANIM_ANY;
+    st->state_time = st->clip_time = 0.0f;
+    st->queue_count = 0;
+    memset(st->values, 0, sizeof st->values);
+    for (uint32_t p = 0; st->graph && p < st->graph->param_count; ++p) {
+        if (st->graph->params[p].type != WPE_ANIM_PARAM_TRIGGER) st->values[p] = st->graph->params[p].value;
+    }
+}
+
+static void wpe__anim_states_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
+    (void)ecs;
+    (void)entity;
+    (void)user_data;
+    WPE_AnimStates* st = component;
+    wpe_anim_graph_destroy(st->graph);
+    st->graph = NULL;
 }
 
 static void wpe__billboard_on_add(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
@@ -140,6 +166,12 @@ WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs, WPE_AssetManager* asse
           .on_add = wpe__trail_on_add}},
         {WPE_COMP_SLASH, {.name = "Slash", .size = sizeof(WPE_Slash), .alignment = alignof(WPE_Slash)}},
         {WPE_COMP_WATER, {.name = "Water", .size = sizeof(WPE_Water), .alignment = alignof(WPE_Water)}},
+        {WPE_COMP_ANIM_STATES,
+         {.name = "AnimStates",
+          .size = sizeof(WPE_AnimStates),
+          .alignment = alignof(WPE_AnimStates),
+          .on_add = wpe__anim_states_on_add,
+          .on_remove = wpe__anim_states_on_remove}},
     };
     for (size_t i = 0; i < sizeof components / sizeof components[0]; ++i) {
         const WPE_Result result = wpe_ecs_register_component(ecs, components[i].type, &components[i].desc);

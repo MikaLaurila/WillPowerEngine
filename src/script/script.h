@@ -227,6 +227,15 @@ WPE_Result wpe_script_host_fixed_update(WPE_ScriptHost* host, float dt);
 WPE_Result wpe_script_host_dispatch_physics(WPE_ScriptHost* host);
 
 /**
+ * Hands what the animation state machines queued (graphics/anim_states.h) to their listeners' scripts:
+ * on_animation_state(state) when one is entered, on_animation_event(name) when a clip passes an event. Call
+ * after wpe_anim_states_scan().
+ *
+ * @thread_safety Main thread
+ */
+WPE_Result wpe_script_host_dispatch_animation(WPE_ScriptHost* host);
+
+/**
  * Calls `method` (an event callback without arguments, such as "on_click") on the started, healthy
  * script of an entity, if it has one and the method exists, then applies deferred destroys.
  *

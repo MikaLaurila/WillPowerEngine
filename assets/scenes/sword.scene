@@ -34,7 +34,7 @@
       "name": "game",
       "script": {"path": "scripts/game.luau",
                  "properties": {"next_scene": "scenes/water.scene", "title": "Sword trail",
-                                "help": "F,LMB/X slash (it also slashes by itself);Q/RB slash wave  E/LB curve spell"}}
+                                "help": "F,LMB/X slash, again late in a swing: combo;Q/RB slash wave  E/LB curve spell"}}
     },
     {
       "id": 5,

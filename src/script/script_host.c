@@ -7,6 +7,7 @@
 #include "core/alloc.h"
 #include "core/debug.h"
 #include "core/log.h"
+#include "graphics/anim_states.h"
 #include "graphics/graphics.h"
 #include "platform/platform.h"
 #include "scene/scene.h"
@@ -1176,6 +1177,46 @@ WPE_Result wpe_script_host_dispatch_physics(WPE_ScriptHost* host) {
         wpe__notify(host, event.entity_b, methods[event.type], event.entity_a);
     }
     wpe__flush_destroys(host);
+    return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_script_host_dispatch_animation(WPE_ScriptHost* host) {
+    if (!host) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!wpe_ecs_is_registered(host->ecs, WPE_COMP_ANIM_STATES)) return WPE_RESULT_OK;
+    /* Collected first (names copied): callbacks may change or remove state machines. */
+    typedef struct wpe__AnimCall {
+        WPE_Entity listener;
+        bool event;
+        char name[WPE_ANIM_NAME_MAX];
+    } wpe__AnimCall;
+    wpe__AnimCall calls[64];
+    for (;;) {
+        uint32_t count = 0;
+        WPE_EcsIter it = wpe_ecs_query(host->ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_ANIM_STATES)});
+        while (wpe_ecs_iter_next(&it) && count < 64) {
+            WPE_AnimStates* st = wpe_ecs_iter_get(&it, WPE_COMP_ANIM_STATES);
+            uint32_t taken = 0;
+            for (; taken < st->queue_count && count < 64; ++taken) {
+                const WPE_AnimNotice notice = st->queue[taken];
+                const bool event = notice.kind == WPE_ANIM_NOTICE_EVENT;
+                const char* name =
+                    event ? st->graph->events[notice.index].name : st->graph->states[notice.index].name;
+                calls[count] = (wpe__AnimCall){.listener = st->listener, .event = event};
+                memcpy(calls[count].name, name, sizeof calls[count].name);
+                ++count;
+            }
+            memmove(st->queue, st->queue + taken, (st->queue_count - taken) * sizeof *st->queue);
+            st->queue_count -= taken;
+        }
+        if (count == 0) break;
+        for (uint32_t i = 0; i < count; ++i) {
+            const WPE_ScriptValue name = {.type = WPE_SCRIPT_VALUE_STRING, .string = calls[i].name};
+            if (calls[i].listener != WPE_ENTITY_NULL)
+                wpe_script_host_notify_value(host, calls[i].listener,
+                                             calls[i].event ? "on_animation_event" : "on_animation_state",
+                                             &name);
+        }
+    }
     return WPE_RESULT_OK;
 }
 
