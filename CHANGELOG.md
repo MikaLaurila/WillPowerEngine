@@ -78,8 +78,14 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Luau: `wpe.set_texture_filter(name)` and `wpe.get_texture_filter()` switch it while the game runs
   (until the scene is loaded again), through the new `WPE_ScriptApp.render_settings`.
   `wpe_texture_filtering_name`/`_from_name` give the names.
-- `model_viewer --three-point`.
-- Tests: three-point sampling (corners, both halves, the diagonal, edges); the API tour switches filters.
+- Pixel art stays crisp: textures whose glTF sampler magnifies with `NEAREST` are shrunk to
+  `max_texture_size` and mipmapped by point sampling (`WPE_TextureDesc.point_downsample`: the texel in
+  the middle of each block, mips taken from the full-size level) instead of averaging, which blended
+  painted edges into new colors (Beowulf's 1024 atlas at 256). The `"nearest"` override also picks
+  one mip level instead of blending two.
+- `model_viewer --filter NAME` (`material`, `nearest`, `bilinear`, `three_point`).
+- Tests: three-point sampling (corners, both halves, the diagonal, edges); point-sampled shrinking and
+  mips; the API tour switches filters.
 
 ### Added (Bezier slashes)
 - Component `slash` (`WPE_Slash`, `WPE_COMP_SLASH` 24): a ribbon sweeping along a cubic Bezier curve when

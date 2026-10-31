@@ -283,6 +283,10 @@ static WPE_Vec4 wpe__sample_ref(const WPE_MaterialUniforms* u, const WPE_Texture
     };
     WPE_Sampler sampler = ref->sampler;
     sampler.mag_filter = sampler.min_filter = filters[u->texture_filtering];
+    /* Nearest stays crisp when minified too: one mip level, not a blend of two (glTF's default is trilinear).
+     */
+    if (u->texture_filtering == WPE_TEXTURE_FILTERING_NEAREST && sampler.mip_filter == WPE_MIP_LINEAR)
+        sampler.mip_filter = WPE_MIP_NEAREST;
     return wpe_texture_sample(texture, &sampler, uv, dx, dy);
 }
 

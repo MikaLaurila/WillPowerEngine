@@ -54,6 +54,22 @@ static void wpe__downsample(const WPE_TextureLevel* src, uint32_t* dst, uint32_t
     }
 }
 
+/*
+ * Point-samples `src` into a smaller level: each texel takes the source texel at the middle of the block it
+ * covers. Sampling straight from the full-size level keeps every mip centered (halving level by level would
+ * drift toward one corner, since a 2x2 block has no middle texel).
+ */
+static void wpe__point_downsample(const WPE_TextureLevel* src, uint32_t* dst, uint32_t dst_width,
+                                  uint32_t dst_height) {
+    for (uint32_t y = 0; y < dst_height; ++y) {
+        const uint64_t sy = ((uint64_t)y * 2 + 1) * src->height / ((uint64_t)dst_height * 2);
+        for (uint32_t x = 0; x < dst_width; ++x) {
+            const uint64_t sx = ((uint64_t)x * 2 + 1) * src->width / ((uint64_t)dst_width * 2);
+            dst[(size_t)y * dst_width + x] = src->texels[(size_t)sy * src->width + (size_t)sx];
+        }
+    }
+}
+
 static void wpe__fill_to_linear(float to_linear[256]) {
     for (int i = 0; i < 256; ++i)
         to_linear[i] = wpe__srgb_to_linear((float)i / 255.0f);
@@ -85,6 +101,21 @@ WPE_Result wpe_texture_create(const WPE_TextureDesc* desc, WPE_Texture** out_tex
     const uint32_t limit = desc->max_dimension;
     if (limit == 0 || (w <= limit && h <= limit))
         return wpe__texture_create_from(desc, w, h, desc->texels, out_texture);
+
+    if (desc->point_downsample) {
+        /* One point-sampled step straight to the size the halvings below would reach. */
+        while (w > limit || h > limit) {
+            w = w > 1 ? w / 2 : 1;
+            h = h > 1 ? h / 2 : 1;
+        }
+        uint32_t* shrunk = wpe_alloc((size_t)w * h * sizeof(uint32_t));
+        if (!shrunk) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        const WPE_TextureLevel full = {.width = desc->width, .height = desc->height, .texels = desc->texels};
+        wpe__point_downsample(&full, shrunk, w, h);
+        const WPE_Result result = wpe__texture_create_from(desc, w, h, shrunk, out_texture);
+        wpe_free(shrunk);
+        return result;
+    }
 
     /* Downscale into a scratch buffer, halving until the texture fits the limit. */
     float to_linear[256];
@@ -130,7 +161,7 @@ static WPE_Result wpe__texture_create_from(const WPE_TextureDesc* desc, uint32_t
     uint32_t* storage = (uint32_t*)(texture + 1);
 
     float to_linear[256];
-    if (desc->srgb && texture->level_count > 1) wpe__fill_to_linear(to_linear);
+    if (desc->srgb && texture->level_count > 1 && !desc->point_downsample) wpe__fill_to_linear(to_linear);
 
     size_t offset = 0;
     for (uint32_t level = 0; level < texture->level_count; ++level) {
@@ -138,6 +169,8 @@ static WPE_Result wpe__texture_create_from(const WPE_TextureDesc* desc, uint32_t
         uint32_t* texels = storage + offset;
         if (level == 0) {
             memcpy(texels, source, (size_t)lvl->width * lvl->height * sizeof(uint32_t));
+        } else if (desc->point_downsample) {
+            wpe__point_downsample(&texture->levels[0], texels, lvl->width, lvl->height);
         } else {
             wpe__downsample(&texture->levels[level - 1], texels, lvl->width, lvl->height, desc->srgb,
                             to_linear);

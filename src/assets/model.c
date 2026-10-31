@@ -128,6 +128,7 @@ static WPE_Result wpe__cgltf_to_result(cgltf_result result) {
 typedef struct wpe__TextureJob {
     const cgltf_image* image;
     bool srgb;
+    bool pixel_art; /* A texture of the image magnifies with NEAREST: shrink and mip it by point sampling. */
     WPE_Texture* texture; /* Output. */
     WPE_Result result;    /* Output. */
 } wpe__TextureJob;
@@ -214,6 +215,7 @@ static WPE_TextureRef wpe__convert_texture_view(wpe__Loader* loader, const cgltf
 
     ref.texture = wpe__texture_for_image(loader, view->texture->image, srgb);
     ref.sampler = wpe__convert_sampler(view->texture->sampler);
+    if (ref.sampler.mag_filter == WPE_FILTER_NEAREST) loader->texture_jobs[ref.texture].pixel_art = true;
     ref.texcoord = view->texcoord > 0 ? 1u : 0u;
     if (view->texcoord > 1)
         wpe_log_warn("'%s': texture uses TEXCOORD_%d; only sets 0 and 1 are supported", loader->path,
@@ -309,7 +311,8 @@ static void wpe__decode_textures(void* context, uint32_t begin, uint32_t end, ui
                                                   .texels = image.pixels,
                                                   .generate_mips = true,
                                                   .srgb = job->srgb,
-                                                  .max_dimension = loader->options->max_texture_size},
+                                                  .max_dimension = loader->options->max_texture_size,
+                                                  .point_downsample = job->pixel_art},
                                &job->texture);
         wpe_image_free(&image);
     }

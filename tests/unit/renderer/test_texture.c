@@ -56,6 +56,53 @@ static void test_texture_max_dimension_downscales(void) {
     wpe_texture_destroy(t);
 }
 
+static void test_texture_point_downsample_keeps_painted_colors(void) {
+    /* 8x8 of 2x2 blocks in a checker of red and blue, with a white texel at each block's bottom-right. */
+    static uint32_t texels[8 * 8];
+    for (uint32_t y = 0; y < 8; ++y) {
+        for (uint32_t x = 0; x < 8; ++x) {
+            const bool corner = x % 2 == 1 && y % 2 == 1;
+            texels[y * 8 + x] = corner ? 0xFFFFFFFFu : (((x / 2 + y / 2) % 2) ? 0xFF0000FFu : 0xFFFF0000u);
+        }
+    }
+    /* Shrunk to 4x4: each block becomes the texel in its middle (the bottom-right of a 2x2), never a blend.
+     */
+    WPE_Texture* t = NULL;
+    WPE_TEST_ASSERT_OK(wpe_texture_create(&(WPE_TextureDesc){.width = 8,
+                                                             .height = 8,
+                                                             .texels = texels,
+                                                             .generate_mips = true,
+                                                             .srgb = true,
+                                                             .max_dimension = 4,
+                                                             .point_downsample = true},
+                                          &t));
+    WPE_TEST_ASSERT_EQ_UINT(4, t->levels[0].width);
+    for (uint32_t i = 0; i < 16; ++i)
+        WPE_TEST_ASSERT_EQ_UINT(0xFFFFFFFFu, t->levels[0].texels[i]);
+    wpe_texture_destroy(t);
+
+    /* Mips come from the full-size level, centered: level 2 (2x2) takes texels (2, 2), (6, 2), ... of level
+     * 0, the top-left of the blocks at (1, 1) and (3, 1) - painted colors, not averages. */
+    t = make_texture(8, 8, texels, true, true, 0);
+    WPE_Texture* point = NULL;
+    WPE_TEST_ASSERT_OK(wpe_texture_create(&(WPE_TextureDesc){.width = 8,
+                                                             .height = 8,
+                                                             .texels = texels,
+                                                             .generate_mips = true,
+                                                             .srgb = true,
+                                                             .point_downsample = true},
+                                          &point));
+    WPE_TEST_ASSERT_EQ_UINT(4, point->level_count);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFFFFFFu, point->levels[1].texels[0]); /* (1, 1) */
+    WPE_TEST_ASSERT_EQ_UINT(texels[2 * 8 + 2], point->levels[2].texels[0]);
+    WPE_TEST_ASSERT_EQ_UINT(texels[2 * 8 + 6], point->levels[2].texels[1]);
+    WPE_TEST_ASSERT_EQ_UINT(texels[4 * 8 + 4], point->levels[3].texels[0]);
+    /* Averaged mips blend the same blocks into colors that were never painted. */
+    WPE_TEST_ASSERT(t->levels[1].texels[0] != 0xFFFFFFFFu && t->levels[1].texels[0] != 0xFFFF0000u);
+    wpe_texture_destroy(point);
+    wpe_texture_destroy(t);
+}
+
 static void test_texture_create_validation(void) {
     WPE_Texture* t = NULL;
     const uint32_t texel = 0;
@@ -325,6 +372,7 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_texture_update_replaces_texels), WPE_TEST_CASE(
               WPE_TEST_CASE(test_texture_nearest_and_wrap_modes),
               WPE_TEST_CASE(test_texture_bilinear_interpolates_between_texel_centers),
               WPE_TEST_CASE(test_texture_three_point_blends_the_nearest_triangle),
+              WPE_TEST_CASE(test_texture_point_downsample_keeps_painted_colors),
               WPE_TEST_CASE(test_texture_lod_selection_from_derivatives),
               WPE_TEST_CASE(test_texture_rasterizer_provides_exact_uv_derivatives),
               WPE_TEST_CASE(test_texture_perspective_derivatives_grow_with_distance))

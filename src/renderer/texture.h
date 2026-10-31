@@ -46,6 +46,10 @@ typedef struct WPE_TextureDesc {
     bool generate_mips;
     bool srgb;              /* Average mips in linear light (color data). */
     uint32_t max_dimension; /* If non-zero, box-filter down by powers of two until both sides fit. */
+    /* Shrink (max_dimension) and build mips by picking the texel at the middle of each block instead of
+     * averaging it: pixel art keeps its colors and hard edges, though details thinner than a block can drop
+     * out. */
+    bool point_downsample;
 } WPE_TextureDesc;
 
 typedef enum WPE_TextureFilter {

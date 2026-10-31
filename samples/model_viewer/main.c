@@ -4,9 +4,10 @@
  *
  * Usage: model_viewer [model.glb] [--width N] [--height N] [--scale N] [--workers N] [--frames N]
  *                     [--screenshot file.png] [--max-texture N] [--yaw DEGREES] [--pitch DEGREES]
- *                     [--distance FACTOR] [--time SECONDS] [--dither] [--three-point] [--no-hud]
+ *                     [--distance FACTOR] [--time SECONDS] [--dither] [--filter NAME] [--no-hud]
  *                     [--no-vsync]
- *   --three-point     filter every texture Nintendo 64 style (three-point) instead of as authored
+ *   --filter NAME     filter every texture one way: material (as authored), nearest, bilinear or
+ *                     three_point (Nintendo 64 style)
  *   --frames N       exit after N frames (0 = run until the window is closed)
  *   --screenshot F    save the last frame as PNG; also freezes the orbit/animation clock so
  *                     captures are reproducible (use --yaw/--time to choose the view and pose)
@@ -31,7 +32,8 @@ typedef struct Options {
     uint32_t width, height, scale, workers, frames, max_texture;
     const char* screenshot;
     float yaw, pitch, distance, time;
-    bool dither, three_point, hud, vsync;
+    WPE_TextureFiltering filter;
+    bool dither, hud, vsync;
 } Options;
 
 static bool parse_float(const char* text, float* out) {
@@ -64,10 +66,6 @@ static bool parse_options(int argc, char** argv, Options* o) {
             o->dither = true;
             continue;
         }
-        if (strcmp(arg, "--three-point") == 0) {
-            o->three_point = true;
-            continue;
-        }
         if (strcmp(arg, "--no-hud") == 0) {
             o->hud = false;
             continue;
@@ -91,6 +89,8 @@ static bool parse_options(int argc, char** argv, Options* o) {
             ok = parse_u32(value, &o->frames);
         } else if (strcmp(arg, "--max-texture") == 0) {
             ok = parse_u32(value, &o->max_texture);
+        } else if (strcmp(arg, "--filter") == 0) {
+            ok = wpe_texture_filtering_from_name(value, &o->filter);
         } else if (strcmp(arg, "--screenshot") == 0) {
             o->screenshot = value;
         } else if (strcmp(arg, "--yaw") == 0) {
@@ -252,7 +252,7 @@ int main(int argc, char** argv) {
 
     WPE_SceneRenderSettings settings = wpe_scene_render_settings_default();
     settings.dither_transparency = o.dither;
-    if (o.three_point) settings.texture_filtering = WPE_TEXTURE_FILTERING_THREE_POINT;
+    settings.texture_filtering = o.filter;
     char hud[256] = "";
     double previous = wpe_platform_time_seconds(), stats_start = previous, render_ms = 0.0;
     uint32_t stats_frames = 0;
