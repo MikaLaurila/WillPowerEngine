@@ -144,6 +144,18 @@ WPE_Result wpe_audio_update(WPE_Audio* audio);
 void wpe_audio_set_listener(WPE_Audio* audio, WPE_Entity entity);
 
 /**
+ * Plays every effects-bus voice (one-shots and sources) at its pitch times `scale` (slow motion lowers and
+ * slows them; 1 is normal). Below 0.01 they are held where they are and resume when it rises. The music bus
+ * keeps its speed. Negative or non-finite scales are ignored.
+ *
+ * @thread_safety Owning thread
+ */
+void wpe_audio_set_time_scale(WPE_Audio* audio, float scale);
+
+/** @return The scale set by wpe_audio_set_time_scale() (1 by default). @thread_safety Owning thread */
+float wpe_audio_time_scale(const WPE_Audio* audio);
+
+/**
  * Plays a sound once (or looping, until stopped). The voice holds a reference to the sound.
  *
  * @param desc Optional (NULL = defaults: volume 1, pitch 1, effects bus, 2D).

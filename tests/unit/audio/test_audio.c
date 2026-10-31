@@ -162,6 +162,49 @@ static void test_audio_pitch_changes_duration(void) {
     free_fixture(&f);
 }
 
+static void test_audio_time_scale_slows_effects(void) {
+    Fixture f = make_fixture();
+    const WPE_AssetHandle sound = load_sound(&f, "sounds/stereo.wav"); /* 0.5 s */
+    WPE_TEST_ASSERT_NEAR(1.0, wpe_audio_time_scale(f.audio), 0);
+    /* At half speed an effect played at pitch 2 runs its normal 0.5 s; music keeps its speed (0.25 s). */
+    wpe_audio_set_time_scale(f.audio, 0.5f);
+    const WPE_Voice effect = wpe_audio_play(f.audio, sound, &(WPE_AudioPlayDesc){.pitch = 2.0f});
+    const WPE_Voice music =
+        wpe_audio_play(f.audio, sound, &(WPE_AudioPlayDesc){.pitch = 2.0f, .bus = WPE_AUDIO_BUS_MUSIC});
+    advance(&f, 0.35f);
+    WPE_TEST_ASSERT(wpe_audio_is_playing(f.audio, effect));
+    WPE_TEST_ASSERT(!wpe_audio_is_playing(f.audio, music));
+    advance(&f, 0.3f);
+    WPE_TEST_ASSERT(!wpe_audio_is_playing(f.audio, effect));
+
+    /* At a standstill effects hold where they are, silently, and resume when time runs again. */
+    wpe_audio_set_time_scale(f.audio, 1.0f);
+    const WPE_Voice held = wpe_audio_play(f.audio, sound, NULL);
+    advance(&f, 0.2f);
+    wpe_audio_set_time_scale(f.audio, 0.0f);
+    advance(&f, 1.0f);
+    WPE_TEST_ASSERT(wpe_audio_is_playing(f.audio, held));
+    WPE_TEST_ASSERT_NEAR(0.0, render_rms(&f, 4800), 1e-4);
+    const WPE_Voice late =
+        wpe_audio_play(f.audio, sound, NULL); /* Started during the standstill: held too. */
+    advance(&f, 0.6f);
+    WPE_TEST_ASSERT(wpe_audio_is_playing(f.audio, late));
+    wpe_audio_set_time_scale(f.audio, 1.0f);
+    WPE_TEST_ASSERT(render_rms(&f, 4800) > 0.1f);
+    advance(&f, 0.25f); /* The rest of the held one (0.3 s, minus the render above). */
+    WPE_TEST_ASSERT(!wpe_audio_is_playing(f.audio, held));
+    WPE_TEST_ASSERT(wpe_audio_is_playing(f.audio, late));
+    advance(&f, 0.3f);
+    WPE_TEST_ASSERT(!wpe_audio_is_playing(f.audio, late));
+
+    /* Nonsense is ignored. */
+    wpe_audio_set_time_scale(f.audio, -1.0f);
+    wpe_audio_set_time_scale(f.audio, NAN);
+    WPE_TEST_ASSERT_NEAR(1.0, wpe_audio_time_scale(f.audio), 0);
+    wpe_asset_release(f.assets.assets, sound);
+    free_fixture(&f);
+}
+
 static void test_audio_volume_buses(void) {
     Fixture f = make_fixture();
     const WPE_AssetHandle sound = load_sound(&f, "sounds/long.wav");
@@ -384,7 +427,8 @@ static void test_audio_create_validation(void) {
 }
 
 WPE_TEST_MAIN(WPE_TEST_CASE(test_audio_sound_assets), WPE_TEST_CASE(test_audio_one_shot_plays_and_finishes),
-              WPE_TEST_CASE(test_audio_pitch_changes_duration), WPE_TEST_CASE(test_audio_volume_buses),
+              WPE_TEST_CASE(test_audio_pitch_changes_duration),
+              WPE_TEST_CASE(test_audio_time_scale_slows_effects), WPE_TEST_CASE(test_audio_volume_buses),
               WPE_TEST_CASE(test_audio_spatial_panning_and_attenuation),
               WPE_TEST_CASE(test_audio_source_components), WPE_TEST_CASE(test_audio_voice_stealing),
               WPE_TEST_CASE(test_audio_music_streams_and_crossfades),

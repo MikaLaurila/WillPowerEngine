@@ -157,7 +157,7 @@ end
 
 ### Game feel: slow motion, hit-stop, shake
 
-The game clock can run slower or stop. Everything simulated follows it: `dt` in `on_update` and `on_fixed_update`, the number of fixed steps (so physics too), timers, `wpe.time()`, animation, particles, trails and slashes. The UI and audio keep real time. Slow motion, hit-stops and shakes count real seconds, so they end on time at any speed; a scene load ends them all and puts the speed back to 1.
+The game clock can run slower or stop. Everything simulated follows it: `dt` in `on_update` and `on_fixed_update`, the number of fixed steps (so physics too), timers, `wpe.time()`, animation, particles, trails and slashes. The UI keeps real time. Sound effects (the `"effects"` bus: one-shots and audio sources) slow down and drop in pitch with slow motion and pause while the speed set by `wpe.set_time_scale` is 0, but play on through hit-stops, so a hit's own sound isn't choked; the `"music"` bus keeps its speed (play a sound on it to keep it at full speed too). Slow motion, hit-stops and shakes count real seconds, so they end on time at any speed; a scene load ends them all and puts the speed back to 1.
 
 | Function | Description |
 |---|---|

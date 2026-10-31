@@ -43,6 +43,9 @@ typedef struct wpe__Voice {
     uint64_t serial;        /* Start order (voice stealing takes the oldest one-shot). */
     uint32_t generation;
     wpe__VoiceKind kind;
+    float pitch;  /* Its own pitch; effects voices play at pitch x the time scale. */
+    bool effects; /* On the effects bus (follows the time scale). */
+    bool held;    /* Stopped by a time scale of 0, resumed when it rises. */
     bool loop;
     bool stopping; /* Music fading out before it is recycled. */
 } wpe__Voice;
@@ -65,6 +68,7 @@ struct WPE_Audio {
     WPE_Voice music; /* The current (not fading-out) music voice. */
     uint64_t serial;
     WPE_Entity listener;
+    float time_scale; /* Effects play at their pitch times this (wpe_audio_set_time_scale). */
     uint32_t voices_lost;
     bool device;
     bool groups_ready;
@@ -280,6 +284,9 @@ static void wpe__recycle(WPE_Audio* audio, wpe__Voice* voice) {
     voice->asset = WPE_ASSET_NONE;
     voice->entity = WPE_ENTITY_NULL;
     voice->stopping = false;
+    voice->held = false;
+    voice->effects = false;
+    voice->pitch = 1.0f;
     voice->generation = voice->generation >= WPE__VOICE_MAX_GENERATION ? 1u : voice->generation + 1u;
 }
 
@@ -316,6 +323,26 @@ static void wpe__apply_spatial(wpe__Voice* voice, const wpe__VoiceParams* p) {
     ma_sound_set_position(&voice->sound, p->position.x, p->position.y, p->position.z);
 }
 
+/* Below this time scale effects are held (miniaudio can't play at pitch 0, and a crawl would only drone). */
+#define WPE__MIN_TIME_SCALE 0.01f
+
+/* Plays a voice at its pitch times the time scale (effects), holding or resuming it at a standstill. */
+static void wpe__apply_pitch(const WPE_Audio* audio, wpe__Voice* voice) {
+    const float scale = voice->effects ? audio->time_scale : 1.0f;
+    if (scale < WPE__MIN_TIME_SCALE) {
+        if (!voice->held && ma_sound_is_playing(&voice->sound)) {
+            ma_sound_stop(&voice->sound); /* Keeps its place. */
+            voice->held = true;
+        }
+        return;
+    }
+    ma_sound_set_pitch(&voice->sound, voice->pitch * scale);
+    if (voice->held) {
+        ma_sound_start(&voice->sound);
+        voice->held = false;
+    }
+}
+
 /* Starts an effects voice for a sound asset; takes its own reference. */
 static wpe__Voice* wpe__start_sound(WPE_Audio* audio, WPE_AssetHandle asset, wpe__VoiceKind kind,
                                     const wpe__VoiceParams* p) {
@@ -339,11 +366,13 @@ static wpe__Voice* wpe__start_sound(WPE_Audio* audio, WPE_AssetHandle asset, wpe
     voice->kind = kind;
     voice->loop = p->loop;
     voice->serial = ++audio->serial;
+    voice->pitch = p->pitch;
+    voice->effects = p->bus != WPE_AUDIO_BUS_MUSIC;
     ma_sound_set_volume(&voice->sound, p->volume);
-    ma_sound_set_pitch(&voice->sound, p->pitch);
     ma_sound_set_looping(&voice->sound, p->loop);
     if (p->spatial) wpe__apply_spatial(voice, p);
     ma_sound_start(&voice->sound);
+    wpe__apply_pitch(audio, voice); /* After starting: a standstill holds it at its first frame. */
     return voice;
 }
 
@@ -413,6 +442,7 @@ WPE_Result wpe_audio_create(const WPE_AudioDesc* desc, WPE_Audio** out_audio) {
     audio->ecs = desc->ecs;
     audio->assets = desc->assets;
     audio->allocation = wpe__ma_allocation;
+    audio->time_scale = 1.0f;
     for (uint32_t i = 0; i < WPE_AUDIO_BUS_COUNT; ++i)
         audio->volumes[i] = 1.0f;
     for (uint32_t i = 0; i < WPE_AUDIO_MAX_VOICES; ++i)
@@ -563,7 +593,8 @@ WPE_Result wpe_audio_update(WPE_Audio* audio) {
             source->wpe__voice = wpe__voice_id(audio, (uint32_t)(voice - audio->voices));
         } else {
             ma_sound_set_volume(&voice->sound, params.volume);
-            ma_sound_set_pitch(&voice->sound, params.pitch);
+            voice->pitch = params.pitch;
+            wpe__apply_pitch(audio, voice);
             ma_sound_set_looping(&voice->sound, params.loop);
             if (params.spatial) wpe__apply_spatial(voice, &params);
         }
@@ -578,6 +609,19 @@ WPE_Result wpe_audio_update(WPE_Audio* audio) {
             wpe__recycle(audio, voice);
     }
     return WPE_RESULT_OK;
+}
+
+void wpe_audio_set_time_scale(WPE_Audio* audio, float scale) {
+    if (!audio || !(scale >= 0.0f) || !isfinite(scale) || scale == audio->time_scale) return;
+    audio->time_scale = scale;
+    for (uint32_t i = 0; i < WPE_AUDIO_MAX_VOICES; ++i) {
+        wpe__Voice* voice = &audio->voices[i];
+        if (voice->kind != WPE__VOICE_FREE && voice->effects) wpe__apply_pitch(audio, voice);
+    }
+}
+
+float wpe_audio_time_scale(const WPE_Audio* audio) {
+    return audio ? audio->time_scale : 1.0f;
 }
 
 void wpe_audio_set_listener(WPE_Audio* audio, WPE_Entity entity) {

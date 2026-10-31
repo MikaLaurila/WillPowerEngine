@@ -63,6 +63,10 @@ WPE_GameFeel wpe_game_feel_default(void);
  * Any thread */
 float wpe_game_feel_time_scale(const WPE_GameFeel* feel);
 
+/** @return The time scale for sound: as wpe_game_feel_time_scale() but through hit-stops, so the hit's own
+ * sound plays on while the game holds. @thread_safety Any thread */
+float wpe_game_feel_audio_scale(const WPE_GameFeel* feel);
+
 /**
  * Advances hit-stop and slow motion by a frame's real time.
  *

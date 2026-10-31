@@ -538,6 +538,8 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
 
 static WPE_Result wpe__mix_audio(WPE_Engine* engine, WPE_Entity camera, double dt) {
     wpe_audio_set_listener(engine->audio, camera);
+    /* Effects slow down and drop in pitch with slow motion (not with hit-stops: the hit's sound plays on). */
+    wpe_audio_set_time_scale(engine->audio, wpe_game_feel_audio_scale(&engine->feel));
     WPE_Result result = wpe_audio_update(engine->audio);
     const WPE_AudioStats stats = wpe_audio_stats(engine->audio);
     if (stats.device || result != WPE_RESULT_OK) return result;

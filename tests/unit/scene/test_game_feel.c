@@ -21,6 +21,7 @@ static void test_game_feel_base_scale_and_hit_stop(void) {
     /* A hit-stop freezes whole frames, then only its share of the frame it ends in. */
     wpe_game_feel_hit_stop(&feel, 0.25f);
     WPE_TEST_ASSERT_NEAR(0.0, wpe_game_feel_time_scale(&feel), EPS);
+    WPE_TEST_ASSERT_NEAR(1.0, wpe_game_feel_audio_scale(&feel), EPS); /* Sound plays on through a hit-stop. */
     WPE_TEST_ASSERT_NEAR(0.0, wpe_game_feel_advance(&feel, 0.1), EPS);
     WPE_TEST_ASSERT_NEAR(0.0, wpe_game_feel_advance(&feel, 0.1), EPS);
     WPE_TEST_ASSERT_NEAR(0.05, wpe_game_feel_advance(&feel, 0.1), EPS);
@@ -42,6 +43,7 @@ static void test_game_feel_slow_motion(void) {
     WPE_GameFeel feel = wpe_game_feel_default();
     wpe_game_feel_slow_motion(&feel, 0.25f, 1.0f, 0.0f);
     WPE_TEST_ASSERT_NEAR(0.25, wpe_game_feel_time_scale(&feel), EPS);
+    WPE_TEST_ASSERT_NEAR(0.25, wpe_game_feel_audio_scale(&feel), EPS); /* ...but slows with slow motion. */
     WPE_TEST_ASSERT_NEAR(0.125, wpe_game_feel_advance(&feel, 0.5), EPS);
     /* It ends mid-frame: half slow, half at full speed. */
     WPE_TEST_ASSERT_NEAR(0.5 * 0.25 + 0.5, wpe_game_feel_advance(&feel, 1.0), EPS);

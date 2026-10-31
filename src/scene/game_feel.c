@@ -27,6 +27,10 @@ float wpe_game_feel_time_scale(const WPE_GameFeel* feel) {
     return feel->base_scale;
 }
 
+float wpe_game_feel_audio_scale(const WPE_GameFeel* feel) {
+    return feel->slow_remaining > 0.0f ? wpe__slow_scale(feel, feel->slow_remaining) : feel->base_scale;
+}
+
 double wpe_game_feel_advance(WPE_GameFeel* feel, double real_dt) {
     if (!(real_dt > 0.0) || !isfinite(real_dt)) real_dt = 0.0;
     feel->real_dt = (float)real_dt;

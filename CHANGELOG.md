@@ -69,6 +69,14 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (sound follows slow motion)
+- `wpe_audio_set_time_scale`/`wpe_audio_time_scale`: effects-bus voices (one-shots and sources) play at
+  their pitch times the scale, so slow motion slows and lowers them; below 0.01 they are held in place
+  and resume after. The music bus keeps its speed. The engine feeds it `wpe_game_feel_audio_scale`
+  (slow motion and the base scale, not hit-stops, so a hit's sound plays on while the game holds).
+- Tests: an effect slowed and a music-bus sound not, sounds held at a standstill (also ones started
+  then) and resumed where they were; the audio scale through hit-stops and slow motion.
+
 ### Added (game feel: slow motion, hit-stop, shake)
 - `scene/game_feel.h` (`WPE_GameFeel`): the game clock's time scale and entity shakes. A hit-stop (0)
   wins over slow motion (which can ease back over a fade), which wins over the base scale;
