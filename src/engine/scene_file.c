@@ -37,6 +37,10 @@ static const char* const wpe__collider_shapes[] = {"box", "sphere", "capsule", "
 static const char* const wpe__buses[] = {"master", "effects", "music"};
 static const char* const wpe__fog_modes[] = {"none", "linear", "exponential"};
 static const char* const wpe__sky_modes[] = {"color", "gradient", "panorama"};
+static const char* const wpe__texture_filters[] = {"material", "nearest", "bilinear", "three_point"};
+static_assert(sizeof wpe__texture_filters / sizeof wpe__texture_filters[0] ==
+                  WPE_TEXTURE_FILTERING_THREE_POINT + 1,
+              "texture filter names out of sync with WPE_TextureFiltering");
 
 #define WPE__COUNT(array) ((uint32_t)(sizeof(array) / sizeof((array)[0])))
 
@@ -204,6 +208,7 @@ static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment*
     wpe__write_number(w, "bias", r->shadows.bias);
     wpe_json_write_object_end(w);
     wpe__write_bool(w, "dither_transparency", r->dither_transparency);
+    wpe__write_string(w, "texture_filter", wpe__texture_filters[r->texture_filtering]);
     wpe__write_bool(w, "frustum_culling", r->frustum_culling);
     wpe_json_write_key(w, "subdivision");
     wpe_json_write_object_begin(w);
@@ -838,11 +843,16 @@ static bool wpe__load_sky(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvir
 
 static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvironment* env) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "environment", "clear_color", "ambient", "fog", "sky", "shadows",
-                                "dither_transparency", "frustum_culling", "subdivision", "default_sun",
-                                "gravity", "music", "postfx"))
+                                "dither_transparency", "texture_filter", "frustum_culling", "subdivision",
+                                "default_sun", "gravity", "music", "postfx"))
         return false;
     if (!wpe__load_sky(l, wpe_json_get(v, "sky"), env)) return false;
     WPE_SceneRenderSettings* r = &env->render;
+    uint32_t texture_filter = r->texture_filtering;
+    if (!wpe__json_read_enum(&l->r, v, "texture_filter", wpe__texture_filters,
+                             WPE__COUNT(wpe__texture_filters), &texture_filter))
+        return false;
+    r->texture_filtering = (WPE_TextureFiltering)texture_filter;
     if (!wpe__json_read_vec3(&l->r, v, "clear_color", &env->clear_color) ||
         !wpe__json_read_vec3(&l->r, v, "ambient", &r->ambient) ||
         !wpe__json_read_vec3(&l->r, v, "gravity", &env->gravity) ||

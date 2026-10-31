@@ -212,9 +212,28 @@ static WPE_Vec4 wpe__sample_level(const WPE_TextureLevel* level, const WPE_Sampl
                   x1 = wpe__wrap((int32_t)bx + 1, w, sampler->wrap_u);
     const int32_t y0 = wpe__wrap((int32_t)by, h, sampler->wrap_v),
                   y1 = wpe__wrap((int32_t)by + 1, h, sampler->wrap_v);
+    WPE_Vec4 out;
+    if (filter == WPE_FILTER_THREE_POINT) {
+        /* The quad splits along its x0y1-x1y0 diagonal; each half interpolates its three corners. */
+        WPE_Vec4 corner, along_x, along_y;
+        float sx = tx, sy = ty;
+        if (tx + ty <= 1.0f) {
+            corner = wpe__texel(level, x0, y0);
+            along_x = wpe__texel(level, x1, y0);
+            along_y = wpe__texel(level, x0, y1);
+        } else {
+            corner = wpe__texel(level, x1, y1);
+            along_x = wpe__texel(level, x0, y1);
+            along_y = wpe__texel(level, x1, y0);
+            sx = 1.0f - tx;
+            sy = 1.0f - ty;
+        }
+        for (int i = 0; i < 4; ++i)
+            out.v[i] = corner.v[i] + (along_x.v[i] - corner.v[i]) * sx + (along_y.v[i] - corner.v[i]) * sy;
+        return out;
+    }
     const WPE_Vec4 a = wpe__texel(level, x0, y0), b = wpe__texel(level, x1, y0);
     const WPE_Vec4 c = wpe__texel(level, x0, y1), d = wpe__texel(level, x1, y1);
-    WPE_Vec4 out;
     for (int i = 0; i < 4; ++i) {
         const float top = a.v[i] + (b.v[i] - a.v[i]) * tx;
         const float bottom = c.v[i] + (d.v[i] - c.v[i]) * tx;

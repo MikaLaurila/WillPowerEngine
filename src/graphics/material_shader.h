@@ -41,6 +41,14 @@ typedef struct WPE_FogParams {
     float density;
 } WPE_FogParams;
 
+/** How material textures are filtered: as their samplers say, or one filter for every texture. */
+typedef enum WPE_TextureFiltering {
+    WPE_TEXTURE_FILTERING_MATERIAL = 0, /* Each texture's own sampler (glTF). */
+    WPE_TEXTURE_FILTERING_NEAREST,
+    WPE_TEXTURE_FILTERING_BILINEAR,
+    WPE_TEXTURE_FILTERING_THREE_POINT, /* Nintendo 64 style (WPE_FILTER_THREE_POINT). */
+} WPE_TextureFiltering;
+
 /** A point or spot light in world space, as consumed by the shader. */
 typedef struct WPE_ShaderLight {
     WPE_Vec3 position;
@@ -86,6 +94,9 @@ typedef struct WPE_MaterialUniforms {
      * for a double-sided material. */
     bool unlit;
     bool double_sided;
+    /* Replaces the magnification and minification filters of every material texture (mip filtering is kept).
+     */
+    WPE_TextureFiltering texture_filtering;
 } WPE_MaterialUniforms;
 
 /** @return The material program (static storage); supports subdivision. @thread_safety Any thread */

@@ -453,6 +453,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
     static const char* const billboard_blends[] = {"cutout", "alpha", "additive"};
     static const char* const particle_shapes[] = {"point", "sphere", "box"};
     static const char* const skies[] = {"color", "gradient", "panorama"};
+    static const char* const texture_filters[] = {"material", "nearest", "bilinear", "three_point"};
     const struct {
         const char* component;
         const char* key;
@@ -466,6 +467,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
         {"fog", "mode", fogs, 3}, /* The environment's objects go by their own names (wpe__draw_value). */
         {"sky", "mode", skies, 3},
         {"environment", "effect", effects, (uint32_t)(sizeof effects / sizeof effects[0])},
+        {"environment", "texture_filter", texture_filters, 4},
         {"text", "align", aligns, 3},
         {"text", "valign", valigns, 3},
         {"billboard", "mode", billboard_modes, 4},

@@ -19,6 +19,7 @@
       "bias": 0.00150000001
     },
     "dither_transparency": false,
+    "texture_filter": "material",
     "frustum_culling": true,
     "subdivision": {
       "levels": 3,

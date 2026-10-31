@@ -4,8 +4,10 @@
  *
  * Usage: model_viewer [model.glb] [--width N] [--height N] [--scale N] [--workers N] [--frames N]
  *                     [--screenshot file.png] [--max-texture N] [--yaw DEGREES] [--pitch DEGREES]
- *                     [--distance FACTOR] [--time SECONDS] [--dither] [--no-hud] [--no-vsync]
- *   --frames N        exit after N frames (0 = run until the window is closed)
+ *                     [--distance FACTOR] [--time SECONDS] [--dither] [--three-point] [--no-hud]
+ *                     [--no-vsync]
+ *   --three-point     filter every texture Nintendo 64 style (three-point) instead of as authored
+ *   --frames N       exit after N frames (0 = run until the window is closed)
  *   --screenshot F    save the last frame as PNG; also freezes the orbit/animation clock so
  *                     captures are reproducible (use --yaw/--time to choose the view and pose)
  */
@@ -29,7 +31,7 @@ typedef struct Options {
     uint32_t width, height, scale, workers, frames, max_texture;
     const char* screenshot;
     float yaw, pitch, distance, time;
-    bool dither, hud, vsync;
+    bool dither, three_point, hud, vsync;
 } Options;
 
 static bool parse_float(const char* text, float* out) {
@@ -60,6 +62,10 @@ static bool parse_options(int argc, char** argv, Options* o) {
         }
         if (strcmp(arg, "--dither") == 0) {
             o->dither = true;
+            continue;
+        }
+        if (strcmp(arg, "--three-point") == 0) {
+            o->three_point = true;
             continue;
         }
         if (strcmp(arg, "--no-hud") == 0) {
@@ -246,6 +252,7 @@ int main(int argc, char** argv) {
 
     WPE_SceneRenderSettings settings = wpe_scene_render_settings_default();
     settings.dither_transparency = o.dither;
+    if (o.three_point) settings.texture_filtering = WPE_TEXTURE_FILTERING_THREE_POINT;
     char hud[256] = "";
     double previous = wpe_platform_time_seconds(), stats_start = previous, render_ms = 0.0;
     uint32_t stats_frames = 0;

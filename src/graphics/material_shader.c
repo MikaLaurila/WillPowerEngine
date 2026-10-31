@@ -232,9 +232,11 @@ static void wpe__material_lerp(const void* a_ptr, const void* b_ptr, float t, vo
 
 /* ---- Fragment stage ------------------------------------------------------------------------------- */
 
-/* Samples a material texture reference (KHR_texture_transform applied), or returns `fallback`. */
-static WPE_Vec4 wpe__sample_ref(const WPE_Model* model, const WPE_TextureRef* ref,
+/* Samples a material texture reference (KHR_texture_transform applied, the filter override of `u` too), or
+ * returns `fallback`. */
+static WPE_Vec4 wpe__sample_ref(const WPE_MaterialUniforms* u, const WPE_TextureRef* ref,
                                 const WPE_FragmentInput* in, WPE_Vec4 fallback) {
+    const WPE_Model* model = u->model;
     if (ref->texture == WPE_MODEL_NONE || ref->texture >= model->texture_count) return fallback;
     const WPE_Texture* texture = model->textures[ref->texture];
     if (!texture) return fallback;
@@ -252,7 +254,16 @@ static WPE_Vec4 wpe__sample_ref(const WPE_Model* model, const WPE_TextureRef* re
     }
     uv.x += ref->offset.x;
     uv.y += ref->offset.y;
-    return wpe_texture_sample(texture, &ref->sampler, uv, dx, dy);
+    if (u->texture_filtering == WPE_TEXTURE_FILTERING_MATERIAL)
+        return wpe_texture_sample(texture, &ref->sampler, uv, dx, dy);
+    static const WPE_TextureFilter filters[] = {
+        [WPE_TEXTURE_FILTERING_NEAREST] = WPE_FILTER_NEAREST,
+        [WPE_TEXTURE_FILTERING_BILINEAR] = WPE_FILTER_BILINEAR,
+        [WPE_TEXTURE_FILTERING_THREE_POINT] = WPE_FILTER_THREE_POINT,
+    };
+    WPE_Sampler sampler = ref->sampler;
+    sampler.mag_filter = sampler.min_filter = filters[u->texture_filtering];
+    return wpe_texture_sample(texture, &sampler, uv, dx, dy);
 }
 
 /* Applies the alpha mode; returns false to discard. */
@@ -289,11 +300,10 @@ float wpe_fog_factor(const WPE_FogParams* fog, float distance) {
 static bool wpe__material_fs(const void* uniforms, const WPE_FragmentInput* in, WPE_Vec4* out_color) {
     const WPE_MaterialUniforms* u = uniforms;
     const WPE_Material* m = u->material;
-    const WPE_Model* model = u->model;
     const float* v = in->varyings;
     const WPE_Vec4 one = wpe_vec4(1, 1, 1, 1);
 
-    const WPE_Vec4 tex = wpe__sample_ref(model, &m->diffuse_texture, in, one);
+    const WPE_Vec4 tex = wpe__sample_ref(u, &m->diffuse_texture, in, one);
     WPE_Vec4 base = wpe_vec4(
         m->diffuse_factor.x * tex.x * v[WPE__V_COLOR + 0], m->diffuse_factor.y * tex.y * v[WPE__V_COLOR + 1],
         m->diffuse_factor.z * tex.z * v[WPE__V_COLOR + 2], m->diffuse_factor.w * tex.w * v[WPE__V_COLOR + 3]);
@@ -316,7 +326,7 @@ static bool wpe__material_fs(const void* uniforms, const WPE_FragmentInput* in, 
         WPE_Vec3 diffuse, specular;
         float gloss;
         if (m->workflow == WPE_MATERIAL_METALLIC_ROUGHNESS) {
-            const WPE_Vec4 mr = wpe__sample_ref(model, &m->metallic_roughness_texture, in, one);
+            const WPE_Vec4 mr = wpe__sample_ref(u, &m->metallic_roughness_texture, in, one);
             const float metallic = m->metallic_factor * mr.z;
             const float roughness = m->roughness_factor * mr.y;
             diffuse = wpe_vec3_scale(wpe_vec3(base.x, base.y, base.z), 1.0f - metallic);
@@ -324,7 +334,7 @@ static bool wpe__material_fs(const void* uniforms, const WPE_FragmentInput* in, 
                                 0.04f + (base.z - 0.04f) * metallic);
             gloss = 1.0f - roughness;
         } else {
-            const WPE_Vec4 sg = wpe__sample_ref(model, &m->specular_glossiness_texture, in, one);
+            const WPE_Vec4 sg = wpe__sample_ref(u, &m->specular_glossiness_texture, in, one);
             diffuse = wpe_vec3(base.x, base.y, base.z);
             specular = wpe_vec3(m->specular_factor.x * sg.x, m->specular_factor.y * sg.y,
                                 m->specular_factor.z * sg.z);
@@ -335,8 +345,7 @@ static bool wpe__material_fs(const void* uniforms, const WPE_FragmentInput* in, 
         float sun_ndl = v[WPE__V_SUN_NDL], sun_spec = v[WPE__V_SUN_SPEC];
         const WPE_Vec3 sun_ts = wpe_vec3(v[WPE__V_SUN_TS], v[WPE__V_SUN_TS + 1], v[WPE__V_SUN_TS + 2]);
         if (wpe__normal_mapped(u) && wpe_vec3_length_sq(sun_ts) > 1e-8f) {
-            const WPE_Vec4 nt =
-                wpe__sample_ref(model, &m->normal_texture, in, wpe_vec4(0.5f, 0.5f, 1.0f, 1.0f));
+            const WPE_Vec4 nt = wpe__sample_ref(u, &m->normal_texture, in, wpe_vec4(0.5f, 0.5f, 1.0f, 1.0f));
             const WPE_Vec3 nm =
                 wpe_vec3_normalize(wpe_vec3((nt.x * 2.0f - 1.0f) * m->normal_scale,
                                             (nt.y * 2.0f - 1.0f) * m->normal_scale, nt.z * 2.0f - 1.0f));
@@ -356,7 +365,7 @@ static bool wpe__material_fs(const void* uniforms, const WPE_FragmentInput* in, 
                                            : 1.0f;
 
         const float ao =
-            1.0f + m->occlusion_strength * (wpe__sample_ref(model, &m->occlusion_texture, in, one).x - 1.0f);
+            1.0f + m->occlusion_strength * (wpe__sample_ref(u, &m->occlusion_texture, in, one).x - 1.0f);
         for (int i = 0; i < 3; ++i) {
             const float diffuse_light = v[WPE__V_DIFFUSE + i] + u->sun_color.v[i] * sun_ndl * shadow;
             const float specular_light = v[WPE__V_SPECULAR + i] + u->sun_color.v[i] * sun_spec * shadow;
@@ -367,7 +376,7 @@ static bool wpe__material_fs(const void* uniforms, const WPE_FragmentInput* in, 
         }
     }
 
-    const WPE_Vec4 emissive_tex = wpe__sample_ref(model, &m->emissive_texture, in, one);
+    const WPE_Vec4 emissive_tex = wpe__sample_ref(u, &m->emissive_texture, in, one);
     for (int i = 0; i < 3; ++i)
         color.v[i] += m->emissive_factor.v[i] * emissive_tex.v[i];
 
@@ -398,7 +407,7 @@ static void wpe__depth_vs(const void* uniforms, const void* vertex, WPE_Vec4* ou
 static bool wpe__depth_mask_fs(const void* uniforms, const WPE_FragmentInput* in, WPE_Vec4* out_color) {
     const WPE_MaterialUniforms* u = uniforms;
     const WPE_Material* m = u->material;
-    const WPE_Vec4 tex = wpe__sample_ref(u->model, &m->diffuse_texture, in, wpe_vec4(1, 1, 1, 1));
+    const WPE_Vec4 tex = wpe__sample_ref(u, &m->diffuse_texture, in, wpe_vec4(1, 1, 1, 1));
     float alpha = m->diffuse_factor.w * tex.w * in->varyings[WPE__V_COLOR + 3];
     *out_color = wpe_vec4(0, 0, 0, 1);
     return wpe__resolve_alpha(m, &alpha);

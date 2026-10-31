@@ -114,6 +114,29 @@ static void test_texture_bilinear_interpolates_between_texel_centers(void) {
     wpe_texture_destroy(t);
 }
 
+static void test_texture_three_point_blends_the_nearest_triangle(void) {
+    /* Red 0, 60 / 120, 240: the quad's halves are (0, 60, 120) and (240, 120, 60). */
+    const uint32_t texels[4] = {0xFF000000u, 0xFF3C0000u, 0xFF780000u, 0xFFF00000u};
+    WPE_Texture* t = make_texture(2, 2, texels, false, false, 0);
+    const WPE_Sampler s = {.mag_filter = WPE_FILTER_THREE_POINT,
+                           .min_filter = WPE_FILTER_THREE_POINT,
+                           .wrap_u = WPE_WRAP_CLAMP,
+                           .wrap_v = WPE_WRAP_CLAMP};
+    const float r = 1.0f / 255.0f;
+    /* Texel centers sit at 0.25 and 0.75, so a sample at 0.25 + 0.5 * f is f of the way across the quad. */
+    WPE_TEST_ASSERT_NEAR(0.0, wpe_texture_sample_lod(t, &s, (WPE_Vec2){{0.25f, 0.25f}}, 0).x, 1e-6);
+    WPE_TEST_ASSERT_NEAR(240 * r, wpe_texture_sample_lod(t, &s, (WPE_Vec2){{0.75f, 0.75f}}, 0).x, 1e-6);
+    /* A quarter of the way: 0.25 * 60 + 0.25 * 120 (bilinear would also take a sixteenth of 240). */
+    WPE_TEST_ASSERT_NEAR(45 * r, wpe_texture_sample_lod(t, &s, (WPE_Vec2){{0.375f, 0.375f}}, 0).x, 1e-5);
+    /* Three quarters: 240 - 0.25 * 120 - 0.25 * 180, from the far corner. */
+    WPE_TEST_ASSERT_NEAR(165 * r, wpe_texture_sample_lod(t, &s, (WPE_Vec2){{0.625f, 0.625f}}, 0).x, 1e-5);
+    /* The middle lies on the diagonal: only its two texels count (bilinear gives 105). */
+    WPE_TEST_ASSERT_NEAR(90 * r, wpe_texture_sample_lod(t, &s, (WPE_Vec2){{0.5f, 0.5f}}, 0).x, 1e-5);
+    /* Along an edge it is linear, as bilinear is: halfway between the top texels. */
+    WPE_TEST_ASSERT_NEAR(30 * r, wpe_texture_sample_lod(t, &s, (WPE_Vec2){{0.5f, 0.25f}}, 0).x, 1e-5);
+    wpe_texture_destroy(t);
+}
+
 static void test_texture_lod_selection_from_derivatives(void) {
     /* 8x8 texture whose levels have distinct colors: 8x8 red, 4x4 green, 2x2 blue, 1x1 white. */
     static uint32_t texels[64];
@@ -301,6 +324,7 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_texture_update_replaces_texels), WPE_TEST_CASE(
               WPE_TEST_CASE(test_texture_create_validation),
               WPE_TEST_CASE(test_texture_nearest_and_wrap_modes),
               WPE_TEST_CASE(test_texture_bilinear_interpolates_between_texel_centers),
+              WPE_TEST_CASE(test_texture_three_point_blends_the_nearest_triangle),
               WPE_TEST_CASE(test_texture_lod_selection_from_derivatives),
               WPE_TEST_CASE(test_texture_rasterizer_provides_exact_uv_derivatives),
               WPE_TEST_CASE(test_texture_perspective_derivatives_grow_with_distance))

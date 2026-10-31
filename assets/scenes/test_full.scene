@@ -8,6 +8,7 @@
     "sky": {"mode": "panorama", "image": "skies/dusk.png", "rotation": 30, "sun_size": 1.5, "sun_glow": 0.2},
     "shadows": {"enabled": true, "map_size": 1024, "distance": 30, "caster_extension": 20, "bias": 0.002},
     "dither_transparency": false,
+    "texture_filter": "material",
     "frustum_culling": true,
     "subdivision": {"levels": 3, "edge_pixels": 24},
     "default_sun": {"enabled": true, "direction": [-0.4, -1, -0.3], "color": [1, 1, 1]},

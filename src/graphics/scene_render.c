@@ -420,6 +420,7 @@ static WPE_Result wpe__render_shadow_map(WPE_SceneRenderer* sr, WPE_JobSystem* j
             const WPE_MaterialUniforms uniforms = {.mvp = mvp,
                                                    .model = model,
                                                    .material = material,
+                                                   .texture_filtering = settings->texture_filtering,
                                                    .joint_palette = inst->palette,
                                                    .joint_count =
                                                        inst->palette ? inst->mesh->joint_count : 0};
@@ -922,6 +923,7 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             .model = model,
             .unlit = inst->mesh->unlit,
             .double_sided = inst->mesh->double_sided,
+            .texture_filtering = settings->texture_filtering,
             .joint_palette = inst->palette,
             .joint_count = inst->palette ? inst->mesh->joint_count : 0,
         };

@@ -75,6 +75,8 @@ typedef struct WPE_SceneRenderSettings {
     WPE_SkySettings sky;
     WPE_ShadowSettings shadows;
     bool dither_transparency; /* Render alpha-blended materials with WPE_BLEND_ALPHA_DITHER. */
+    WPE_TextureFiltering
+        texture_filtering; /* Material textures: their own samplers, or one filter for all. */
     bool frustum_culling;
     uint32_t subdivision_levels;   /* 0 disables adaptive subdivision. */
     float subdivision_edge_pixels; /* Split edges longer than this on screen. */

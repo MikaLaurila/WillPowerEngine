@@ -69,6 +69,15 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (Nintendo 64 style texture filtering)
+- Sampler filter `WPE_FILTER_THREE_POINT`: blends the three nearest texels (the half of the 2x2 footprint
+  the sample falls in), with the N64's diagonal look.
+- Scene environment `texture_filter` (`"material"`, the default, `"nearest"`, `"bilinear"` or
+  `"three_point"`) replaces the filter of every material texture (`WPE_SceneRenderSettings.texture_filtering`);
+  it's in the editor's Environment panel. Mip filtering stays as the model's samplers set it.
+- `model_viewer --three-point`.
+- Tests: three-point sampling (corners, both halves, the diagonal, edges).
+
 ### Added (Bezier slashes)
 - Component `slash` (`WPE_Slash`, `WPE_COMP_SLASH` 24): a ribbon sweeping along a cubic Bezier curve when
   played, `length` of it visible at a time, thin at both ends and full in the middle, facing the camera,

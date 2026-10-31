@@ -51,6 +51,9 @@ typedef struct WPE_TextureDesc {
 typedef enum WPE_TextureFilter {
     WPE_FILTER_NEAREST = 0,
     WPE_FILTER_BILINEAR,
+    /* Nintendo 64 style: blends the three nearest texels of the 2x2 footprint (the triangle of the quad
+     * the sample falls in), cheaper than bilinear and with its characteristic diagonal artifacts. */
+    WPE_FILTER_THREE_POINT,
 } WPE_TextureFilter;
 
 typedef enum WPE_MipFilter {
