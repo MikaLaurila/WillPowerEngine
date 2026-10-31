@@ -278,6 +278,47 @@ bool wpe_script_panel_focused(const WPE_ScriptPanel* panel) {
     return panel && panel->focused;
 }
 
+static char* wpe__read_text(WPE_ScriptPanel* panel, const char* path);
+
+/* Whether `disk` (which may have Windows line ends) is the document's text. */
+static bool wpe__same_text(const WPE_CodeText* t, const char* disk) {
+    size_t i = 0;
+    for (const char* c = disk; *c; ++c) {
+        if (*c == '\r') continue;
+        if (i >= t->length || t->text[i] != *c) return false;
+        ++i;
+    }
+    return i == t->length;
+}
+
+void wpe_script_panel_files_changed(WPE_ScriptPanel* panel, const char* from, const char* to) {
+    if (!panel) return;
+    for (uint32_t i = panel->count; i-- > 0;) {
+        wpe__Doc* doc = panel->docs[i];
+        const bool dirty = wpe_code_text_dirty(&doc->text);
+        if (from && strcmp(doc->path, from) == 0) {
+            if (to) {
+                snprintf(doc->path, sizeof doc->path, "%s", to);
+            } else if (!dirty) { /* Deleted: unsaved changes keep their tab (saving writes the file again). */
+                wpe__close_doc(panel, (int)i);
+                continue;
+            }
+        }
+        if (dirty) continue;
+        /* A file changed on disk (a rename rewrote the names in it): show it as it is now. */
+        char* text = wpe__read_text(panel, doc->path);
+        if (text && !wpe__same_text(&doc->text, text)) {
+            const size_t cursor = doc->text.cursor;
+            if (wpe_code_text_set(&doc->text, text, strlen(text))) {
+                wpe_code_text_set_cursor(&doc->text, cursor < doc->text.length ? cursor : doc->text.length,
+                                         false);
+                wpe__check(panel, doc);
+            }
+        }
+        wpe_free(text);
+    }
+}
+
 bool wpe_script_panel_take_new_request(WPE_ScriptPanel* panel) {
     if (!panel || !panel->new_requested) return false;
     panel->new_requested = false;

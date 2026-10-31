@@ -36,6 +36,13 @@ void wpe_script_panel_draw(WPE_ScriptPanel* panel);
 /** @return Whether the code has the keyboard (the editor's own shortcuts then stay quiet). */
 bool wpe_script_panel_focused(const WPE_ScriptPanel* panel);
 
+/**
+ * Follows changes to project files made outside the panel: the file `from` was renamed to `to` (its tab
+ * follows) or deleted (`to` NULL: a tab without unsaved changes closes), and tabs without unsaved changes
+ * show their file's current text. `from` may be NULL to only re-read.
+ */
+void wpe_script_panel_files_changed(WPE_ScriptPanel* panel, const char* from, const char* to);
+
 /** @return Whether the panel's New script button was pressed since the last call (the UI owns the dialog). */
 bool wpe_script_panel_take_new_request(WPE_ScriptPanel* panel);
 

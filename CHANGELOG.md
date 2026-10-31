@@ -69,6 +69,17 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (editor: managing asset files)
+- Right-click in Assets: Edit script, Copy path, Show in file browser (opens the folder, `SDL_OpenURL`),
+  Duplicate, Rename..., Delete.... The dialogs list the files that name the asset.
+- Commands `asset_references`, `rename_asset` (with `update_references`, default on: the quoted names in
+  scenes, prefabs, scripts — `require` paths too — and JSON files, plus the open scene and its undo/redo
+  snapshots, change to the new name; unsaved changes stay unsaved), `duplicate_asset` and `delete_asset`
+  (refuses the open scene and `project.json`). Rename and delete need edit mode.
+- The Script panel follows: a renamed file's tab is renamed, a deleted file's tab closes (unless it has
+  unsaved changes), and tabs without changes show the rewritten text
+  (`wpe_script_panel_files_changed`).
+
 ### Added (editor: new scripts from templates, completion for the script's own names)
 - `new_script {path, template}`: a script from a template (`behavior`, `physics`, `ui`, `module`), its
   class or module named after the file (`enemy_spawner.luau` declares `EnemySpawner`), opened in the

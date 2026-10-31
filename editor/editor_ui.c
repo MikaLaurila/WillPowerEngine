@@ -108,6 +108,14 @@ struct WPE_EditorUi {
     uint32_t asset_count, asset_capacity;
     bool assets_stale;
     char asset_filter[64];
+    /* Rename and delete: the file asked about, the new name, the files naming it, why the last try failed. */
+    bool rename_popup, delete_popup;
+    char asset_path[WPE__UI_PATH];
+    char asset_to[WPE__UI_PATH];
+    bool asset_update_refs;
+    char asset_refs[2048];
+    uint32_t asset_ref_count;
+    char asset_error[256];
 
     /* Popups and console. */
     char scene_path[WPE__UI_PATH];
@@ -2479,6 +2487,157 @@ static void wpe__clear_assets(WPE_EditorUi* ui) {
 
 static void wpe__ui_ask_new_script(WPE_EditorUi* ui);
 
+/* The error of the last command's reply ("" when there is none). */
+static void wpe__ui_reply_error(const WPE_EditorUi* ui, char* out, size_t size) {
+    WPE_JsonDocument* reply = NULL;
+    const char* error = NULL;
+    if (wpe_json_parse(ui->reply, strlen(ui->reply), &reply, NULL) == WPE_RESULT_OK)
+        error = wpe_json_string(wpe_json_get(wpe_json_root(reply), "error"));
+    snprintf(out, size, "%s", error ? error : "");
+    wpe_json_free(reply);
+}
+
+/* Opens the rename or delete dialog for `path`, with the files that name it. */
+static void wpe__ui_ask_asset(WPE_EditorUi* ui, const char* path, bool rename) {
+    snprintf(ui->asset_path, sizeof ui->asset_path, "%s", path);
+    snprintf(ui->asset_to, sizeof ui->asset_to, "%s", path);
+    ui->asset_update_refs = true;
+    ui->asset_error[0] = ui->asset_refs[0] = '\0';
+    ui->asset_ref_count = 0;
+    if (wpe__ui_string_command(ui, "asset_references", "path", path, false) == WPE_RESULT_OK) {
+        WPE_JsonDocument* reply = NULL;
+        if (wpe_json_parse(ui->reply, strlen(ui->reply), &reply, NULL) == WPE_RESULT_OK) {
+            const WPE_JsonValue* list = wpe_json_get(wpe_json_root(reply), "result");
+            ui->asset_ref_count = wpe_json_count(list);
+            for (uint32_t i = 0; i < ui->asset_ref_count; ++i) {
+                const size_t used = strlen(ui->asset_refs);
+                snprintf(ui->asset_refs + used, sizeof ui->asset_refs - used, "%s%s", i ? "\n" : "",
+                         wpe_json_string(wpe_json_at(list, i)));
+            }
+        }
+        wpe_json_free(reply);
+    }
+    if (rename) {
+        ui->rename_popup = true;
+    } else {
+        ui->delete_popup = true;
+    }
+}
+
+/* Opens the file's folder in the system's file browser. */
+static void wpe__ui_reveal(const WPE_EditorUi* ui, const char* path) {
+    char folder[2048];
+    const char* dir = ui->editor->project_dir;
+    const bool absolute = dir[0] == '/' || dir[0] == '\\' || (dir[0] && dir[1] == ':');
+    char* cwd = absolute ? NULL : SDL_GetCurrentDirectory();
+    snprintf(folder, sizeof folder, "%s%s/%s", cwd ? cwd : "", dir, path);
+    SDL_free(cwd);
+    char* slash = strrchr(folder, '/');
+    if (slash) *slash = '\0';
+    /* A file URL: forward slashes, everything but plain characters percent-encoded. */
+    char url[4096] = "file://";
+    size_t n = strlen(url);
+    if (folder[0] != '/' && folder[0] != '\\') url[n++] = '/';
+    for (const char* c = folder; *c && n + 4 < sizeof url; ++c) {
+        const unsigned char b = (unsigned char)*c;
+        if (b == '\\') {
+            url[n++] = '/';
+        } else if ((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') ||
+                   strchr("/:-_.~", b)) {
+            url[n++] = (char)b;
+        } else {
+            n += (size_t)snprintf(url + n, sizeof url - n, "%%%02X", b);
+        }
+    }
+    url[n] = '\0';
+    if (!SDL_OpenURL(url)) wpe_log_error("cannot open %s: %s", url, SDL_GetError());
+}
+
+/* An asset's right-click menu. */
+static void wpe__ui_asset_menu(WPE_EditorUi* ui, const char* path) {
+    if (!igBeginPopupContextItem(NULL, ImGuiPopupFlags_MouseButtonRight)) return;
+    igTextDisabled("%s", path);
+    igSeparator();
+    if (wpe__has_suffix(path, ".luau") && igMenuItem_Bool("Edit script", NULL, false, true))
+        wpe_script_panel_open(ui->scripts, path, 0, 0);
+    if (igMenuItem_Bool("Copy path", NULL, false, true)) igSetClipboardText(path);
+    if (igMenuItem_Bool("Show in file browser", NULL, false, true)) wpe__ui_reveal(ui, path);
+    igSeparator();
+    if (igMenuItem_Bool("Duplicate", NULL, false, true)) {
+        wpe__ui_string_command(ui, "duplicate_asset", "path", path, false);
+        ui->assets_stale = true;
+    }
+    if (igMenuItem_Bool("Rename...", NULL, false, true)) wpe__ui_ask_asset(ui, path, true);
+    if (igMenuItem_Bool("Delete...", NULL, false, true)) wpe__ui_ask_asset(ui, path, false);
+    igEndPopup();
+}
+
+/* The rename and delete dialogs. */
+static void wpe__ui_asset_popups(WPE_EditorUi* ui) {
+    if (ui->rename_popup) igOpenPopup_Str("Rename asset", 0);
+    if (ui->delete_popup) igOpenPopup_Str("Delete asset", 0);
+    ui->rename_popup = ui->delete_popup = false;
+    if (igBeginPopupModal("Rename asset", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        igText("Rename or move %s to:", ui->asset_path);
+        igSetNextItemWidth(420.0f);
+        const bool enter = igInputText("##to", ui->asset_to, sizeof ui->asset_to,
+                                       ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
+        if (ui->asset_ref_count) {
+            igCheckbox("Update the files that name it", &ui->asset_update_refs);
+            igTextDisabled("%s", ui->asset_refs);
+        } else {
+            igTextDisabled("No scene, prefab or script names it.");
+        }
+        if (ui->asset_error[0]) igTextColored((ImVec4_c){1.0f, 0.45f, 0.4f, 1.0f}, "%s", ui->asset_error);
+        if (igButton("Rename", (ImVec2_c){120, 0}) || enter) {
+            WPE_JsonWriter* w = wpe__ui_begin("rename_asset");
+            if (w) {
+                wpe_json_write_key(w, "path");
+                wpe_json_write_string(w, ui->asset_path);
+                wpe_json_write_key(w, "to");
+                wpe_json_write_string(w, ui->asset_to);
+                wpe_json_write_key(w, "update_references");
+                wpe_json_write_bool(w, ui->asset_update_refs);
+            }
+            const WPE_Result result = wpe__ui_send(ui, w);
+            wpe__ui_reply_error(ui, ui->asset_error, sizeof ui->asset_error);
+            /* Renamed also when a reference couldn't be updated (the log says which): the old file is gone.
+             */
+            char os_from[2048];
+            snprintf(os_from, sizeof os_from, "%s/%s", ui->editor->project_dir, ui->asset_path);
+            int64_t time = 0;
+            if (result == WPE_RESULT_OK || wpe_file_modified_time(os_from, &time) != WPE_RESULT_OK) {
+                wpe_script_panel_files_changed(ui->scripts, ui->asset_path, ui->asset_to);
+                ui->assets_stale = true;
+                if (result == WPE_RESULT_OK) igCloseCurrentPopup();
+            }
+        }
+        igSameLine(0, -1);
+        if (igButton("Cancel", (ImVec2_c){120, 0})) igCloseCurrentPopup();
+        igEndPopup();
+    }
+    if (igBeginPopupModal("Delete asset", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        igText("Delete %s? This can't be undone.", ui->asset_path);
+        if (ui->asset_ref_count) {
+            igTextColored((ImVec4_c){1.0f, 0.65f, 0.4f, 1.0f}, "Still named by:");
+            igTextUnformatted(ui->asset_refs, NULL);
+        }
+        if (ui->asset_error[0]) igTextColored((ImVec4_c){1.0f, 0.45f, 0.4f, 1.0f}, "%s", ui->asset_error);
+        if (igButton("Delete", (ImVec2_c){120, 0})) {
+            if (wpe__ui_string_command(ui, "delete_asset", "path", ui->asset_path, false) == WPE_RESULT_OK) {
+                wpe_script_panel_files_changed(ui->scripts, ui->asset_path, NULL);
+                ui->assets_stale = true;
+                igCloseCurrentPopup();
+            } else {
+                wpe__ui_reply_error(ui, ui->asset_error, sizeof ui->asset_error);
+            }
+        }
+        igSameLine(0, -1);
+        if (igButton("Cancel", (ImVec2_c){120, 0})) igCloseCurrentPopup();
+        igEndPopup();
+    }
+}
+
 static void wpe__ui_assets(WPE_EditorUi* ui) {
     if (!igBegin("Assets", NULL, 0)) {
         igEnd();
@@ -2527,6 +2686,7 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
             igText("%s", path);
             igEndDragDropSource();
         }
+        wpe__ui_asset_menu(ui, path);
     }
     igEndChild();
     igEnd();
@@ -2967,6 +3127,7 @@ static void wpe__ui_popups(WPE_EditorUi* ui) {
     wpe__ui_unsaved_popup(ui);
     if (wpe_script_panel_take_new_request(ui->scripts)) wpe__ui_ask_new_script(ui);
     wpe__ui_new_script_popup(ui);
+    wpe__ui_asset_popups(ui);
     if (wpe__ui_path_popup(&ui->open_scene_popup, "Open scene", "Scene asset path:", ui->scene_path,
                            sizeof ui->scene_path) == WPE__POPUP_OK)
         wpe__ui_guard(ui, WPE__PENDING_LOAD, ui->scene_path);

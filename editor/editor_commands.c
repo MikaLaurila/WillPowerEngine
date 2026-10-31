@@ -499,6 +499,375 @@ static WPE_Result wpe__write_script(wpe__Call* call, const char* path, const cha
     return WPE_RESULT_OK;
 }
 
+/* ---- Asset files: references, delete, duplicate, rename -------------------------------------------------
+ */
+
+/* The project file behind an asset path; false when the path is invalid or too long. */
+static bool wpe__os_path(const wpe__Call* call, const char* path, char* out, size_t size) {
+    return path && wpe_vfs_path_is_valid(path) &&
+           snprintf(out, size, "%s/%s", call->editor->project_dir, path) < (int)size;
+}
+
+static bool wpe__file_exists(const char* os_path) {
+    int64_t time = 0;
+    return wpe_file_modified_time(os_path, &time) == WPE_RESULT_OK;
+}
+
+/* The quoted forms other files name an asset by: "path" and 'path', plus a module's require path (without
+ * ".luau"). Fills `out` (4 entries of 2 * WPE_VFS_PATH_MAX); returns how many. */
+static uint32_t wpe__asset_names(const char* path, char out[4][2 * WPE_VFS_PATH_MAX]) {
+    uint32_t n = 0;
+    const size_t length = strlen(path);
+    const bool module = wpe__ends_with(path, ".luau");
+    for (int stem = 0; stem <= (module ? 1 : 0); ++stem)
+        for (int quote = 0; quote < 2; ++quote) {
+            const char q = quote ? '\'' : '"';
+            snprintf(out[n++], sizeof out[0], "%c%.*s%c", q, (int)(stem ? length - 5 : length), path, q);
+        }
+    return n;
+}
+
+/* Replaces every `from` in `text` with `to`; returns the new text (owned) or NULL when there was none (or
+ * memory ran out: *out_failed). */
+static char* wpe__replace_all(const char* text, const char* from, const char* to, bool* out_failed) {
+    const size_t from_length = strlen(from), to_length = strlen(to);
+    size_t count = 0;
+    for (const char* at = strstr(text, from); at; at = strstr(at + from_length, from))
+        ++count;
+    if (count == 0) return NULL;
+    const size_t length = strlen(text) - count * from_length + count * to_length;
+    char* out = wpe_alloc(length + 1);
+    if (!out) {
+        *out_failed = true;
+        return NULL;
+    }
+    char* w = out;
+    const char* r = text;
+    for (const char* at = strstr(r, from); at; at = strstr(r, from)) {
+        memcpy(w, r, (size_t)(at - r));
+        w += at - r;
+        memcpy(w, to, to_length + 1); /* With its terminator: whatever follows overwrites it. */
+        w += to_length;
+        r = at + from_length;
+    }
+    memcpy(w, r, strlen(r) + 1);
+    return out;
+}
+
+/* `text` with the asset's names changed from `from` to `to` (owned), or NULL when it names none of them. */
+static char* wpe__rename_in(const char* text, const char* from, const char* to, bool* out_failed) {
+    char names_from[4][2 * WPE_VFS_PATH_MAX], names_to[4][2 * WPE_VFS_PATH_MAX];
+    const uint32_t n = wpe__asset_names(from, names_from);
+    wpe__asset_names(to, names_to);
+    char* result = NULL;
+    for (uint32_t i = 0; i < n && !*out_failed; ++i) {
+        char* next = wpe__replace_all(result ? result : text, names_from[i], names_to[i], out_failed);
+        if (next) {
+            wpe_free(result);
+            result = next;
+        }
+    }
+    return result;
+}
+
+/* Files that can name other assets. */
+static bool wpe__may_reference(const char* path) {
+    return wpe__ends_with(path, ".scene") || wpe__ends_with(path, ".prefab") ||
+           wpe__ends_with(path, ".luau") || wpe__ends_with(path, ".json");
+}
+
+typedef struct wpe__References {
+    const wpe__Call* call;
+    const char* path;
+    char names[4][2 * WPE_VFS_PATH_MAX];
+    uint32_t name_count;
+    char** found; /* Asset paths (owned). */
+    uint32_t count;
+    bool failed;
+} wpe__References;
+
+static bool wpe__find_reference(const char* path, void* user_data) {
+    wpe__References* refs = user_data;
+    if (strcmp(path, refs->path) == 0 || !wpe__may_reference(path)) return true;
+    void* data = NULL;
+    size_t size = 0;
+    if (wpe_vfs_read_all(wpe_engine_vfs(refs->call->editor->engine), path, &data, &size) != WPE_RESULT_OK) {
+        wpe_free(data);
+        return true;
+    }
+    char* text = wpe_alloc(size + 1);
+    bool named = false;
+    if (text) {
+        memcpy(text, data, size);
+        text[size] = '\0';
+        for (uint32_t i = 0; i < refs->name_count && !named; ++i)
+            named = strstr(text, refs->names[i]) != NULL;
+    }
+    wpe_free(text);
+    wpe_free(data);
+    if (!named) return true;
+    char** found = wpe_realloc(refs->found, (refs->count + 1) * sizeof *found);
+    const size_t length = strlen(path);
+    char* copy = wpe_alloc(length + 1);
+    if (!found || !copy) {
+        if (found) refs->found = found;
+        wpe_free(copy);
+        refs->failed = true;
+        return false;
+    }
+    memcpy(copy, path, length + 1);
+    refs->found = found;
+    refs->found[refs->count++] = copy;
+    return true;
+}
+
+/* The project's text assets that name `path` (scenes, prefabs, scripts, JSON). */
+static WPE_Result wpe__references(const wpe__Call* call, const char* path, wpe__References* out) {
+    *out = (wpe__References){.call = call, .path = path};
+    out->name_count = wpe__asset_names(path, out->names);
+    const WPE_Result result = wpe_vfs_list(wpe_engine_vfs(call->editor->engine), wpe__find_reference, out);
+    return out->failed ? WPE_RESULT_ERROR_OUT_OF_MEMORY : result;
+}
+
+static void wpe__references_free(wpe__References* refs) {
+    for (uint32_t i = 0; i < refs->count; ++i)
+        wpe_free(refs->found[i]);
+    wpe_free(refs->found);
+    refs->found = NULL;
+    refs->count = 0;
+}
+
+static void wpe__write_paths(wpe__Call* call, const wpe__References* refs) {
+    wpe_json_write_array_begin(call->w, false);
+    for (uint32_t i = 0; i < refs->count; ++i)
+        wpe_json_write_string(call->w, refs->found[i]);
+    wpe_json_write_array_end(call->w);
+}
+
+/* An asset path of a file in the project directory (`os_path` gets the file). */
+static WPE_Result wpe__project_file_arg(wpe__Call* call, const char* key, char* os_path, size_t size) {
+    const char* path = wpe__string_arg(call, key);
+    if (!wpe__os_path(call, path, os_path, size))
+        return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"%s\" must be an asset path", key);
+    if (!wpe__file_exists(os_path))
+        return wpe__fail(call, WPE_RESULT_ERROR_NOT_FOUND, "'%s' is not a file in the project", path);
+    return WPE_RESULT_OK;
+}
+
+static WPE_Result wpe__edit_mode_only(wpe__Call* call) {
+    if (call->editor->mode == WPE_EDITOR_EDIT) return WPE_RESULT_OK;
+    return wpe__fail(call, WPE_RESULT_ERROR_INVALID_STATE, "stop play mode first");
+}
+
+static WPE_Result wpe__cmd_asset_references(wpe__Call* call) {
+    const char* path = wpe__string_arg(call, "path");
+    if (!path || !wpe_vfs_path_is_valid(path))
+        return wpe__null(call,
+                         wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"path\" must be an asset path"));
+    wpe__References refs;
+    const WPE_Result result = wpe__references(call, path, &refs);
+    if (result == WPE_RESULT_OK) {
+        wpe__write_paths(call, &refs);
+    } else {
+        wpe_json_write_null(call->w);
+    }
+    wpe__references_free(&refs);
+    return result;
+}
+
+static WPE_Result wpe__cmd_delete_asset(wpe__Call* call) {
+    char os_path[2048];
+    WPE_Result result = wpe__edit_mode_only(call);
+    if (result == WPE_RESULT_OK) result = wpe__project_file_arg(call, "path", os_path, sizeof os_path);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    const char* path = wpe__string_arg(call, "path");
+    if (strcmp(path, "project.json") == 0)
+        return wpe__null(call,
+                         wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "the project file can't be deleted"));
+    if (strcmp(path, call->editor->scene_path) == 0)
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_STATE,
+                                         "'%s' is the open scene: open another one first", path));
+    result = wpe_path_remove(os_path);
+    if (result != WPE_RESULT_OK) return wpe__null(call, wpe__fail(call, result, "cannot delete '%s'", path));
+    wpe_log_info("deleted %s", path);
+    return wpe__null(call, WPE_RESULT_OK);
+}
+
+/* Copies a project file (creating the target's folder). */
+static WPE_Result wpe__copy_file(const char* from, const char* to) {
+    void* data = NULL;
+    size_t size = 0;
+    WPE_Result result = wpe_file_read_all(from, &data, &size);
+    char folder[2048];
+    snprintf(folder, sizeof folder, "%s", to);
+    char* slash = strrchr(folder, '/');
+    if (slash) *slash = '\0';
+    if (result == WPE_RESULT_OK) result = wpe_directory_create(folder);
+    WPE_File* file = NULL;
+    if (result == WPE_RESULT_OK) result = wpe_file_open(to, true, &file);
+    if (result == WPE_RESULT_OK) {
+        result = wpe_file_write(file, data, size);
+        const WPE_Result closed = wpe_file_close(file);
+        if (result == WPE_RESULT_OK) result = closed;
+    }
+    wpe_free(data);
+    return result;
+}
+
+/* {path, to?} -> {path}: a copy; without "to", "name_copy.ext" (then _copy2, ...). */
+static WPE_Result wpe__cmd_duplicate_asset(wpe__Call* call) {
+    char os_path[2048], os_to[2048], to[WPE_VFS_PATH_MAX];
+    WPE_Result result = wpe__project_file_arg(call, "path", os_path, sizeof os_path);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    const char* path = wpe__string_arg(call, "path");
+    const char* wanted = wpe__string_arg(call, "to");
+    if (wanted) {
+        snprintf(to, sizeof to, "%s", wanted);
+    } else {
+        const char* slash = strrchr(path, '/');
+        const char* dot = strrchr(path, '.');
+        const size_t stem = dot && (!slash || dot > slash) ? (size_t)(dot - path) : strlen(path);
+        for (int i = 1; i < 100; ++i) {
+            char suffix[16] = "_copy";
+            if (i > 1) snprintf(suffix, sizeof suffix, "_copy%d", i);
+            snprintf(to, sizeof to, "%.*s%s%s", (int)stem, path, suffix, path + stem);
+            if (!wpe__os_path(call, to, os_to, sizeof os_to) || !wpe__file_exists(os_to)) break;
+        }
+    }
+    if (!wpe__os_path(call, to, os_to, sizeof os_to))
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"to\" must be an asset path"));
+    if (wpe__file_exists(os_to))
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "'%s' already exists", to));
+    result = wpe__copy_file(os_path, os_to);
+    if (result != WPE_RESULT_OK) return wpe__null(call, wpe__fail(call, result, "cannot copy '%s'", path));
+    wpe_log_info("copied %s to %s", path, to);
+    wpe_json_write_object_begin(call->w);
+    wpe_json_write_key(call->w, "path");
+    wpe_json_write_string(call->w, to);
+    wpe_json_write_object_end(call->w);
+    return WPE_RESULT_OK;
+}
+
+/* Renames the asset in a scene snapshot (the open scene, undo and redo steps); false when out of memory. */
+static bool wpe__rename_in_snapshot(wpe__Snapshot* snapshot, const char* from, const char* to,
+                                    bool* changed) {
+    if (!snapshot->text) return true;
+    bool failed = false;
+    char* text = wpe__rename_in(snapshot->text, from, to, &failed);
+    if (text) {
+        wpe_free(snapshot->text);
+        snapshot->text = text;
+        snapshot->size = strlen(text);
+        *changed = true;
+    }
+    return !failed;
+}
+
+/* {path, to, update_references = true} -> {updated: [paths]}: renames (moves) a project file. With
+ * update_references, the files naming it (scenes, prefabs, scripts' strings and requires, project.json) and
+ * the open scene with its undo steps are changed to the new name. */
+static WPE_Result wpe__cmd_rename_asset(wpe__Call* call) {
+    WPE_Editor* editor = call->editor;
+    char os_path[2048], os_to[2048];
+    WPE_Result result = wpe__edit_mode_only(call);
+    if (result == WPE_RESULT_OK) result = wpe__project_file_arg(call, "path", os_path, sizeof os_path);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    const char* path = wpe__string_arg(call, "path");
+    const char* to = wpe__string_arg(call, "to");
+    const bool update = wpe_json_bool(wpe_json_get(call->args, "update_references"), true);
+    if (!wpe__os_path(call, to, os_to, sizeof os_to))
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"to\" must be an asset path"));
+    const char* ext_from = strrchr(path, '.');
+    const char* ext_to = strrchr(to, '.');
+    if (strcmp(path, "project.json") == 0 || !ext_from || !ext_to || strcmp(ext_from, ext_to) != 0)
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                                         "keep the file's extension (%s); the project file keeps its name",
+                                         ext_from ? ext_from : "none"));
+    if (wpe__file_exists(os_to))
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "'%s' already exists", to));
+    wpe__References refs = {0};
+    if (update) {
+        result = wpe__references(call, path, &refs);
+        if (result != WPE_RESULT_OK) {
+            wpe__references_free(&refs);
+            return wpe__null(call, result);
+        }
+    }
+    char folder[2048];
+    snprintf(folder, sizeof folder, "%s", os_to);
+    char* slash = strrchr(folder, '/');
+    if (slash) *slash = '\0';
+    result = wpe_directory_create(folder);
+    if (result == WPE_RESULT_OK) result = wpe_path_rename(os_path, os_to);
+    if (result != WPE_RESULT_OK) {
+        wpe__references_free(&refs);
+        return wpe__null(call, wpe__fail(call, result, "cannot rename '%s'", path));
+    }
+    wpe_log_info("renamed %s to %s", path, to);
+    if (strcmp(editor->scene_path, path) == 0)
+        snprintf(editor->scene_path, sizeof editor->scene_path, "%s", to);
+    /* The files naming it (a failure is logged and the rest go on). */
+    bool failed = false;
+    for (uint32_t i = 0; i < refs.count; ++i) {
+        bool file_failed = false;
+        char os_ref[2048];
+        void* data = NULL;
+        size_t size = 0;
+        const bool read = wpe__os_path(call, refs.found[i], os_ref, sizeof os_ref) &&
+                          wpe_file_read_all(os_ref, &data, &size) == WPE_RESULT_OK;
+        char* text = read ? wpe_alloc(size + 1) : NULL;
+        if (text) {
+            memcpy(text, data, size);
+            text[size] = '\0';
+            char* renamed = wpe__rename_in(text, path, to, &file_failed);
+            WPE_File* file = NULL;
+            if (renamed && wpe_file_open(os_ref, true, &file) == WPE_RESULT_OK) {
+                const WPE_Result written = wpe_file_write(file, renamed, strlen(renamed));
+                if (wpe_file_close(file) != WPE_RESULT_OK || written != WPE_RESULT_OK) file_failed = true;
+            } else if (renamed) {
+                file_failed = true;
+            }
+            wpe_free(renamed);
+        } else {
+            file_failed = true;
+        }
+        wpe_free(text);
+        wpe_free(data);
+        if (file_failed) wpe_log_error("cannot update the name in '%s'", refs.found[i]);
+        failed |= file_failed;
+    }
+    /* The open scene and its undo steps, so they keep pointing at the file (unsaved changes stay unsaved). */
+    if (update) {
+        wpe__Snapshot current = {0};
+        bool changed = false;
+        bool ok = wpe__editor_snapshot(editor, &current) == WPE_RESULT_OK &&
+                  wpe__rename_in_snapshot(&current, path, to, &changed);
+        if (ok && changed) {
+            const bool dirty = editor->dirty;
+            ok = wpe__editor_restore(editor, &current, "rename") == WPE_RESULT_OK;
+            editor->dirty = dirty;
+        }
+        wpe_free(current.text);
+        bool unused = false;
+        for (uint32_t i = 0; ok && i < editor->undo_count; ++i)
+            ok = wpe__rename_in_snapshot(&editor->undo[i], path, to, &unused);
+        for (uint32_t i = 0; ok && i < editor->redo_count; ++i)
+            ok = wpe__rename_in_snapshot(&editor->redo[i], path, to, &unused);
+        if (!ok) {
+            wpe_log_error("cannot update the open scene to the new name of '%s'", path);
+            failed = true;
+        }
+    }
+    wpe_json_write_object_begin(call->w);
+    wpe_json_write_key(call->w, "updated");
+    wpe__write_paths(call, &refs);
+    wpe_json_write_object_end(call->w);
+    wpe__references_free(&refs);
+    return failed ? wpe__fail(call, WPE_RESULT_ERROR_IO,
+                              "renamed, but some references were not updated (see the log)")
+                  : WPE_RESULT_OK;
+}
+
 /* Shows a script in the script panel (the UI opens it on its next frame). */
 static WPE_Result wpe__cmd_open_script(wpe__Call* call) {
     const char* path = wpe__string_arg(call, "path");
@@ -1468,6 +1837,15 @@ static const struct {
      "the entity"},
     {"run_lua", wpe__cmd_run_lua, "{code}: run Luau with the wpe API (undoable)"},
     {"list_assets", wpe__cmd_list_assets, "{prefix?} -> asset paths"},
+    {"asset_references", wpe__cmd_asset_references,
+     "{path} -> [paths]: the scenes, prefabs, scripts and JSON files that name the asset"},
+    {"delete_asset", wpe__cmd_delete_asset,
+     "{path}: delete a project file (not the open scene or project.json)"},
+    {"duplicate_asset", wpe__cmd_duplicate_asset,
+     "{path, to?} -> {path}: copy a file (default: name_copy.ext)"},
+    {"rename_asset", wpe__cmd_rename_asset,
+     "{path, to, update_references = true} -> {updated}: rename or move a file; the files naming it and the "
+     "open scene (with its undo steps) follow"},
     {"read_file", wpe__cmd_read_file,
      "{path} -> {text}: a text asset (.luau, .json, .scene, .prefab, .prim, ...)"},
     {"write_file", wpe__cmd_write_file,

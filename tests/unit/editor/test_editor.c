@@ -571,6 +571,124 @@ static void test_editor_new_script(void) {
     wpe_editor_destroy(editor);
 }
 
+static bool has_string(const WPE_JsonValue* list, const char* text) {
+    for (uint32_t i = 0; i < wpe_json_count(list); ++i)
+        if (strcmp(wpe_json_string(wpe_json_at(list, i)), text) == 0) return true;
+    return false;
+}
+
+static bool file_exists(const char* path) {
+    int64_t time = 0;
+    return wpe_file_modified_time(path, &time) == WPE_RESULT_OK;
+}
+
+static bool file_contains(const char* path, const char* text) {
+    void* data = NULL;
+    size_t size = 0;
+    const bool found =
+        wpe_file_read_all(path, &data, &size) == WPE_RESULT_OK && memmem_safe(data, size, text);
+    wpe_free(data);
+    return found;
+}
+
+/* Asset files from the Assets panel: references, rename (the names follow, also in the open scene and its
+ * undo steps), duplicate and delete. */
+static void test_editor_asset_files(void) {
+    static const char* const leftovers[] = {"scripts/movement.luau",   "scripts/lib/ext.luau",
+                                            "scripts/lib/extras.luau", "scripts/user.luau",
+                                            "meshes/box_copy.prim",    "meshes/box_copy2.prim"};
+    for (size_t i = 0; i < sizeof leftovers / sizeof leftovers[0]; ++i) {
+        char path[256];
+        snprintf(path, sizeof path, ROOT "/project/%s", leftovers[i]);
+        remove(path);
+    }
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/project/scripts/lib"));
+    write_text(ROOT "/project/scripts/lib/ext.luau", "local ext = {}\nreturn ext\n");
+    write_text(ROOT "/project/scripts/user.luau", "local ext = require(\"scripts/lib/ext\")\nreturn {}\n");
+    WPE_Editor* editor = open_editor();
+    /* An unsaved change, so the scene is dirty and has an undo step. */
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"extra\"}}");
+
+    /* (Scenes other tests saved name the script too.) */
+    WPE_JsonDocument* reply =
+        run(editor, "{\"cmd\": \"asset_references\", \"path\": \"scripts/mover.luau\"}", true);
+    WPE_TEST_ASSERT(has_string(result_of(reply), "scenes/start.scene"));
+    WPE_TEST_ASSERT(!has_string(result_of(reply), "scripts/mover.luau"));
+    wpe_json_free(reply);
+    reply = run(editor, "{\"cmd\": \"asset_references\", \"path\": \"scripts/lib/ext.luau\"}", true);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_json_count(result_of(reply))); /* require without ".luau". */
+    WPE_TEST_ASSERT_EQ_STR("scripts/user.luau", wpe_json_string(wpe_json_at(result_of(reply), 0)));
+    wpe_json_free(reply);
+
+    /* Rename: the scene file, the open scene (still unsaved) and its undo step follow. */
+    reply = run(
+        editor,
+        "{\"cmd\": \"rename_asset\", \"path\": \"scripts/mover.luau\", \"to\": \"scripts/movement.luau\"}",
+        true);
+    WPE_TEST_ASSERT(has_string(wpe_json_get(result_of(reply), "updated"), "scenes/start.scene"));
+    wpe_json_free(reply);
+    WPE_TEST_ASSERT(!file_exists(ROOT "/project/scripts/mover.luau") &&
+                    file_exists(ROOT "/project/scripts/movement.luau"));
+    WPE_TEST_ASSERT(file_contains(ROOT "/project/scenes/start.scene", "\"scripts/movement.luau\""));
+    WPE_TEST_ASSERT(wpe_editor_dirty(editor));
+    for (int pass = 0; pass < 2; ++pass) { /* Now, and after undoing the change before the rename. */
+        WPE_Ecs* ecs = wpe_engine_ecs(wpe_editor_engine(editor));
+        WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_SCRIPT)});
+        WPE_TEST_ASSERT(wpe_ecs_iter_next(&it));
+        char command[128];
+        snprintf(command, sizeof command, "{\"cmd\": \"get_entity\", \"id\": %u}", it.entity);
+        reply = run(editor, command, true);
+        WPE_TEST_ASSERT_EQ_STR(
+            "scripts/movement.luau",
+            wpe_json_string(wpe_json_get(wpe_json_get(result_of(reply), "script"), "path")));
+        wpe_json_free(reply);
+        run_ok(editor, "{\"cmd\": \"play\"}");
+        run_ok(editor, "{\"cmd\": \"frames\"}");
+        const float before = box_height(editor);
+        run_ok(editor, "{\"cmd\": \"frames\"}");
+        WPE_TEST_ASSERT_NEAR(1.0, box_height(editor) - before, 1e-3); /* The script still runs. */
+        run_ok(editor, "{\"cmd\": \"stop\"}");
+        if (pass == 0) run_ok(editor, "{\"cmd\": \"undo\"}");
+    }
+    run_ok(editor, "{\"cmd\": \"rename_asset\", \"path\": \"scripts/lib/ext.luau\", \"to\": "
+                   "\"scripts/lib/extras.luau\"}");
+    WPE_TEST_ASSERT(file_contains(ROOT "/project/scripts/user.luau", "require(\"scripts/lib/extras\")"));
+    wpe_json_free(
+        run(editor, "{\"cmd\": \"rename_asset\", \"path\": \"scripts/user.luau\", \"to\": \"scripts/u.txt\"}",
+            false)); /* The extension stays. */
+    wpe_json_free(run(editor,
+                      "{\"cmd\": \"rename_asset\", \"path\": \"scripts/user.luau\", \"to\": "
+                      "\"scripts/movement.luau\"}",
+                      false)); /* Taken. */
+    wpe_json_free(
+        run(editor, "{\"cmd\": \"rename_asset\", \"path\": \"project.json\", \"to\": \"p.json\"}", false));
+
+    /* Duplicate, then delete. */
+    reply = run(editor, "{\"cmd\": \"duplicate_asset\", \"path\": \"meshes/box.prim\"}", true);
+    WPE_TEST_ASSERT_EQ_STR("meshes/box_copy.prim", wpe_json_string(wpe_json_get(result_of(reply), "path")));
+    wpe_json_free(reply);
+    reply = run(editor, "{\"cmd\": \"duplicate_asset\", \"path\": \"meshes/box.prim\"}", true);
+    WPE_TEST_ASSERT_EQ_STR("meshes/box_copy2.prim", wpe_json_string(wpe_json_get(result_of(reply), "path")));
+    wpe_json_free(reply);
+    WPE_TEST_ASSERT(file_contains(ROOT "/project/meshes/box_copy2.prim", "\"box\""));
+    run_ok(editor, "{\"cmd\": \"delete_asset\", \"path\": \"meshes/box_copy.prim\"}");
+    WPE_TEST_ASSERT(!file_exists(ROOT "/project/meshes/box_copy.prim"));
+    wpe_json_free(run(editor, "{\"cmd\": \"delete_asset\", \"path\": \"meshes/box_copy.prim\"}", false));
+    wpe_json_free(
+        run(editor, "{\"cmd\": \"delete_asset\", \"path\": \"scenes/start.scene\"}", false)); /* Open. */
+    wpe_json_free(run(editor, "{\"cmd\": \"delete_asset\", \"path\": \"project.json\"}", false));
+    run_ok(editor, "{\"cmd\": \"play\"}");
+    wpe_json_free(run(editor, "{\"cmd\": \"delete_asset\", \"path\": \"meshes/box_copy2.prim\"}", false));
+    run_ok(editor, "{\"cmd\": \"stop\"}");
+    run_ok(editor, "{\"cmd\": \"delete_asset\", \"path\": \"meshes/box_copy2.prim\"}");
+    /* Back to the name the other tests' scenes use. */
+    run_ok(
+        editor,
+        "{\"cmd\": \"rename_asset\", \"path\": \"scripts/movement.luau\", \"to\": \"scripts/mover.luau\"}");
+    WPE_TEST_ASSERT(file_contains(ROOT "/project/scenes/start.scene", "\"scripts/mover.luau\""));
+    wpe_editor_destroy(editor);
+}
+
 typedef struct ApiCheck {
     const WPE_ApiDocs* docs;
     uint32_t functions, missing;
@@ -1087,8 +1205,9 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
     WPE_TEST_CASE(test_editor_view_settings_and_overlays), WPE_TEST_CASE(test_editor_physics_follows_edits),
     WPE_TEST_CASE(test_editor_hot_reloads_scripts), WPE_TEST_CASE(test_editor_script_files),
-    WPE_TEST_CASE(test_editor_new_script), WPE_TEST_CASE(test_editor_every_api_function_is_documented),
-    WPE_TEST_CASE(test_editor_script_properties), WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
+    WPE_TEST_CASE(test_editor_new_script), WPE_TEST_CASE(test_editor_asset_files),
+    WPE_TEST_CASE(test_editor_every_api_function_is_documented), WPE_TEST_CASE(test_editor_script_properties),
+    WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
     WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
     WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
     WPE_TEST_CASE(test_editor_play_mode_restores_the_scene))
