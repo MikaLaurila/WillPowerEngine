@@ -1,4 +1,4 @@
-add_library(wpe_math STATIC wpe_math.c)
+add_library(wpe_math STATIC wpe_math.c easing.c)
 add_library(wpe::math ALIAS wpe_math)
 
 target_link_libraries(wpe_math

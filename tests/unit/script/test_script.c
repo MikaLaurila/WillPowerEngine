@@ -908,6 +908,117 @@ static void test_script_timers(void) {
     free_fixture(&f);
 }
 
+static WPE_Transform* transform_of(Fixture* f, WPE_Entity e) {
+    return wpe_ecs_get_component(f->ecs, e, WPE_COMP_TRANSFORM);
+}
+
+static void run(Fixture* f, const char* code) {
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(f->host, "test", code));
+}
+
+static void test_script_tweens(void) {
+    Fixture f = make_fixture(0, 0);
+    const WPE_Entity box = spawn(&f, "box");
+    const WPE_Entity meter = spawn(&f, "meter");
+
+    /* Linear to a position over a second, then on_done. */
+    run(&f, "wpe.tween(wpe.find('box'), {position = vector.create(10, 0, 0), duration = 1, ease = 'linear',\n"
+            "  on_done = function() wpe.set_name(wpe.find('box'), 'done') end})");
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.5f));
+    WPE_TEST_ASSERT_NEAR(5.0, position(&f, box).x, 1e-5);
+    run(&f, "assert(wpe.is_tweening(wpe.find('box')))");
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.6f));
+    WPE_TEST_ASSERT_NEAR(10.0, position(&f, box).x, 0); /* Exactly at the end, not past it. */
+    WPE_TEST_ASSERT_EQ_STR("done", wpe_scene_get_name(f.ecs, box));
+    run(&f, "assert(not wpe.is_tweening(wpe.find('done')))");
+
+    /* A delay, then relative scale: it starts from where it is when the delay ends. Eased in the middle. */
+    run(&f, "wpe.tween(wpe.find('done'), {scale = vector.create(1, 1, 1), relative = true, delay = 0.5,\n"
+            "  duration = 0.5, ease = 'linear'})");
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.25f));
+    WPE_TEST_ASSERT_NEAR(1.0, transform_of(&f, box)->scale.x, 0);
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.5f)); /* 0.25 s into the play. */
+    WPE_TEST_ASSERT_NEAR(1.5, transform_of(&f, box)->scale.y, 1e-5);
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.5f));
+    WPE_TEST_ASSERT_NEAR(2.0, transform_of(&f, box)->scale.z, 0);
+
+    /* Rotation turns along the shorter way: halfway to a quarter turn is an eighth. */
+    run(&f, "wpe.tween(wpe.find('done'), {rotation = vector.create(0, math.pi / 2, 0), duration = 1,\n"
+            "  ease = 'linear'})");
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.5f));
+    WPE_TEST_ASSERT_NEAR(WPE_PI / 4.0, wpe_quat_to_euler_xyz(transform_of(&f, box)->rotation).y, 1e-4);
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.5f));
+
+    /* Values: a yoyo three plays long (there, back, there) ends at the far end. */
+    run(&f, "wpe.tween_value(0, 1, {duration = 1, ease = 'linear', loop = 'yoyo', times = 3}, function(v)\n"
+            "  wpe.set_position(wpe.find('meter'), vector.create(v, 0, 0)) end)");
+    const float expected[] = {0.5f, 1.0f, 0.5f, 0.0f, 0.5f, 1.0f, 1.0f};
+    for (int i = 0; i < 7; ++i) {
+        WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.5f));
+        WPE_TEST_ASSERT_NEAR(expected[i], position(&f, meter).x, 1e-5);
+    }
+    run(&f, "assert(not wpe.is_tweening(wpe.find('meter')))"); /* Value tweens have no entity. */
+
+    /* A newer tween of a property takes it over; the older keeps its others. */
+    transform_of(&f, box)->position = wpe_vec3(0, 0, 0);
+    transform_of(&f, box)->scale = wpe_vec3(1, 1, 1);
+    run(&f, "local b = wpe.find('done')\n"
+            "wpe.tween(b, {position = vector.create(4, 0, 0), scale = vector.create(3, 3, 3), duration = 1,\n"
+            "  ease = 'linear'})\n"
+            "wpe.tween(b, {position = vector.create(0, 8, 0), duration = 1, ease = 'linear'})");
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.5f));
+    WPE_TEST_ASSERT_NEAR(0.0, position(&f, box).x, 1e-5);
+    WPE_TEST_ASSERT_NEAR(4.0, position(&f, box).y, 1e-5);
+    WPE_TEST_ASSERT_NEAR(2.0, transform_of(&f, box)->scale.x, 1e-5);
+    /* Stopping all of an entity's tweens leaves it where it is. */
+    run(&f, "assert(wpe.stop_tweens(wpe.find('done')) == 2 and wpe.stop_tweens(wpe.find('done')) == 0)");
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.5f));
+    WPE_TEST_ASSERT_NEAR(4.0, position(&f, box).y, 1e-5);
+
+    /* Cancelling by id: no on_done. A failing callback cancels its tween and counts as an error. */
+    run(&f, "local id = wpe.tween(wpe.find('done'), {position = vector.create(9, 9, 9), duration = 1,\n"
+            "  on_done = function() error('cancelled tweens do not finish') end})\n"
+            "assert(wpe.cancel_tween(id) and not wpe.cancel_tween(id) and not wpe.cancel_tween(-1))\n"
+            "wpe.tween_value(0, 1, {duration = 1}, function(v) error('boom') end)");
+    quiet(true);
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.1f));
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 2.0f));
+    quiet(false);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_script_host_stats(f.host).errors);
+    WPE_TEST_ASSERT_NEAR(4.0, position(&f, box).y, 1e-5);
+
+    /* A script's tweens go with it; a tween whose entity is gone just ends. */
+    write_script("tweener.luau",
+                 "local S = {}\n"
+                 "function S:on_start()\n"
+                 "  wpe.tween(wpe.find('meter'), {position = vector.create(0, 100, 0), duration = 10})\n"
+                 "end\n"
+                 "return S\n");
+    const WPE_Entity owner = spawn(&f, NULL);
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, owner, "tweener.luau"));
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.1f));
+    const float moved = position(&f, meter).y;
+    WPE_TEST_ASSERT(moved > 0.0f);
+    WPE_TEST_ASSERT_OK(wpe_ecs_despawn(f.ecs, owner));
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.5f));
+    WPE_TEST_ASSERT_NEAR(moved, position(&f, meter).y, 0);
+    run(&f, "wpe.tween(wpe.find('meter'), {scale = vector.create(2, 2, 2), duration = 1})");
+    WPE_TEST_ASSERT_OK(wpe_ecs_despawn(f.ecs, meter));
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.5f));
+
+    /* Mistakes raise before anything starts. */
+    run(&f,
+        "local b = wpe.find('done')\n"
+        "assert(not pcall(wpe.tween, b, {duration = 1}))\n"
+        "assert(not pcall(wpe.tween, b, {position = vector.create(1, 0, 0), ease = 'wobbly'}))\n"
+        "assert(not pcall(wpe.tween, b, {position = vector.create(1, 0, 0), loop = 'yoyo', duration = 0}))\n"
+        "assert(not pcall(wpe.tween, b, {position = vector.create(1, 0, 0), times = 1.5}))\n"
+        "assert(not pcall(wpe.tween, b, {position = vector.create(1, 0, 0), on_done = 3}))\n"
+        "assert(not pcall(wpe.tween_value, 0, 1, {}, 'not a function'))\n"
+        "assert(not wpe.is_tweening(b))");
+    free_fixture(&f);
+}
+
 static void test_script_messages(void) {
     write_script("receiver.luau",
                  "local S = {}\n"
@@ -1023,12 +1134,15 @@ static void test_script_saved_data(void) {
 
 typedef struct AppLog {
     char scene[64];
+    WPE_Transition transition; /* Of the last scene asked for. */
     int quits;
     WPE_Entity camera;
 } AppLog;
 
-static void app_load_scene(void* user_data, const char* path) {
-    snprintf(((AppLog*)user_data)->scene, sizeof((AppLog*)user_data)->scene, "%s", path);
+static void app_load_scene(void* user_data, const char* path, const WPE_Transition* transition) {
+    AppLog* log = user_data;
+    snprintf(log->scene, sizeof log->scene, "%s", path);
+    log->transition = transition ? *transition : wpe_transition_default(WPE_TRANSITION_NONE);
 }
 static void app_quit(void* user_data) {
     ++((AppLog*)user_data)->quits;
@@ -1078,7 +1192,12 @@ static void test_script_input_app_and_draw(void) {
         "  local cam = wpe.spawn('cam'); assert(not pcall(wpe.set_camera, cam)) -- no camera component\n"
         "  assert(wpe.get_camera() == nil)\n"
         "  assert(not pcall(wpe.load_scene, 'scenes/missing.scene'))\n"
-        "  wpe.load_scene('scenes/next.scene'); wpe.quit()\n"
+        "  assert(not pcall(wpe.load_scene, 'scenes/next.scene', {transition = 'swirl'}))\n"
+        "  assert(not pcall(wpe.load_scene, 'scenes/next.scene', {transition = 'fade', duration = 0}))\n"
+        "  wpe.load_scene('scenes/next.scene', {transition = 'iris', duration = 0.6, color = wpe.color(1, 0, "
+        "0),\n"
+        "                                       center_x = 0.25})\n"
+        "  wpe.quit()\n"
         "  -- 2D drawing (top-left 4x4 pixels red, then text)\n"
         "  local red = wpe.color(1, 0, 0)\n"
         "  assert(red == 0xFFFF0000 and wpe.color(0, 0, 1, 0) == 0x000000FF)\n"
@@ -1141,6 +1260,12 @@ static void test_script_input_app_and_draw(void) {
     WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(host).errors);
     WPE_TEST_ASSERT_EQ_STR("app ok", wpe_scene_get_name(ecs, e));
     WPE_TEST_ASSERT_EQ_STR("scenes/next.scene", log.scene);
+    WPE_TEST_ASSERT_EQ_INT(WPE_TRANSITION_IRIS, log.transition.kind);
+    WPE_TEST_ASSERT_NEAR(0.6, log.transition.duration, 1e-6);
+    WPE_TEST_ASSERT_NEAR(1.0, log.transition.color.x, 1e-6);
+    WPE_TEST_ASSERT_NEAR(0.0, log.transition.color.y, 1e-6);
+    WPE_TEST_ASSERT_NEAR(0.25, log.transition.center_x, 1e-6);
+    WPE_TEST_ASSERT_NEAR(0.5, log.transition.center_y, 1e-6);
     WPE_TEST_ASSERT_EQ_INT(1, log.quits);
     WPE_TEST_ASSERT(wpe_input_mouse_captured(input));
 
@@ -1209,6 +1334,7 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_script_lifecycle_order), WPE_TEST_CASE(test_scr
               WPE_TEST_CASE(test_script_physics_api_and_callbacks), WPE_TEST_CASE(test_script_physics_errors),
               WPE_TEST_CASE(test_script_audio_api), WPE_TEST_CASE(test_script_properties),
               WPE_TEST_CASE(test_script_declared_properties), WPE_TEST_CASE(test_script_require_modules),
-              WPE_TEST_CASE(test_script_timers), WPE_TEST_CASE(test_script_messages),
-              WPE_TEST_CASE(test_script_saved_data), WPE_TEST_CASE(test_script_input_app_and_draw),
+              WPE_TEST_CASE(test_script_timers), WPE_TEST_CASE(test_script_tweens),
+              WPE_TEST_CASE(test_script_messages), WPE_TEST_CASE(test_script_saved_data),
+              WPE_TEST_CASE(test_script_input_app_and_draw),
               WPE_TEST_CASE(test_script_ecs_unregister_component))

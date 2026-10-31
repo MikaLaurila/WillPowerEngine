@@ -155,6 +155,34 @@ function Door:open()
 end
 ```
 
+### Tweens
+
+A tween eases an entity's transform to a target, or a number through a function, over time: doors swinging, pickups bobbing, UI sliding in, a light dimming. Tweens run after `on_update` and the timers, on game time (slow motion slows them) unless `real_time` is set. Like timers, they belong to the script that starts them and end with it; a tween of an entity that's gone just ends.
+
+| Function | Description |
+|---|---|
+| `wpe.tween(entity, {position, rotation, scale, ...options}) -> id` | Eases the given properties (vectors; `rotation` in radians like `wpe.set_rotation`, turned the shorter way) from where they are when it starts. A newer tween of a property takes it over from older ones of the entity. |
+| `wpe.tween_value(from, to, options, fn) -> id` | Calls `fn(value)` every update with a number eased from `from` to `to`: anything else (UI offsets, colors, light intensity, post-effect parameters, volume). |
+| `wpe.cancel_tween(id) -> bool` | Stops it where it is (no `on_done`); false when it had already ended. |
+| `wpe.stop_tweens(entity) -> count` | Stops all of an entity's tweens. |
+| `wpe.is_tweening(entity) -> bool` | Whether one runs (or waits for its delay). |
+
+Options: `duration` (0.5 s), `ease` (`"out_quad"`; also `"linear"`, `"smooth"` and `in_`/`out_`/`in_out_` with `quad`, `cubic`, `sine`, `expo`, `back` (overshoots), `elastic` (springs) and `bounce`), `delay` (seconds before it starts, taking its starting values then: chain tweens with delays), `loop` (`"once"`, `"repeat"` from the start, `"yoyo"` back and forth), `times` (plays in all for loops; 0, the default, forever), `relative` (targets are offsets: `{position = vector.create(0, 1, 0), relative = true}` rises a meter), `real_time`, `on_done` (called when it finishes, not when cancelled).
+
+```lua
+-- A coin bobbing forever, and a door that swings open, then says so.
+wpe.tween(coin, { position = vector.create(0, 0.3, 0), relative = true, duration = 0.8, ease = "in_out_sine", loop = "yoyo" })
+wpe.tween(door, { rotation = vector.create(0, math.rad(100), 0), duration = 0.6, ease = "out_back",
+	on_done = function() wpe.play_sound("sounds/creak.wav") end })
+-- A UI panel sliding in from the left.
+local min_x, min_y, max_x, max_y = wpe.get_ui_offsets(panel)
+wpe.tween_value(-320, 0, { duration = 0.4, ease = "out_cubic" }, function(shift)
+	wpe.set_ui_offsets(panel, min_x + shift, min_y, max_x + shift, max_y)
+end)
+```
+
+Tweens move transforms like `wpe.set_position` does: a physics body follows a moved entity as a teleport, so tween kinematic platforms by their velocity (`wpe.set_velocity`) when riders must be carried.
+
 ### Game feel: slow motion, hit-stop, shake
 
 The game clock can run slower or stop. Everything simulated follows it: `dt` in `on_update` and `on_fixed_update`, the number of fixed steps (so physics too), timers, `wpe.time()`, animation, particles, trails and slashes. The UI keeps real time. Sound effects (the `"effects"` bus: one-shots and audio sources) slow down and drop in pitch with slow motion and pause while the speed set by `wpe.set_time_scale` is 0, but play on through hit-stops, so a hit's own sound isn't choked; the `"music"` bus keeps its speed (play a sound on it to keep it at full speed too). Slow motion, hit-stops and shakes count real seconds, so they end on time at any speed; a scene load ends them all and puts the speed back to 1.
@@ -301,7 +329,7 @@ Provided by the application running the scripts (the engine runtime). Elsewhere 
 
 | Function | Description |
 |---|---|
-| `wpe.load_scene(path)` | Switch to another scene after the current frame: every entity is destroyed (scripts get `on_destroy`) and the new scene's entities and environment are loaded. Raises if the file doesn't exist. |
+| `wpe.load_scene(path, {transition, duration, color, center_x, center_y}?)` | Switch to another scene after the current frame: every entity is destroyed (scripts get `on_destroy`) and the new scene's entities and environment are loaded. Raises if the file doesn't exist. With a `transition` the screen closes first (the game runs on), the scene loads when it's covered, and the new one opens: `"fade"`, `"wipe"` (left to right), `"iris"` (a circle closing on `center_x`, `center_y`, fractions of the screen, the middle by default) or `"dissolve"` (pixels turning over in a dither pattern), `duration` seconds each way (0.4, real time), `color` (`wpe.color`, black). It covers everything, the UI and 2D drawing too. Asking again while it closes only changes the scene; a scene loaded otherwise (the editor stopping play) cuts. |
 | `wpe.quit()` | Exit the game after the current frame. |
 | `wpe.set_camera(entity)` / `wpe.get_camera() -> entity?` | The camera the scene is rendered from and heard from. Without one, the scene file's `camera`, then the first camera found, is used. |
 | `wpe.screen_size() -> width, height` | The framebuffer (canvas) size in pixels. |

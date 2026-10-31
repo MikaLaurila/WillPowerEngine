@@ -15,7 +15,9 @@
 #include "graphics/graphics.h"
 #include "graphics/postfx.h"
 #include "graphics/scene_render.h"
+#include "graphics/transition.h"
 #include "jobs/jobs.h"
+#include "math/easing.h"
 #include "platform/platform.h"
 #include "scene/scene.h"
 
@@ -53,9 +55,16 @@ struct WPE_Engine {
     WPE_GameFeel feel;            /* Time scale (slow motion, hit-stop) and shakes. */
     char music[WPE_VFS_PATH_MAX]; /* Track started by the current scene ("" = none). */
     char pending_scene[WPE_VFS_PATH_MAX];
-    char save_dir[1024]; /* "" until a script needs it (see wpe__app_save_directory). */
-    bool save_dir_made;  /* save_dir exists (made on first use). */
-    WPE_AssetHandle sky; /* The loaded sky image (wpe__resolve_sky). */
+    /* A scene transition: closing toward `transition_scene`, then (after it loads) opening. Kind NONE: none.
+     */
+    WPE_Transition transition;
+    char transition_scene[WPE_VFS_PATH_MAX];
+    float transition_time; /* Real seconds into the current half. */
+    bool transition_opening;
+    bool transition_loading; /* The transition's own load is running (it doesn't cancel the transition). */
+    char save_dir[1024];     /* "" until a script needs it (see wpe__app_save_directory). */
+    bool save_dir_made;      /* save_dir exists (made on first use). */
+    WPE_AssetHandle sky;     /* The loaded sky image (wpe__resolve_sky). */
     /* Captured frames (wpe.capture_screen), image assets "capture/1".. that the engine owns. */
     WPE_AssetHandle captures[WPE__CAPTURE_SLOTS];
     WPE_Texture* capture_textures[WPE__CAPTURE_SLOTS];
@@ -75,9 +84,51 @@ struct WPE_Engine {
 
 /* ---- Script services ---------------------------------------------------------------------------- */
 
-static void wpe__app_load_scene(void* user_data, const char* path) {
+/* How much of the screen the running transition covers (0..1). */
+static float wpe__transition_coverage(const WPE_Engine* engine) {
+    if (engine->transition.kind == WPE_TRANSITION_NONE) return 0.0f;
+    const float t = wpe_ease(WPE_EASE_SMOOTH, engine->transition_time / engine->transition.duration);
+    return engine->transition_opening ? 1.0f - t : t;
+}
+
+static void wpe__app_load_scene(void* user_data, const char* path, const WPE_Transition* transition) {
     WPE_Engine* engine = user_data;
-    snprintf(engine->pending_scene, sizeof engine->pending_scene, "%s", path);
+    if (!transition || transition->kind == WPE_TRANSITION_NONE || !(transition->duration > 0.0f)) {
+        snprintf(engine->pending_scene, sizeof engine->pending_scene, "%s", path);
+        return;
+    }
+    /* Closing toward this scene; already closing, only the scene changes; opening, it closes again from
+     * where it is. */
+    const float coverage = wpe__transition_coverage(engine);
+    const bool closing = engine->transition.kind != WPE_TRANSITION_NONE && !engine->transition_opening;
+    if (!closing) {
+        engine->transition = *transition;
+        engine->transition_opening = false;
+        engine->transition_time = 0.0f;
+        /* Pick up from the current coverage: the closing half's time where the curve reaches it. */
+        for (int i = 0; i < 20 && coverage > 0.0f; ++i) {
+            const float t = engine->transition_time / transition->duration;
+            if (wpe_ease(WPE_EASE_SMOOTH, t) >= coverage) break;
+            engine->transition_time += transition->duration / 20.0f;
+        }
+    }
+    snprintf(engine->transition_scene, sizeof engine->transition_scene, "%s", path);
+}
+
+/* Advances a running transition by a frame's real time; at the closed point it asks for its scene. */
+static void wpe__advance_transition(WPE_Engine* engine, double dt) {
+    if (engine->transition.kind == WPE_TRANSITION_NONE) return;
+    engine->transition_time += (float)dt;
+    if (engine->transition_time < engine->transition.duration) return;
+    if (engine->transition_opening) {
+        engine->transition.kind = WPE_TRANSITION_NONE; /* Open again: done. */
+        return;
+    }
+    /* Closed: this frame shows it covered, the scene loads after it, and the next ones open. */
+    engine->transition_opening = true;
+    engine->transition_time = 0.0f;
+    memcpy(engine->pending_scene, engine->transition_scene, sizeof engine->pending_scene);
+    engine->transition_loading = true;
 }
 
 static void wpe__app_quit(void* user_data) {
@@ -424,6 +475,7 @@ WPE_Result wpe_engine_load_scene_text(WPE_Engine* engine, const char* text, size
     engine->camera = WPE_ENTITY_NULL;
     engine->environment = wpe_scene_environment_default();
     wpe_game_feel_reset(&engine->feel, NULL); /* The world is gone: nothing to restore. */
+    if (!engine->transition_loading) engine->transition.kind = WPE_TRANSITION_NONE; /* Other loads cut. */
     const WPE_SceneContext context = wpe__context(engine);
     WPE_SceneEnvironment environment = wpe_scene_environment_default();
     WPE_Entity camera = WPE_ENTITY_NULL;
@@ -715,6 +767,11 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
         const WPE_Result end = wpe_renderer_end_frame(engine->renderer);
         if (result == WPE_RESULT_OK) result = end;
     }
+    /* A scene transition covers everything, the UI and the HUD included. */
+    const float coverage = wpe__transition_coverage(engine);
+    if (result == WPE_RESULT_OK && coverage > 0.0f)
+        wpe_transition_cover(wpe_renderer_framebuffer_for_write(engine->renderer), &engine->transition,
+                             coverage, engine->transition_opening);
     if (result == WPE_RESULT_OK && engine->window)
         result = wpe_window_present(engine->window, wpe_renderer_framebuffer(engine->renderer));
     engine->stats.overlay_ms = wpe__ms_since(&mark);
@@ -748,6 +805,7 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
     engine->stats.simulate_ms = engine->simulating ? wpe__ms_since(&mark) : 0.0;
     if (!engine->simulating) engine->stats.physics_ms = 0.0;
     const WPE_Entity camera = wpe_engine_camera(engine);
+    if (engine->simulating) wpe__advance_transition(engine, dt);
     if (result == WPE_RESULT_OK && engine->simulating) result = wpe__mix_audio(engine, camera, dt);
     if (result == WPE_RESULT_OK) result = wpe__render(engine, engine->draw_scene ? camera : WPE_ENTITY_NULL);
     if (engine->embedded) wpe_input_begin_frame(engine->input); /* Events for the next frame follow. */
@@ -758,6 +816,7 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
         memcpy(path, engine->pending_scene, sizeof path);
         engine->pending_scene[0] = '\0';
         result = wpe_engine_load_scene(engine, path);
+        engine->transition_loading = false;
     }
     ++engine->stats.frames;
     engine->stats.entities = wpe_ecs_entity_count(engine->ecs);

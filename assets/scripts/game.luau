@@ -41,7 +41,7 @@ function Game:on_update(dt)
 		wpe.quit()
 	end
 	if wpe.action_pressed("switch_scene") then
-		wpe.load_scene(self.next_scene)
+		wpe.load_scene(self.next_scene, { transition = "dissolve", duration = 0.35 })
 	end
 	if wpe.key_pressed("f1") then
 		self.show_help = not self.show_help

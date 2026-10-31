@@ -396,6 +396,8 @@ static bool wpe__invoke(WPE_ScriptHost* host, WPE_Entity entity, uint32_t script
     return false;
 }
 
+static void wpe__kill_tween(WPE_ScriptHost* host, wpe__Tween* tween); /* With the tweens, below. */
+
 /* ECS remove hook: runs on_destroy in restricted mode and releases the instance. */
 static void wpe__script_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
     (void)ecs;
@@ -413,6 +415,11 @@ static void wpe__script_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* compone
         if (timer->owner_instance != s.instance_ref || timer->fn_ref == LUA_NOREF) continue;
         lua_unref(host->L, timer->fn_ref);
         timer->fn_ref = LUA_NOREF;
+    }
+    /* So do its tweens. */
+    for (uint32_t i = 0; i < host->tween_count; ++i) {
+        if (host->tweens[i].live && host->tweens[i].owner_instance == s.instance_ref)
+            wpe__kill_tween(host, &host->tweens[i]);
     }
     lua_unref(host->L, s.instance_ref);
     if (s.property_ref != LUA_NOREF) lua_unref(host->L, s.property_ref);
@@ -553,6 +560,234 @@ static void wpe__fire_timers(WPE_ScriptHost* host) {
     for (uint32_t i = 0; i < host->timer_count; ++i)
         if (host->timers[i].fn_ref != LUA_NOREF) host->timers[kept++] = host->timers[i];
     host->timer_count = kept;
+}
+
+/* ---- Tweens --------------------------------------------------------------------------------------- */
+
+/* Ends a tween now: it is dropped at the end of the update and its callbacks are released. */
+static void wpe__kill_tween(WPE_ScriptHost* host, wpe__Tween* tween) {
+    tween->live = false;
+    if (tween->fn_ref != LUA_NOREF) lua_unref(host->L, tween->fn_ref);
+    if (tween->done_ref != LUA_NOREF) lua_unref(host->L, tween->done_ref);
+    tween->fn_ref = tween->done_ref = LUA_NOREF;
+}
+
+uint32_t wpe__script_add_tween(WPE_ScriptHost* host, const wpe__Tween* tween) {
+    if (host->tween_count == host->tween_capacity) {
+        const uint32_t capacity = host->tween_capacity ? host->tween_capacity * 2 : 16;
+        wpe__Tween* tweens = wpe_realloc(host->tweens, (size_t)capacity * sizeof *tweens);
+        if (!tweens) return 0;
+        host->tweens = tweens;
+        host->tween_capacity = capacity;
+    }
+    /* The newest tween of a property wins: older ones of the entity let go of it. */
+    if (tween->target != WPE_ENTITY_NULL) {
+        for (uint32_t i = 0; i < host->tween_count; ++i) {
+            wpe__Tween* old = &host->tweens[i];
+            if (!old->live || old->target != tween->target || !(old->props & tween->props)) continue;
+            old->props &= ~tween->props;
+            if (old->props == 0) wpe__kill_tween(host, old);
+        }
+    }
+    const uint32_t id = host->next_tween_id++;
+    if (host->next_tween_id == 0) host->next_tween_id = 1;
+    wpe__Tween* added = &host->tweens[host->tween_count++];
+    *added = *tween;
+    added->id = id;
+    added->owner_instance = host->current_instance;
+    added->owner = host->current_entity;
+    added->live = true;
+    return id;
+}
+
+bool wpe__script_cancel_tween(WPE_ScriptHost* host, uint32_t id) {
+    for (uint32_t i = 0; i < host->tween_count; ++i) {
+        if (host->tweens[i].id != id || !host->tweens[i].live) continue;
+        wpe__kill_tween(host, &host->tweens[i]);
+        return true;
+    }
+    return false;
+}
+
+uint32_t wpe__script_stop_tweens(WPE_ScriptHost* host, WPE_Entity entity) {
+    uint32_t stopped = 0;
+    for (uint32_t i = 0; i < host->tween_count; ++i) {
+        if (!host->tweens[i].live || host->tweens[i].target != entity) continue;
+        wpe__kill_tween(host, &host->tweens[i]);
+        ++stopped;
+    }
+    return stopped;
+}
+
+bool wpe__script_is_tweening(const WPE_ScriptHost* host, WPE_Entity entity) {
+    for (uint32_t i = 0; i < host->tween_count; ++i) {
+        if (host->tweens[i].live && host->tweens[i].target == entity) return true;
+    }
+    return false;
+}
+
+/* The rotation `p` of the way from `from` to `to` along the shorter arc (p may leave [0, 1] for overshooting
+ * eases). */
+static WPE_Quat wpe__turn(WPE_Quat from, WPE_Quat to, float p) {
+    const WPE_Quat inverse = {.x = -from.x, .y = -from.y, .z = -from.z, .w = from.w};
+    WPE_Quat delta = wpe_quat_normalize(wpe_quat_mul(inverse, to));
+    if (delta.w < 0.0f) delta = (WPE_Quat){.x = -delta.x, .y = -delta.y, .z = -delta.z, .w = -delta.w};
+    const float half = acosf(delta.w > 1.0f ? 1.0f : delta.w);
+    const float s = sinf(half);
+    if (s < 1e-6f) return to;
+    const WPE_Vec3 axis = wpe_vec3(delta.x / s, delta.y / s, delta.z / s);
+    return wpe_quat_normalize(wpe_quat_mul(from, wpe_quat_from_axis_angle(axis, 2.0f * half * p)));
+}
+
+typedef struct wpe__TweenCallOp {
+    WPE_ScriptHost* host;
+    int fn_ref;
+    bool with_value;
+    double value;
+    bool failed;                          /* out */
+    char message[WPE__ERROR_MESSAGE_MAX]; /* out */
+} wpe__TweenCallOp;
+
+/* Protected: calls a tween callback, with the value for value tweens. */
+static int wpe__op_call_tween(lua_State* L) {
+    wpe__TweenCallOp* op = lua_touserdata(L, 1);
+    lua_pushcfunction(L, wpe__traceback, "traceback");
+    const int handler = lua_gettop(L);
+    lua_getref(L, op->fn_ref);
+    if (op->with_value) lua_pushnumber(L, op->value);
+    const double previous = wpe__begin_budget(op->host);
+    const int status = lua_pcall(L, op->with_value ? 1 : 0, 0, handler);
+    op->host->deadline = previous;
+    if (status != 0) {
+        op->failed = true;
+        snprintf(op->message, sizeof op->message, "%s",
+                 lua_tostring(L, -1) ? lua_tostring(L, -1) : "unknown error");
+    }
+    return 0;
+}
+
+/* Runs a tween's callback as its owner; false (logged) when it failed. */
+static bool wpe__call_tween(WPE_ScriptHost* host, const wpe__Tween* tween, int fn_ref, bool with_value,
+                            double value) {
+    wpe__TweenCallOp op = {.host = host, .fn_ref = fn_ref, .with_value = with_value, .value = value};
+    const int previous_instance = host->current_instance;
+    const WPE_Entity previous_entity = host->current_entity;
+    host->current_instance = tween->owner_instance;
+    host->current_entity = tween->owner;
+    if (lua_cpcall(host->L, wpe__op_call_tween, &op) != 0) {
+        op.failed = true;
+        snprintf(op.message, sizeof op.message, "%s",
+                 lua_tostring(host->L, -1) ? lua_tostring(host->L, -1) : "VM error");
+        lua_pop(host->L, 1);
+    }
+    host->current_instance = previous_instance;
+    host->current_entity = previous_entity;
+    if (op.failed) {
+        ++host->errors;
+        wpe_log_error("tween %u (entity 0x%08x) failed and was cancelled:\n%s", tween->id, tween->owner,
+                      op.message);
+    }
+    return !op.failed;
+}
+
+/* Advances one tween's clock by dt; returns false while it waits for its delay. Sets *done at its end. */
+static bool wpe__tween_clock(wpe__Tween* tween, float dt, bool* done) {
+    *done = false;
+    if (tween->delay > 0.0f) {
+        tween->delay -= dt;
+        if (tween->delay > 0.0f) return false;
+        dt = -tween->delay; /* What is left of the frame. */
+        tween->delay = 0.0f;
+    }
+    if (!(tween->duration > 0.0f)) {
+        *done = true;
+        return true;
+    }
+    tween->elapsed += dt;
+    while (tween->elapsed >= tween->duration) {
+        if (tween->loop == WPE__TWEEN_ONCE || tween->times == 1) {
+            tween->elapsed = tween->duration;
+            *done = true;
+            break;
+        }
+        if (tween->times > 1) --tween->times;
+        tween->elapsed -= tween->duration;
+        if (tween->loop == WPE__TWEEN_YOYO) tween->reversed = !tween->reversed;
+    }
+    return true;
+}
+
+/* Advances the tweens (each on game or real time) and applies them, then drops the finished ones. Tweens of a
+ * disabled (failed) script wait for its reload; tweens made by callbacks start in the next update. */
+static void wpe__run_tweens(WPE_ScriptHost* host, float game_dt) {
+    float real_dt = game_dt;
+    if (host->app.game_feel) real_dt = host->app.game_feel(host->app.user_data)->real_dt;
+    const uint32_t count = host->tween_count;
+    for (uint32_t i = 0; i < count; ++i) {
+        wpe__Tween tween = host->tweens[i];
+        if (!tween.live) continue;
+        if (tween.owner_instance != LUA_NOREF) {
+            const WPE_Script* s = wpe_ecs_get_component(host->ecs, tween.owner, WPE_COMP_SCRIPT);
+            if (s && s->instance_ref == tween.owner_instance && (s->state & WPE__SCRIPT_FAILED)) continue;
+        }
+        WPE_Transform* t = NULL;
+        if (tween.target != WPE_ENTITY_NULL) {
+            t = wpe_ecs_get_component(host->ecs, tween.target, WPE_COMP_TRANSFORM);
+            if (!t) { /* Its entity (or transform) is gone. */
+                wpe__kill_tween(host, &host->tweens[i]);
+                continue;
+            }
+        }
+        bool done = false;
+        if (!wpe__tween_clock(&tween, tween.real_time ? real_dt : game_dt, &done)) {
+            host->tweens[i] = tween;
+            continue;
+        }
+        if (!tween.started) {
+            tween.started = true;
+            if (t) {
+                tween.from_position = t->position;
+                tween.from_rotation = t->rotation;
+                tween.from_scale = t->scale;
+                if (tween.relative) {
+                    tween.to_position = wpe_vec3_add(t->position, tween.to_position);
+                    tween.to_rotation = wpe_quat_normalize(wpe_quat_mul(t->rotation, tween.to_rotation));
+                    tween.to_scale = wpe_vec3_add(t->scale, tween.to_scale);
+                }
+            } else if (tween.relative) {
+                tween.to_value += tween.from_value;
+            }
+        }
+        float progress = tween.duration > 0.0f ? tween.elapsed / tween.duration : 1.0f;
+        if (tween.reversed) progress = 1.0f - progress;
+        const float p = wpe_ease(tween.ease, progress);
+        if (t) {
+            if (tween.props & WPE__TWEEN_POSITION)
+                t->position = wpe_vec3_lerp(tween.from_position, tween.to_position, p);
+            if (tween.props & WPE__TWEEN_ROTATION)
+                t->rotation = wpe__turn(tween.from_rotation, tween.to_rotation, p);
+            if (tween.props & WPE__TWEEN_SCALE) t->scale = wpe_vec3_lerp(tween.from_scale, tween.to_scale, p);
+        }
+        /* Its state is stored before any callback runs: callbacks may cancel it or start others. */
+        if (done) tween.live = false;
+        host->tweens[i] = tween;
+        if ((tween.props & WPE__TWEEN_VALUE) && tween.fn_ref != LUA_NOREF) {
+            const double value = tween.from_value + (tween.to_value - tween.from_value) * (double)p;
+            if (!wpe__call_tween(host, &tween, tween.fn_ref, true, value)) {
+                wpe__kill_tween(host, &host->tweens[i]);
+                continue;
+            }
+        }
+        if (done) {
+            /* Finished: on_done runs, then the references are released. */
+            if (tween.done_ref != LUA_NOREF) (void)wpe__call_tween(host, &tween, tween.done_ref, false, 0.0);
+            wpe__kill_tween(host, &host->tweens[i]);
+        }
+    }
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < host->tween_count; ++i)
+        if (host->tweens[i].live) host->tweens[kept++] = host->tweens[i];
+    host->tween_count = kept;
 }
 
 /* ---- Modules (require) ---------------------------------------------------------------------------- */
@@ -762,6 +997,7 @@ WPE_Result wpe_script_host_create(const WPE_ScriptHostDesc* desc, WPE_ScriptHost
     host->ui = desc->ui;
     host->current_instance = LUA_NOREF;
     host->next_timer_id = 1;
+    host->next_tween_id = 1;
     if (desc->app) host->app = *desc->app;
     if (desc->font != WPE_ASSET_NONE) {
         if (!wpe_asset_font(desc->assets, desc->font)) {
@@ -833,6 +1069,7 @@ void wpe_script_host_destroy(WPE_ScriptHost* host) {
     wpe_free(host->files);
     wpe_free(host->modules); /* Their references went with the VM. */
     wpe_free(host->timers);
+    wpe_free(host->tweens); /* Their references went with the VM. */
     wpe_free(host->pending_destroy);
     wpe_free(host->snapshot);
     wpe_free(host);
@@ -904,6 +1141,7 @@ WPE_Result wpe_script_host_update(WPE_ScriptHost* host, float dt) {
     host->time += dt;
     ++host->frame;
     wpe__fire_timers(host);
+    wpe__run_tweens(host, dt);
     wpe__flush_destroys(host);
     return result;
 }

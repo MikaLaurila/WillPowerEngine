@@ -9,6 +9,7 @@
 #include "graphics/graphics.h"
 #include "graphics/material_shader.h"
 #include "graphics/scene_render.h"
+#include "graphics/transition.h"
 
 #define ASSET(path) WPE_TEST_ASSETS_DIR "/" path
 
@@ -1353,6 +1354,72 @@ static void test_graphics_uv_offset_and_water_render(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* ---- Scene transitions ----------------------------------------------------------------------------------
+ */
+
+static uint32_t covered_count(const WPE_Framebuffer* fb) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < fb->width * fb->height; ++i)
+        n += fb->color[i] == 0xFF000000u;
+    return n;
+}
+
+static void test_graphics_transition_shapes(void) {
+    WPE_Color pixels[8 * 4];
+    WPE_Framebuffer fb = {.width = 8, .height = 4, .color = pixels};
+    const WPE_Color white = 0xFFFFFFFFu;
+    WPE_Transition t = wpe_transition_default(WPE_TRANSITION_FADE);
+#define RESET()                                                                                              \
+    for (int i = 0; i < 32; ++i)                                                                             \
+    pixels[i] = white
+
+    /* Nothing at 0; a fade blends every pixel; everything is the color at 1. */
+    RESET();
+    wpe_transition_cover(&fb, &t, 0.0f, false);
+    WPE_TEST_ASSERT_EQ_UINT(white, pixels[5]);
+    wpe_transition_cover(&fb, &t, 0.5f, false);
+    WPE_TEST_ASSERT_EQ_UINT(0xFF7F7F7Fu, pixels[5]);
+    RESET();
+    wpe_transition_cover(&fb, &t, 1.0f, false);
+    WPE_TEST_ASSERT_EQ_UINT(32, covered_count(&fb));
+
+    /* A wipe closes from the left and opens toward the right: half covered either way, other halves. */
+    t.kind = WPE_TRANSITION_WIPE;
+    RESET();
+    wpe_transition_cover(&fb, &t, 0.5f, false);
+    WPE_TEST_ASSERT(pixels[0] == 0xFF000000u && pixels[3] == 0xFF000000u && pixels[4] == white);
+    RESET();
+    wpe_transition_cover(&fb, &t, 0.5f, true);
+    WPE_TEST_ASSERT(pixels[3] == white && pixels[4] == 0xFF000000u && pixels[7] == 0xFF000000u);
+    WPE_TEST_ASSERT_EQ_UINT(16, covered_count(&fb));
+
+    /* An iris closes on its center: the corners go first, the middle last. */
+    t.kind = WPE_TRANSITION_IRIS;
+    RESET();
+    wpe_transition_cover(&fb, &t, 0.5f, false);
+    WPE_TEST_ASSERT(pixels[0] == 0xFF000000u && pixels[1 * 8 + 3] == white);
+    RESET();
+    wpe_transition_cover(&fb, &t, 1.0f, false);
+    WPE_TEST_ASSERT_EQ_UINT(32, covered_count(&fb));
+
+    /* A dissolve turns pixels over in the dither order: exactly half at 0.5, in every 4x4 block. */
+    t.kind = WPE_TRANSITION_DISSOLVE;
+    t.color = wpe_vec3(0, 0, 0);
+    RESET();
+    wpe_transition_cover(&fb, &t, 0.5f, false);
+    WPE_TEST_ASSERT_EQ_UINT(16, covered_count(&fb));
+    RESET();
+    wpe_transition_cover(&fb, &t, 0.25f, false);
+    WPE_TEST_ASSERT_EQ_UINT(8, covered_count(&fb));
+#undef RESET
+
+    /* Names. */
+    WPE_TransitionKind kind = WPE_TRANSITION_NONE;
+    WPE_TEST_ASSERT(wpe_transition_from_name("iris", &kind) && kind == WPE_TRANSITION_IRIS);
+    WPE_TEST_ASSERT(!wpe_transition_from_name("swirl", &kind));
+    WPE_TEST_ASSERT_EQ_STR("dissolve", wpe_transition_name(WPE_TRANSITION_DISSOLVE));
+}
+
 static void test_graphics_scene_render_frustum_culling(void) {
     WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 32);
     const WPE_AssetHandle model = wpe_test_load_model(t.assets, "meshes/damaged_helmet.glb");
@@ -1562,6 +1629,6 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_trail_records_and_draws), WPE_TEST_CASE(test_graphics_slash_sweeps),
     WPE_TEST_CASE(test_graphics_surface_update_wraps),
     WPE_TEST_CASE(test_graphics_water_wave_is_periodic_with_matching_slopes),
-    WPE_TEST_CASE(test_graphics_uv_offset_and_water_render),
+    WPE_TEST_CASE(test_graphics_uv_offset_and_water_render), WPE_TEST_CASE(test_graphics_transition_shapes),
     WPE_TEST_CASE(test_graphics_camera_matrices_validation),
     WPE_TEST_CASE(test_graphics_draw2d_text_is_pixel_exact), WPE_TEST_CASE(test_graphics_debug_lines))

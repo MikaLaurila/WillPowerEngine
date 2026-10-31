@@ -739,6 +739,58 @@ static void test_engine_hit_stop_and_shake(void) {
     wpe_engine_destroy(engine);
 }
 
+/* A fade between two scenes: the screen closes over 0.2 s, the next scene loads covered, then it opens. */
+static void test_engine_scene_transition(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/fade/scenes"));
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/fade/scripts"));
+    write_text(ROOT "/fade/project.json",
+               "{\"format\": \"wpe.project\", \"version\": 1, \"name\": \"Fade\", \"start_scene\": "
+               "\"scenes/a.scene\", \"display\": {\"width\": 16, \"height\": 16}}\n");
+    write_text(ROOT "/fade/scenes/a.scene",
+               "{\"format\": \"wpe.scene\", \"version\": 1, \"environment\": {\"clear_color\": [1, 1, 1],\n"
+               " \"gravity\": [0, -1, 0]},\n"
+               " \"entities\": [{\"id\": 1, \"script\": {\"path\": \"scripts/go.luau\"}}]}\n");
+    write_text(ROOT "/fade/scenes/b.scene",
+               "{\"format\": \"wpe.scene\", \"version\": 1, \"environment\": {\"clear_color\": [1, 1, 1],\n"
+               " \"gravity\": [0, -2, 0]}}\n");
+    write_text(ROOT "/fade/scripts/go.luau",
+               "local S = {}\n"
+               "function S:on_update(dt)\n"
+               "  wpe.load_scene('scenes/b.scene', {transition = 'fade', duration = 0.2})\n"
+               "end\n"
+               "return S\n");
+    WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_engine_create(
+        &(WPE_EngineDesc){
+            .project_dir = ROOT "/fade", .embedded = true, .no_audio_device = true, .workers = 2},
+        &engine));
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(engine));
+    uint32_t shade[9];
+    float gravity[9];
+    for (int i = 0; i < 9; ++i) {
+        WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 0.05));
+        shade[i] = fb->color[0] & 0xFFu; /* White fading to black and back. */
+        gravity[i] = wpe_physics_gravity(wpe_engine_physics(engine)).y;
+    }
+    /* Closing (the script asks again every frame: it only retargets), black on the fourth frame, when b loads
+     * after it; then opening, white again by the eighth. */
+    WPE_TEST_ASSERT(shade[0] < 255 && shade[1] < shade[0] && shade[2] < shade[1]);
+    WPE_TEST_ASSERT_EQ_UINT(0, shade[3]);
+    WPE_TEST_ASSERT_NEAR(-1.0, gravity[2], 1e-6);
+    WPE_TEST_ASSERT_NEAR(-2.0, gravity[3], 1e-6);
+    WPE_TEST_ASSERT(shade[4] > 0 && shade[5] > shade[4] && shade[6] > shade[5]);
+    WPE_TEST_ASSERT_EQ_UINT(255, shade[7]);
+    WPE_TEST_ASSERT_EQ_UINT(255, shade[8]);
+    /* A load from outside (the editor stopping play) cuts: no transition carries over. */
+    WPE_TEST_ASSERT_OK(wpe_engine_load_scene(engine, "scenes/a.scene"));
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 0.05)); /* The script starts a fade again... */
+    WPE_TEST_ASSERT_OK(wpe_engine_load_scene(engine, "scenes/b.scene"));
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 0.05)); /* ...which the load ended. */
+    WPE_TEST_ASSERT_EQ_UINT(255, fb->color[0] & 0xFFu);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(wpe_engine_scripts(engine)).errors);
+    wpe_engine_destroy(engine);
+}
+
 /* A 2D menu: no camera, a button whose script writes its click count into a label. */
 static void write_menu_game(void) {
     WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/menu/scenes"));
@@ -1074,5 +1126,6 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_engine_scene_save_filter), WPE_TEST_CASE(test_engine_embedded_edit_mode),
     WPE_TEST_CASE(test_engine_captures_the_frame_before_post_effects),
     WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts),
-    WPE_TEST_CASE(test_engine_hit_stop_and_shake), WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
+    WPE_TEST_CASE(test_engine_hit_stop_and_shake), WPE_TEST_CASE(test_engine_scene_transition),
+    WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
     WPE_TEST_CASE(test_engine_creates_new_projects), WPE_TEST_CASE(test_engine_export_embeds_the_project))

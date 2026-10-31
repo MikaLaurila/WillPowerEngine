@@ -69,6 +69,28 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (tweens and scene transitions)
+- Tweens (`wpe.tween`, `wpe.tween_value`, `cancel_tween`, `stop_tweens`, `is_tweening`): a transform's
+  position, rotation (shorter arc, overshoot allowed) and scale, or any number through a function,
+  eased over a duration with a delay, once/repeat/yoyo loops with a play count, relative targets,
+  game or real time, and `on_done`. Run by the script host after the timers; owned by the script that
+  starts them (they end with it); a newer tween of a property takes it over.
+- Easing curves (`math/easing.h`): linear, smooth, and in/out/in_out quad, cubic, sine, expo, back,
+  elastic and bounce, by name.
+- Scene transitions: `wpe.load_scene(path, {transition = "fade" | "wipe" | "iris" | "dissolve",
+  duration, color, center_x, center_y})`. The screen closes on real time, the scene loads covered,
+  then it opens; the cover goes over everything (UI and HUD too). `graphics/transition.h`
+  (`wpe_transition_cover`); `WPE_ScriptApp.load_scene` takes the transition. **BREAKING** for hosts
+  implementing `load_scene` (one more parameter, NULL for a cut).
+- Demo: title-menu buttons slide in (staggered, overshooting) and open their scene through an iris on
+  the button; Tab in the demo scenes dissolves to the next.
+- CI: the error report names failing tests; `engine_templates` gets a 600 s timeout (the Linux
+  sanitizer build was timing out on it).
+- Tests: every ease (ends, clamping, continuity, which overshoot, names), transition shapes, tweens
+  (progress, on_done, delay with relative targets, rotation, yoyo counts, takeover, stop, cancel,
+  failing callbacks, owner removal, a destroyed target, validation), a fade between scenes frame by
+  frame, and a load from outside cutting a transition.
+
 ### Added (sound follows slow motion)
 - `wpe_audio_set_time_scale`/`wpe_audio_time_scale`: effects-bus voices (one-shots and sources) play at
   their pitch times the scale, so slow motion slows and lowers them; below 0.01 they are held in place

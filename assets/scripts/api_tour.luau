@@ -289,6 +289,19 @@ function Tour:on_start()
 	wpe.set_time_scale(1)
 	assert(not pcall(wpe.set_time_scale, -1) and not pcall(wpe.slow_motion, 0.5, 0) and not pcall(wpe.hit_stop, 0))
 	assert(not pcall(wpe.slow_motion, -1, 1) and not pcall(wpe.slow_motion, 0.5, 1, -1))
+	-- Tweens: a transform eased to a target (the newest tween of a property takes it over), and any number.
+	local mover = wpe.spawn("tour mover")
+	local arrived = false
+	wpe.tween(mover, { position = vector.create(0, 2, 0), scale = vector.create(2, 2, 2), duration = 0.5,
+		ease = "out_back", on_done = function() arrived = true end })
+	wpe.tween(mover, { rotation = vector.create(0, math.pi, 0), duration = 1, ease = "in_out_sine",
+		loop = "yoyo", times = 2, real_time = true })
+	assert(wpe.is_tweening(mover) and not arrived)
+	local pulse = wpe.tween_value(0, 1, { duration = 0.3, loop = "repeat" }, function(v) end)
+	assert(wpe.cancel_tween(pulse) and not wpe.cancel_tween(pulse))
+	assert(wpe.stop_tweens(mover) == 2 and not wpe.is_tweening(mover))
+	assert(not pcall(wpe.tween, mover, { position = vector.create(1, 0, 0), ease = "wobbly" }))
+	wpe.destroy(mover)
 	local shaker = wpe.spawn("tour shaker")
 	wpe.shake(shaker, { amplitude = 0.2, rotation = 3, duration = 0.2, frequency = 25 })
 	assert(wpe.is_shaking(shaker))

@@ -11,6 +11,7 @@ add_library(wpe_graphics STATIC
     sky.c
     slash.c
     trail.c
+    transition.c
     water.c)
 add_library(wpe::graphics ALIAS wpe_graphics)
 

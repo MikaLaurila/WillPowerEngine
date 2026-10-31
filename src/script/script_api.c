@@ -1024,6 +1024,130 @@ static int wpe__api_cancel(lua_State* L) {
     return 1;
 }
 
+/* ---- Tweens ---------------------------------------------------------------------------------------- */
+
+/* Reads a tween's options (duration, ease, delay, loop, times, relative, real_time) from a table into *tween,
+ * and whether it has an on_done function (left on the stack's top when it has: the caller refs it). Raises on
+ * bad values; makes no references. */
+static bool wpe__check_tween_options(lua_State* L, int table, const char* function, wpe__Tween* tween) {
+    tween->duration = wpe__field_number(L, table, "duration", 0.5f);
+    tween->delay = wpe__field_number(L, table, "delay", 0.0f);
+    if (!(tween->duration >= 0.0f && tween->duration <= 3600.0f))
+        luaL_errorL(L, "wpe.%s: duration must be 0..3600 seconds", function);
+    if (!(tween->delay >= 0.0f && tween->delay <= 3600.0f))
+        luaL_errorL(L, "wpe.%s: delay must be 0..3600 seconds", function);
+    tween->ease = WPE_EASE_OUT_QUAD;
+    lua_getfield(L, table, "ease");
+    if (!lua_isnil(L, -1) && !wpe_ease_from_name(luaL_checkstring(L, -1), &tween->ease))
+        luaL_errorL(L, "wpe.%s: unknown ease '%s' (\"linear\", \"smooth\", \"in_quad\", \"out_back\", ...)",
+                    function, lua_tostring(L, -1));
+    lua_pop(L, 1);
+    lua_getfield(L, table, "loop");
+    if (!lua_isnil(L, -1)) {
+        const char* loop = luaL_checkstring(L, -1);
+        if (strcmp(loop, "once") == 0) {
+            tween->loop = WPE__TWEEN_ONCE;
+        } else if (strcmp(loop, "repeat") == 0) {
+            tween->loop = WPE__TWEEN_REPEAT;
+        } else if (strcmp(loop, "yoyo") == 0) {
+            tween->loop = WPE__TWEEN_YOYO;
+        } else {
+            luaL_errorL(L, "wpe.%s: loop must be \"once\", \"repeat\" or \"yoyo\"", function);
+        }
+    }
+    lua_pop(L, 1);
+    const float times = wpe__field_number(L, table, "times", 0.0f);
+    if (!(times >= 0.0f && times <= 1e6f) || times != floorf(times))
+        luaL_errorL(L, "wpe.%s: times must be a whole number (0: forever)", function);
+    tween->times = (uint32_t)times;
+    if (tween->loop != WPE__TWEEN_ONCE && !(tween->duration > 0.0f))
+        luaL_errorL(L, "wpe.%s: a looping tween needs a duration", function);
+    tween->relative = wpe__field_bool(L, table, "relative", false);
+    tween->real_time = wpe__field_bool(L, table, "real_time", false);
+    lua_getfield(L, table, "on_done");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return false;
+    }
+    if (!lua_isfunction(L, -1)) luaL_errorL(L, "wpe.%s: on_done must be a function", function);
+    return true;
+}
+
+/* Adds a checked tween, referencing on_done (on the stack's top when `has_done`) and `fn_index` (0: none). */
+static int wpe__push_new_tween(lua_State* L, wpe__Tween* tween, bool has_done, int fn_index,
+                               const char* function) {
+    tween->done_ref = has_done ? lua_ref(L, -1) : LUA_NOREF;
+    if (has_done) lua_pop(L, 1);
+    tween->fn_ref = fn_index ? lua_ref(L, fn_index) : LUA_NOREF;
+    const uint32_t id = wpe__script_add_tween(wpe__script_host_from(L), tween);
+    if (id == 0) {
+        if (tween->done_ref != LUA_NOREF) lua_unref(L, tween->done_ref);
+        if (tween->fn_ref != LUA_NOREF) lua_unref(L, tween->fn_ref);
+        luaL_errorL(L, "wpe.%s: out of memory", function);
+    }
+    lua_pushnumber(L, (double)id);
+    return 1;
+}
+
+static int wpe__api_tween(lua_State* L) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    wpe__transform(L, host, entity); /* Raises without one. */
+    wpe__Tween tween = {.target = entity};
+    lua_getfield(L, 2, "position");
+    if (!lua_isnil(L, -1)) {
+        tween.to_position = wpe__check_vec3(L, -1);
+        tween.props |= WPE__TWEEN_POSITION;
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "rotation");
+    if (!lua_isnil(L, -1)) {
+        tween.to_rotation = wpe_quat_from_euler_xyz(wpe__check_vec3(L, -1));
+        tween.props |= WPE__TWEEN_ROTATION;
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "scale");
+    if (!lua_isnil(L, -1)) {
+        tween.to_scale = wpe__check_vec3(L, -1);
+        tween.props |= WPE__TWEEN_SCALE;
+    }
+    lua_pop(L, 1);
+    if (tween.props == 0) luaL_errorL(L, "wpe.tween: give a position, rotation or scale to go to");
+    const bool has_done = wpe__check_tween_options(L, 2, "tween", &tween);
+    return wpe__push_new_tween(L, &tween, has_done, 0, "tween");
+}
+
+static int wpe__api_tween_value(lua_State* L) {
+    const double from = luaL_checknumber(L, 1), to = luaL_checknumber(L, 2);
+    luaL_checktype(L, 3, LUA_TTABLE);
+    luaL_checktype(L, 4, LUA_TFUNCTION);
+    if (!isfinite(from) || !isfinite(to)) luaL_errorL(L, "wpe.tween_value: from and to must be finite");
+    wpe__Tween tween = {
+        .target = WPE_ENTITY_NULL, .props = WPE__TWEEN_VALUE, .from_value = from, .to_value = to};
+    const bool has_done = wpe__check_tween_options(L, 3, "tween_value", &tween);
+    return wpe__push_new_tween(L, &tween, has_done, 4, "tween_value");
+}
+
+static int wpe__api_cancel_tween(lua_State* L) {
+    const double id = luaL_checknumber(L, 1);
+    const bool valid = id >= 1.0 && id <= (double)UINT32_MAX && id == floor(id);
+    lua_pushboolean(L, valid && wpe__script_cancel_tween(wpe__script_host_from(L), (uint32_t)id));
+    return 1;
+}
+
+static int wpe__api_stop_tweens(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    lua_pushnumber(L, wpe__script_stop_tweens(wpe__script_host_from(L), entity));
+    return 1;
+}
+
+static int wpe__api_is_tweening(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    lua_pushboolean(L, wpe__script_is_tweening(wpe__script_host_from(L), entity));
+    return 1;
+}
+
 /* The live script component of a handle, or NULL (dead entities and missing scripts are not errors:
  * the receiver of a message may be gone). */
 static const WPE_Script* wpe__receiver(lua_State* L, int index) {
@@ -1715,13 +1839,38 @@ static const WPE_ScriptApp* wpe__app(lua_State* L, bool available, const char* f
     return &wpe__script_host_from(L)->app;
 }
 
+static WPE_Color wpe__opt_color(lua_State* L, int index); /* With the 2D drawing, below. */
+
 static int wpe__api_load_scene(lua_State* L) {
     WPE_ScriptHost* host = wpe__script_host_from(L);
     const WPE_ScriptApp* app = wpe__app(L, host->app.load_scene != NULL, "load_scene");
     const char* path = luaL_checkstring(L, 1);
     if (!wpe_vfs_path_is_valid(path) || !wpe_vfs_exists(wpe_asset_manager_vfs(host->assets), path))
         luaL_errorL(L, "wpe.load_scene: scene '%s' not found", path);
-    app->load_scene(app->user_data, path);
+    WPE_Transition transition = wpe_transition_default(WPE_TRANSITION_NONE);
+    if (!lua_isnoneornil(L, 2)) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        lua_getfield(L, 2, "transition");
+        if (!wpe_transition_from_name(luaL_checkstring(L, -1), &transition.kind))
+            luaL_errorL(
+                L,
+                "wpe.load_scene: transition must be \"fade\", \"wipe\", \"iris\", \"dissolve\" or \"none\"");
+        lua_pop(L, 1);
+        transition.duration = wpe__field_number(L, 2, "duration", transition.duration);
+        transition.center_x = wpe__field_number(L, 2, "center_x", transition.center_x);
+        transition.center_y = wpe__field_number(L, 2, "center_y", transition.center_y);
+        if (!(transition.duration > 0.0f && transition.duration <= 60.0f))
+            luaL_errorL(L, "wpe.load_scene: duration must be 0..60 seconds (each way)");
+        if (!isfinite(transition.center_x) || !isfinite(transition.center_y))
+            luaL_errorL(L, "wpe.load_scene: center_x and center_y must be finite");
+        lua_getfield(L, 2, "color");
+        if (!lua_isnil(L, -1)) {
+            const WPE_Vec4 color = wpe_color_to_vec4(wpe__opt_color(L, -1));
+            transition.color = wpe_vec3(color.x, color.y, color.z);
+        }
+        lua_pop(L, 1);
+    }
+    app->load_scene(app->user_data, path, transition.kind == WPE_TRANSITION_NONE ? NULL : &transition);
     return 0;
 }
 
@@ -3003,6 +3152,11 @@ static const luaL_Reg wpe__api[] = {
     {"after", wpe__api_after},
     {"every", wpe__api_every},
     {"cancel", wpe__api_cancel},
+    {"tween", wpe__api_tween},
+    {"tween_value", wpe__api_tween_value},
+    {"cancel_tween", wpe__api_cancel_tween},
+    {"stop_tweens", wpe__api_stop_tweens},
+    {"is_tweening", wpe__api_is_tweening},
     {"get_script", wpe__api_get_script},
     {"send", wpe__api_send},
     {"broadcast", wpe__script_broadcast},

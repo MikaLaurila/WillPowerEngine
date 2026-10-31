@@ -16,6 +16,7 @@
 #include <lua.h>
 #include <lualib.h>
 
+#include "math/easing.h"
 #include "script/script.h"
 
 #define WPE__SCRIPT_PATH_MAX 256u
@@ -58,6 +59,45 @@ typedef struct wpe__Timer {
     double interval; /* Repeat interval (0: once). */
     int fn_ref;      /* Registry ref of the callback; LUA_NOREF once cancelled. */
 } wpe__Timer;
+
+/* What a tween moves (wpe__Tween::props bits). */
+#define WPE__TWEEN_POSITION 0x1u
+#define WPE__TWEEN_ROTATION 0x2u
+#define WPE__TWEEN_SCALE 0x4u
+#define WPE__TWEEN_VALUE 0x8u /* A number handed to `fn_ref` (wpe.tween_value). */
+
+typedef enum wpe__TweenLoop {
+    WPE__TWEEN_ONCE = 0,
+    WPE__TWEEN_REPEAT, /* Starts over from the beginning. */
+    WPE__TWEEN_YOYO,   /* Goes back and forth. */
+} wpe__TweenLoop;
+
+/* A wpe.tween / wpe.tween_value animation, advanced after the timers in each update. */
+typedef struct wpe__Tween {
+    uint32_t id;
+    int owner_instance; /* As for timers: it goes with the script that made it. */
+    WPE_Entity owner;
+    WPE_Entity target; /* Entity tweens: whose transform moves (WPE_ENTITY_NULL for value tweens). */
+    uint32_t props;    /* WPE__TWEEN_* bits still animated (a newer tween of a property takes it over). */
+    /* Targets as given; the starting values are taken when it starts (after its delay), and relative
+     * targets are added to them then. */
+    WPE_Vec3 to_position, to_scale, from_position, from_scale;
+    WPE_Quat to_rotation, from_rotation;
+    double from_value, to_value;
+    float delay;    /* Seconds left before it starts. */
+    float duration; /* Seconds per play. */
+    float elapsed;  /* Seconds into the current play. */
+    uint32_t times; /* Plays in all for loops (0: forever); counts down. */
+    WPE_Ease ease;
+    wpe__TweenLoop loop;
+    bool relative;  /* Targets are offsets from the starting values. */
+    bool real_time; /* Runs on real time (through slow motion and hit-stops). */
+    bool started;
+    bool reversed; /* A yoyo on its way back. */
+    bool live;     /* False once finished or cancelled (dropped at the end of the update). */
+    int fn_ref;    /* Value tweens: called with the value each update. LUA_NOREF otherwise. */
+    int done_ref;  /* Called once it finishes (not when cancelled). LUA_NOREF for none. */
+} wpe__Tween;
 
 /* Sounds used by scripts stay loaded (one reference each) until the host is destroyed. */
 typedef struct wpe__CachedSound {
@@ -112,6 +152,11 @@ struct WPE_ScriptHost {
     uint32_t timer_capacity;
     uint32_t next_timer_id;
 
+    wpe__Tween* tweens;
+    uint32_t tween_count;
+    uint32_t tween_capacity;
+    uint32_t next_tween_id;
+
     /* The script instance whose code runs now (timers it makes belong to it); LUA_NOREF/NULL outside. */
     int current_instance;
     WPE_Entity current_entity;
@@ -134,6 +179,17 @@ WPE_AssetHandle wpe__script_find_sound(WPE_ScriptHost* host, const char* path);
 uint32_t wpe__script_add_timer(WPE_ScriptHost* host, double delay, double interval, int fn_ref);
 /* Cancels a timer; false when no such timer is pending. */
 bool wpe__script_cancel_timer(WPE_ScriptHost* host, uint32_t id);
+
+/* Adds a tween owned by the running script (if any), taking its targets' properties over from older tweens of
+ * the same entity; fills in id and owner. Returns its id (0 when out of memory: the caller drops its refs).
+ */
+uint32_t wpe__script_add_tween(WPE_ScriptHost* host, const wpe__Tween* tween);
+/* Stops a tween where it is (no on_done); false when no such tween runs. */
+bool wpe__script_cancel_tween(WPE_ScriptHost* host, uint32_t id);
+/* Stops every tween of an entity; returns how many. */
+uint32_t wpe__script_stop_tweens(WPE_ScriptHost* host, WPE_Entity entity);
+/* Whether a tween of the entity runs (or waits for its delay). */
+bool wpe__script_is_tweening(const WPE_ScriptHost* host, WPE_Entity entity);
 
 /* Bindings that need the host's internals: require(name), wpe.broadcast(method, ...). */
 int wpe__script_require(lua_State* L);

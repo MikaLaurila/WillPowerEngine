@@ -1,5 +1,8 @@
 #include "wpe_test.h"
 
+#include <math.h>
+
+#include "math/easing.h"
 #include "math/wpe_math.h"
 
 #define EPS 1e-5
@@ -186,7 +189,42 @@ static void test_math_orthographic_and_look_at(void) {
     assert_vec3_near(wpe_vec3(0, 0, -5), wpe_mat4_transform_point(&side, wpe_vec3(0, 0, 0)), EPS);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_math_perspective_maps_near_far_to_clip_range),
+static void test_math_easing(void) {
+    for (int e = 0; e < WPE_EASE_COUNT; ++e) {
+        const WPE_Ease ease = (WPE_Ease)e;
+        /* Every curve starts at 0 and ends at 1, clamps outside, and is continuous at the ends. */
+        WPE_TEST_ASSERT_NEAR(0.0, wpe_ease(ease, 0.0f), 0);
+        WPE_TEST_ASSERT_NEAR(1.0, wpe_ease(ease, 1.0f), 0);
+        WPE_TEST_ASSERT_NEAR(0.0, wpe_ease(ease, -3.0f), 0);
+        WPE_TEST_ASSERT_NEAR(1.0, wpe_ease(ease, 7.0f), 0);
+        WPE_TEST_ASSERT_NEAR(0.0, wpe_ease(ease, NAN), 0);
+        WPE_TEST_ASSERT_MSG(fabsf(wpe_ease(ease, 1e-4f)) < 0.01f, "%s jumps at 0", wpe_ease_name(ease));
+        WPE_TEST_ASSERT_MSG(fabsf(wpe_ease(ease, 1.0f - 1e-4f) - 1.0f) < 0.01f, "%s jumps at 1",
+                            wpe_ease_name(ease));
+        /* Names round-trip. */
+        WPE_Ease found = WPE_EASE_LINEAR;
+        WPE_TEST_ASSERT(wpe_ease_from_name(wpe_ease_name(ease), &found) && found == ease);
+        /* Only back and elastic leave [0, 1]; in_out curves pass through the middle. */
+        const bool overshoots = (ease >= WPE_EASE_IN_BACK && ease <= WPE_EASE_IN_OUT_ELASTIC);
+        bool outside = false;
+        for (int i = 0; i <= 1000; ++i) {
+            const float v = wpe_ease(ease, (float)i / 1000.0f);
+            outside |= v < -1e-6f || v > 1.0f + 1e-6f;
+        }
+        WPE_TEST_ASSERT_MSG(outside == overshoots, "%s", wpe_ease_name(ease));
+    }
+    WPE_TEST_ASSERT_NEAR(0.5, wpe_ease(WPE_EASE_LINEAR, 0.5f), EPS);
+    WPE_TEST_ASSERT_NEAR(0.25, wpe_ease(WPE_EASE_IN_QUAD, 0.5f), EPS);
+    WPE_TEST_ASSERT_NEAR(0.75, wpe_ease(WPE_EASE_OUT_QUAD, 0.5f), EPS);
+    WPE_TEST_ASSERT_NEAR(0.5, wpe_ease(WPE_EASE_IN_OUT_CUBIC, 0.5f), EPS);
+    WPE_TEST_ASSERT_NEAR(0.5, wpe_ease(WPE_EASE_SMOOTH, 0.5f), EPS);
+    WPE_Ease unused;
+    WPE_TEST_ASSERT(!wpe_ease_from_name("wobbly", &unused) && !wpe_ease_from_name(NULL, &unused));
+    WPE_TEST_ASSERT(wpe_ease_name((WPE_Ease)99) == NULL);
+}
+
+WPE_TEST_MAIN(WPE_TEST_CASE(test_math_easing),
+              WPE_TEST_CASE(test_math_perspective_maps_near_far_to_clip_range),
               WPE_TEST_CASE(test_math_orthographic_and_look_at), WPE_TEST_CASE(test_math_vec3_basic_ops),
               WPE_TEST_CASE(test_math_vec3_normalize_handles_zero),
               WPE_TEST_CASE(test_math_quat_axis_angle_rotates_vector),

@@ -73,6 +73,7 @@
 #include "graphics/draw2d.h"
 #include "graphics/postfx.h"
 #include "graphics/scene_render.h"
+#include "graphics/transition.h"
 #include "scene/game_feel.h"
 #include "input/input.h"
 #include "physics/physics.h"
@@ -94,8 +95,9 @@ typedef struct WPE_ScriptHost WPE_ScriptHost;
  */
 typedef struct WPE_ScriptApp {
     void* user_data;
-    /* Requests a scene switch; the application performs it after the current frame. */
-    void (*load_scene)(void* user_data, const char* path);
+    /* Requests a scene switch; the application performs it after the current frame, or, with a transition
+     * (NULL: a cut), once the screen has closed. */
+    void (*load_scene)(void* user_data, const char* path, const WPE_Transition* transition);
     /* Requests the application to exit after the current frame. */
     void (*quit)(void* user_data);
     /* Makes an entity the camera the scene is rendered from (and heard from). */
