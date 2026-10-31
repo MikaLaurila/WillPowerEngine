@@ -22,6 +22,8 @@
  *   they were lately (wpe_trail_update()), drawn by wpe_scene_render() through the billboard shader.
  * - WPE_COMP_SLASH (WPE_Slash): a slash sweeping along a Bezier curve (wpe_slash_update()), drawn by
  *   wpe_scene_render() as a camera-facing ribbon, thin at both ends.
+ * - WPE_COMP_WATER (WPE_Water): makes the entity's mesh a retro water surface: its vertices bob on two
+ * crossing waves in world space and brighten and darken as they pass (wpe_surface_update() moves them).
  *
  * Asset lifetime: mesh renderers and animators reference their model by asset handle
  * (`model_asset`). Their add hook takes a reference and resolves the cached `model` pointer; their
@@ -57,6 +59,11 @@ typedef struct WPE_MeshRenderer {
     bool cast_shadows;    /* Drawn into the sun's shadow map (default true). */
     bool receive_shadows; /* Darkened by the sun's shadow (default true). */
     bool double_sided;    /* Both faces drawn and lit even if the material is single-sided (default false). */
+    WPE_Vec2
+        uv_scroll; /* Texture repeats per second every texture of the mesh moves by (wpe_surface_update). */
+    /* Added to the texture coordinates of every texture (after the material's texture transform). Moved by
+     * uv_scroll and kept in [0, 2) so it never loses precision; set it to step through frames yourself. */
+    WPE_Vec2 uv_offset;
 } WPE_MeshRenderer;
 
 typedef struct WPE_Camera {
@@ -349,6 +356,31 @@ void wpe_slash_play(WPE_Ecs* ecs, WPE_Entity entity);
  */
 void wpe_slash_update(WPE_Ecs* ecs, float dt);
 
+/**
+ * Retro water (after the Sega Saturn's): on an entity with a WPE_MeshRenderer, the vertex shader lifts each
+ * vertex by two sine waves crossing along world X and Z (so neighbouring water meshes line up), tilts its
+ * lighting normal with the slope and changes its brightness by `shimmer`. Only vertices move, so the mesh
+ * needs enough of them (a plane with a segment every meter or so). Pair it with the mesh's uv_scroll for
+ * flow.
+ */
+typedef struct WPE_Water {
+    float amplitude;  /* Meters the surface rises and falls (each wave half of it). 0: flat. */
+    float wavelength; /* Meters between crests (> 0); the second wave's are 3/4 of it. */
+    float speed;      /* Meters per second the crests travel. */
+    float shimmer;    /* 0..1: how much vertices brighten and darken as the waves pass. */
+    float wpe__time;  /* Runtime: seconds into the wave cycle (wrapped), moved by wpe_surface_update(). */
+} WPE_Water;
+
+/** @return Waves 0.1 m high, 3 m apart, moving at 1 m/s, with a 0.2 shimmer. @thread_safety Any thread */
+WPE_Water wpe_water_default(void);
+
+/**
+ * Animates surfaces: moves every mesh's uv_offset by its uv_scroll and advances every water's waves.
+ *
+ * @thread_safety Thread owning the world
+ */
+void wpe_surface_update(WPE_Ecs* ecs, float dt);
+
 /** Points in each curve wpe_slash_distortions() fills (x, y and depth each). */
 #define WPE_SLASH_DISTORTION_POINTS 33u
 
@@ -378,7 +410,7 @@ WPE_Light wpe_light_default(WPE_LightType type);
 
 /**
  * Registers WPE_COMP_MESH, WPE_COMP_CAMERA, WPE_COMP_LIGHT, WPE_COMP_ANIMATOR, WPE_COMP_BILLBOARD and
- * WPE_COMP_PARTICLES, WPE_COMP_TRAIL and WPE_COMP_SLASH. Scene components
+ * WPE_COMP_PARTICLES, WPE_COMP_TRAIL, WPE_COMP_SLASH and WPE_COMP_WATER. Scene components
  * must be registered too (wpe_scene_register_components()).
  *
  * @param assets Borrowed; must outlive the world (component hooks release model references).

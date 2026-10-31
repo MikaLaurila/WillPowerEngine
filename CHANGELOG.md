@@ -69,6 +69,27 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (animated textures and retro water)
+- Mesh renderers take `uv_scroll` (`[u, v]` texture repeats per second); the runtime `uv_offset` it moves
+  is added to every texture coordinate of the mesh and kept in [0, 2) so it never loses precision.
+- Component `water` (`WPE_Water`, `WPE_COMP_WATER` 25, `graphics/water.c`), after the Sega Saturn's: the
+  material vertex shader lifts vertices by two sine waves crossing along world X and Z
+  (`wpe_water_wave`), tilts their lighting normals by the slope and changes their brightness
+  (`shimmer`). Shadow casters move the same way; culling bounds grow by the wave height.
+  `wpe_surface_update` advances both in the engine's simulation, and in the editor's edit mode too.
+- Luau: `wpe.set_uv_scroll`, `get_uv_scroll`, `set_uv_offset`, `get_uv_offset` (an entity's meshes and
+  those below it), `wpe.set_water`, `get_water`, `remove_water`.
+- Sample: `scenes/water.scene` (a shallow lagoon, between the sword and demo scenes), `meshes/water.glb`
+  (a 16 m plane, one vertex per meter, with a tileable 64x64 caustics texture) and `meshes/sand.prim`.
+- Fixed: a mesh without a Transform wasn't drawn; it now sits at the origin, as physics already
+  treated it. The grounds of `character.scene` and `sword.scene` (which have no `transform`) show again.
+- Changed: textures are shrunk and mipmapped by point sampling when their glTF sampler *minifies* with
+  `NEAREST` (was: magnifies), so a texture can be crisp up close and smooth far away
+  (`NEAREST` / `LINEAR_MIPMAP_LINEAR`, as the water's is) without distant sparkle.
+- Tests: scrolling and wave-time wrapping, wave periodicity and slopes, UV offsets and wave displacement
+  in rendered frames, a mesh without a transform; the API tour covers the new functions and the master
+  scene has a pond.
+
 ### Added (Nintendo 64 style texture filtering)
 - Sampler filter `WPE_FILTER_THREE_POINT`: blends the three nearest texels (the half of the 2x2 footprint
   the sample falls in), with the N64's diagonal look.

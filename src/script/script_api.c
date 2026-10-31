@@ -421,26 +421,87 @@ static int wpe__api_remove_light(lua_State* L) {
 
 /* ---- Rendering and animation ----------------------------------------------------------------------- */
 
-static int wpe__api_set_visible(lua_State* L) {
-    const WPE_Entity entity = wpe__check_entity(L, 1);
-    const bool visible = luaL_checkboolean(L, 2);
-    WPE_ScriptHost* host = wpe__script_host_from(L);
-    /* Applies to the entity and all mesh renderers below it (instantiated models are trees). */
-    WPE_Entity stack[256];
-    uint32_t top = 0;
+#define WPE__TREE_MESHES 256
+
+/* The mesh renderers of an entity and all entities below it (instantiated models are trees), the entity's own
+ * first; at most WPE__TREE_MESHES. Valid until the world's structure changes. */
+static uint32_t wpe__tree_meshes(WPE_Ecs* ecs, WPE_Entity entity, WPE_MeshRenderer* out[WPE__TREE_MESHES]) {
+    WPE_Entity stack[WPE__TREE_MESHES];
+    uint32_t top = 0, count = 0;
     stack[top++] = entity;
-    while (top > 0) {
+    while (top > 0 && count < WPE__TREE_MESHES) {
         const WPE_Entity e = stack[--top];
-        WPE_MeshRenderer* mesh = wpe_ecs_get_component(host->ecs, e, WPE_COMP_MESH);
-        if (mesh) mesh->visible = visible;
-        const WPE_Hierarchy* node = wpe_ecs_get_component(host->ecs, e, WPE_COMP_HIERARCHY);
-        for (WPE_Entity c = node ? node->first_child : WPE_ENTITY_NULL; c != WPE_ENTITY_NULL && top < 256;) {
+        WPE_MeshRenderer* mesh = wpe_ecs_get_component(ecs, e, WPE_COMP_MESH);
+        if (mesh) out[count++] = mesh;
+        const WPE_Hierarchy* node = wpe_ecs_get_component(ecs, e, WPE_COMP_HIERARCHY);
+        for (WPE_Entity c = node ? node->first_child : WPE_ENTITY_NULL;
+             c != WPE_ENTITY_NULL && top < WPE__TREE_MESHES;) {
             stack[top++] = c;
-            const WPE_Hierarchy* child = wpe_ecs_get_component(host->ecs, c, WPE_COMP_HIERARCHY);
+            const WPE_Hierarchy* child = wpe_ecs_get_component(ecs, c, WPE_COMP_HIERARCHY);
             c = child ? child->next_sibling : WPE_ENTITY_NULL;
         }
     }
+    return count;
+}
+
+static int wpe__api_set_visible(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const bool visible = luaL_checkboolean(L, 2);
+    WPE_MeshRenderer* meshes[WPE__TREE_MESHES];
+    const uint32_t count = wpe__tree_meshes(wpe__script_host_from(L)->ecs, entity, meshes);
+    for (uint32_t i = 0; i < count; ++i)
+        meshes[i]->visible = visible;
     return 0;
+}
+
+/* wpe.set_uv_scroll / set_uv_offset: the entity's meshes and those below it; raises when there are none. */
+static int wpe__set_uv(lua_State* L, bool scroll) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const float u = (float)luaL_checknumber(L, 2), v = (float)luaL_checknumber(L, 3);
+    if (!isfinite(u) || !isfinite(v)) luaL_errorL(L, "texture coordinates must be finite numbers");
+    WPE_MeshRenderer* meshes[WPE__TREE_MESHES];
+    const uint32_t count = wpe__tree_meshes(wpe__script_host_from(L)->ecs, entity, meshes);
+    if (count == 0) luaL_errorL(L, "entity 0x%08x has no mesh (nor any below it)", entity);
+    for (uint32_t i = 0; i < count; ++i) {
+        if (scroll) {
+            meshes[i]->uv_scroll = (WPE_Vec2){.x = u, .y = v};
+        } else {
+            /* Kept in [0, 2) like wpe_surface_update keeps it: the same picture for repeating textures. */
+            meshes[i]->uv_offset =
+                (WPE_Vec2){.x = u - 2.0f * floorf(u * 0.5f), .y = v - 2.0f * floorf(v * 0.5f)};
+        }
+    }
+    return 0;
+}
+
+static int wpe__api_set_uv_scroll(lua_State* L) {
+    return wpe__set_uv(L, true);
+}
+
+static int wpe__api_set_uv_offset(lua_State* L) {
+    return wpe__set_uv(L, false);
+}
+
+/* The first mesh's (the entity's own, else the first below it) scroll or offset: u, v; nil without meshes. */
+static int wpe__get_uv(lua_State* L, bool scroll) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    WPE_MeshRenderer* meshes[WPE__TREE_MESHES];
+    if (wpe__tree_meshes(wpe__script_host_from(L)->ecs, entity, meshes) == 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const WPE_Vec2 uv = scroll ? meshes[0]->uv_scroll : meshes[0]->uv_offset;
+    lua_pushnumber(L, uv.x);
+    lua_pushnumber(L, uv.y);
+    return 2;
+}
+
+static int wpe__api_get_uv_scroll(lua_State* L) {
+    return wpe__get_uv(L, true);
+}
+
+static int wpe__api_get_uv_offset(lua_State* L) {
+    return wpe__get_uv(L, false);
 }
 
 static WPE_Animator* wpe__check_animator(lua_State* L, WPE_Entity entity) {
@@ -2580,6 +2641,66 @@ static int wpe__api_remove_slash(lua_State* L) {
     return 0;
 }
 
+/* ---- Water ----------------------------------------------------------------------------------------- */
+
+/* Changes (or adds) an entity's water; its waves go on from where they are. */
+static int wpe__api_set_water(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    const WPE_Water* existing = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_WATER);
+    WPE_Water water = existing ? *existing : wpe_water_default();
+    water.amplitude = wpe__field_number(L, 2, "amplitude", water.amplitude);
+    water.wavelength = wpe__field_number(L, 2, "wavelength", water.wavelength);
+    water.speed = wpe__field_number(L, 2, "speed", water.speed);
+    water.shimmer = wpe__field_number(L, 2, "shimmer", water.shimmer);
+    if (!(water.amplitude >= 0.0f && water.amplitude <= 1e3f)) luaL_errorL(L, "amplitude must be 0..1000");
+    if (!(water.wavelength >= 0.01f && water.wavelength <= 1e4f))
+        luaL_errorL(L, "wavelength must be 0.01..10000");
+    if (!(fabsf(water.speed) <= 1e3f)) luaL_errorL(L, "speed must be -1000..1000");
+    if (!(water.shimmer >= 0.0f && water.shimmer <= 1.0f)) luaL_errorL(L, "shimmer must be 0..1");
+    WPE_Water* live = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_WATER); /* Re-fetch. */
+    if (live) {
+        *live = water;
+        return 0;
+    }
+    wpe__check_unrestricted(L, "set_water");
+    wpe__raise_result(L, "set_water", wpe_ecs_add_component(host->ecs, entity, WPE_COMP_WATER, &water, NULL));
+    return 0;
+}
+
+static int wpe__api_get_water(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_Water* found = wpe_ecs_get_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_WATER);
+    if (!found) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const WPE_Water w = *found; /* Copy before pushing. */
+    const struct {
+        const char* key;
+        double value;
+    } numbers[] = {{"amplitude", w.amplitude},
+                   {"wavelength", w.wavelength},
+                   {"speed", w.speed},
+                   {"shimmer", w.shimmer},
+                   {"time", w.wpe__time}};
+    lua_createtable(L, 0, (int)(sizeof numbers / sizeof numbers[0]));
+    for (size_t i = 0; i < sizeof numbers / sizeof numbers[0]; ++i) {
+        lua_pushnumber(L, numbers[i].value);
+        lua_setfield(L, -2, numbers[i].key);
+    }
+    return 1;
+}
+
+static int wpe__api_remove_water(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "remove_water");
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    if (wpe_ecs_has_component(host->ecs, entity, WPE_COMP_WATER))
+        wpe__raise_result(L, "remove_water", wpe_ecs_remove_component(host->ecs, entity, WPE_COMP_WATER));
+    return 0;
+}
+
 /* ---- UI -------------------------------------------------------------------------------------------- */
 
 /* The entity's UI component of `type`; raises when it has none. */
@@ -2766,6 +2887,13 @@ static const luaL_Reg wpe__api[] = {
     {"get_light", wpe__api_get_light},
     {"remove_light", wpe__api_remove_light},
     {"set_visible", wpe__api_set_visible},
+    {"set_uv_scroll", wpe__api_set_uv_scroll},
+    {"get_uv_scroll", wpe__api_get_uv_scroll},
+    {"set_uv_offset", wpe__api_set_uv_offset},
+    {"get_uv_offset", wpe__api_get_uv_offset},
+    {"set_water", wpe__api_set_water},
+    {"get_water", wpe__api_get_water},
+    {"remove_water", wpe__api_remove_water},
     {"play_animation", wpe__api_play_animation},
     {"stop_animation", wpe__api_stop_animation},
     {"animation_time", wpe__api_animation_time},

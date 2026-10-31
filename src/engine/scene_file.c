@@ -143,6 +143,7 @@ static void wpe__write_ref(wpe__Saver* s, const char* key, WPE_Entity entity) {
 
 static void wpe__save_trail(wpe__Saver* s, WPE_Entity e); /* With the trail's loader, below. */
 static void wpe__save_slash(wpe__Saver* s, WPE_Entity e); /* Likewise. */
+static void wpe__save_water(wpe__Saver* s, WPE_Entity e); /* Likewise. */
 
 static void wpe__write_refs(wpe__Saver* s, const char* key, const WPE_Entity* entities, uint32_t count) {
     wpe_json_write_key(s->w, key);
@@ -318,6 +319,11 @@ void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
         wpe__write_bool(w, "cast_shadows", mesh->cast_shadows);
         wpe__write_bool(w, "receive_shadows", mesh->receive_shadows);
         wpe__write_bool(w, "double_sided", mesh->double_sided);
+        wpe_json_write_key(w, "uv_scroll");
+        wpe_json_write_array_begin(w, true);
+        wpe_json_write_number(w, mesh->uv_scroll.x);
+        wpe_json_write_number(w, mesh->uv_scroll.y);
+        wpe_json_write_array_end(w);
         wpe_json_write_object_end(w);
     }
     const WPE_Camera* camera = wpe_ecs_get_component(ecs, e, WPE_COMP_CAMERA);
@@ -348,6 +354,7 @@ void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
     wpe__save_particles(s, e);
     wpe__save_trail(s, e);
     wpe__save_slash(s, e);
+    wpe__save_water(s, e);
     const WPE_Animator* animator = wpe_ecs_get_component(ecs, e, WPE_COMP_ANIMATOR);
     if (animator) {
         wpe_json_write_key(w, "animator");
@@ -797,6 +804,30 @@ static bool wpe__load_slash(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v
     slash.blend = (WPE_BillboardBlend)blend;
     return wpe__add(l, v, e, WPE_COMP_SLASH, &slash, "slash");
 }
+
+static void wpe__save_water(wpe__Saver* s, WPE_Entity e) {
+    const WPE_Water* water = wpe_ecs_get_component(s->context->ecs, e, WPE_COMP_WATER);
+    if (!water) return;
+    WPE_JsonWriter* w = s->w;
+    wpe_json_write_key(w, "water");
+    wpe_json_write_object_begin(w);
+    wpe__write_number(w, "amplitude", water->amplitude);
+    wpe__write_number(w, "wavelength", water->wavelength);
+    wpe__write_number(w, "speed", water->speed);
+    wpe__write_number(w, "shimmer", water->shimmer);
+    wpe_json_write_object_end(w);
+}
+
+static bool wpe__load_water(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
+    WPE_Water water = wpe_water_default();
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "water", "amplitude", "wavelength", "speed", "shimmer") ||
+        !wpe__json_read_float(&l->r, v, "amplitude", 0.0, 1e3, &water.amplitude) ||
+        !wpe__json_read_float(&l->r, v, "wavelength", 0.01, 1e4, &water.wavelength) ||
+        !wpe__json_read_float(&l->r, v, "speed", -1e3, 1e3, &water.speed) ||
+        !wpe__json_read_float(&l->r, v, "shimmer", 0.0, 1.0, &water.shimmer))
+        return false;
+    return wpe__add(l, v, e, WPE_COMP_WATER, &water, "water");
+}
 bool wpe__add(wpe__Loader* l, const WPE_JsonValue* at, WPE_Entity e, WPE_ComponentType type, const void* data,
               const char* what) {
     if (!wpe_ecs_is_registered(l->context->ecs, type))
@@ -974,9 +1005,11 @@ static bool wpe__skin_covers_mesh(const WPE_Model* model, uint32_t mesh_index, u
 
 static bool wpe__load_mesh(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "mesh", "model", "mesh", "skin", "joints", "visible", "unlit",
-                                "cast_shadows", "receive_shadows", "double_sided"))
+                                "cast_shadows", "receive_shadows", "double_sided", "uv_scroll"))
         return false;
     WPE_MeshRenderer mesh = wpe_mesh_renderer_default(WPE_ASSET_NONE, 0);
+    const WPE_JsonValue* uv_scroll = wpe_json_get(v, "uv_scroll");
+    if (uv_scroll && !wpe__json_read_floats(&l->r, uv_scroll, "uv_scroll", 2, mesh.uv_scroll.v)) return false;
     if (!wpe__json_read_bool(&l->r, v, "visible", &mesh.visible) ||
         !wpe__json_read_bool(&l->r, v, "unlit", &mesh.unlit) ||
         !wpe__json_read_bool(&l->r, v, "cast_shadows", &mesh.cast_shadows) ||
@@ -1424,9 +1457,9 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
         const WPE_JsonValue* v = wpe_json_at(entities, i);
         if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "entity", "id", "name", "parent", "transform", "instance",
                                     "mesh", "camera", "light", "billboard", "particles", "trail", "slash",
-                                    "animator", "rigidbody", "collider", "character", "audio_source", "ui",
-                                    "sprite", "text", "button", "toggle", "slider", "script", "components",
-                                    "prefab"))
+                                    "water", "animator", "rigidbody", "collider", "character", "audio_source",
+                                    "ui", "sprite", "text", "button", "toggle", "slider", "script",
+                                    "components", "prefab"))
             return false;
         uint32_t id = 0;
         if (!wpe__read_file_id(l, wpe_json_get(v, "id"), v, &id))
@@ -1492,6 +1525,7 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
         {"particles", wpe__load_particles},
         {"trail", wpe__load_trail},
         {"slash", wpe__load_slash},
+        {"water", wpe__load_water},
         {"animator", wpe__load_animator},
         {"rigidbody", wpe__load_rigidbody},
         {"collider", wpe__load_collider},
@@ -1650,6 +1684,7 @@ static const struct {
     {"particles", WPE_COMP_PARTICLES, wpe__load_particles},
     {"trail", WPE_COMP_TRAIL, wpe__load_trail},
     {"slash", WPE_COMP_SLASH, wpe__load_slash},
+    {"water", WPE_COMP_WATER, wpe__load_water},
     {"animator", WPE_COMP_ANIMATOR, wpe__load_animator},
     {"rigidbody", WPE_COMP_PHYSICS_RIGIDBODY, wpe__load_rigidbody},
     {"collider", WPE_COMP_PHYSICS_COLLIDER, wpe__load_collider},
@@ -1772,8 +1807,8 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
     /* "id" is accepted and ignored, so a saved entity (wpe_scene_save_entity) can be fed back as a copy. */
     if (!WPE__JSON_CHECK_OBJECT(&l.r, description, "entity", "id", "name", "parent", "transform", "instance",
                                 "mesh", "camera", "light", "billboard", "particles", "trail", "slash",
-                                "animator", "rigidbody", "collider", "character", "audio_source", "ui",
-                                "sprite", "text", "button", "toggle", "slider", "script", "components",
+                                "water", "animator", "rigidbody", "collider", "character", "audio_source",
+                                "ui", "sprite", "text", "button", "toggle", "slider", "script", "components",
                                 "prefab"))
         return l.r.result;
     /* A prefab instance starts from its prefab; the description's parts then replace the root's. */
@@ -1788,9 +1823,9 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
     }
     /* The scene-file order: identity first, then components, scripts last. */
     static const char* const order[] = {
-        "name",      "transform", "parent", "instance", "mesh",      "camera",   "light",     "billboard",
-        "particles", "trail",     "slash",  "animator", "rigidbody", "collider", "character", "audio_source",
-        "ui",        "sprite",    "text",   "button",   "toggle",    "slider"};
+        "name",         "transform", "parent", "instance", "mesh",     "camera",    "light",    "billboard",
+        "particles",    "trail",     "slash",  "water",    "animator", "rigidbody", "collider", "character",
+        "audio_source", "ui",        "sprite", "text",     "button",   "toggle",    "slider"};
     bool ok = true;
     for (size_t i = 0; ok && i < sizeof order / sizeof order[0]; ++i) {
         const WPE_JsonValue* value = wpe_json_get(description, order[i]);

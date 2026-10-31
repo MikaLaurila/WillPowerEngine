@@ -2361,7 +2361,7 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
     static const char* const addable[] = {"transform", "mesh",      "camera",   "light",     "billboard",
                                           "particles", "rigidbody", "collider", "character", "audio_source",
                                           "ui",        "sprite",    "text",     "button",    "toggle",
-                                          "slider",    "trail",     "slash",    "script"};
+                                          "slider",    "trail",     "slash",    "water",     "script"};
     igSetNextItemWidth(-1.0f);
     igInputText("##asset_path", ui->add_path, sizeof ui->add_path, 0, NULL, NULL);
     (void)wpe__asset_drop(WPE__ASSET_ANY, ui->add_path,

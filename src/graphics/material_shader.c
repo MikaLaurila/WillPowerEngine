@@ -56,6 +56,22 @@ float wpe_light_attenuation(float distance, float range) {
     return window * window / (1.0f + scaled * scaled);
 }
 
+void wpe_water_wave(const WPE_WaveUniforms* waves, float x, float z, float* out_height, float* out_slope_x,
+                    float* out_slope_z, float* out_brightness) {
+    *out_height = *out_slope_x = *out_slope_z = 0.0f;
+    *out_brightness = 1.0f;
+    if (!(waves->wavelength > 0.0f)) return;
+    const float k1 = 2.0f * WPE_PI / waves->wavelength, k2 = k1 * (4.0f / 3.0f);
+    const float a = waves->amplitude * 0.5f, t = waves->time * waves->speed;
+    const float s1 = k1 * (x - t), s2 = k2 * (z - t);
+    *out_height = a * (sinf(s1) + sinf(s2));
+    *out_slope_x = a * k1 * cosf(s1);
+    *out_slope_z = a * k2 * cosf(s2);
+    /* Diagonal bands at twice the first wave's rate: they cross the bob, so lit vertices don't just follow
+     * it. */
+    *out_brightness = 1.0f + waves->shimmer * sinf(1.5f * k1 * (x - z) - 2.0f * k1 * t);
+}
+
 float wpe_shadow_visibility(const WPE_ShadowSampler* shadow, float u, float v, float depth) {
     if (!shadow || !shadow->depth || shadow->size == 0) return 1.0f;
     if (!(u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f && depth <= 1.0f)) return 1.0f;
@@ -110,17 +126,27 @@ static void wpe__material_vs(const void* uniforms, const void* vertex, WPE_Vec4*
     WPE_Vec3 tangent = wpe_vec3(v->tangent[0], v->tangent[1], v->tangent[2]);
     if (u->joint_palette) wpe__skin(u, v, &position, &normal, &tangent);
 
-    *out_position = wpe_mat4_mul_vec4(&u->mvp, wpe_vec4(position.x, position.y, position.z, 1.0f));
+    WPE_Vec3 world_position = wpe_mat4_transform_point(&u->world, position);
+    float wave_slope_x = 0.0f, wave_slope_z = 0.0f, brightness = 1.0f;
+    if (u->water) {
+        float height;
+        wpe_water_wave(&u->waves, world_position.x, world_position.z, &height, &wave_slope_x, &wave_slope_z,
+                       &brightness);
+        world_position.y += height;
+        *out_position = wpe_mat4_mul_vec4(
+            &u->view_projection, wpe_vec4(world_position.x, world_position.y, world_position.z, 1.0f));
+    } else {
+        *out_position = wpe_mat4_mul_vec4(&u->mvp, wpe_vec4(position.x, position.y, position.z, 1.0f));
+    }
     out[WPE__V_UV0 + 0] = v->uv0.x;
     out[WPE__V_UV0 + 1] = v->uv0.y;
     out[WPE__V_UV1 + 0] = v->uv1.x;
     out[WPE__V_UV1 + 1] = v->uv1.y;
     for (int i = 0; i < 4; ++i)
-        out[WPE__V_COLOR + i] = v->color[i];
+        out[WPE__V_COLOR + i] = v->color[i] * (i < 3 ? brightness : 1.0f);
     for (int i = WPE__V_DIFFUSE; i < WPE__V_COUNT; ++i)
         out[i] = 0.0f;
 
-    const WPE_Vec3 world_position = wpe_mat4_transform_point(&u->world, position);
     const WPE_Vec3 to_camera = wpe_vec3_sub(u->camera_position, world_position);
     out[WPE__V_DISTANCE] = wpe_vec3_length(to_camera);
 
@@ -138,7 +164,9 @@ static void wpe__material_vs(const void* uniforms, const void* vertex, WPE_Vec4*
     }
 
     const bool two_sided = u->material->double_sided || u->double_sided;
-    const WPE_Vec3 n = wpe_vec3_normalize(wpe_mat4_transform_dir(&u->normal_matrix, normal));
+    WPE_Vec3 n = wpe_vec3_normalize(wpe_mat4_transform_dir(&u->normal_matrix, normal));
+    /* A surface y = h(x, z) has the normal (-dh/dx, 1, -dh/dz): tilt the (upward) normal by the slope. */
+    if (u->water) n = wpe_vec3_normalize(wpe_vec3(n.x - wave_slope_x, n.y, n.z - wave_slope_z));
     const WPE_Vec3 view = wpe_vec3_normalize(to_camera);
     WPE_Vec3 diffuse = u->ambient, specular = wpe_vec3(0, 0, 0);
 
@@ -272,8 +300,8 @@ static WPE_Vec4 wpe__sample_ref(const WPE_MaterialUniforms* u, const WPE_Texture
         dx = (WPE_Vec2){.x = c * dx.x + s * dx.y, .y = -s * dx.x + c * dx.y};
         dy = (WPE_Vec2){.x = c * dy.x + s * dy.y, .y = -s * dy.x + c * dy.y};
     }
-    uv.x += ref->offset.x;
-    uv.y += ref->offset.y;
+    uv.x += ref->offset.x + u->uv_offset.x;
+    uv.y += ref->offset.y + u->uv_offset.y;
     if (u->texture_filtering == WPE_TEXTURE_FILTERING_MATERIAL)
         return wpe_texture_sample(texture, &ref->sampler, uv, dx, dy);
     static const WPE_TextureFilter filters[] = {
@@ -418,7 +446,17 @@ static void wpe__depth_vs(const void* uniforms, const void* vertex, WPE_Vec4* ou
     const WPE_MeshVertex* v = vertex;
     WPE_Vec3 position = v->position, normal = v->normal, tangent = wpe_vec3(0, 0, 0);
     if (u->joint_palette) wpe__skin(u, v, &position, &normal, &tangent);
-    *out_position = wpe_mat4_mul_vec4(&u->mvp, wpe_vec4(position.x, position.y, position.z, 1.0f));
+    if (u->water) {
+        WPE_Vec3 world_position = wpe_mat4_transform_point(&u->world, position);
+        float height, slope_x, slope_z, brightness;
+        wpe_water_wave(&u->waves, world_position.x, world_position.z, &height, &slope_x, &slope_z,
+                       &brightness);
+        world_position.y += height;
+        *out_position = wpe_mat4_mul_vec4(
+            &u->view_projection, wpe_vec4(world_position.x, world_position.y, world_position.z, 1.0f));
+    } else {
+        *out_position = wpe_mat4_mul_vec4(&u->mvp, wpe_vec4(position.x, position.y, position.z, 1.0f));
+    }
     out[WPE__V_UV0 + 0] = v->uv0.x;
     out[WPE__V_UV0 + 1] = v->uv0.y;
     out[WPE__V_UV1 + 0] = v->uv1.x;

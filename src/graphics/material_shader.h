@@ -49,6 +49,15 @@ typedef enum WPE_TextureFiltering {
     WPE_TEXTURE_FILTERING_THREE_POINT, /* Nintendo 64 style (WPE_FILTER_THREE_POINT). */
 } WPE_TextureFiltering;
 
+/** A retro water surface's waves (WPE_Water) as the shader applies them. */
+typedef struct WPE_WaveUniforms {
+    float amplitude;  /* Meters the surface rises and falls. */
+    float wavelength; /* Meters between the first wave's crests (the second's are 3/4 of it). */
+    float speed;      /* Meters per second the crests travel. */
+    float shimmer;    /* Brightness change, 0..1. */
+    float time;       /* Seconds. */
+} WPE_WaveUniforms;
+
 /** A point or spot light in world space, as consumed by the shader. */
 typedef struct WPE_ShaderLight {
     WPE_Vec3 position;
@@ -94,9 +103,15 @@ typedef struct WPE_MaterialUniforms {
      * for a double-sided material. */
     bool unlit;
     bool double_sided;
-    /* Replaces the magnification and minification filters of every material texture (mip filtering is kept).
-     */
+    /* Replaces the magnification and minification filters of every material texture (mip filtering is
+     * kept). */
     WPE_TextureFiltering texture_filtering;
+    WPE_Vec2 uv_offset; /* Added to every texture coordinate after the texture transform (animated UVs). */
+    /* Water: vertices are moved in world space by `waves`, then projected by `view_projection` (world to
+     * clip) instead of `mvp`. */
+    bool water;
+    WPE_WaveUniforms waves;
+    WPE_Mat4 view_projection;
 } WPE_MaterialUniforms;
 
 /** @return The material program (static storage); supports subdivision. @thread_safety Any thread */
@@ -121,6 +136,17 @@ const char* wpe_texture_filtering_name(WPE_TextureFiltering filtering);
 /** Looks up a filtering by its name (wpe_texture_filtering_name). @return false for an unknown name.
  * @thread_safety Any thread */
 bool wpe_texture_filtering_from_name(const char* name, WPE_TextureFiltering* out_filtering);
+
+/**
+ * The water surface at world (x, z): two sine waves, along X and (3/4 as long) along Z, each half the
+ * amplitude, travelling at `speed`. Everything repeats every 3 wavelengths of travel.
+ *
+ * @param out_height Meters above the mesh. @param out_slope_x,out_slope_z The height's slope along X and Z.
+ * @param out_brightness A factor around 1 (1 +- shimmer) for the vertex's color.
+ * @thread_safety Any thread
+ */
+void wpe_water_wave(const WPE_WaveUniforms* waves, float x, float z, float* out_height, float* out_slope_x,
+                    float* out_slope_z, float* out_brightness);
 
 /** @return Blinn-Phong exponent for a glossiness in [0, 1] (2 at 0, 2048 at 1). @thread_safety Any thread */
 float wpe_material_shininess(float glossiness);

@@ -1,0 +1,99 @@
+{
+  "format": "wpe.scene",
+  "version": 1,
+  "environment": {
+    "clear_color": [0.5, 0.66, 0.8],
+    "ambient": [0.24, 0.26, 0.3],
+    "fog": {"mode": "linear", "color": [0.62, 0.76, 0.86], "start": 20, "end": 55},
+    "sky": {"mode": "gradient", "zenith": [0.18, 0.4, 0.72], "horizon": [0.62, 0.76, 0.86], "ground": [0.4, 0.42, 0.44],
+            "curve": 0.6, "sun_size": 2.5, "sun_color": [1, 0.96, 0.84], "sun_glow": 0.35},
+    "shadows": {"enabled": true, "map_size": 1024, "distance": 24}
+  },
+  "camera": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "camera",
+      "transform": {"position": [0, 3, 12]},
+      "camera": {"fov": 65, "far": 120},
+      "script": {"path": "scripts/follow_camera.luau", "properties": {"target": "hero"}}
+    },
+    {
+      "id": 2,
+      "name": "sun",
+      "transform": {"position": [0, 10, 0], "euler": [-45, 30, 0]},
+      "light": {"type": "directional", "color": [1, 0.96, 0.88], "intensity": 0.9, "cast_shadows": true}
+    },
+    {
+      "id": 3,
+      "name": "sand",
+      "mesh": {"model": "meshes/sand.prim"},
+      "collider": {"shape": "box", "size": [60, 1, 60], "offset": [0, -0.5, 0], "friction": 0.8}
+    },
+    {
+      "id": 4,
+      "name": "game",
+      "script": {"path": "scripts/game.luau",
+                 "properties": {"next_scene": "scenes/demo.scene", "title": "Retro water",
+                                "help": "WASD/stick move  Space/A jump  Shift/LT run;Wade in: the water is shallow"}}
+    },
+    {
+      "id": 5,
+      "name": "lagoon",
+      "transform": {"position": [0, 0.35, -5]},
+      "mesh": {"model": "meshes/water.glb", "cast_shadows": false, "uv_scroll": [0.03, 0.012]},
+      "water": {"amplitude": 0.12, "wavelength": 4, "speed": 1.2, "shimmer": 0.25}
+    },
+    {
+      "id": 6,
+      "name": "hero",
+      "transform": {"position": [0, 0, 6]},
+      "character": {"radius": 0.35, "height": 1.7, "offset": [0, 0.85, 0]},
+      "script": {"path": "scripts/hero.luau"}
+    },
+    {"id": 7, "name": "body", "parent": 6, "transform": {"position": [0, 0.85, 0]}, "mesh": {"model": "meshes/hero.prim"}},
+    {
+      "id": 8,
+      "name": "visor",
+      "parent": 6,
+      "transform": {"position": [0, 1.4, -0.22], "scale": [0.4, 0.12, 0.1]},
+      "mesh": {"model": "meshes/box.prim"}
+    },
+    {
+      "id": 9,
+      "name": "pillar",
+      "transform": {"position": [-3.5, 1.5, -6]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 10,
+      "name": "pillar",
+      "transform": {"position": [4, 1.5, -3]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 11,
+      "name": "pillar",
+      "transform": {"position": [1.5, 1.5, -10]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 12,
+      "name": "stepping stone",
+      "transform": {"position": [-1, 0.25, -2.5], "scale": [1.4, 0.1667, 1.4]},
+      "mesh": {"model": "meshes/pillar.prim"},
+      "collider": {"shape": "box", "size": [1, 3, 1]}
+    },
+    {
+      "id": 13,
+      "name": "crate",
+      "transform": {"position": [3, 0.5, 3]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "rigidbody": {"type": "dynamic"},
+      "collider": {"shape": "box", "size": [1, 1, 1], "density": 0.5}
+    }
+  ]
+}

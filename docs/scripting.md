@@ -378,6 +378,26 @@ A slash ([scenes.md](scenes.md): `slash`) is a cubic Bezier curve along which a 
 
 In `scenes/sword.scene`, Q (or the right shoulder button) sends a wave: a standing crescent slash flying off to the right with sparks, a radial blur and a blue tint. E (or the left shoulder button) casts a curve spell: a slash used as a faint line (thin, see-through, `length = 1` so the whole curve shows) from his hand over to the ground, with red blobs left along it by an emitter on its head, which travels the curve at an even speed (`scripts/sword_trail.luau`). Both slashes distort the screen around them.
 
+### Animated textures and water
+
+Every mesh can scroll its textures (`uv_scroll` in [scenes.md](scenes.md), in texture repeats per second), and a `water` component makes a mesh a retro water surface that bobs and shimmers. The UV functions apply to the entity's mesh and every mesh below it, so they work on instantiated models; they raise when there is none.
+
+| Function | Description |
+|---|---|
+| `wpe.set_uv_scroll(entity, u, v)` | How fast the textures move. |
+| `wpe.get_uv_scroll(entity) -> u, v` | The first mesh's (the entity's own, else the first below it), or nil without meshes. |
+| `wpe.set_uv_offset(entity, u, v)` | Moves the textures to an offset (kept in [0, 2), the same picture for repeating textures). With a zero scroll, step it yourself: flipbook frames laid out side by side, a lava flow that pulses. |
+| `wpe.get_uv_offset(entity) -> u, v` | The first mesh's current offset, or nil. |
+| `wpe.set_water(entity, table)` | Changes the fields given, adding water (with the defaults) if the entity has none: `amplitude`, `wavelength`, `speed`, `shimmer`. The waves go on from where they are. |
+| `wpe.get_water(entity) -> table?` | The settings plus `time` (seconds into the wave cycle), or nil. |
+| `wpe.remove_water(entity)` | Removes the water: the mesh lies flat again. |
+
+`scenes/water.scene` is a shallow lagoon to wade through: `meshes/water.glb` with waves and a slow scroll. Calm the water as a storm passes:
+
+```lua
+wpe.set_water(lagoon, { amplitude = 0.3 * storm + 0.05, speed = 1 + 2 * storm })
+```
+
 ### UI
 
 The scene's UI elements (`ui`, `sprite`, `text` and `button` components, see [scenes.md](scenes.md#ui)) are retained: change them and they stay changed. Functions raise when the entity lacks the component they need.

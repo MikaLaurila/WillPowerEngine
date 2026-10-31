@@ -139,6 +139,7 @@ WPE_Result wpe_graphics_register_components(WPE_Ecs* ecs, WPE_AssetManager* asse
           .alignment = alignof(WPE_Trail),
           .on_add = wpe__trail_on_add}},
         {WPE_COMP_SLASH, {.name = "Slash", .size = sizeof(WPE_Slash), .alignment = alignof(WPE_Slash)}},
+        {WPE_COMP_WATER, {.name = "Water", .size = sizeof(WPE_Water), .alignment = alignof(WPE_Water)}},
     };
     for (size_t i = 0; i < sizeof components / sizeof components[0]; ++i) {
         const WPE_Result result = wpe_ecs_register_component(ecs, components[i].type, &components[i].desc);

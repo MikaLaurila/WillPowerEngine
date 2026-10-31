@@ -26,6 +26,8 @@ typedef struct wpe__MeshInstance {
     const WPE_Mat4* palette;
     WPE_Vec3 sphere_center; /* World-space bounding sphere for light selection. */
     float sphere_radius;
+    const WPE_Water* water; /* Or NULL. */
+    float cull_margin; /* Object-space padding of the bounds for culling (how far waves move vertices). */
 } wpe__MeshInstance;
 
 WPE_SceneRenderSettings wpe_scene_render_settings_default(void) {
@@ -137,6 +139,26 @@ static bool wpe__aabb_visible(const wpe__Frustum* f, const WPE_Aabb* box) {
 
 /* ---- Helpers -------------------------------------------------------------------------------------- */
 
+/* A primitive's bounds padded by `margin` on every side. */
+static WPE_Aabb wpe__padded(const WPE_Aabb* box, float margin) {
+    const WPE_Vec3 pad = wpe_vec3(margin, margin, margin);
+    return (WPE_Aabb){.min = wpe_vec3_sub(box->min, pad), .max = wpe_vec3_add(box->max, pad)};
+}
+
+/* The material uniforms that depend on the mesh renderer alone: animated UVs and water. */
+static void wpe__surface_uniforms(const WPE_MeshRenderer* mesh, const WPE_Water* water,
+                                  const WPE_Mat4* view_projection, WPE_MaterialUniforms* uniforms) {
+    uniforms->uv_offset = mesh->uv_offset;
+    if (!water) return;
+    uniforms->water = true;
+    uniforms->view_projection = *view_projection;
+    uniforms->waves = (WPE_WaveUniforms){.amplitude = water->amplitude,
+                                         .wavelength = water->wavelength,
+                                         .speed = water->speed,
+                                         .shimmer = water->shimmer,
+                                         .time = water->wpe__time};
+}
+
 static uint32_t wpe__depth_key(float depth) {
     if (!(depth > 0.0f)) return 0;
     uint32_t bits;
@@ -187,14 +209,16 @@ static WPE_Result wpe__gather_meshes(WPE_SceneRenderer* sr, const WPE_Ecs* ecs, 
     if (!instances) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
 
     uint32_t count = 0;
-    WPE_EcsIter it = wpe_ecs_query(
-        (WPE_Ecs*)ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    /* A mesh without a Transform sits at the origin (a scene file's "transform" is optional, as for physics).
+     */
+    WPE_EcsIter it = wpe_ecs_query((WPE_Ecs*)ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH)});
     while (wpe_ecs_iter_next(&it)) {
         const WPE_MeshRenderer* mesh = wpe_ecs_iter_get(&it, WPE_COMP_MESH);
-        const WPE_Transform* transform = wpe_ecs_iter_get(&it, WPE_COMP_TRANSFORM);
+        const WPE_Transform* transform = wpe_ecs_get_component(ecs, it.entity, WPE_COMP_TRANSFORM);
+        const WPE_Mat4 world = transform ? transform->world : wpe_mat4_identity();
         if (!mesh->visible || !mesh->model || mesh->mesh >= mesh->model->mesh_count) continue;
         wpe__MeshInstance* inst = &instances[count];
-        *inst = (wpe__MeshInstance){.mesh = mesh, .world = transform->world};
+        *inst = (wpe__MeshInstance){.mesh = mesh, .world = world};
         const WPE_Aabb bounds = mesh->model->meshes[mesh->mesh].bounds;
         const WPE_Vec3 local_center = wpe_vec3_scale(wpe_vec3_add(bounds.min, bounds.max), 0.5f);
         const float local_radius = wpe_vec3_length(wpe_vec3_sub(bounds.max, local_center));
@@ -211,10 +235,8 @@ static WPE_Result wpe__gather_meshes(WPE_SceneRenderer* sr, const WPE_Ecs* ecs, 
             for (uint32_t j = 0; j < mesh->joint_count; ++j) {
                 sum = wpe_vec3_add(sum, wpe_vec3(palette[j].m[3][0], palette[j].m[3][1], palette[j].m[3][2]));
             }
-            inst->sphere_center =
-                mesh->joint_count
-                    ? wpe_vec3_scale(sum, 1.0f / (float)mesh->joint_count)
-                    : wpe_vec3(transform->world.m[3][0], transform->world.m[3][1], transform->world.m[3][2]);
+            inst->sphere_center = mesh->joint_count ? wpe_vec3_scale(sum, 1.0f / (float)mesh->joint_count)
+                                                    : wpe_vec3(world.m[3][0], world.m[3][1], world.m[3][2]);
             float radius = local_radius;
             for (uint32_t j = 0; j < mesh->joint_count; ++j) {
                 const WPE_Transform* joint = wpe_ecs_get_component(ecs, mesh->joints[j], WPE_COMP_TRANSFORM);
@@ -234,6 +256,14 @@ static WPE_Result wpe__gather_meshes(WPE_SceneRenderer* sr, const WPE_Ecs* ecs, 
             const float sz =
                 wpe_vec3_length(wpe_vec3(inst->world.m[2][0], inst->world.m[2][1], inst->world.m[2][2]));
             inst->sphere_radius = local_radius * fmaxf(sx, fmaxf(sy, sz));
+            inst->water = wpe_ecs_get_component(ecs, it.entity, WPE_COMP_WATER);
+            if (inst->water) {
+                /* Waves move vertices up to `amplitude` in world space: that much in the smallest scaled
+                 * axis. */
+                const float smallest = fminf(sx, fminf(sy, sz));
+                inst->cull_margin = smallest > 1e-6f ? fabsf(inst->water->amplitude) / smallest : 1e30f;
+                inst->sphere_radius += fabsf(inst->water->amplitude);
+            }
         }
         ++count;
     }
@@ -408,7 +438,8 @@ static WPE_Result wpe__render_shadow_map(WPE_SceneRenderer* sr, WPE_JobSystem* j
             const WPE_Material* material = wpe__primitive_material(model, prim);
             /* Smoothly blended surfaces do not cast; dithered ones behave like cut-outs and do. */
             if (material->alpha_mode == WPE_ALPHA_BLEND && !settings->dither_transparency) continue;
-            if (!inst->palette && !wpe__aabb_visible(&frustum, &prim->bounds)) continue;
+            const WPE_Aabb bounds = wpe__padded(&prim->bounds, inst->cull_margin);
+            if (!inst->palette && !wpe__aabb_visible(&frustum, &bounds)) continue;
 
             /* Front faces are culled for casters, which moves acne-prone depth to back faces. */
             WPE_RenderState state = wpe_render_state_default();
@@ -417,13 +448,14 @@ static WPE_Result wpe__render_shadow_map(WPE_SceneRenderer* sr, WPE_JobSystem* j
                          : mirrored                                         ? WPE_CULL_BACK
                                                                             : WPE_CULL_FRONT;
             const bool masked = material->alpha_mode != WPE_ALPHA_OPAQUE;
-            const WPE_MaterialUniforms uniforms = {.mvp = mvp,
-                                                   .model = model,
-                                                   .material = material,
-                                                   .texture_filtering = settings->texture_filtering,
-                                                   .joint_palette = inst->palette,
-                                                   .joint_count =
-                                                       inst->palette ? inst->mesh->joint_count : 0};
+            WPE_MaterialUniforms uniforms = {.mvp = mvp,
+                                             .world = inst->world,
+                                             .model = model,
+                                             .material = material,
+                                             .texture_filtering = settings->texture_filtering,
+                                             .joint_palette = inst->palette,
+                                             .joint_count = inst->palette ? inst->mesh->joint_count : 0};
+            wpe__surface_uniforms(inst->mesh, inst->water, light_view_projection, &uniforms);
             result =
                 wpe_renderer_submit(sr->shadow_pass, &(WPE_DrawDesc){
                                                          .program = wpe_shader_material_depth(masked),
@@ -927,12 +959,14 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             .joint_palette = inst->palette,
             .joint_count = inst->palette ? inst->mesh->joint_count : 0,
         };
+        wpe__surface_uniforms(inst->mesh, inst->water, &view_projection, &uniforms);
         uniforms.light_count = wpe__select_lights(lights, light_count, inst->sphere_center,
                                                   inst->sphere_radius, uniforms.lights);
 
         for (uint32_t p = 0; p < mesh_data->primitive_count && result == WPE_RESULT_OK; ++p) {
             const WPE_MeshPrimitive* prim = &model->primitives[mesh_data->first_primitive + p];
-            if (settings->frustum_culling && !inst->palette && !wpe__aabb_visible(&frustum, &prim->bounds)) {
+            const WPE_Aabb bounds = wpe__padded(&prim->bounds, inst->cull_margin);
+            if (settings->frustum_culling && !inst->palette && !wpe__aabb_visible(&frustum, &bounds)) {
                 ++stats.primitives_culled;
                 continue;
             }

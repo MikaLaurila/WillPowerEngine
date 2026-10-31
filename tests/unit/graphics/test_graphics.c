@@ -1224,6 +1224,135 @@ static void test_graphics_slash_sweeps(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* ---- Animated surfaces: scrolling textures and water --------------------------------------------------- */
+
+static void test_graphics_surface_update_wraps(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Model* plane = NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_create_plane(1.0f, 1, NULL, &plane));
+    const WPE_AssetHandle asset = wpe_test_add_model(t.assets, "test/plane", plane);
+    WPE_Ecs* ecs = make_world(t.assets);
+    const WPE_Entity e = spawn_mesh(ecs, asset, wpe_vec3(0, 0, 0));
+    mesh_of(ecs, e)->uv_scroll = (WPE_Vec2){.x = 0.5f, .y = -0.25f};
+    WPE_Water water = wpe_water_default();
+    water.wavelength = 3.0f;
+    water.speed = 1.0f;
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, e, WPE_COMP_WATER, &water, NULL));
+
+    /* Offsets stay in [0, 2): 0.5 a second along U reaches 2 and starts over; -0.25 along V wraps below 0. */
+    wpe_surface_update(ecs, 1.0f);
+    WPE_TEST_ASSERT_NEAR(0.5, mesh_of(ecs, e)->uv_offset.x, 1e-6);
+    WPE_TEST_ASSERT_NEAR(1.75, mesh_of(ecs, e)->uv_offset.y, 1e-6);
+    for (int i = 0; i < 3; ++i)
+        wpe_surface_update(ecs, 1.0f);
+    WPE_TEST_ASSERT_NEAR(0.0, mesh_of(ecs, e)->uv_offset.x, 1e-6);
+    WPE_TEST_ASSERT_NEAR(1.0, mesh_of(ecs, e)->uv_offset.y, 1e-6);
+    /* The waves repeat every 3 wavelengths of travel: 9 s here, so 10 s in is 1 s in. */
+    wpe_surface_update(ecs, 6.0f);
+    const WPE_Water* live = wpe_ecs_get_component(ecs, e, WPE_COMP_WATER);
+    WPE_TEST_ASSERT_NEAR(1.0, live->wpe__time, 1e-5);
+    wpe_surface_update(ecs, -1.0f); /* Ignored. */
+    WPE_TEST_ASSERT_NEAR(1.0, live->wpe__time, 1e-5);
+
+    wpe_ecs_destroy(ecs);
+    wpe_asset_release(t.assets, asset);
+    wpe_test_assets_destroy(&t);
+}
+
+static void test_graphics_water_wave_is_periodic_with_matching_slopes(void) {
+    WPE_WaveUniforms waves = {
+        .amplitude = 0.4f, .wavelength = 3.0f, .speed = 1.5f, .shimmer = 0.3f, .time = 0.7f};
+    const float period = 3.0f * 3.0f / 1.5f;
+    for (float x = -4.0f; x <= 4.0f; x += 1.3f) {
+        for (float z = -4.0f; z <= 4.0f; z += 1.7f) {
+            float h, sx, sz, b, h2, sx2, sz2, b2;
+            waves.time = 0.7f;
+            wpe_water_wave(&waves, x, z, &h, &sx, &sz, &b);
+            WPE_TEST_ASSERT(fabsf(h) <= waves.amplitude + 1e-5f);
+            WPE_TEST_ASSERT(b >= 1.0f - waves.shimmer - 1e-5f && b <= 1.0f + waves.shimmer + 1e-5f);
+            /* One period later: the same surface. */
+            waves.time = 0.7f + period;
+            wpe_water_wave(&waves, x, z, &h2, &sx2, &sz2, &b2);
+            WPE_TEST_ASSERT_NEAR(h, h2, 1e-4);
+            WPE_TEST_ASSERT_NEAR(b, b2, 1e-4);
+            /* The slopes are the height's derivatives (central differences). */
+            waves.time = 0.7f;
+            const float d = 1e-3f;
+            float hp, hm, unused1, unused2, unused3;
+            wpe_water_wave(&waves, x + d, z, &hp, &unused1, &unused2, &unused3);
+            wpe_water_wave(&waves, x - d, z, &hm, &unused1, &unused2, &unused3);
+            WPE_TEST_ASSERT_NEAR(sx, (hp - hm) / (2.0f * d), 2e-3);
+            wpe_water_wave(&waves, x, z + d, &hp, &unused1, &unused2, &unused3);
+            wpe_water_wave(&waves, x, z - d, &hm, &unused1, &unused2, &unused3);
+            WPE_TEST_ASSERT_NEAR(sz, (hp - hm) / (2.0f * d), 2e-3);
+        }
+    }
+    float h, sx, sz, b;
+    waves.wavelength = 0.0f; /* Invalid: flat. */
+    wpe_water_wave(&waves, 1.0f, 2.0f, &h, &sx, &sz, &b);
+    WPE_TEST_ASSERT(h == 0.0f && sx == 0.0f && sz == 0.0f && b == 1.0f);
+}
+
+static bool same_frame(const WPE_Framebuffer* fb, const WPE_Color* copy) {
+    return memcmp(fb->color, copy, (size_t)fb->width * fb->height * sizeof *copy) == 0;
+}
+
+static void test_graphics_uv_offset_and_water_render(void) {
+    WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 0);
+    /* A textured plane seen from straight above, unlit so only the texture shows. */
+    const WPE_AssetHandle water_model = wpe_test_load_model(t.assets, "meshes/water.glb");
+    WPE_Ecs* ecs = make_world(t.assets);
+    const WPE_Entity surface = spawn_mesh(ecs, water_model, wpe_vec3(0, 0, 0));
+    mesh_of(ecs, surface)->unlit = true;
+    const WPE_Quat down = wpe_quat_from_axis_angle(wpe_vec3(1, 0, 0), -WPE_PI * 0.5f);
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 4, 0), down);
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    static WPE_Color still[64 * 48];
+
+    /* Shifting the texture changes the picture; a whole repeat brings it back exactly. */
+    const WPE_Framebuffer* fb = render_scene(renderer, sr, ecs, camera, NULL);
+    memcpy(still, fb->color, sizeof still);
+    mesh_of(ecs, surface)->uv_offset = (WPE_Vec2){.x = 0.25f, .y = 0.0f};
+    WPE_TEST_ASSERT(!same_frame(render_scene(renderer, sr, ecs, camera, NULL), still));
+    mesh_of(ecs, surface)->uv_offset = (WPE_Vec2){.x = 1.0f, .y = 0.0f};
+    WPE_TEST_ASSERT(same_frame(render_scene(renderer, sr, ecs, camera, NULL), still));
+
+    /* Waves move the vertices: an opaque plane's depth below the camera changes where the surface dips. */
+    mesh_of(ecs, surface)->visible = false;
+    const WPE_Material gray = wpe_material_solid(wpe_vec4(0.8f, 0.8f, 0.8f, 1), 0.0f, 1.0f);
+    WPE_Model* grid = NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_create_plane(8.0f, 16, &gray, &grid));
+    const WPE_AssetHandle grid_asset = wpe_test_add_model(t.assets, "test/grid", grid);
+    const WPE_Entity pond = spawn_mesh(ecs, grid_asset, wpe_vec3(0, 0, 0));
+    fb = render_scene(renderer, sr, ecs, camera, NULL);
+    const size_t middle = (size_t)(fb->height / 2) * fb->width + fb->width / 2;
+    const float flat_depth = fb->depth[middle];
+    memcpy(still, fb->color, sizeof still);
+    /* At 0.75 s both waves are below rest at the origin: 1 m amplitude sinks it by about 0.93 m. */
+    WPE_Water water = {
+        .amplitude = 1.0f, .wavelength = 3.0f, .speed = 1.0f, .shimmer = 0.5f, .wpe__time = 0.75f};
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, pond, WPE_COMP_WATER, &water, NULL));
+    fb = render_scene(renderer, sr, ecs, camera, NULL);
+    WPE_TEST_ASSERT(fb->depth[middle] > flat_depth); /* Farther from the camera above it. */
+    WPE_TEST_ASSERT(!same_frame(fb, still));         /* Tilted normals and shimmer light it differently. */
+
+    /* A mesh without a transform draws at the origin. */
+    WPE_TEST_ASSERT_OK(wpe_ecs_remove_component(ecs, pond, WPE_COMP_WATER));
+    WPE_TEST_ASSERT_OK(wpe_ecs_remove_component(ecs, pond, WPE_COMP_TRANSFORM));
+    fb = render_scene(renderer, sr, ecs, camera, NULL);
+    WPE_TEST_ASSERT_NEAR(flat_depth, fb->depth[middle], 1e-6);
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_asset_release(t.assets, water_model);
+    wpe_asset_release(t.assets, grid_asset);
+    wpe_test_assets_destroy(&t);
+}
+
 static void test_graphics_scene_render_frustum_culling(void) {
     WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 32);
     const WPE_AssetHandle model = wpe_test_load_model(t.assets, "meshes/damaged_helmet.glb");
@@ -1431,5 +1560,8 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
     WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),
     WPE_TEST_CASE(test_graphics_trail_records_and_draws), WPE_TEST_CASE(test_graphics_slash_sweeps),
+    WPE_TEST_CASE(test_graphics_surface_update_wraps),
+    WPE_TEST_CASE(test_graphics_water_wave_is_periodic_with_matching_slopes),
+    WPE_TEST_CASE(test_graphics_uv_offset_and_water_render),
     WPE_TEST_CASE(test_graphics_camera_matrices_validation),
     WPE_TEST_CASE(test_graphics_draw2d_text_is_pixel_exact), WPE_TEST_CASE(test_graphics_debug_lines))

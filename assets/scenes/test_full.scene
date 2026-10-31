@@ -122,6 +122,13 @@
     },
     {"id": 49, "name": "slash sparks", "parent": 48, "transform": {}},
     {
+      "id": 50,
+      "name": "pond",
+      "transform": {"position": [-8, 0.2, 8], "scale": [0.5, 1, 0.5]},
+      "mesh": {"model": "meshes/water.glb", "cast_shadows": false, "uv_scroll": [0.05, -0.02]},
+      "water": {"amplitude": 0.15, "wavelength": 2.5, "speed": 1.5, "shimmer": 0.3}
+    },
+    {
       "id": 13,
       "name": "figure",
       "transform": {"position": [-4, 0, 2], "euler": [0, 30, 0]},
