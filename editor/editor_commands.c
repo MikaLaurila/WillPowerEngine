@@ -229,6 +229,127 @@ static WPE_Result wpe__cmd_list_assets(wpe__Call* call) {
     return result;
 }
 
+/* ---- Files (the script editor) ----------------------------------------------------------------------------
+ */
+
+static bool wpe__ends_with(const char* text, const char* suffix) {
+    const size_t a = strlen(text), b = strlen(suffix);
+    return a >= b && strcmp(text + a - b, suffix) == 0;
+}
+
+/* Text assets read_file returns. */
+static bool wpe__is_text_asset(const char* path) {
+    static const char* const suffixes[] = {".luau", ".json", ".scene", ".prefab", ".prim", ".md", ".txt"};
+    for (size_t i = 0; i < sizeof suffixes / sizeof suffixes[0]; ++i)
+        if (wpe__ends_with(path, suffixes[i])) return true;
+    return false;
+}
+
+static WPE_Result wpe__cmd_read_file(wpe__Call* call) {
+    const char* path = wpe__string_arg(call, "path");
+    if (!path || !wpe_vfs_path_is_valid(path) || !wpe__is_text_asset(path))
+        return wpe__null(call,
+                         wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                                   "\"path\" must be the asset path of a text file (.luau, .json, .scene, "
+                                   ".prefab, .prim, .md, .txt)"));
+    void* data = NULL;
+    size_t size = 0;
+    const WPE_Result result = wpe_vfs_read_all(wpe_engine_vfs(call->editor->engine), path, &data, &size);
+    if (result != WPE_RESULT_OK) {
+        wpe_free(data);
+        return wpe__null(call, wpe__fail(call, result, "cannot read '%s'", path));
+    }
+    if (memchr(data, '\0', size)) {
+        wpe_free(data);
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_PARSE, "'%s' is not text", path));
+    }
+    wpe_json_write_object_begin(call->w);
+    wpe_json_write_key(call->w, "text");
+    char* text = wpe_alloc(size + 1);
+    if (text) {
+        memcpy(text, data, size);
+        text[size] = '\0';
+        wpe_json_write_string(call->w, text);
+    } else {
+        wpe_json_write_null(call->w);
+    }
+    wpe_json_write_object_end(call->w);
+    wpe_free(text);
+    wpe_free(data);
+    return text ? WPE_RESULT_OK : WPE_RESULT_ERROR_OUT_OF_MEMORY;
+}
+
+/* Scripts are written into the project directory (scenes and prefabs have their own commands). Saving a
+ * script with hot reload on reloads it right away. */
+static WPE_Result wpe__cmd_write_file(wpe__Call* call) {
+    const char* path = wpe__string_arg(call, "path");
+    const char* text = wpe__string_arg(call, "text");
+    if (!path || !wpe_vfs_path_is_valid(path) || !wpe__ends_with(path, ".luau"))
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                                         "\"path\" must be the asset path of a script (.luau)"));
+    if (!text) return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"text\" is required"));
+    char os_path[2048], folder[2048];
+    if (snprintf(os_path, sizeof os_path, "%s/%s", call->editor->project_dir, path) >= (int)sizeof os_path)
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "the path is too long"));
+    memcpy(folder, os_path, sizeof folder);
+    char* slash = strrchr(folder, '/');
+    if (slash) *slash = '\0';
+    WPE_Result result = wpe_directory_create(folder);
+    WPE_File* file = NULL;
+    if (result == WPE_RESULT_OK) result = wpe_file_open(os_path, true, &file);
+    if (result == WPE_RESULT_OK) {
+        result = wpe_file_write(file, text, strlen(text));
+        const WPE_Result closed = wpe_file_close(file);
+        if (result == WPE_RESULT_OK) result = closed;
+    }
+    if (result != WPE_RESULT_OK) return wpe__null(call, wpe__fail(call, result, "cannot write '%s'", path));
+    wpe_log_info("saved %s", path);
+    if (call->editor->view.hot_reload) {
+        /* Reloaded now, whatever the file clock says (a quick save can keep the same timestamp). A module
+         * (require) isn't a loaded script: the change check drops and reloads the modules. */
+        WPE_ScriptHost* scripts = wpe_engine_scripts(call->editor->engine);
+        if (wpe_script_host_reload(scripts, path) == WPE_RESULT_ERROR_NOT_FOUND)
+            wpe_script_host_reload_changed(scripts);
+    }
+    return wpe__null(call, WPE_RESULT_OK);
+}
+
+/* Shows a script in the script panel (the UI opens it on its next frame). */
+static WPE_Result wpe__cmd_open_script(wpe__Call* call) {
+    const char* path = wpe__string_arg(call, "path");
+    const double line = wpe_json_number(wpe_json_get(call->args, "line"), 0.0);
+    if (!path || !wpe_vfs_path_is_valid(path) || !wpe__ends_with(path, ".luau") ||
+        !wpe_vfs_exists(wpe_engine_vfs(call->editor->engine), path))
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                                         "\"path\" must be the asset path of an existing script (.luau)"));
+    if (!(line >= 0.0 && line <= (double)UINT32_MAX) || line != floor(line))
+        return wpe__null(call,
+                         wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"line\" must be a line number"));
+    snprintf(call->editor->open_script, sizeof call->editor->open_script, "%s", path);
+    call->editor->open_script_line = (uint32_t)line;
+    return wpe__null(call, WPE_RESULT_OK);
+}
+
+/* {text} -> {ok, line, message}: whether Luau compiles, without running it. */
+static WPE_Result wpe__cmd_check_script(wpe__Call* call) {
+    const char* text = wpe__string_arg(call, "text");
+    if (!text) return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"text\" is required"));
+    uint32_t line = 0;
+    char message[512];
+    const bool ok = wpe_script_check_syntax(text, strlen(text), &line, message, sizeof message);
+    wpe_json_write_object_begin(call->w);
+    wpe_json_write_key(call->w, "ok");
+    wpe_json_write_bool(call->w, ok);
+    if (!ok) {
+        wpe_json_write_key(call->w, "line");
+        wpe_json_write_integer(call->w, line);
+        wpe_json_write_key(call->w, "message");
+        wpe_json_write_string(call->w, message);
+    }
+    wpe_json_write_object_end(call->w);
+    return WPE_RESULT_OK;
+}
+
 /* ---- Edits ------------------------------------------------------------------------------------------ */
 
 static WPE_Result wpe__cmd_create_entity(wpe__Call* call) {
@@ -1159,6 +1280,13 @@ static const struct {
      "the entity"},
     {"run_lua", wpe__cmd_run_lua, "{code}: run Luau with the wpe API (undoable)"},
     {"list_assets", wpe__cmd_list_assets, "{prefix?} -> asset paths"},
+    {"read_file", wpe__cmd_read_file,
+     "{path} -> {text}: a text asset (.luau, .json, .scene, .prefab, .prim, ...)"},
+    {"write_file", wpe__cmd_write_file,
+     "{path, text}: save a script (.luau) into the project (reloaded at once with hot reload on)"},
+    {"check_script", wpe__cmd_check_script,
+     "{text} -> {ok, line?, message?}: compile Luau without running it"},
+    {"open_script", wpe__cmd_open_script, "{path, line = 0}: show a script in the editor's Script panel"},
     {"export", wpe__cmd_export, "{output, runtime?} -> {files, bytes}"},
     {"log", wpe__cmd_log, "{count = 50} -> recent log lines"},
     {"clear_log", wpe__cmd_clear_log, "{}: hide the lines logged so far (the console's clear, cls, clr)"},

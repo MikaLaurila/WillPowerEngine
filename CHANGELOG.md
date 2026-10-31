@@ -69,6 +69,24 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (editor: Script panel)
+- A Luau code editor in the editor (a tab behind the viewport): files in tabs with unsaved marks, syntax
+  highlighting (keywords, constants, numbers, strings, comments, libraries; long comments and strings
+  across lines), line numbers, auto-indent after block openers, Tab/Shift+Tab over selected lines,
+  undo/redo, clipboard, word moves, mouse selection, find (Ctrl+F, F3). Compiled a moment after typing
+  stops: a mistake marks its line with the compiler's message; runtime errors logged for the file mark
+  theirs. Ctrl+S saves (hot reload runs it at once, also while playing); closing a tab or the editor
+  with unsaved scripts asks first.
+- Opening: double-click a script in Assets, **Edit script** on a script component, or double-click a
+  console error naming a script line.
+- Text model `editor/code_text.{h,c}` (no UI: buffer, cursor, selection, undo, search, Luau tokenizer)
+  and panel `editor/script_panel.{h,c}`.
+- Commands `read_file`, `write_file` (scripts only; reloads the script at once with hot reload on),
+  `check_script` (compile without running) and `open_script`. Script API `wpe_script_check_syntax`.
+- Tests: the text model (positions, undo coalescing, auto-indent, UTF-8 erasing, block indent, moves,
+  search, the tokenizer), the file commands (a save while playing runs on the next frame), and the
+  command-line test draws the panel with a broken script.
+
 ### Added (animation state machines)
 - `graphics/anim_states.h`: graphs of parameters (numbers, bools, buffered triggers), states (an
   animation, loop, speed, an optional speed parameter, events at clip times) and ordered transitions

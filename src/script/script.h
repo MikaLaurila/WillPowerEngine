@@ -353,4 +353,16 @@ WPE_Result wpe_script_visit_declared(const WPE_ScriptHost* host, WPE_Entity enti
  */
 WPE_Result wpe_script_host_run(WPE_ScriptHost* host, const char* chunk_name, const char* source);
 
+/**
+ * Compiles Luau source without running it (an editor checking as you type).
+ *
+ * @param out_line Receives the error's line (1-based), or 0 when the message names none. Optional.
+ * @param out_message Receives the compiler's message without its location (terminated). Optional.
+ * @return true when it compiles; false with the error.
+ *
+ * @thread_safety Any thread
+ */
+bool wpe_script_check_syntax(const char* source, size_t size, uint32_t* out_line, char* out_message,
+                             size_t message_size);
+
 #endif /* WPE_SCRIPT_SCRIPT_H */

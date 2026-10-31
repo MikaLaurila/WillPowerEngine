@@ -153,6 +153,46 @@ static WPE_Result wpe__compile_file(WPE_ScriptHost* host, const char* path, char
     return WPE_RESULT_OK;
 }
 
+bool wpe_script_check_syntax(const char* source, size_t size, uint32_t* out_line, char* out_message,
+                             size_t message_size) {
+    if (out_line) *out_line = 0;
+    if (out_message && message_size) out_message[0] = '\0';
+    lua_CompileOptions options = {.optimizationLevel = 0, .debugLevel = 1};
+    size_t bytecode_size = 0;
+    char* bytecode = luau_compile(source ? source : "", source ? size : 0, &options, &bytecode_size);
+    if (!bytecode) {
+        if (out_message && message_size) snprintf(out_message, message_size, "out of memory");
+        return false;
+    }
+    const bool ok = bytecode_size > 0 && bytecode[0] != 0;
+    if (!ok) {
+        /* The message after the zero byte reads ":LINE: text". */
+        const char* message = bytecode_size > 1 ? bytecode + 1 : "";
+        const size_t length = bytecode_size > 1 ? bytecode_size - 1 : 0;
+        size_t at = 0;
+        uint32_t line = 0;
+        if (at < length && message[at] == ':') {
+            size_t digits = at + 1;
+            while (digits < length && message[digits] >= '0' && message[digits] <= '9') {
+                line = line * 10u + (uint32_t)(message[digits] - '0');
+                ++digits;
+            }
+            if (digits > at + 1 && digits < length && message[digits] == ':') {
+                at = digits + 1;
+                while (at < length && message[at] == ' ')
+                    ++at;
+            } else {
+                line = 0;
+            }
+        }
+        if (out_line) *out_line = line;
+        if (out_message && message_size)
+            snprintf(out_message, message_size, "%.*s", (int)(length - at), message + at);
+    }
+    free(bytecode); /* luau_compile allocates with malloc. */
+    return ok;
+}
+
 static WPE_Result wpe__load_bytecode(WPE_ScriptHost* host, const char* path, const char* bytecode,
                                      size_t size, int existing_meta_ref, wpe__LoadOp* out_op) {
     char chunk_name[WPE__SCRIPT_PATH_MAX + 1];

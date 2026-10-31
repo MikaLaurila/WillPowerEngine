@@ -23,6 +23,10 @@ file(WRITE "${WORK}/commands.jsonl"
 {\"cmd\": \"save_scene\", \"path\": \"scenes/made.scene\"}
 {\"cmd\": \"screenshot\", \"target\": \"editor\", \"path\": \"${WORK}/editor.png\"}
 {\"cmd\": \"screenshot\", \"path\": \"${WORK}/game.png\"}
+{\"cmd\": \"write_file\", \"path\": \"scripts/broken.luau\", \"text\": \"--[[ a long\\ncomment ]] local t = {\\n\\tname = \\\"x\\\",\\n\\tvalue = 0x1F,\\nif\\n\"}
+{\"cmd\": \"open_script\", \"path\": \"scripts/broken.luau\", \"line\": 3}
+{\"cmd\": \"frames\", \"count\": 3}
+{\"cmd\": \"screenshot\", \"target\": \"editor\", \"path\": \"${WORK}/script.png\"}
 ")
 
 function(run expect_success)
@@ -36,7 +40,7 @@ function(run expect_success)
 endfunction()
 
 run(TRUE "${WPE_EDITOR}" "${WORK}/project" --run "${WORK}/commands.jsonl")
-foreach(file project/scenes/made.scene editor.png game.png)
+foreach(file project/scenes/made.scene editor.png game.png project/scripts/broken.luau script.png)
     if(NOT EXISTS "${WORK}/${file}")
         message(FATAL_ERROR "${file} was not written")
     endif()

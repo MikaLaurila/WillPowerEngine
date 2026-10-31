@@ -4,11 +4,20 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "core/alloc.h"
 #include "editor/editor.h"
 #include "platform/platform.h"
 #include "scene/scene.h"
 
 #define ROOT "editor_scratch"
+
+/* Whether `size` bytes of `data` contain `needle`. */
+static bool memmem_safe(const void* data, size_t size, const char* needle) {
+    const size_t length = strlen(needle);
+    for (size_t i = 0; i + length <= size; ++i)
+        if (memcmp((const char*)data + i, needle, length) == 0) return true;
+    return false;
+}
 
 static void write_text(const char* path, const char* text) {
     WPE_File* file = NULL;
@@ -458,6 +467,54 @@ static void test_editor_hot_reloads_scripts(void) {
     run_ok(editor, "{\"cmd\": \"frames\"}");
     WPE_TEST_ASSERT_NEAR(100.0, box_height(editor) - still_moving, 1e-3);
     run_ok(editor, "{\"cmd\": \"stop\"}");
+    wpe_editor_destroy(editor);
+}
+
+/* The script editor's commands: read a script, check text, save it (reloaded at once while playing). */
+static void test_editor_script_files(void) {
+    WPE_Editor* editor = open_editor();
+    WPE_JsonDocument* reply = run(editor, "{\"cmd\": \"read_file\", \"path\": \"scripts/mover.luau\"}", true);
+    const char* text = wpe_json_string(wpe_json_get(result_of(reply), "text"));
+    WPE_TEST_ASSERT(text && strstr(text, "vector.create(0, 1, 0)"));
+    wpe_json_free(reply);
+    wpe_json_free(run(editor, "{\"cmd\": \"read_file\", \"path\": \"scripts/missing.luau\"}", false));
+    wpe_json_free(run(editor, "{\"cmd\": \"read_file\", \"path\": \"meshes/../project.json\"}", false));
+
+    /* Checking: where a mistake is, without running anything. */
+    reply = run(editor, "{\"cmd\": \"check_script\", \"text\": \"local x = 1\\nif x then\\n  print(x)\\n\"}",
+                true);
+    WPE_TEST_ASSERT(!wpe_json_bool(wpe_json_get(result_of(reply), "ok"), true));
+    WPE_TEST_ASSERT_NEAR(4.0, wpe_json_number(wpe_json_get(result_of(reply), "line"), 0),
+                         0); /* "end" missing. */
+    WPE_TEST_ASSERT(strstr(wpe_json_string(wpe_json_get(result_of(reply), "message")), "end") != NULL);
+    wpe_json_free(reply);
+    reply = run(editor, "{\"cmd\": \"check_script\", \"text\": \"return {}\"}", true);
+    WPE_TEST_ASSERT(wpe_json_bool(wpe_json_get(result_of(reply), "ok"), false));
+    wpe_json_free(reply);
+
+    /* Saving while playing: the new code runs from the next frame. */
+    run_ok(editor, "{\"cmd\": \"play\"}");
+    run_ok(editor, "{\"cmd\": \"frames\", \"count\": 2}");
+    run_ok(editor, "{\"cmd\": \"write_file\", \"path\": \"scripts/mover.luau\", \"text\": \"local M = {}\\n"
+                   "function M:on_update(dt) wpe.set_position(self.entity, wpe.get_position(self.entity) + "
+                   "vector.create(0, 7, 0)) end\\nreturn M\\n\"}");
+    const float before = box_height(editor);
+    run_ok(editor, "{\"cmd\": \"frames\"}");
+    WPE_TEST_ASSERT_NEAR(7.0, box_height(editor) - before, 1e-3);
+    run_ok(editor, "{\"cmd\": \"stop\"}");
+    void* data = NULL;
+    size_t size = 0;
+    WPE_TEST_ASSERT_OK(wpe_file_read_all(ROOT "/project/scripts/mover.luau", &data, &size));
+    WPE_TEST_ASSERT(size > 0 && memmem_safe(data, size, "(0, 7, 0)"));
+    wpe_free(data);
+    /* Only scripts are written; scenes and others have their own commands. */
+    wpe_json_free(
+        run(editor, "{\"cmd\": \"write_file\", \"path\": \"scenes/start.scene\", \"text\": \"{}\"}", false));
+    wpe_json_free(
+        run(editor, "{\"cmd\": \"write_file\", \"path\": \"/etc/passwd.luau\", \"text\": \"\"}", false));
+    /* open_script asks the UI to show a file (here: just checked). */
+    run_ok(editor, "{\"cmd\": \"open_script\", \"path\": \"scripts/mover.luau\", \"line\": 2}");
+    wpe_json_free(run(editor, "{\"cmd\": \"open_script\", \"path\": \"scripts/none.luau\"}", false));
     wpe_editor_destroy(editor);
 }
 
@@ -930,18 +987,16 @@ static void test_editor_prefab_commands(void) {
     wpe_editor_destroy(editor);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_editor_coalesces_continuous_edits),
-              WPE_TEST_CASE(test_editor_prefab_commands),
-              WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
-              WPE_TEST_CASE(test_editor_play_does_not_keep_keys_held),
-              WPE_TEST_CASE(test_editor_takes_the_mouse_back_from_the_game),
-              WPE_TEST_CASE(test_editor_fits_colliders_to_meshes),
-              WPE_TEST_CASE(test_editor_guards_unsaved_changes),
-              WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
-              WPE_TEST_CASE(test_editor_view_settings_and_overlays),
-              WPE_TEST_CASE(test_editor_physics_follows_edits),
-              WPE_TEST_CASE(test_editor_hot_reloads_scripts), WPE_TEST_CASE(test_editor_script_properties),
-              WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
-              WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
-              WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
-              WPE_TEST_CASE(test_editor_play_mode_restores_the_scene))
+WPE_TEST_MAIN(
+    WPE_TEST_CASE(test_editor_coalesces_continuous_edits), WPE_TEST_CASE(test_editor_prefab_commands),
+    WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
+    WPE_TEST_CASE(test_editor_play_does_not_keep_keys_held),
+    WPE_TEST_CASE(test_editor_takes_the_mouse_back_from_the_game),
+    WPE_TEST_CASE(test_editor_fits_colliders_to_meshes), WPE_TEST_CASE(test_editor_guards_unsaved_changes),
+    WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
+    WPE_TEST_CASE(test_editor_view_settings_and_overlays), WPE_TEST_CASE(test_editor_physics_follows_edits),
+    WPE_TEST_CASE(test_editor_hot_reloads_scripts), WPE_TEST_CASE(test_editor_script_files),
+    WPE_TEST_CASE(test_editor_script_properties), WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
+    WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
+    WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
+    WPE_TEST_CASE(test_editor_play_mode_restores_the_scene))

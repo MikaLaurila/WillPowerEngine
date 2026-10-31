@@ -15,6 +15,7 @@
 #include "core/alloc.h"
 #include "core/log.h"
 #include "editor/editor_internal.h"
+#include "editor/script_panel.h"
 #include "editor/ui_backend.h"
 #include "graphics/graphics.h"
 #include "graphics/scene_render.h"
@@ -65,6 +66,7 @@ typedef struct wpe__Edit {
 struct WPE_EditorUi {
     WPE_Editor* editor;
     WPE_UiBackend* backend;
+    WPE_ScriptPanel* scripts;          /* The Script panel (code editor). */
     float frame_ms[WPE__PERF_HISTORY]; /* The game's frame times, oldest at frame_ms_at. */
     uint32_t frame_ms_at;
     float smoothed_dt;   /* The editor's own frame time, smoothed (its FPS). */
@@ -196,7 +198,12 @@ static void wpe__ui_perform(WPE_EditorUi* ui, bool discard) {
         wpe__ui_string_command(ui, "load_scene", "path", ui->pending_path, discard);
         break;
     case WPE__PENDING_QUIT:
-        ui->quit = true;
+        /* Unsaved scripts get their own question first (wpe_editor_ui_frame quits once it is answered). */
+        if (wpe_script_panel_dirty(ui->scripts)) {
+            wpe_script_panel_request_close_all(ui->scripts);
+        } else {
+            ui->quit = true;
+        }
         break;
     case WPE__PENDING_NONE:
         break;
@@ -2312,6 +2319,11 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
                     }
                     igPopID();
                 }
+                if (script) {
+                    const char* script_path = wpe_json_string(wpe_json_get(value, "path"));
+                    if (script_path && igSmallButton("Edit script"))
+                        wpe_script_panel_open(ui->scripts, script_path, 0);
+                }
                 if (script && wpe__ui_script_properties(ui, entity)) property_sent = true;
                 if (strcmp(key, "collider") == 0 && igSmallButton("Fit to meshes")) command = "fit_collider";
                 if (strcmp(key, "collider") == 0 && igIsItemHovered(0))
@@ -2474,8 +2486,9 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
     igSameLine(0, -1);
     igSetNextItemWidth(-1.0f);
     igInputText("##filter", ui->asset_filter, sizeof ui->asset_filter, 0, NULL, NULL);
-    igTextDisabled("Double-click: open a scene / add a model, prefab or image (a UI sprite). Drag them into "
-                   "the viewport, or drag assets onto the inspector's fields.");
+    igTextDisabled(
+        "Double-click: open a scene or a script / add a model, prefab or image (a UI sprite). Drag "
+        "them into the viewport, or drag assets onto the inspector's fields.");
     igBeginChild_Str("##asset_list", (ImVec2_c){0, 0}, 0, 0);
     for (uint32_t i = 0; i < ui->asset_count; ++i) {
         const char* path = ui->assets[i];
@@ -2493,6 +2506,8 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
                 wpe__ui_create_model(ui, path);
             } else if (image) {
                 wpe__ui_create_element(ui, "image", path);
+            } else if (wpe__has_suffix(path, ".luau")) {
+                wpe_script_panel_open(ui->scripts, path, 0);
             }
         }
         /* Models, prefabs and images can be placed in the viewport; they, sounds and scripts can be dropped
@@ -2508,12 +2523,51 @@ static void wpe__ui_assets(WPE_EditorUi* ui) {
     igEnd();
 }
 
+/* The first "<asset path>.luau:<line>:" in a log line: copies the path, returns the line (0: none). */
+static uint32_t wpe__script_location(const char* text, char* out_path, size_t path_size) {
+    for (const char* at = strstr(text, ".luau:"); at; at = strstr(at + 1, ".luau:")) {
+        const char* digits = at + 6;
+        uint32_t line = 0;
+        const char* p = digits;
+        while (*p >= '0' && *p <= '9')
+            line = line * 10u + (uint32_t)(*p++ - '0');
+        if (p == digits || *p != ':') continue;
+        /* The path runs back to a space, a quote or the line's start. */
+        const char* start = at;
+        while (start > text && start[-1] != ' ' && start[-1] != '\'' && start[-1] != '"' &&
+               start[-1] != '\n' && start[-1] != '@')
+            --start;
+        const size_t length = (size_t)(at + 5 - start);
+        if (length >= path_size) continue;
+        memcpy(out_path, start, length);
+        out_path[length] = '\0';
+        if (wpe_vfs_path_is_valid(out_path)) return line;
+    }
+    return 0;
+}
+
 static void wpe__console_line(const wpe__LogLine* line, void* user_data) {
-    (void)user_data;
+    WPE_EditorUi* ui = user_data;
     const ImVec4_c color = line->level >= WPE_LOG_LEVEL_ERROR  ? (ImVec4_c){1.0f, 0.45f, 0.4f, 1.0f}
                            : line->level >= WPE_LOG_LEVEL_WARN ? (ImVec4_c){1.0f, 0.85f, 0.4f, 1.0f}
                                                                : (ImVec4_c){0.8f, 0.82f, 0.85f, 1.0f};
-    igTextColored(color, "%s", line->text);
+    char path[WPE__UI_PATH];
+    const uint32_t at =
+        line->level >= WPE_LOG_LEVEL_WARN ? wpe__script_location(line->text, path, sizeof path) : 0;
+    if (!at) {
+        igTextColored(color, "%s", line->text);
+        return;
+    }
+    /* A script error: double-click shows the line in the Script panel. */
+    igPushStyleColor_Vec4(ImGuiCol_Text, color);
+    igPushID_Ptr(line);
+    igSelectable_Bool(line->text, false, ImGuiSelectableFlags_AllowDoubleClick, (ImVec2_c){0, 0});
+    igPopID();
+    igPopStyleColor(1);
+    if (igIsItemHovered(0)) {
+        igSetTooltip("Double-click: open %s at line %u", path, at);
+        if (igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) wpe_script_panel_open(ui->scripts, path, at);
+    }
 }
 
 /* Whether the console's input is "clear", "cls" or "clr" (any case, spaces around allowed). */
@@ -2558,7 +2612,7 @@ static void wpe__ui_console(WPE_EditorUi* ui) {
     if (ui->reply[0]) igTextWrapped("%s", ui->reply);
     igSeparator();
     igBeginChild_Str("##log", (ImVec2_c){0, 0}, 0, 0);
-    wpe__editor_log_since(ui->editor, 0, WPE__EDITOR_LOG_LINES, wpe__console_line, NULL);
+    wpe__editor_log_since(ui->editor, 0, WPE__EDITOR_LOG_LINES, wpe__console_line, ui);
     if (igGetScrollY() >= igGetScrollMaxY()) igSetScrollHereY(1.0f);
     igEndChild();
     igEnd();
@@ -2879,7 +2933,7 @@ static void wpe__ui_popups(WPE_EditorUi* ui) {
 
 static void wpe__ui_shortcuts(WPE_EditorUi* ui) {
     ImGuiIO* io = igGetIO_Nil();
-    if (io->WantTextInput) return;
+    if (io->WantTextInput || wpe_script_panel_focused(ui->scripts)) return; /* Typing: the keys are text. */
     const WPE_EditorMode mode = wpe_editor_mode(ui->editor);
     if (igIsKeyPressed_Bool(ImGuiKey_F5, false))
         wpe__ui_simple(ui, io->KeyShift || mode != WPE_EDITOR_EDIT ? "stop" : "play");
@@ -2931,6 +2985,7 @@ static void wpe__ui_layout(WPE_EditorUi* ui, ImGuiID dockspace, const ImGuiViewp
     igDockBuilderDockWindow("Console", bottom);
     igDockBuilderDockWindow("Assets", bottom);
     igDockBuilderDockWindow("Performance", bottom);
+    igDockBuilderDockWindow("Script", center); /* A tab behind the viewport. */
     igDockBuilderDockWindow("Viewport", center);
     igDockBuilderFinish(dockspace);
     ui->layout_built = true;
@@ -3021,8 +3076,11 @@ WPE_Result wpe_editor_ui_create(WPE_Editor* editor, WPE_PlatformRenderer* gpu, W
     ui->assets_stale = true;
     snprintf(ui->scene_path, sizeof ui->scene_path, "scenes/new.scene");
     snprintf(ui->export_path, sizeof ui->export_path, "game%s", WPE_EXE_SUFFIX);
-    const WPE_Result result = wpe_ui_backend_create(gpu, &ui->backend);
+    ui->scripts = wpe_script_panel_create(editor);
+    const WPE_Result result =
+        ui->scripts ? wpe_ui_backend_create(gpu, &ui->backend) : WPE_RESULT_ERROR_OUT_OF_MEMORY;
     if (result != WPE_RESULT_OK) {
+        wpe_script_panel_destroy(ui->scripts);
         wpe_free(ui);
         return result;
     }
@@ -3033,6 +3091,7 @@ WPE_Result wpe_editor_ui_create(WPE_Editor* editor, WPE_PlatformRenderer* gpu, W
 
 void wpe_editor_ui_destroy(WPE_EditorUi* ui) {
     if (!ui) return;
+    wpe_script_panel_destroy(ui->scripts);
     wpe_ui_backend_destroy(ui->backend);
     wpe__clear_assets(ui);
     wpe_free(ui->assets);
@@ -3146,6 +3205,8 @@ WPE_Result wpe_editor_ui_frame(WPE_EditorUi* ui, WPE_Renderer* renderer, float d
     wpe__ui_assets(ui);
     wpe__ui_console(ui);
     wpe__ui_performance(ui);
+    wpe_script_panel_draw(ui->scripts);
+    if (wpe_script_panel_close_all_result(ui->scripts) == 1) ui->quit = true; /* Scripts saved or dropped. */
     wpe__ui_popups(ui);
 
     if (gpu) {

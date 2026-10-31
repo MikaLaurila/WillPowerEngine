@@ -1,9 +1,11 @@
 # The editor: a library with everything but main() (so tests can drive it) and the executable.
 # Unlike engine modules it may use SDL directly (OS events to the UI) and cimgui.
 add_library(wpe_editor_core STATIC
+    code_text.c
     editor.c
     editor_commands.c
     editor_ui.c
+    script_panel.c
     ui_backend.c)
 target_compile_definitions(wpe_editor_core PRIVATE WPE_EXE_SUFFIX="${CMAKE_EXECUTABLE_SUFFIX}")
 target_include_directories(wpe_editor_core PUBLIC "${PROJECT_SOURCE_DIR}")
