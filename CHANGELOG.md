@@ -69,6 +69,26 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Tests: shadows cast and received or not, unlit color with and without shadow, double-sided from
   behind.
 
+### Added (game feel: slow motion, hit-stop, shake)
+- `scene/game_feel.h` (`WPE_GameFeel`): the game clock's time scale and entity shakes. A hit-stop (0)
+  wins over slow motion (which can ease back over a fade), which wins over the base scale;
+  `wpe_game_feel_advance` turns a frame's real time into game time, integrating the scales through
+  the frame. Shakes are smooth seeded noise fading over their duration, put on the transform just
+  before transforms update and restored at the start of the next frame (unless something moved the
+  entity meanwhile), so game code and physics only see real poses.
+- Engine: every simulated system runs on game time (fixed steps, scripts and timers, animation,
+  particles, trails, slashes, scrolling textures and water); the UI and audio keep real time; shakes,
+  slow motion and hit-stops count real time. Scene loads reset them. `wpe_engine_game_feel`,
+  `WPE_ScriptApp.game_feel`.
+- Luau: `wpe.slow_motion(scale, seconds, fade)`, `wpe.hit_stop(seconds)`, `wpe.set_time_scale`,
+  `get_time_scale`, `wpe.real_delta()`, `wpe.shake(entity, {...})`, `stop_shake`, `is_shaking`.
+- Demo: in `scenes/character.scene` the shockwave (F) hits with a hit-stop and a camera jolt, and the
+  Judgement Cut (Q) runs in slow motion with a rolling camera.
+- Tests: time scale, hit-stops ending mid-frame, slow motion with its fade and inside a hit-stop,
+  shake bounds, fading and determinism, exact pose restoring (moved during the frame, moved while
+  shaken, finished, stopped, destroyed), limits; an engine test that records each update's game time
+  through a hit-stop and slow motion and checks scripts never see the shake.
+
 ### Added (animated textures and retro water)
 - Mesh renderers take `uv_scroll` (`[u, v]` texture repeats per second); the runtime `uv_offset` it moves
   is added to every texture coordinate of the mesh and kept in [0, 2) so it never loses precision.

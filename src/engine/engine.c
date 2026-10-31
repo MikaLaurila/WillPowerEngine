@@ -50,6 +50,7 @@ struct WPE_Engine {
     WPE_SceneEnvironment environment;
     WPE_Entity camera;
     WPE_FixedStep clock;
+    WPE_GameFeel feel;            /* Time scale (slow motion, hit-stop) and shakes. */
     char music[WPE_VFS_PATH_MAX]; /* Track started by the current scene ("" = none). */
     char pending_scene[WPE_VFS_PATH_MAX];
     char save_dir[1024]; /* "" until a script needs it (see wpe__app_save_directory). */
@@ -162,6 +163,10 @@ static WPE_PostFxConfig* wpe__app_postfx(void* user_data, uint32_t** out_count) 
 static WPE_SceneRenderSettings* wpe__app_render_settings(void* user_data) {
     WPE_Engine* engine = user_data;
     return &engine->environment.render;
+}
+static WPE_GameFeel* wpe__app_game_feel(void* user_data) {
+    WPE_Engine* engine = user_data;
+    return &engine->feel;
 }
 
 static WPE_SceneContext wpe__context(const WPE_Engine* engine) {
@@ -291,6 +296,7 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                    .save_directory = wpe__app_save_directory,
                                    .postfx = wpe__app_postfx,
                                    .render_settings = wpe__app_render_settings,
+                                   .game_feel = wpe__app_game_feel,
                                    .capture_screen = wpe__app_capture_screen};
         result =
             wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = engine->ecs,
@@ -336,6 +342,7 @@ WPE_Result wpe_engine_create(const WPE_EngineDesc* desc, WPE_Engine** out_engine
     WPE_Engine* engine = wpe_alloc_zeroed(1, sizeof *engine);
     if (!engine) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     engine->environment = wpe_scene_environment_default();
+    engine->feel = wpe_game_feel_default();
     engine->embedded = desc->embedded;
     engine->simulating = true;
     engine->draw_ui = true;
@@ -416,6 +423,7 @@ WPE_Result wpe_engine_load_scene_text(WPE_Engine* engine, const char* text, size
     WPE_Result result = wpe_scene_clear(engine->ecs);
     engine->camera = WPE_ENTITY_NULL;
     engine->environment = wpe_scene_environment_default();
+    wpe_game_feel_reset(&engine->feel, NULL); /* The world is gone: nothing to restore. */
     const WPE_SceneContext context = wpe__context(engine);
     WPE_SceneEnvironment environment = wpe_scene_environment_default();
     WPE_Entity camera = WPE_ENTITY_NULL;
@@ -479,9 +487,14 @@ static uint8_t wpe__channel(float value) {
     return (uint8_t)(clamped * 255.0f + 0.5f);
 }
 
-static WPE_Result wpe__simulate(WPE_Engine* engine, double dt) {
+static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
+    /* Shakes come off before anything reads or moves transforms; they go back on before transforms update. */
+    wpe_game_feel_restore_shakes(&engine->feel, engine->ecs);
+    /* Game time (slow motion, hit-stops) drives the simulation; the UI keeps real time. */
+    const double dt = wpe_game_feel_advance(&engine->feel, real_dt);
     /* The UI reacts to this frame's input first, so scripts see its clicks in this frame. */
-    WPE_Result result = wpe_ui_update(engine->ui, engine->project.width, engine->project.height, (float)dt);
+    WPE_Result result =
+        wpe_ui_update(engine->ui, engine->project.width, engine->project.height, (float)real_dt);
     /* Changes first (a toggle's click flips it), each with the new value. */
     uint32_t changes = 0;
     const WPE_Entity* changed = wpe_ui_changes(engine->ui, &changes);
@@ -514,6 +527,8 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double dt) {
     if (result == WPE_RESULT_OK) wpe_surface_update(engine->ecs, (float)dt);
     /* Before transforms: a slash's head entity moves, and emitters on it emit from there this frame. */
     if (result == WPE_RESULT_OK) wpe_slash_update(engine->ecs, (float)dt);
+    /* Shakes run on real time, so they go on through a hit-stop. */
+    if (result == WPE_RESULT_OK) wpe_game_feel_apply_shakes(&engine->feel, engine->ecs, (float)real_dt);
     if (result == WPE_RESULT_OK) result = wpe_scene_update_transforms(engine->ecs);
     /* After transforms, so emitters spawn where they are this frame. */
     if (result == WPE_RESULT_OK) result = wpe_particles_update(engine->ecs, engine->jobs, (float)dt);
@@ -876,6 +891,10 @@ const WPE_ProjectSettings* wpe_engine_project(const WPE_Engine* engine) {
 
 WPE_SceneEnvironment* wpe_engine_environment(WPE_Engine* engine) {
     return engine ? &engine->environment : NULL;
+}
+
+WPE_GameFeel* wpe_engine_game_feel(WPE_Engine* engine) {
+    return engine ? &engine->feel : NULL;
 }
 
 void wpe_engine_set_debug_draw(WPE_Engine* engine, const WPE_EngineDebugDraw* debug_draw) {

@@ -133,7 +133,7 @@ Entity handles are numbers. Passing a handle that isn't alive raises an error. V
 | `wpe.animation_time(entity, [seconds]) -> seconds` | Get or set the playback position. |
 | `wpe.animation_speed(entity, [speed]) -> speed` | Get or set the playback rate (1 normal, 2 twice as fast, negative backwards). |
 | `wpe.get_animation(entity) -> {index, name, time, duration, speed, playing, loop, fading, names}` | What's playing. `playing` turns false when a non-looping animation ends; `names` lists the model's animations. |
-| `wpe.time() -> seconds` | Accumulated game time from updates. |
+| `wpe.time() -> seconds` | Accumulated game time from updates (it runs slower in slow motion, see [Game feel](#game-feel-slow-motion-hit-stop-shake)). |
 | `wpe.frame() -> number` | Number of completed updates. |
 
 ### Timers
@@ -153,6 +153,29 @@ function Door:open()
 		self:close()
 	end)
 end
+```
+
+### Game feel: slow motion, hit-stop, shake
+
+The game clock can run slower or stop. Everything simulated follows it: `dt` in `on_update` and `on_fixed_update`, the number of fixed steps (so physics too), timers, `wpe.time()`, animation, particles, trails and slashes. The UI and audio keep real time. Slow motion, hit-stops and shakes count real seconds, so they end on time at any speed; a scene load ends them all and puts the speed back to 1.
+
+| Function | Description |
+|---|---|
+| `wpe.slow_motion(scale, seconds, fade = 0)` | Runs the game at `scale` (0..100; below 1 is slower) for `seconds` of real time, easing back to normal speed over the last `fade` seconds. Replaces slow motion already running. |
+| `wpe.hit_stop(seconds)` | Freezes the game for `seconds` of real time (up to 60): `dt` is 0, physics and animation hold. Lends weight to a hit (0.05..0.1 s). The longer of two hit-stops wins, and a hit-stop wins over slow motion, which carries on after it. |
+| `wpe.set_time_scale(scale)` | The speed outside slow motion and hit-stops (1; 0..100), e.g. 0 for a pause that still runs the UI. |
+| `wpe.get_time_scale() -> scale` | The speed now: 0 during a hit-stop, slow motion's while it runs, else the one set. |
+| `wpe.real_delta() -> seconds` | This frame's real time, unscaled: for HUD animation that should keep moving during slow motion. |
+| `wpe.shake(entity, {amplitude, rotation, duration, frequency}?)` | Shakes an entity (it needs a transform): it moves up to `amplitude` meters (0.1) and turns up to `rotation` degrees (0) on each axis, changing direction about `frequency` times a second (20), fading out over `duration` real seconds (0.3). Shaking it again starts over. Shake the camera (`wpe.get_camera()`) for impacts. |
+| `wpe.stop_shake(entity)` | Ends its shake. |
+| `wpe.is_shaking(entity) -> bool` | Whether it is shaking. |
+
+A shake is put on just before the frame is drawn and taken off when the next one starts, so scripts (`wpe.get_position`), physics and a camera that follows the player never see it, and the entity ends exactly where it would have been. Shakes keep going through a hit-stop. In `scenes/character.scene`, the shockwave (F) hits with a short hit-stop and a camera jolt, and the Judgement Cut (Q) runs in slow motion:
+
+```lua
+wpe.hit_stop(0.07)
+wpe.shake(wpe.get_camera(), { amplitude = 0.06, rotation = 0.8, duration = 0.3, frequency = 28 })
+wpe.slow_motion(0.35, 1.2, 0.4) -- 35% speed for 1.2 s, the last 0.4 s easing back
 ```
 
 ### Messages between scripts

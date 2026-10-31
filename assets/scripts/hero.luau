@@ -1,8 +1,9 @@
 -- A walking character on a character controller: moves relative to the camera (move_x / move_y),
 -- runs (boost), jumps when standing (jump), faces the way it walks, and goes back to its start
 -- (reset, or after a fall). Slopes up to the controller's max_slope are walkable, steeper ones
--- aren't; crates get pushed. "fire" sends a shockwave out from it (post effects driven by script);
--- "special" cuts the space in front of it (Judgement Cut, scripts/lib/judgement_cut.luau).
+-- aren't; crates get pushed. "fire" sends a shockwave out from it (post effects driven by script) with a
+-- hit-stop and a camera shake; "special" cuts the space in front of it (Judgement Cut,
+-- scripts/lib/judgement_cut.luau) in slow motion.
 local util = require("scripts/lib/util")
 local JudgementCut = require("scripts/lib/judgement_cut")
 
@@ -56,6 +57,9 @@ function Hero:on_update(dt)
 	if wpe.action_pressed("fire", self.player) then
 		self.wave = 0
 		wpe.play_sound("sounds/thud.wav", { volume = 0.4, pitch = 0.6 })
+		-- Impact: the game holds for a few frames while the camera jolts (shakes run on through a hit-stop).
+		wpe.hit_stop(0.07)
+		wpe.shake(wpe.get_camera(), { amplitude = 0.06, rotation = 0.8, duration = 0.3, frequency = 28 })
 	end
 	if wpe.action_pressed("special", self.player) and not self.cut then
 		-- Where the cuts cross: a point four meters ahead of the hero, at chest height.
@@ -64,6 +68,9 @@ function Hero:on_update(dt)
 		local width, height = wpe.screen_size()
 		self.cut = JudgementCut.start(x / width, y / height)
 		wpe.play_sound("sounds/thud.wav", { volume = 0.5, pitch = 1.4 })
+		-- Time crawls while the space is cut, easing back to full speed; the camera rolls with it.
+		wpe.slow_motion(0.35, 1.2, 0.4)
+		wpe.shake(wpe.get_camera(), { amplitude = 0.04, rotation = 1.5, duration = 0.8, frequency = 12 })
 	end
 	if self.cut and not self.cut:update(dt) then
 		self.cut = nil

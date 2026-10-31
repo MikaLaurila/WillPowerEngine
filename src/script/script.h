@@ -73,6 +73,7 @@
 #include "graphics/draw2d.h"
 #include "graphics/postfx.h"
 #include "graphics/scene_render.h"
+#include "scene/game_feel.h"
 #include "input/input.h"
 #include "physics/physics.h"
 #include "ui/ui.h"
@@ -114,6 +115,8 @@ typedef struct WPE_ScriptApp {
     WPE_PostFxConfig* (*postfx)(void* user_data, uint32_t** out_count);
     /* The scene's render settings, which scripts may change (wpe.set_texture_filter). */
     WPE_SceneRenderSettings* (*render_settings)(void* user_data);
+    /* The game clock's speed and shakes, which scripts drive (wpe.slow_motion, wpe.hit_stop, wpe.shake). */
+    WPE_GameFeel* (*game_feel)(void* user_data);
     /* Captures this frame (as the scene renders it, before post effects and 2D) into slot 1..8, and
      * returns the image asset path that shows it (valid until the host goes), or NULL (logged). */
     const char* (*capture_screen)(void* user_data, uint32_t slot);

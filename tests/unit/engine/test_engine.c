@@ -684,6 +684,61 @@ static void write_tiny_game(void) {
                "return S\n");
 }
 
+/* Hit-stop and shake through the engine: game time stops and resumes; scripts never see a shaken pose. */
+static void test_engine_hit_stop_and_shake(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/feel/scenes"));
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/feel/scripts"));
+    write_text(ROOT "/feel/project.json",
+               "{\"format\": \"wpe.project\", \"version\": 1, \"name\": \"Feel\", \"start_scene\": "
+               "\"scenes/main.scene\", \"display\": {\"width\": 64, \"height\": 48}}\n");
+    write_text(ROOT "/feel/scenes/main.scene",
+               "{\"format\": \"wpe.scene\", \"version\": 1, \"entities\": [\n"
+               " {\"id\": 1, \"name\": \"clock\", \"script\": {\"path\": \"scripts/feel.luau\"}},\n"
+               " {\"id\": 2, \"name\": \"box\", \"transform\": {\"position\": [1, 2, 3]}}]}\n");
+    /* Each update's game time goes into the clock's name. The first starts a 0.1 s hit-stop and a shake; the
+     * fourth half-speed slow motion for 0.1 s. */
+    write_text(
+        ROOT "/feel/scripts/feel.luau",
+        "local S = {}\n"
+        "function S:on_start() self.times = {}; self.box = wpe.find('box') end\n"
+        "function S:on_update(dt)\n"
+        "  local p = wpe.get_position(self.box)\n"
+        "  assert(p.x == 1 and p.y == 2 and p.z == 3)\n"
+        "  if #self.times == 0 then wpe.hit_stop(0.1); wpe.shake(self.box, {amplitude = 0.5, duration = 1}) "
+        "end\n"
+        "  if #self.times == 3 then wpe.slow_motion(0.5, 0.1); assert(wpe.get_time_scale() == 0.5) end\n"
+        "  if #self.times < 7 then table.insert(self.times, string.format('%.3f', dt)) end\n"
+        "  assert(math.abs(wpe.real_delta() - 0.05) < 1e-6)\n"
+        "  wpe.set_name(self.entity, table.concat(self.times, ','))\n"
+        "end\n"
+        "return S\n");
+    WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_engine_create(
+        &(WPE_EngineDesc){
+            .project_dir = ROOT "/feel", .embedded = true, .no_audio_device = true, .workers = 2},
+        &engine));
+    for (int i = 0; i < 9; ++i)
+        WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 0.05));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(wpe_engine_scripts(engine)).errors);
+    WPE_Ecs* ecs = wpe_engine_ecs(engine);
+    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_SCRIPT)});
+    WPE_TEST_ASSERT(wpe_ecs_iter_next(&it));
+    /* 0.05 s, then the hit-stop freezes two frames (0.1 s of real time), then time runs again; slow motion
+     * halves two frames (0.1 s of real time) and lets go. */
+    WPE_TEST_ASSERT_EQ_STR("0.050,0.000,0.000,0.050,0.025,0.025,0.050", wpe_scene_get_name(ecs, it.entity));
+    /* Between frames the box shows its shaken pose (what was rendered). */
+    WPE_EcsIter boxes = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    WPE_TEST_ASSERT(wpe_ecs_iter_next(&boxes));
+    const WPE_Transform* box = wpe_ecs_iter_get(&boxes, WPE_COMP_TRANSFORM);
+    WPE_TEST_ASSERT(box->position.x != 1.0f || box->position.y != 2.0f || box->position.z != 3.0f);
+    WPE_TEST_ASSERT(wpe_game_feel_is_shaking(wpe_engine_game_feel(engine), boxes.entity));
+    /* A scene load ends it all. */
+    WPE_TEST_ASSERT_OK(wpe_engine_load_scene(engine, "scenes/main.scene"));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_engine_game_feel(engine)->shake_count);
+    WPE_TEST_ASSERT_NEAR(1.0, wpe_game_feel_time_scale(wpe_engine_game_feel(engine)), 1e-6);
+    wpe_engine_destroy(engine);
+}
+
 /* A 2D menu: no camera, a button whose script writes its click count into a label. */
 static void write_menu_game(void) {
     WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/menu/scenes"));
@@ -1019,5 +1074,5 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_engine_scene_save_filter), WPE_TEST_CASE(test_engine_embedded_edit_mode),
     WPE_TEST_CASE(test_engine_captures_the_frame_before_post_effects),
     WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts),
-    WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
+    WPE_TEST_CASE(test_engine_hit_stop_and_shake), WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
     WPE_TEST_CASE(test_engine_creates_new_projects), WPE_TEST_CASE(test_engine_export_embeds_the_project))

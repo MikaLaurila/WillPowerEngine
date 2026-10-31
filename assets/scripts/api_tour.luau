@@ -281,6 +281,23 @@ function Tour:on_start()
 	wpe.remove_water(pool)
 	assert(wpe.get_water(pool) == nil)
 	wpe.destroy(pool)
+	-- Game feel: the game clock's speed and shakes. This scene counts its fixed steps, so the clock is only
+	-- touched and put back here (the engine tests play hit-stops and slow motion).
+	assert(wpe.get_time_scale() == 1 and wpe.real_delta() >= 0)
+	wpe.set_time_scale(0.5)
+	assert(wpe.get_time_scale() == 0.5)
+	wpe.set_time_scale(1)
+	assert(not pcall(wpe.set_time_scale, -1) and not pcall(wpe.slow_motion, 0.5, 0) and not pcall(wpe.hit_stop, 0))
+	assert(not pcall(wpe.slow_motion, -1, 1) and not pcall(wpe.slow_motion, 0.5, 1, -1))
+	local shaker = wpe.spawn("tour shaker")
+	wpe.shake(shaker, { amplitude = 0.2, rotation = 3, duration = 0.2, frequency = 25 })
+	assert(wpe.is_shaking(shaker))
+	wpe.stop_shake(shaker)
+	assert(not wpe.is_shaking(shaker))
+	wpe.shake(shaker) -- The defaults: 0.1 m for 0.3 s.
+	assert(wpe.is_shaking(shaker))
+	assert(not pcall(wpe.shake, shaker, { duration = 0 }) and not pcall(wpe.shake, shaker, { rotation = 500 }))
+	wpe.destroy(shaker)
 
 	-- Screen positions: a point straight ahead of the camera is in the middle of the screen.
 	local camera = wpe.get_camera()

@@ -177,6 +177,8 @@ WPE_Renderer* wpe_engine_renderer(const WPE_Engine* engine);
 const WPE_ProjectSettings* wpe_engine_project(const WPE_Engine* engine);
 /** The current scene's environment; changes apply from the next frame. */
 WPE_SceneEnvironment* wpe_engine_environment(WPE_Engine* engine);
+/** The game clock's speed (slow motion, hit-stops) and shakes; reset by every scene load. */
+WPE_GameFeel* wpe_engine_game_feel(WPE_Engine* engine);
 
 /** Debug overlays drawn over the scene (depth tested, not post-processed, under the scripts' 2D). */
 typedef struct WPE_EngineDebugDraw {

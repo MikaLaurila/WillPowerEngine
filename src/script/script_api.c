@@ -1950,6 +1950,91 @@ static int wpe__api_get_texture_filter(lua_State* L) {
     return 1;
 }
 
+/* ---- Game feel: time scale, slow motion, hit-stop, shakes ---------------------------------------------- */
+
+static WPE_GameFeel* wpe__game_feel(lua_State* L, const char* function) {
+    const WPE_ScriptApp* app = wpe__app(L, wpe__script_host_from(L)->app.game_feel != NULL, function);
+    return app->game_feel(app->user_data);
+}
+
+/* A number argument in [min, max]; raises naming the function and the argument otherwise. */
+static float wpe__check_range(lua_State* L, int arg, double min, double max, const char* function,
+                              const char* what) {
+    const double value = luaL_checknumber(L, arg);
+    if (!(value >= min && value <= max))
+        luaL_errorL(L, "wpe.%s: %s must be %g..%g", function, what, min, max);
+    return (float)value;
+}
+
+static int wpe__api_set_time_scale(lua_State* L) {
+    WPE_GameFeel* feel = wpe__game_feel(L, "set_time_scale");
+    feel->base_scale = wpe__check_range(L, 1, 0.0, 100.0, "set_time_scale", "the scale");
+    return 0;
+}
+
+static int wpe__api_get_time_scale(lua_State* L) {
+    lua_pushnumber(L, wpe_game_feel_time_scale(wpe__game_feel(L, "get_time_scale")));
+    return 1;
+}
+
+static int wpe__api_slow_motion(lua_State* L) {
+    WPE_GameFeel* feel = wpe__game_feel(L, "slow_motion");
+    const float scale = wpe__check_range(L, 1, 0.0, 100.0, "slow_motion", "the scale");
+    const float duration = wpe__check_range(L, 2, 0.001, 3600.0, "slow_motion", "the duration");
+    const float fade =
+        lua_isnoneornil(L, 3) ? 0.0f : wpe__check_range(L, 3, 0.0, 3600.0, "slow_motion", "the fade");
+    wpe_game_feel_slow_motion(feel, scale, duration, fade);
+    return 0;
+}
+
+static int wpe__api_hit_stop(lua_State* L) {
+    WPE_GameFeel* feel = wpe__game_feel(L, "hit_stop");
+    wpe_game_feel_hit_stop(feel, wpe__check_range(L, 1, 0.001, 60.0, "hit_stop", "the duration"));
+    return 0;
+}
+
+static int wpe__api_real_delta(lua_State* L) {
+    lua_pushnumber(L, wpe__game_feel(L, "real_delta")->real_dt);
+    return 1;
+}
+
+static int wpe__api_shake(lua_State* L) {
+    WPE_GameFeel* feel = wpe__game_feel(L, "shake");
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    WPE_ShakeParams params = {.amplitude = 0.1f, .rotation = 0.0f, .duration = 0.3f, .frequency = 20.0f};
+    if (!lua_isnoneornil(L, 2)) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        params.amplitude = wpe__field_number(L, 2, "amplitude", params.amplitude);
+        params.rotation = wpe__field_number(L, 2, "rotation", params.rotation);
+        params.duration = wpe__field_number(L, 2, "duration", params.duration);
+        params.frequency = wpe__field_number(L, 2, "frequency", params.frequency);
+    }
+    if (!(params.amplitude >= 0.0f && params.amplitude <= 1e3f))
+        luaL_errorL(L, "wpe.shake: amplitude must be 0..1000");
+    if (!(params.rotation >= 0.0f && params.rotation <= 180.0f))
+        luaL_errorL(L, "wpe.shake: rotation must be 0..180");
+    if (!(params.duration > 0.0f && params.duration <= 60.0f))
+        luaL_errorL(L, "wpe.shake: duration must be 0..60");
+    if (!(params.frequency >= 0.0f && params.frequency <= 1e3f))
+        luaL_errorL(L, "wpe.shake: frequency must be 0..1000");
+    if (!wpe_ecs_has_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_TRANSFORM))
+        luaL_errorL(L, "wpe.shake: entity 0x%08x has no transform", entity);
+    wpe_game_feel_shake(feel, entity, &params);
+    return 0;
+}
+
+static int wpe__api_stop_shake(lua_State* L) {
+    WPE_GameFeel* feel = wpe__game_feel(L, "stop_shake");
+    wpe_game_feel_stop_shake(feel, wpe__check_entity(L, 1));
+    return 0;
+}
+
+static int wpe__api_is_shaking(lua_State* L) {
+    WPE_GameFeel* feel = wpe__game_feel(L, "is_shaking");
+    lua_pushboolean(L, wpe_game_feel_is_shaking(feel, wpe__check_entity(L, 1)));
+    return 1;
+}
+
 /* ---- 2D drawing ------------------------------------------------------------------------------------ */
 
 static WPE_Draw2D* wpe__draw2d(lua_State* L) {
@@ -2970,6 +3055,14 @@ static const luaL_Reg wpe__api[] = {
     {"set_postfx", wpe__api_set_postfx},
     {"add_postfx", wpe__api_add_postfx},
     {"remove_postfx", wpe__api_remove_postfx},
+    {"set_time_scale", wpe__api_set_time_scale},
+    {"get_time_scale", wpe__api_get_time_scale},
+    {"slow_motion", wpe__api_slow_motion},
+    {"hit_stop", wpe__api_hit_stop},
+    {"real_delta", wpe__api_real_delta},
+    {"shake", wpe__api_shake},
+    {"stop_shake", wpe__api_stop_shake},
+    {"is_shaking", wpe__api_is_shaking},
     {"set_texture_filter", wpe__api_set_texture_filter},
     {"get_texture_filter", wpe__api_get_texture_filter},
     {"color", wpe__api_color},
