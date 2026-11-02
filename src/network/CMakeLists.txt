@@ -1,5 +1,7 @@
 add_library(wpe_network STATIC
     bits.c
+    discovery.c
+    session.c
     value.c
     transport.c
     transport_enet.c

@@ -87,6 +87,44 @@ void wpe__net_enet_release(void);
 /** Resolves a host name to an IPv4 address (host byte order) with DNS. */
 bool wpe__net_enet_resolve(const char* name, uint32_t* out_ipv4);
 
+/* ---- Datagram sockets (LAN discovery) -------------------------------------------------------
+ * Connectionless packets, possibly broadcast (ipv4 0xFFFFFFFF). On a hub, a datagram reaches every
+ * other socket bound to the port it is sent to (the address is ignored) 1 ms later. */
+#define WPE__NET_BROADCAST 0xFFFFFFFFu
+#define WPE__NET_LOOPBACK 0x7F000001u
+
+typedef struct wpe__NetSocket {
+    WPE_NetHub* hub;
+    void* state; /* The backend's. */
+    uint16_t port;
+} wpe__NetSocket;
+
+/** Opens a socket on `port` (0: any free one); several may share a port. Logged on failure. */
+WPE_Result wpe__net_socket_open(WPE_NetHub* hub, uint16_t port, bool local_only, wpe__NetSocket* out);
+void wpe__net_socket_close(wpe__NetSocket* s);
+/** Sends one datagram; false if it could not be sent (not logged: discovery is best effort). */
+bool wpe__net_socket_send(wpe__NetSocket* s, WPE_NetAddress to, const void* data, size_t size);
+/** Takes one received datagram (truncated to `capacity`); false when none is waiting. */
+bool wpe__net_socket_receive(wpe__NetSocket* s, void* buffer, size_t capacity, size_t* out_size,
+                             WPE_NetAddress* out_from);
+/** Milliseconds on the socket's clock (the hub's, or real time). */
+uint64_t wpe__net_socket_now(const wpe__NetSocket* s);
+
+WPE_Result wpe__net_enet_socket_open(uint16_t port, bool local_only, wpe__NetSocket* out);
+void wpe__net_enet_socket_close(wpe__NetSocket* s);
+bool wpe__net_enet_socket_send(wpe__NetSocket* s, WPE_NetAddress to, const void* data, size_t size);
+bool wpe__net_enet_socket_receive(wpe__NetSocket* s, void* buffer, size_t capacity, size_t* out_size,
+                                  WPE_NetAddress* out_from);
+uint64_t wpe__net_enet_clock(void);
+WPE_Result wpe__net_memory_socket_open(WPE_NetHub* hub, uint16_t port, wpe__NetSocket* out);
+void wpe__net_memory_socket_close(wpe__NetSocket* s);
+bool wpe__net_memory_socket_send(wpe__NetSocket* s, const void* data, size_t size, uint16_t to_port);
+bool wpe__net_memory_socket_receive(wpe__NetSocket* s, void* buffer, size_t capacity, size_t* out_size,
+                                    WPE_NetAddress* out_from);
+
+/** A transport's clock in milliseconds (for layers above it). */
+uint64_t wpe__net_transport_now(const WPE_NetTransport* t);
+
 /* Backend constructors: fill t->backend/t->state (and t->local_port). */
 WPE_Result wpe__net_enet_host(WPE_NetTransport* t, uint16_t port, bool local_only);
 WPE_Result wpe__net_enet_connect(WPE_NetTransport* t, WPE_NetAddress server);

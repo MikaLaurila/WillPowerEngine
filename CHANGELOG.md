@@ -4,6 +4,22 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 11: networking, phase 3: sessions and LAN discovery)
+- Sessions (`network/session.h`): a host and up to 7 players in a star. The join handshake checks
+  the protocol version and the game id and refuses with reasons (full, wrong game, not accepting,
+  protocol errors); players get ids and names, join/leave events, kicks, a shared scene, and
+  messages of their own kinds (16..255) for the layers above.
+- LAN discovery (`network/discovery.h`): beacons answer broadcast queries with the game's port,
+  names and player counts; browsers list them and drop silent ones. Datagram sockets over ENet
+  or the in-memory hub (deterministic).
+- Engine: `wpe_engine_net_start`/`_stop`/`_session`, `wpe_engine_game_id` (a hash of the
+  project file, scenes, prefabs and scripts, line endings ignored), `wpe_engine_scene_path`.
+  Players follow the host's scene loads. Project files get a `"network"` block (ports, player
+  limit, timeout).
+- Tests: joining, refusals, names, scenes, leaving, kicks, timeouts, hostile players and a
+  hostile host sending random messages, discovery on the hub and over UDP, and two engines
+  playing together (scene following, another build refused, discovery).
+
 ### Added (Milestone 11: networking, phase 2: serialization)
 - Bit packing (`network/bits.h`): any-width integers, varints and zigzag signed integers, exact
   floats and doubles, quantized floats and vectors, "smallest three" quaternions (15 bits per

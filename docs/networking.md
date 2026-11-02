@@ -8,7 +8,10 @@ networking milestone; sections marked *(coming)* describe parts that are not bui
 3. [Testing without a network: the in-memory hub](#the-in-memory-hub)
 4. [Packing messages: bits, quantization and rotations](#packing-messages)
 5. [Script values on the wire](#script-values-on-the-wire)
-6. Sessions, LAN discovery and replication *(coming)*
+6. [Sessions: players, joining and refusals](#sessions)
+7. [LAN discovery: finding games on your network](#lan-discovery)
+8. [Playing together: the engine and the project file](#playing-together)
+9. Replication: keeping objects in sync *(coming)*
 
 ## The basics
 
@@ -196,3 +199,116 @@ For example, `{lap = 3, best = 61.25}` takes 22 bytes. The reader checks everyth
 sees it: tables nest at most 16 deep, a message holds at most 65536 values, keys must be strings,
 booleans or numbers (not NaN), and a table cannot claim more entries than its bytes could hold, so
 a forged "4 billion entries" header cannot make the game allocate gigabytes.
+
+## Sessions
+
+A transport only knows *connections*. A game needs more: who the players are, whether someone may
+join, and what everyone is playing. That is the **session** (`network/session.h`), built on a
+transport.
+
+**Topology.** WillPowerEngine uses a **star**: one player *hosts*, everyone else connects to the
+host, and players talk only to the host. The host sees everything and decides what is true (who
+finished first, whose turn it is) and relays what the others need to know. The alternative, every
+player connected to every other (peer-to-peer), has no referee and gets complicated quickly, so
+most small games use a star with a player hosting (a *listen server*). A host that only serves,
+without playing, is a *dedicated server* (the runtime gets options for that later in this milestone).
+
+**Players** are numbered: the host is player 0, and joiners get the lowest free number from 1
+(a player who leaves frees the number for the next one). Everyone knows every player's name.
+
+**Joining** is a short conversation, a *handshake*:
+
+```
+player                                       host
+  |--- connect (transport) ------------------->|
+  |--- HELLO: protocol 1, game id, "Alice" --->|   checks the version, the game, room
+  |<-- WELCOME: you are 1, players, scene -----|   (or a refusal: disconnect with a reason)
+  |                                            |--- PLAYER_JOINED "Alice" ---> the others
+```
+
+The **game id** is a 64-bit fingerprint of the game: two copies of the game that differ in a
+script or scene would behave differently, and playing them together would go wrong in confusing
+ways. So the host refuses players whose id differs (`WPE_SESSION_REASON_WRONG_GAME`), as it does
+for another engine protocol (`VERSION`), a full game (`FULL`) or a host not taking players
+(`NOT_ACCEPTING`).
+
+The session reports what happens as events:
+
+| Event | Meaning |
+|---|---|
+| `JOINED` | This side is in the game (the host: right away), as `player` |
+| `PLAYER_JOINED` | `player` joined; `text` is the name. A joiner gets one for everyone already there |
+| `PLAYER_LEFT` | `player` left; `reason` says why (closed, timed out, kicked...) |
+| `SCENE` | The host is playing the scene `text` now |
+| `MESSAGE` | A message of `kind` from `player` (layers above the session use kinds 16..255) |
+| `ENDED` | This player's game is over: refused, kicked, the host left or went silent |
+
+The host **kicks** with `wpe_session_kick(session, player, reason)`, the reason being the game's
+own (from `WPE_SESSION_REASON_GAME`), so the kicked player can say why.
+
+**Distrust, again.** A session also checks every session message. A player sending garbage, or
+anything but HELLO first, is refused (`PROTOCOL`), and so is one that connects but never says
+HELLO. A player who receives nonsense from a "host" leaves. The tests play both: hostile players
+sending random bytes, and a fake host answering with random messages.
+
+## LAN discovery
+
+Typing an IP address is no fun, so on a local network (home Wi-Fi, a LAN party) players can *find*
+games. `network/discovery.h` uses UDP **broadcast**: a packet sent to the address
+255.255.255.255 reaches every machine on the local network (but no further: routers do not pass
+broadcasts on, so this never finds games on the internet).
+
+- A host runs a **beacon** on the *discovery port* (47809 unless the project says otherwise).
+- A player looking for games runs a **browser**. Every second it broadcasts a query: "is anyone
+  hosting the game with this id?"
+- Beacons of the same game answer with their game port, the player count, and the game's and
+  host's names. Other games stay silent.
+- The browser lists what answered, and drops a game it has not heard from for 3.5 seconds.
+
+```c
+WPE_DiscoveryBrowser* browser = NULL;
+wpe_discovery_browser_create(&(WPE_DiscoveryDesc){.game_id = wpe_engine_game_id(engine)}, &browser);
+/* each frame: */
+wpe_discovery_browser_update(browser);
+for (uint32_t i = 0; i < wpe_discovery_browser_count(browser); ++i) {
+    WPE_DiscoveredGame game;
+    wpe_discovery_browser_game(browser, i, &game);
+    /* show game.info.game_name, game.info.host_name, game.info.players / game.info.max_players;
+       to join, connect to game.address */
+}
+```
+
+A session hosts with a beacon when `desc.discoverable` is set; the engine does this unless told
+`hidden`.
+
+## Playing together
+
+The engine (`engine/engine.h`) puts it together. A game hosts or joins with one call:
+
+```c
+/* Host: */
+wpe_engine_net_start(engine, &(WPE_EngineNetDesc){.player_name = "Mika"});
+/* Join: */
+wpe_engine_net_start(engine, &(WPE_EngineNetDesc){.join = "192.168.1.20", .player_name = "Alice"});
+```
+
+From then on the engine takes the session's events at the start of every frame and sends what was
+queued at the end. **The host's scene is shared**: whenever the host loads a scene file, every
+player loads it too, and a player who joins loads the host's current scene. (A player can sit in its
+own menu scene until then.) If the host leaves, the players' sessions end and they stay where they
+are. `wpe_engine_net_stop` leaves or closes the game.
+
+The **game id** (`wpe_engine_game_id`) is computed from the files that decide what the game does:
+`project.json`, scenes, prefabs and scripts. Line endings do not count (a Windows and a Linux
+checkout of the same game match), and neither do other files such as textures or notes.
+
+Ports and limits come from the project file:
+
+```json
+"network": {"port": 47810, "discovery_port": 47809, "max_players": 4, "timeout_ms": 5000}
+```
+
+**Firewalls.** The first time a game hosts, Windows may ask whether to allow it on the network:
+allow it on private networks, or nobody can join. Playing over the internet needs the host's router
+to forward the game's UDP port to the host (*port forwarding*). Connecting through routers
+without that (*NAT traversal*) is not supported yet.

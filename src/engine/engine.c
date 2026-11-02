@@ -71,7 +71,12 @@ struct WPE_Engine {
     WPE_Texture* capture_textures[WPE__CAPTURE_SLOTS];
     uint32_t captures_pending; /* Slots to fill from this frame (bit per slot). */
     char capture_path[32];
-    char sky_image[WPE_VFS_PATH_MAX]; /* Its path. */
+    char sky_image[WPE_VFS_PATH_MAX];  /* Its path. */
+    WPE_Session* session;              /* Multiplayer, when started (wpe_engine_net_start). */
+    char scene_path[WPE_VFS_PATH_MAX]; /* The scene file last loaded ("" after a text load): a host shares it.
+                                        */
+    uint64_t game_id;
+    bool game_id_known;
     bool quit;
     bool embedded;        /* The host forwards events and shows the framebuffer. */
     bool simulating;      /* Scripts, physics, animation and audio run (false: edit mode). */
@@ -425,6 +430,7 @@ WPE_Result wpe_engine_create(const WPE_EngineDesc* desc, WPE_Engine** out_engine
 
 void wpe_engine_destroy(WPE_Engine* engine) {
     if (!engine) return;
+    wpe_engine_net_stop(engine);
     /* Users of the world and its assets first, then the world, then what they read from. */
     wpe_script_host_destroy(engine->scripts);
     wpe_audio_destroy(engine->audio);
@@ -472,6 +478,7 @@ static void wpe__apply_music(WPE_Engine* engine) {
 WPE_Result wpe_engine_load_scene_text(WPE_Engine* engine, const char* text, size_t size, const char* name) {
     if (!engine || !text) return WPE_RESULT_ERROR_NULL_ARG;
     if (!name) name = "scene";
+    engine->scene_path[0] = '\0'; /* wpe_engine_load_scene() sets it once a file has loaded. */
     WPE_Result result = wpe_scene_clear(engine->ecs);
     engine->camera = WPE_ENTITY_NULL;
     engine->environment = wpe_scene_environment_default();
@@ -504,6 +511,11 @@ WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
     if (result == WPE_RESULT_ERROR_NOT_FOUND) wpe_log_error("scene '%s' not found", path);
     if (result == WPE_RESULT_OK) {
         result = wpe_engine_load_scene_text(engine, data, size, path);
+        if (result == WPE_RESULT_OK) {
+            snprintf(engine->scene_path, sizeof engine->scene_path, "%s", path);
+            /* A host takes its players along. */
+            if (wpe_session_is_host(engine->session)) (void)wpe_session_set_scene(engine->session, path);
+        }
     } else {
         /* As with a failed load, the world is left empty. */
         const WPE_Result cleared = wpe_scene_clear(engine->ecs);
@@ -514,6 +526,10 @@ WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
     wpe_free(data);
     return result;
 }
+const char* wpe_engine_scene_path(const WPE_Engine* engine) {
+    return engine ? engine->scene_path : "";
+}
+
 WPE_Result wpe_engine_save_scene(const WPE_Engine* engine, const char* os_path) {
     if (!engine || !os_path) return WPE_RESULT_ERROR_NULL_ARG;
     const WPE_SceneContext context = wpe__context(engine);
@@ -531,6 +547,138 @@ WPE_Entity wpe_engine_camera(const WPE_Engine* engine) {
     WPE_EcsIter it = wpe_ecs_query(
         engine->ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_CAMERA) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
     return wpe_ecs_iter_next(&it) ? it.entity : WPE_ENTITY_NULL;
+}
+
+/* ---- Multiplayer --------------------------------------------------------------------------------- */
+
+typedef struct wpe__GameHash {
+    const WPE_Vfs* vfs;
+    uint64_t hash;
+    bool failed;
+} wpe__GameHash;
+
+static bool wpe__ends_with(const char* text, const char* suffix) {
+    const size_t length = strlen(text);
+    const size_t suffix_length = strlen(suffix);
+    return length >= suffix_length && strcmp(text + length - suffix_length, suffix) == 0;
+}
+
+static void wpe__fnv(uint64_t* hash, const void* data, size_t size, bool skip_cr) {
+    const uint8_t* bytes = data;
+    for (size_t i = 0; i < size; ++i) {
+        if (skip_cr && bytes[i] == '\r') continue; /* Checkouts may differ in line endings only. */
+        *hash = (*hash ^ bytes[i]) * 0x100000001B3ull;
+    }
+}
+
+/* Hashes the files that decide what the game does, in the VFS's (sorted) order. */
+static bool wpe__hash_file(const char* path, void* user_data) {
+    wpe__GameHash* h = user_data;
+    if (!(strcmp(path, WPE_PROJECT_FILE) == 0 || wpe__ends_with(path, ".scene") ||
+          wpe__ends_with(path, ".prefab") || wpe__ends_with(path, ".luau")))
+        return true;
+    void* data = NULL;
+    size_t size = 0;
+    if (wpe_vfs_read_all(h->vfs, path, &data, &size) != WPE_RESULT_OK) {
+        h->failed = true;
+        return true;
+    }
+    wpe__fnv(&h->hash, path, strlen(path) + 1, false);
+    wpe__fnv(&h->hash, data, size, true);
+    wpe_free(data);
+    return true;
+}
+
+uint64_t wpe_engine_game_id(WPE_Engine* engine) {
+    if (!engine) return 0;
+    if (engine->game_id_known) return engine->game_id;
+    wpe__GameHash h = {.vfs = engine->vfs, .hash = 0xCBF29CE484222325ull};
+    if (wpe_vfs_list(engine->vfs, wpe__hash_file, &h) != WPE_RESULT_OK || h.failed)
+        wpe_log_warn("some game files could not be read for the game id");
+    engine->game_id = h.hash;
+    engine->game_id_known = true;
+    return engine->game_id;
+}
+
+void wpe_engine_net_stop(WPE_Engine* engine) {
+    if (!engine || !engine->session) return;
+    wpe_session_destroy(engine->session);
+    engine->session = NULL;
+}
+
+WPE_Result wpe_engine_net_start(WPE_Engine* engine, const WPE_EngineNetDesc* desc) {
+    if (!engine || !desc) return WPE_RESULT_ERROR_NULL_ARG;
+    wpe_engine_net_stop(engine);
+    const WPE_ProjectNetwork* settings = &engine->project.network;
+    const WPE_SessionDesc session = {
+        .transport = {.hub = desc->hub,
+                      .port = desc->port ? desc->port : settings->port,
+                      .timeout_ms = settings->timeout_ms,
+                      .local_only = desc->local_only,
+                      .conditions = desc->conditions},
+        .max_players = settings->max_players,
+        .game_id = wpe_engine_game_id(engine),
+        .player_name = desc->player_name,
+        .game_name = engine->project.name,
+        .discoverable = !desc->hidden,
+        .discovery_port = settings->discovery_port,
+    };
+    WPE_Result result = WPE_RESULT_OK;
+    if (desc->join) {
+        WPE_NetAddress address = {0};
+        result = wpe_network_address_parse(desc->join, settings->port, &address);
+        if (result == WPE_RESULT_OK) result = wpe_session_join(&session, address, &engine->session);
+        if (result == WPE_RESULT_OK) wpe_log_info("joining the game at %s", desc->join);
+    } else {
+        result = wpe_session_host(&session, &engine->session);
+        if (result == WPE_RESULT_OK) {
+            wpe_log_info("hosting on port %u",
+                         (unsigned)wpe_network_local_port(wpe_session_transport(engine->session)));
+            if (engine->scene_path[0]) (void)wpe_session_set_scene(engine->session, engine->scene_path);
+        }
+    }
+    if (result != WPE_RESULT_OK)
+        wpe_log_error("cannot start the multiplayer game: %s", wpe_result_to_string(result));
+    return result;
+}
+
+WPE_Session* wpe_engine_session(const WPE_Engine* engine) {
+    return engine ? engine->session : NULL;
+}
+
+/* Takes the session's events: a player follows the host's scene; joins and leaves are logged. */
+static void wpe__pump_session(WPE_Engine* engine) {
+    WPE_Session* session = engine->session;
+    if (!session) return;
+    WPE_SessionEvent e;
+    while (wpe_session_poll(session, &e)) {
+        switch (e.type) {
+        case WPE_SESSION_EVENT_JOINED:
+            if (!wpe_session_is_host(session)) wpe_log_info("joined the game as player %u", e.player);
+            break;
+        case WPE_SESSION_EVENT_PLAYER_JOINED:
+            wpe_log_info("%s joined (player %u)", e.text, e.player);
+            break;
+        case WPE_SESSION_EVENT_PLAYER_LEFT:
+            wpe_log_info("%s left (%s)", e.text, wpe_session_reason_name(e.reason));
+            break;
+        case WPE_SESSION_EVENT_ENDED:
+            wpe_log_warn("the multiplayer game ended: %s", wpe_session_reason_name(e.reason));
+            break;
+        case WPE_SESSION_EVENT_SCENE:
+            if (!wpe_vfs_path_is_valid(e.text) || !wpe_vfs_exists(engine->vfs, e.text)) {
+                /* The game id should prevent this: the host plays a scene this game does not have. */
+                wpe_log_error("the host plays scene '%s', which this game does not have: leaving", e.text);
+                wpe_engine_net_stop(engine);
+                return;
+            }
+            snprintf(engine->pending_scene, sizeof engine->pending_scene, "%s", e.text);
+            break;
+        case WPE_SESSION_EVENT_MESSAGE:
+        case WPE_SESSION_EVENT_NONE:
+            break; /* Replication and script messages come with the next milestone phases. */
+        }
+    }
 }
 
 /* ---- Frames -------------------------------------------------------------------------------------- */
@@ -801,6 +949,7 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
         if (!open) engine->quit = true;
     }
     wpe_input_update(engine->input);
+    wpe__pump_session(engine); /* Also in edit mode: connections stay alive. */
     const bool captured = wpe_input_mouse_captured(engine->input);
     if (engine->window && captured != engine->mouse_captured &&
         wpe_window_set_relative_mouse(engine->window, captured) == WPE_RESULT_OK)
@@ -826,6 +975,7 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
         result = wpe_engine_load_scene(engine, path);
         engine->transition_loading = false;
     }
+    wpe_session_flush(engine->session);
     ++engine->stats.frames;
     engine->stats.entities = wpe_ecs_entity_count(engine->ecs);
     engine->stats.frame_ms = (wpe_platform_time_seconds() - start) * 1000.0;

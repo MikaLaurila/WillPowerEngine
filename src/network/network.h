@@ -13,6 +13,8 @@
 #define WPE_NETWORK_NETWORK_H
 
 #include "network/bits.h"
+#include "network/discovery.h"
+#include "network/session.h"
 #include "network/transport.h"
 #include "network/value.h"
 

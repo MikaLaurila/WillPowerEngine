@@ -59,7 +59,7 @@ Saved data (`wpe.save_data`) goes to the player's own directory for the game, `%
 
 The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which the editor will reuse. Each frame the engine does the following:
 
-1. Reads input.
+1. Reads input, and takes multiplayer events when a game is hosted or joined.
 2. Runs fixed steps (scripts' `on_fixed_update`, physics, collision callbacks), then `on_update`, animation, transforms and audio.
 3. Renders from the scene camera, applies the scene's post-processing, then draws the scripts' 2D drawing on top.
 4. Performs scene switches requested with `wpe.load_scene`.
@@ -79,6 +79,7 @@ The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which t
   "audio": {"master": 1, "effects": 1, "music": 0.7},
   "scripting": {"memory_limit_mb": 64, "time_limit_ms": 250},
   "prefabs": {"crate": "meshes/crate.prim", "figure": "meshes/RiggedFigure.glb"},
+  "network": {"port": 47810, "discovery_port": 47809, "max_players": 4, "timeout_ms": 5000},
   "input": {"keyboard_player": 1, "stick_deadzone": 0.2, "actions": {"jump": [{"key": "space"}, {"pad_button": "south"}]}}
 }
 ```
@@ -94,6 +95,7 @@ The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which t
 | `audio` | Bus volumes. |
 | `scripting` | Luau heap limit and per-callback time budget. |
 | `prefabs` | Names for `wpe.instantiate(name)`, each mapped to a prefab file (`.prefab`) or a model asset path. |
+| `network` | Multiplayer (see [networking.md](networking.md#playing-together)): the UDP `port` a host listens on, the `discovery_port` of LAN discovery (the two must differ), `max_players` (2..8, the host included) and `timeout_ms`, after which a silent player is dropped (1000..60000). |
 | `input` | Dead zones, the press threshold, the keyboard's player and the actions (below). |
 
 Like scene files, the project file is read strictly: unknown keys and bad values are errors that report the line.

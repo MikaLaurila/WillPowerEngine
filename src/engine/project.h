@@ -13,6 +13,7 @@
  * false}, "simulation": {"fixed_rate": 60, "max_steps": 8}, "assets": {"max_texture_size": 256}, "audio":
  * {"master": 1, "effects": 1, "music": 0.8}, "scripting": {"memory_limit_mb": 64, "time_limit_ms": 250},
  *   "prefabs": {"crate": "meshes/crate.prim", "figure": "meshes/RiggedFigure.glb"},
+ *   "network": {"port": 47810, "discovery_port": 47809, "max_players": 4, "timeout_ms": 5000},
  *   "input": {
  *     "keyboard_player": 1, "stick_deadzone": 0.2, "stick_outer": 0.95, "trigger_deadzone": 0.1,
  *     "press_threshold": 0.5,
@@ -41,6 +42,7 @@
 #include "core/json.h"
 #include "core/result.h"
 #include "input/input.h"
+#include "network/network.h"
 #include "vfs/vfs.h"
 
 #define WPE_PROJECT_FORMAT_VERSION 1u
@@ -48,6 +50,14 @@
 #define WPE_PROJECT_FILE "project.json"
 #define WPE_PROJECT_NAME_MAX 64u
 #define WPE_PROJECT_MAX_PREFABS 64u
+
+/** Multiplayer settings ("network" in project.json; see docs/networking.md). */
+typedef struct WPE_ProjectNetwork {
+    uint16_t port;           /* UDP port a host listens on (1..65535; default 47810). */
+    uint16_t discovery_port; /* UDP port of LAN discovery (1..65535; default 47809). */
+    uint32_t max_players;    /* Players in a game, the host included (2..8; default 4). */
+    uint32_t timeout_ms;     /* A silent player is dropped after this (1000..60000; default 5000). */
+} WPE_ProjectNetwork;
 
 /** A named prefab: scripts call wpe.instantiate(name) for the model at `path`. */
 typedef struct WPE_ProjectPrefab {
@@ -73,6 +83,7 @@ typedef struct WPE_ProjectSettings {
     uint32_t action_count;
     WPE_ProjectPrefab prefabs[WPE_PROJECT_MAX_PREFABS];
     uint32_t prefab_count;
+    WPE_ProjectNetwork network;
 } WPE_ProjectSettings;
 
 /** Fills `out` with the defaults: 320x240 at scale 3, 60 Hz, unit volumes, no actions. @thread_safety Any

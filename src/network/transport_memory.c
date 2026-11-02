@@ -70,6 +70,23 @@ typedef struct wpe__MemEndpoint {
     wpe__MemLink links[WPE_NET_MAX_PEERS];
 } wpe__MemEndpoint;
 
+/* A datagram socket on the hub, and the datagrams waiting for it. */
+typedef struct wpe__MemDatagram {
+    uint64_t deliver_ms;
+    uint32_t to_socket;
+    uint16_t from_port;
+    uint8_t* data; /* Owned. */
+    size_t size;
+} wpe__MemDatagram;
+
+typedef struct wpe__MemSocket {
+    uint32_t id;
+    uint16_t port;
+    wpe__MemDatagram* inbox; /* Delivered, not yet received. */
+    size_t inbox_count;
+    size_t inbox_capacity;
+} wpe__MemSocket;
+
 struct WPE_NetHub {
     uint64_t now;
     uint32_t next_id;
@@ -80,6 +97,12 @@ struct WPE_NetHub {
     wpe__MemPacket* packets;
     size_t packet_count;
     size_t packet_capacity;
+    wpe__MemSocket** sockets;
+    size_t socket_count;
+    size_t socket_capacity;
+    wpe__MemDatagram* datagrams; /* In flight. */
+    size_t datagram_count;
+    size_t datagram_capacity;
 };
 
 /* ---- Helpers --------------------------------------------------------------------------------- */
@@ -395,12 +418,132 @@ WPE_Result wpe_network_hub_create(WPE_NetHub** out_hub) {
 
 void wpe_network_hub_destroy(WPE_NetHub* hub) {
     if (!hub) return;
-    wpe_assert(hub->endpoint_count == 0); /* Its transports must be destroyed first. */
+    wpe_assert(hub->endpoint_count == 0 && hub->socket_count == 0); /* Destroy what uses it first. */
     for (size_t i = 0; i < hub->packet_count; ++i)
         wpe_free(hub->packets[i].data);
+    for (size_t i = 0; i < hub->datagram_count; ++i)
+        wpe_free(hub->datagrams[i].data);
     wpe_free(hub->packets);
+    wpe_free(hub->datagrams);
     wpe_free(hub->endpoints);
+    wpe_free(hub->sockets);
     wpe_free(hub);
+}
+
+/* ---- Datagram sockets ------------------------------------------------------------------------ */
+
+/* Returns `array` with room for one more element (possibly moved), or NULL when out of memory (the
+ * array is then unchanged and still owned by the caller). */
+static void* wpe__reserve(void* array, size_t* capacity, size_t count, size_t element, size_t first) {
+    if (count < *capacity) return array;
+    const size_t grown_capacity = *capacity ? *capacity * 2 : first;
+    void* grown = wpe_realloc(array, grown_capacity * element);
+    if (grown) *capacity = grown_capacity;
+    return grown;
+}
+
+static wpe__MemSocket* wpe__find_socket(const WPE_NetHub* hub, uint32_t id) {
+    for (size_t i = 0; i < hub->socket_count; ++i)
+        if (hub->sockets[i]->id == id) return hub->sockets[i];
+    return NULL;
+}
+
+WPE_Result wpe__net_memory_socket_open(WPE_NetHub* hub, uint16_t port, wpe__NetSocket* out) {
+    if (port == 0) {
+        /* A free port: not used by any socket or transport. */
+        for (uint32_t p = 60000u; p <= 65535u && port == 0; ++p) {
+            bool taken = wpe__find_port(hub, (uint16_t)p) != NULL;
+            for (size_t i = 0; i < hub->socket_count && !taken; ++i)
+                taken = hub->sockets[i]->port == p;
+            if (!taken) port = (uint16_t)p;
+        }
+        if (port == 0) return WPE_RESULT_ERROR_CAPACITY;
+    }
+    wpe__MemSocket** sockets =
+        wpe__reserve(hub->sockets, &hub->socket_capacity, hub->socket_count, sizeof *hub->sockets, 8);
+    if (!sockets) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    hub->sockets = sockets;
+    wpe__MemSocket* s = wpe_alloc_zeroed(1, sizeof *s);
+    if (!s) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    s->id = ++hub->next_id;
+    s->port = port;
+    hub->sockets[hub->socket_count++] = s;
+    *out = (wpe__NetSocket){.hub = hub, .state = s, .port = port};
+    return WPE_RESULT_OK;
+}
+
+void wpe__net_memory_socket_close(wpe__NetSocket* socket) {
+    WPE_NetHub* hub = socket->hub;
+    wpe__MemSocket* s = socket->state;
+    for (size_t i = 0; i < s->inbox_count; ++i)
+        wpe_free(s->inbox[i].data);
+    wpe_free(s->inbox);
+    for (size_t i = 0; i < hub->socket_count; ++i) {
+        if (hub->sockets[i] != s) continue;
+        hub->sockets[i] = hub->sockets[--hub->socket_count];
+        break;
+    }
+    wpe_free(s);
+    socket->state = NULL;
+}
+
+bool wpe__net_memory_socket_send(wpe__NetSocket* socket, const void* data, size_t size, uint16_t to_port) {
+    WPE_NetHub* hub = socket->hub;
+    const wpe__MemSocket* from = socket->state;
+    for (size_t i = 0; i < hub->socket_count; ++i) {
+        const wpe__MemSocket* to = hub->sockets[i];
+        if (to == from || to->port != to_port) continue;
+        wpe__MemDatagram* datagrams = wpe__reserve(hub->datagrams, &hub->datagram_capacity,
+                                                   hub->datagram_count, sizeof *hub->datagrams, 16);
+        if (!datagrams) return false;
+        hub->datagrams = datagrams;
+        uint8_t* copy = size ? wpe_alloc(size) : NULL;
+        if (size && !copy) return false;
+        if (size) memcpy(copy, data, size);
+        hub->datagrams[hub->datagram_count++] = (wpe__MemDatagram){.deliver_ms = hub->now + 1,
+                                                                   .to_socket = to->id,
+                                                                   .from_port = from->port,
+                                                                   .data = copy,
+                                                                   .size = size};
+    }
+    return true;
+}
+
+bool wpe__net_memory_socket_receive(wpe__NetSocket* socket, void* buffer, size_t capacity, size_t* out_size,
+                                    WPE_NetAddress* out_from) {
+    wpe__MemSocket* s = socket->state;
+    if (s->inbox_count == 0) return false;
+    const wpe__MemDatagram d = s->inbox[0];
+    memmove(&s->inbox[0], &s->inbox[1], (s->inbox_count - 1) * sizeof *s->inbox);
+    --s->inbox_count;
+    const size_t size = d.size < capacity ? d.size : capacity;
+    if (size) memcpy(buffer, d.data, size);
+    wpe_free(d.data);
+    *out_size = size;
+    *out_from = (WPE_NetAddress){.ipv4 = WPE__MEM_LOOPBACK, .port = d.from_port};
+    return true;
+}
+
+/* Moves due datagrams into their sockets' inboxes, in sending order. */
+static void wpe__deliver_datagrams(WPE_NetHub* hub) {
+    size_t kept = 0;
+    for (size_t i = 0; i < hub->datagram_count; ++i) {
+        wpe__MemDatagram d = hub->datagrams[i];
+        if (d.deliver_ms > hub->now) {
+            hub->datagrams[kept++] = d;
+            continue;
+        }
+        wpe__MemSocket* to = wpe__find_socket(hub, d.to_socket);
+        wpe__MemDatagram* inbox =
+            to ? wpe__reserve(to->inbox, &to->inbox_capacity, to->inbox_count, sizeof *to->inbox, 8) : NULL;
+        if (inbox) {
+            to->inbox = inbox;
+            to->inbox[to->inbox_count++] = d;
+        } else {
+            wpe_free(d.data); /* The socket closed (or no memory): lost, as a datagram may be. */
+        }
+    }
+    hub->datagram_count = kept;
 }
 
 void wpe_network_hub_advance(WPE_NetHub* hub, uint32_t milliseconds) {
@@ -426,6 +569,7 @@ void wpe_network_hub_advance(WPE_NetHub* hub, uint32_t milliseconds) {
     }
     hub->now = target;
     wpe__check_timeouts(hub);
+    wpe__deliver_datagrams(hub);
 }
 
 uint64_t wpe_network_hub_now(const WPE_NetHub* hub) {

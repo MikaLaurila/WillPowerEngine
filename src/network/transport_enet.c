@@ -58,6 +58,80 @@ bool wpe__net_enet_resolve(const char* name, uint32_t* out_ipv4) {
     return ok;
 }
 
+/* ---- Datagram sockets (discovery) ------------------------------------------------------------ */
+
+uint64_t wpe__net_enet_clock(void) {
+    static uint32_t last = 0;
+    static uint64_t clock = 0;
+    static bool started = false;
+    const uint32_t time = enet_time_get();
+    if (started) clock += (uint32_t)(time - last);
+    started = true;
+    last = time;
+    return clock;
+}
+
+WPE_Result wpe__net_enet_socket_open(uint16_t port, bool local_only, wpe__NetSocket* out) {
+    if (!wpe__net_enet_acquire()) return WPE_RESULT_ERROR_IO;
+    ENetSocket* socket = wpe_alloc(sizeof *socket);
+    if (!socket) {
+        wpe__net_enet_release();
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    *socket = enet_socket_create(ENET_SOCKET_TYPE_DATAGRAM);
+    ENetAddress address = {.host = local_only ? ENET_HOST_TO_NET_32(WPE__NET_LOOPBACK) : ENET_HOST_ANY,
+                           .port = port};
+    /* Several games on one machine may each listen on the discovery port. */
+    const bool ok =
+        *socket != ENET_SOCKET_NULL && enet_socket_set_option(*socket, ENET_SOCKOPT_NONBLOCK, 1) == 0 &&
+        enet_socket_set_option(*socket, ENET_SOCKOPT_BROADCAST, 1) == 0 &&
+        enet_socket_set_option(*socket, ENET_SOCKOPT_REUSEADDR, 1) == 0 &&
+        enet_socket_bind(*socket, &address) == 0 && enet_socket_get_address(*socket, &address) == 0;
+    if (!ok) {
+        if (*socket != ENET_SOCKET_NULL) enet_socket_destroy(*socket);
+        wpe_free(socket);
+        wpe__net_enet_release();
+        wpe_log_error("cannot open UDP port %u for discovery", (unsigned)port);
+        return WPE_RESULT_ERROR_IO;
+    }
+    *out = (wpe__NetSocket){.state = socket, .port = address.port};
+    return WPE_RESULT_OK;
+}
+
+void wpe__net_enet_socket_close(wpe__NetSocket* s) {
+    ENetSocket* socket = s->state;
+    enet_socket_destroy(*socket);
+    wpe_free(socket);
+    s->state = NULL;
+    wpe__net_enet_release();
+}
+
+bool wpe__net_enet_socket_send(wpe__NetSocket* s, WPE_NetAddress to, const void* data, size_t size) {
+    const ENetSocket* socket = s->state;
+    const ENetAddress address = {.host = to.ipv4 == WPE__NET_BROADCAST ? ENET_HOST_BROADCAST
+                                                                       : ENET_HOST_TO_NET_32(to.ipv4),
+                                 .port = to.port};
+    ENetBuffer buffer = {.data = (void*)data, .dataLength = size};
+    return enet_socket_send(*socket, &address, &buffer, 1) == (int)size;
+}
+
+bool wpe__net_enet_socket_receive(wpe__NetSocket* s, void* data, size_t capacity, size_t* out_size,
+                                  WPE_NetAddress* out_from) {
+    const ENetSocket* socket = s->state;
+    ENetAddress from = {0};
+    ENetBuffer buffer = {.data = data, .dataLength = capacity};
+    /* Errors (such as Windows reporting an unreachable port from an earlier send) just skip. */
+    for (int tries = 0; tries < 16; ++tries) {
+        const int got = enet_socket_receive(*socket, &from, &buffer, 1);
+        if (got == 0) return false;
+        if (got < 0) continue;
+        *out_size = (size_t)got;
+        *out_from = (WPE_NetAddress){.ipv4 = ENET_NET_TO_HOST_32(from.host), .port = from.port};
+        return true;
+    }
+    return false;
+}
+
 /* ---- Conditions ------------------------------------------------------------------------------ */
 
 /* The transport being serviced, for the intercept callback (ENet hosts carry no user pointer). */

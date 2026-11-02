@@ -25,6 +25,10 @@ void wpe_project_settings_default(WPE_ProjectSettings* out) {
     out->script_memory_mb = 64;
     out->script_time_limit_ms = 250.0;
     out->input = wpe_input_settings_default();
+    out->network = (WPE_ProjectNetwork){.port = WPE_NET_DEFAULT_PORT,
+                                        .discovery_port = WPE_DISCOVERY_DEFAULT_PORT,
+                                        .max_players = 4,
+                                        .timeout_ms = 5000};
 }
 
 /* One binding object: exactly one source key, plus "scale" and (axes only) "range". */
@@ -138,7 +142,8 @@ static bool wpe__parse_input(wpe__JsonReader* r, const WPE_JsonValue* v, WPE_Pro
 
 static bool wpe__parse_project(wpe__JsonReader* r, const WPE_JsonValue* root, WPE_ProjectSettings* out) {
     if (!WPE__JSON_CHECK_OBJECT(r, root, "project", "format", "version", "name", "start_scene", "font",
-                                "display", "simulation", "assets", "audio", "scripting", "prefabs", "input"))
+                                "display", "simulation", "assets", "audio", "scripting", "prefabs", "input",
+                                "network"))
         return false;
     const char* format = wpe_json_string(wpe_json_get(root, "format"));
     if (!format || strcmp(format, "wpe.project") != 0)
@@ -214,6 +219,24 @@ static bool wpe__parse_project(wpe__JsonReader* r, const WPE_JsonValue* root, WP
             memcpy(prefab->path, text, strlen(text) + 1);
             out->prefab_count = i + 1;
         }
+    }
+    const WPE_JsonValue* network = wpe_json_get(root, "network");
+    if (network) {
+        uint32_t port = out->network.port;
+        uint32_t discovery_port = out->network.discovery_port;
+        if (!WPE__JSON_CHECK_OBJECT(r, network, "network", "port", "discovery_port", "max_players",
+                                    "timeout_ms") ||
+            !wpe__json_read_uint(r, network, "port", 1, 65535, &port) ||
+            !wpe__json_read_uint(r, network, "discovery_port", 1, 65535, &discovery_port) ||
+            !wpe__json_read_uint(r, network, "max_players", 2, WPE_SESSION_MAX_PLAYERS,
+                                 &out->network.max_players) ||
+            !wpe__json_read_uint(r, network, "timeout_ms", 1000, 60000, &out->network.timeout_ms))
+            return false;
+        if (port == discovery_port)
+            return wpe__json_fail(r, network, WPE_RESULT_ERROR_PARSE,
+                                  "\"port\" and \"discovery_port\" must differ");
+        out->network.port = (uint16_t)port;
+        out->network.discovery_port = (uint16_t)discovery_port;
     }
     const WPE_JsonValue* input = wpe_json_get(root, "input");
     return !input || wpe__parse_input(r, input, out);
@@ -314,6 +337,14 @@ WPE_Result wpe_project_write(const WPE_ProjectSettings* s, WPE_JsonWriter* w) {
     wpe_json_write_object_begin(w);
     for (uint32_t i = 0; i < s->prefab_count && i < WPE_PROJECT_MAX_PREFABS; ++i)
         wpe__key_string(w, s->prefabs[i].name, s->prefabs[i].path);
+    wpe_json_write_object_end(w);
+
+    wpe_json_write_key(w, "network");
+    wpe_json_write_object_begin(w);
+    wpe__key_integer(w, "port", s->network.port);
+    wpe__key_integer(w, "discovery_port", s->network.discovery_port);
+    wpe__key_integer(w, "max_players", s->network.max_players);
+    wpe__key_integer(w, "timeout_ms", s->network.timeout_ms);
     wpe_json_write_object_end(w);
 
     wpe_json_write_key(w, "input");

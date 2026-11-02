@@ -9,14 +9,16 @@
  * (project.h), which names the start scene (scene_file.h).
  *
  * Frame (wpe_engine_frame()):
- *  1. Input: OS events are pumped into the input module and actions evaluated.
+ *  1. Input: OS events are pumped into the input module and actions evaluated. A multiplayer
+ *     session (wpe_engine_net_start()) takes its events: a player follows the host's scene.
  *  2. Simulation: the UI's focus and clicks (scripts' on_click), fixed steps (scripts'
  *     on_fixed_update, physics, collision callbacks), then the scripts' on_update, animation,
  *     transforms and audio.
  *  3. Rendering from the scene camera (a scene without one is 2D: only the clear color), the
  *     scene's post-processing, then the UI and the scripts' 2D drawing on top (not
  *     post-processed), and presenting to the window.
- *  4. Requests made by scripts during the frame (wpe.load_scene, wpe.quit) take effect.
+ *  4. Requests made by scripts during the frame (wpe.load_scene, wpe.quit) take effect, and the
+ *     session's queued messages are sent.
  *
  * Headless engines (no window) still render, so frames can be captured with
  * wpe_engine_screenshot(); audio mixes without a device, in step with the frame time.
@@ -40,6 +42,7 @@
 #include "engine/project.h"
 #include "engine/scene_file.h"
 #include "input/input.h"
+#include "network/network.h"
 #include "physics/physics.h"
 #include "renderer/renderer.h"
 #include "script/script.h"
@@ -155,6 +158,10 @@ WPE_Result wpe_engine_run(WPE_Engine* engine, const WPE_RunOptions* options);
  * WPE_RESULT_ERROR_IO. @thread_safety Main thread only */
 WPE_Result wpe_engine_screenshot(const WPE_Engine* engine, const char* os_path);
 
+/** The asset path of the scene file last loaded ("" after loading from text, or a failed load).
+ * @thread_safety Main thread only */
+const char* wpe_engine_scene_path(const WPE_Engine* engine);
+
 /** Saves the world and environment as a scene file. @thread_safety Main thread only */
 WPE_Result wpe_engine_save_scene(const WPE_Engine* engine, const char* os_path);
 
@@ -203,6 +210,46 @@ bool wpe_engine_draws_ui(const WPE_Engine* engine);
  * @thread_safety Main thread only */
 void wpe_engine_set_draw_scene(WPE_Engine* engine, bool draw_scene);
 bool wpe_engine_draws_scene(const WPE_Engine* engine);
+
+/* ---- Multiplayer (docs/networking.md) ------------------------------------------------------------ */
+
+/** How to start a multiplayer session. Ports, player limits and timeouts come from the project. */
+typedef struct WPE_EngineNetDesc {
+    const char* join; /* NULL: host a game; otherwise the host's address ("a.b.c.d[:port]", or a name). */
+    const char* player_name;      /* NULL: "Host" or "Player". */
+    bool hidden;                  /* Host: do not answer LAN discovery. */
+    bool local_only;              /* This machine only (127.0.0.1): tests, and no firewall prompt. */
+    uint16_t port;                /* Host: 0 means the project's port. */
+    WPE_NetConditions conditions; /* A simulated bad network (see transport.h). */
+    WPE_NetHub* hub;              /* Tests: play on this in-memory network instead of UDP. Borrowed. */
+} WPE_EngineNetDesc;
+
+/**
+ * Hosts or joins a game (ending any session already running).
+ *
+ * A host shares its scene: every scene it loads from a file is loaded by every player too, and a
+ * player joining loads the host's current one. Only the same game (wpe_engine_game_id()) can join.
+ *
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; address, transport and discovery errors (logged).
+ *
+ * @thread_safety Main thread only
+ */
+[[nodiscard]] WPE_Result wpe_engine_net_start(WPE_Engine* engine, const WPE_EngineNetDesc* desc);
+
+/** Leaves or closes the session (the others see this side leave); no-op without one. @thread_safety Main
+ * thread only */
+void wpe_engine_net_stop(WPE_Engine* engine);
+
+/** The running session (also after it ENDED, until stopped), or NULL. @thread_safety Main thread only */
+WPE_Session* wpe_engine_session(const WPE_Engine* engine);
+
+/**
+ * The game's network identity: a hash of its project file, scenes, prefabs and scripts (line endings
+ * ignored), so only the same game and build can play together. Computed once, at first use.
+ *
+ * @thread_safety Main thread only
+ */
+uint64_t wpe_engine_game_id(WPE_Engine* engine);
 
 /** Per-frame statistics of the last frame. Times are wall-clock milliseconds. */
 typedef struct WPE_EngineStats {

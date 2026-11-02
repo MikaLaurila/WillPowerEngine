@@ -261,6 +261,10 @@ WPE_NetTransportStats wpe_network_stats(const WPE_NetTransport* transport) {
     return transport ? transport->stats : (WPE_NetTransportStats){0};
 }
 
+uint64_t wpe__net_transport_now(const WPE_NetTransport* t) {
+    return t->backend->now(t);
+}
+
 uint16_t wpe_network_local_port(const WPE_NetTransport* transport) {
     return transport ? transport->local_port : 0;
 }
