@@ -138,6 +138,9 @@ FetchContent_Declare(enet
     EXCLUDE_FROM_ALL
     SYSTEM)
 FetchContent_MakeAvailable(enet)
+# ENet is C99 with POSIX sockets: strict ISO C (the engine's -std=c2x) hides getaddrinfo and friends
+# on Linux, so it compiles in GNU mode.
+set_target_properties(enet PROPERTIES C_STANDARD 99 C_EXTENSIONS ON)
 if(NOT MSVC)
     target_compile_options(enet PRIVATE -w)
 endif()

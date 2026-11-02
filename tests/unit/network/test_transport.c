@@ -450,7 +450,9 @@ static void test_network_udp_loopback(void) {
     trace.count = 0;
     WPE_TEST_ASSERT_OK(wpe_network_disconnect(t[0], 0, WPE_NET_REASON_USER));
     WPE_TEST_ASSERT(poll_until(t, 2, &trace, client_saw_disconnect, 10.0));
-    WPE_TEST_ASSERT_EQ_UINT(WPE_NET_REASON_USER, find(&trace, 1, WPE_NET_EVENT_DISCONNECTED)->reason);
+    const Recorded* kicked = find(&trace, 1, WPE_NET_EVENT_DISCONNECTED);
+    WPE_TEST_ASSERT(kicked != NULL);
+    WPE_TEST_ASSERT_EQ_UINT(WPE_NET_REASON_USER, kicked->reason);
     WPE_TEST_ASSERT(!find(&trace, 0, WPE_NET_EVENT_DISCONNECTED)); /* No event on the side that closed. */
     wpe_network_destroy(t[1]);
 
