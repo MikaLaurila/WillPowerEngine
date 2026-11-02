@@ -428,7 +428,7 @@ willpower_engine/
 │   ├── jobs/           # Worker thread pool (parallel_for)
 │   ├── renderer/       # Software rasterizer (no SDL dependency)
 │   ├── platform/       # SDL3 wrapper: window, present, time, file and PNG I/O
-│   ├── network/        # Message transport: ENet (UDP) or an in-memory network for tests
+│   ├── network/        # Message transport (ENet UDP or an in-memory network), bit packing, value wire format
 │   ├── assets/         # glTF models (cgltf), image decoding (stb_image), bitmap fonts
 │   ├── graphics/       # Mesh/camera/animator components, material shader, scene render, 2D
 │   ├── physics/        # Box3D wrapper
@@ -446,7 +446,7 @@ willpower_engine/
 ├── samples/            # Small demo programs (e.g. spinning_cubes) with --frames/--screenshot for automated checks
 ├── tests/              # Test suites
 ├── tools/              # Command-line tools (wpe_pak: .pak archives; wpe_export: game export)
-├── docs/               # Guides and specifications (scripting, assets and .pak, scenes, runtime and export)
+├── docs/               # Guides and specifications (scripting, assets and .pak, scenes, runtime and export, networking)
 ├── assets/             # The sample game project: project.json, scenes/ (2D title menu, demo and master test
 │                       # scene), scripts/, meshes/ (glTF and .prim), sounds/, music/, fonts/, ui/ (images)
 ├── CMakeLists.txt
@@ -464,7 +464,7 @@ willpower_engine/
   - `renderer` depends on `core`, `math` and `jobs`.
   - `platform` depends on `core` and `renderer`, and uses SDL3 privately.
   - `vfs` depends on `core` and `platform`, and uses zstd privately.
-  - `network` depends only on `core`, and uses ENet privately.
+  - `network` depends on `core` and `math`, and uses ENet privately.
   - `assets` depends on `core`, `math`, `renderer`, `jobs`, `platform` and `vfs`, and uses cgltf and stb_image privately.
   - `graphics` depends on `ecs`, `scene`, `renderer` and `assets`.
   - `physics` depends on `ecs`, `scene` and `assets`, and uses Box3D privately.

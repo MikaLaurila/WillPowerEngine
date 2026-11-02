@@ -4,6 +4,17 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 11: networking, phase 2: serialization)
+- Bit packing (`network/bits.h`): any-width integers, varints and zigzag signed integers, exact
+  floats and doubles, quantized floats and vectors, "smallest three" quaternions (15 bits per
+  component: under 0.01° of error in 47 bits), byte runs. Errors are sticky flags, never UB.
+- Script value wire format (`network/value.h`): nil, booleans, compact integers, doubles, strings,
+  vectors and tables, read by a validating pull reader (depth, value-count and entry-count limits,
+  Luau key rules) so malformed or hostile messages are rejected.
+- `docs/networking.md`: a guide to the networking concepts and the transport, hub and packing APIs.
+- Tests: round trips at every width, quantization error bounds, quaternion accuracy, malformed
+  varints, structure limits, and fuzzing with random and corrupted messages.
+
 ### Added (Milestone 11: networking, phase 1: transport)
 - Network module (`src/network/`, `network/network.h`): `WPE_NetTransport` hosts or connects, with
   a reliable ordered channel and an unreliable sequenced channel, connection and disconnection
