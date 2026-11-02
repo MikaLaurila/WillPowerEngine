@@ -13,7 +13,8 @@
  * false}, "simulation": {"fixed_rate": 60, "max_steps": 8}, "assets": {"max_texture_size": 256}, "audio":
  * {"master": 1, "effects": 1, "music": 0.8}, "scripting": {"memory_limit_mb": 64, "time_limit_ms": 250},
  *   "prefabs": {"crate": "meshes/crate.prim", "figure": "meshes/RiggedFigure.glb"},
- *   "network": {"port": 47810, "discovery_port": 47809, "max_players": 4, "timeout_ms": 5000},
+ *   "network": {"port": 47810, "discovery_port": 47809, "max_players": 4, "timeout_ms": 5000,
+ *               "tick_rate": 30, "interpolation_ms": 100},
  *   "input": {
  *     "keyboard_player": 1, "stick_deadzone": 0.2, "stick_outer": 0.95, "trigger_deadzone": 0.1,
  *     "press_threshold": 0.5,
@@ -57,6 +58,8 @@ typedef struct WPE_ProjectNetwork {
     uint16_t discovery_port; /* UDP port of LAN discovery (1..65535; default 47809). */
     uint32_t max_players;    /* Players in a game, the host included (2..8; default 4). */
     uint32_t timeout_ms;     /* A silent player is dropped after this (1000..60000; default 5000). */
+    double tick_rate;        /* Entity states sent per second (1..120; default 30). */
+    double interpolation_ms; /* Remote entities are shown this far in the past (0..1000; default 100). */
 } WPE_ProjectNetwork;
 
 /** A named prefab: scripts call wpe.instantiate(name) for the model at `path`. */

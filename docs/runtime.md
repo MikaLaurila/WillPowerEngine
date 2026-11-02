@@ -79,7 +79,7 @@ The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which t
   "audio": {"master": 1, "effects": 1, "music": 0.7},
   "scripting": {"memory_limit_mb": 64, "time_limit_ms": 250},
   "prefabs": {"crate": "meshes/crate.prim", "figure": "meshes/RiggedFigure.glb"},
-  "network": {"port": 47810, "discovery_port": 47809, "max_players": 4, "timeout_ms": 5000},
+  "network": {"port": 47810, "discovery_port": 47809, "max_players": 4, "timeout_ms": 5000, "tick_rate": 30, "interpolation_ms": 100},
   "input": {"keyboard_player": 1, "stick_deadzone": 0.2, "actions": {"jump": [{"key": "space"}, {"pad_button": "south"}]}}
 }
 ```
@@ -95,7 +95,7 @@ The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which t
 | `audio` | Bus volumes. |
 | `scripting` | Luau heap limit and per-callback time budget. |
 | `prefabs` | Names for `wpe.instantiate(name)`, each mapped to a prefab file (`.prefab`) or a model asset path. |
-| `network` | Multiplayer (see [networking.md](networking.md#playing-together)): the UDP `port` a host listens on, the `discovery_port` of LAN discovery (the two must differ), `max_players` (2..8, the host included) and `timeout_ms`, after which a silent player is dropped (1000..60000). |
+| `network` | Multiplayer (see [networking.md](networking.md#playing-together)): the UDP `port` a host listens on, the `discovery_port` of LAN discovery (the two must differ), `max_players` (2..8, the host included), `timeout_ms`, after which a silent player is dropped (1000..60000), `tick_rate`, how many times a second networked entities' states are sent (1..120, default 30), and `interpolation_ms`, how far in the past remote entities are shown (0..1000, default 100). |
 | `input` | Dead zones, the press threshold, the keyboard's player and the actions (below). |
 
 Like scene files, the project file is read strictly: unknown keys and bad values are errors that report the line.

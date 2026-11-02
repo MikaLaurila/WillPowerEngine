@@ -17,6 +17,7 @@ add_library(wpe_engine STATIC
     new_project.c
     prefab.c
     project.c
+    replication.c
     scene_file.c
     scene_file_ui.c
     "${WPE_TEMPLATES_HEADER}")

@@ -81,7 +81,7 @@ typedef enum WPE_SessionEventType {
 typedef struct WPE_SessionEvent {
     WPE_SessionEventType type;
     WPE_PlayerId player;
-    uint32_t reason;        /* PLAYER_LEFT, ENDED */
+    uint32_t reason;        /* PLAYER_LEFT, ENDED; SCENE: the scene epoch (wpe_session_scene_epoch) */
     uint32_t kind;          /* MESSAGE */
     WPE_NetChannel channel; /* MESSAGE */
     const uint8_t* data;    /* MESSAGE; valid until the next poll */
@@ -203,6 +203,16 @@ bool wpe_session_player(const WPE_Session* session, WPE_PlayerId player, WPE_Ses
 
 /** Why a player's session ENDED, or 0 while it runs (always 0 on a host). @thread_safety Owning thread */
 uint32_t wpe_session_end_reason(const WPE_Session* session);
+
+/**
+ * Counts the host's scene changes: 1 for the first shared scene, then up by one with each
+ * wpe_session_set_scene(); 0 before any. Players learn it with each SCENE event (also in the event's
+ * `reason` field). Layers above tag their messages with it, so a message about one scene is never
+ * applied to the next.
+ *
+ * @thread_safety Owning thread
+ */
+uint32_t wpe_session_scene_epoch(const WPE_Session* session);
 
 /** The current scene ("" for none). @thread_safety Owning thread */
 const char* wpe_session_scene(const WPE_Session* session);

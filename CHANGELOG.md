@@ -4,6 +4,20 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 11: networking, phase 4: replication)
+- Replication (`engine/replication.h`): `WPE_NetIdentity` (`WPE_COMP_NET_IDENTITY` 27, scene key
+  `"net": {"owner": n}`) makes an entity networked. Its owner sends its state (position, rotation,
+  velocity) at the project's tick rate; the host relays players' entities and only accepts states
+  from an entity's owner. Remote entities are shown `interpolation_ms` in the past between received
+  states (coasting briefly on velocity), and their dynamic bodies turn kinematic so they still push.
+- Ownership: `wpe_engine_net_set_owner` (host), `wpe_engine_net_is_local`; the host sends the table
+  reliably on changes and to joiners; leavers' entities go back to the host.
+- Sessions carry a scene epoch (`wpe_session_scene_epoch`, in WELCOME and SCENE), which tags
+  replication messages so nothing about one scene reaches the next.
+- Project `"network"`: `tick_rate` and `interpolation_ms`. The editor can add the `net` component.
+- Tests: smooth, exact replication of two owners' cars on a perfect and a bad network, ownership
+  transfer, late joiners, leavers, scene changes, forged states and random replication messages.
+
 ### Added (Milestone 11: networking, phase 3: sessions and LAN discovery)
 - Sessions (`network/session.h`): a host and up to 7 players in a star. The join handshake checks
   the protocol version and the game id and refuses with reasons (full, wrong game, not accepting,

@@ -28,7 +28,9 @@ void wpe_project_settings_default(WPE_ProjectSettings* out) {
     out->network = (WPE_ProjectNetwork){.port = WPE_NET_DEFAULT_PORT,
                                         .discovery_port = WPE_DISCOVERY_DEFAULT_PORT,
                                         .max_players = 4,
-                                        .timeout_ms = 5000};
+                                        .timeout_ms = 5000,
+                                        .tick_rate = 30.0,
+                                        .interpolation_ms = 100.0};
 }
 
 /* One binding object: exactly one source key, plus "scale" and (axes only) "range". */
@@ -225,7 +227,10 @@ static bool wpe__parse_project(wpe__JsonReader* r, const WPE_JsonValue* root, WP
         uint32_t port = out->network.port;
         uint32_t discovery_port = out->network.discovery_port;
         if (!WPE__JSON_CHECK_OBJECT(r, network, "network", "port", "discovery_port", "max_players",
-                                    "timeout_ms") ||
+                                    "timeout_ms", "tick_rate", "interpolation_ms") ||
+            !wpe__json_read_double(r, network, "tick_rate", 1.0, 120.0, &out->network.tick_rate) ||
+            !wpe__json_read_double(r, network, "interpolation_ms", 0.0, 1000.0,
+                                   &out->network.interpolation_ms) ||
             !wpe__json_read_uint(r, network, "port", 1, 65535, &port) ||
             !wpe__json_read_uint(r, network, "discovery_port", 1, 65535, &discovery_port) ||
             !wpe__json_read_uint(r, network, "max_players", 2, WPE_SESSION_MAX_PLAYERS,
@@ -345,6 +350,10 @@ WPE_Result wpe_project_write(const WPE_ProjectSettings* s, WPE_JsonWriter* w) {
     wpe__key_integer(w, "discovery_port", s->network.discovery_port);
     wpe__key_integer(w, "max_players", s->network.max_players);
     wpe__key_integer(w, "timeout_ms", s->network.timeout_ms);
+    wpe_json_write_key(w, "tick_rate");
+    wpe_json_write_double(w, s->network.tick_rate);
+    wpe_json_write_key(w, "interpolation_ms");
+    wpe_json_write_double(w, s->network.interpolation_ms);
     wpe_json_write_object_end(w);
 
     wpe_json_write_key(w, "input");

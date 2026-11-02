@@ -9,6 +9,7 @@
 #include "core/debug.h"
 #include "core/fixed_step.h"
 #include "core/log.h"
+#include "engine/replication.h"
 #include "graphics/anim_states.h"
 #include "graphics/animation.h"
 #include "graphics/debug_lines.h"
@@ -73,6 +74,8 @@ struct WPE_Engine {
     char capture_path[32];
     char sky_image[WPE_VFS_PATH_MAX];  /* Its path. */
     WPE_Session* session;              /* Multiplayer, when started (wpe_engine_net_start). */
+    WPE_Replication* replication;      /* Networked entities (works with the session). */
+    bool pending_from_host;            /* pending_scene is the host's scene (a player follows it). */
     char scene_path[WPE_VFS_PATH_MAX]; /* The scene file last loaded ("" after a text load): a host shares it.
                                         */
     uint64_t game_id;
@@ -99,6 +102,7 @@ static float wpe__transition_coverage(const WPE_Engine* engine) {
 
 static void wpe__app_load_scene(void* user_data, const char* path, const WPE_Transition* transition) {
     WPE_Engine* engine = user_data;
+    engine->pending_from_host = false; /* A script's own choice, even on a player. */
     if (!transition || transition->kind == WPE_TRANSITION_NONE || !(transition->duration > 0.0f)) {
         snprintf(engine->pending_scene, sizeof engine->pending_scene, "%s", path);
         return;
@@ -312,12 +316,21 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
     if (result == WPE_RESULT_OK) result = wpe_scene_register_components(engine->ecs);
     if (result == WPE_RESULT_OK) result = wpe_graphics_register_components(engine->ecs, engine->assets);
     if (result == WPE_RESULT_OK) result = wpe_prefab_register(engine->ecs);
+    if (result == WPE_RESULT_OK) result = wpe_replication_register_components(engine->ecs);
     if (result == WPE_RESULT_OK) result = wpe_prefab_cache_create(&engine->prefabs);
     if (result == WPE_RESULT_OK) {
         result = wpe_physics_create(&(WPE_PhysicsDesc){.ecs = engine->ecs,
                                                        .assets = engine->assets,
                                                        .gravity = engine->environment.gravity},
                                     &engine->physics);
+    }
+    if (result == WPE_RESULT_OK) {
+        result =
+            wpe_replication_create(&(WPE_ReplicationDesc){.ecs = engine->ecs,
+                                                          .physics = engine->physics,
+                                                          .tick_rate = p->network.tick_rate,
+                                                          .interpolation_ms = p->network.interpolation_ms},
+                                   &engine->replication);
     }
     if (result == WPE_RESULT_OK) {
         result = wpe_audio_create(&(WPE_AudioDesc){.ecs = engine->ecs,
@@ -433,6 +446,7 @@ void wpe_engine_destroy(WPE_Engine* engine) {
     wpe_engine_net_stop(engine);
     /* Users of the world and its assets first, then the world, then what they read from. */
     wpe_script_host_destroy(engine->scripts);
+    wpe_replication_destroy(engine->replication);
     wpe_audio_destroy(engine->audio);
     wpe_physics_destroy(engine->physics);
     wpe_ecs_destroy(engine->ecs);
@@ -499,12 +513,14 @@ WPE_Result wpe_engine_load_scene_text(WPE_Engine* engine, const char* text, size
     result = wpe_physics_create_bodies(engine->physics);
     if (result != WPE_RESULT_OK) return result;
     if (engine->simulating) wpe__apply_music(engine);
+    /* Not shared: wpe__load_scene_file() marks the session's scene files as shared afterwards. */
+    wpe_replication_scene_loaded(engine->replication, engine->session, false);
     wpe_log_info("loaded scene '%s' (%u entities)", name, wpe_ecs_entity_count(engine->ecs));
     return WPE_RESULT_OK;
 }
 
-WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
-    if (!engine || !path) return WPE_RESULT_ERROR_NULL_ARG;
+/* Loads a scene file; `from_host` when a player follows the host there. */
+static WPE_Result wpe__load_scene_file(WPE_Engine* engine, const char* path, bool from_host) {
     void* data = NULL;
     size_t size = 0;
     WPE_Result result = wpe_vfs_read_all(engine->vfs, path, &data, &size);
@@ -513,8 +529,10 @@ WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
         result = wpe_engine_load_scene_text(engine, data, size, path);
         if (result == WPE_RESULT_OK) {
             snprintf(engine->scene_path, sizeof engine->scene_path, "%s", path);
-            /* A host takes its players along. */
-            if (wpe_session_is_host(engine->session)) (void)wpe_session_set_scene(engine->session, path);
+            /* A host takes its players along; replication runs on the session's scene only. */
+            const bool host = wpe_session_is_host(engine->session);
+            if (host) (void)wpe_session_set_scene(engine->session, path);
+            wpe_replication_scene_loaded(engine->replication, engine->session, host || from_host);
         }
     } else {
         /* As with a failed load, the world is left empty. */
@@ -526,6 +544,12 @@ WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
     wpe_free(data);
     return result;
 }
+
+WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
+    if (!engine || !path) return WPE_RESULT_ERROR_NULL_ARG;
+    return wpe__load_scene_file(engine, path, false);
+}
+
 const char* wpe_engine_scene_path(const WPE_Engine* engine) {
     return engine ? engine->scene_path : "";
 }
@@ -602,8 +626,18 @@ uint64_t wpe_engine_game_id(WPE_Engine* engine) {
 
 void wpe_engine_net_stop(WPE_Engine* engine) {
     if (!engine || !engine->session) return;
+    wpe_replication_stop(engine->replication);
     wpe_session_destroy(engine->session);
     engine->session = NULL;
+}
+
+WPE_Result wpe_engine_net_set_owner(WPE_Engine* engine, WPE_Entity entity, WPE_PlayerId player) {
+    if (!engine) return WPE_RESULT_ERROR_NULL_ARG;
+    return wpe_replication_set_owner(engine->replication, engine->session, entity, player);
+}
+
+bool wpe_engine_net_is_local(const WPE_Engine* engine, WPE_Entity entity) {
+    return !engine || wpe_replication_is_local(engine->replication, engine->session, entity);
 }
 
 WPE_Result wpe_engine_net_start(WPE_Engine* engine, const WPE_EngineNetDesc* desc) {
@@ -634,9 +668,14 @@ WPE_Result wpe_engine_net_start(WPE_Engine* engine, const WPE_EngineNetDesc* des
         if (result == WPE_RESULT_OK) {
             wpe_log_info("hosting on port %u",
                          (unsigned)wpe_network_local_port(wpe_session_transport(engine->session)));
-            if (engine->scene_path[0]) (void)wpe_session_set_scene(engine->session, engine->scene_path);
+            if (engine->scene_path[0]) {
+                (void)wpe_session_set_scene(engine->session, engine->scene_path);
+                wpe_replication_scene_loaded(engine->replication, engine->session, true);
+            }
         }
     }
+    /* A player waits in its own scene until it loads the host's. */
+    if (result == WPE_RESULT_OK && desc->join) wpe_replication_stop(engine->replication);
     if (result != WPE_RESULT_OK)
         wpe_log_error("cannot start the multiplayer game: %s", wpe_result_to_string(result));
     return result;
@@ -658,12 +697,15 @@ static void wpe__pump_session(WPE_Engine* engine) {
             break;
         case WPE_SESSION_EVENT_PLAYER_JOINED:
             wpe_log_info("%s joined (player %u)", e.text, e.player);
+            wpe_replication_player_joined(engine->replication, session, e.player);
             break;
         case WPE_SESSION_EVENT_PLAYER_LEFT:
             wpe_log_info("%s left (%s)", e.text, wpe_session_reason_name(e.reason));
+            wpe_replication_player_left(engine->replication, session, e.player);
             break;
         case WPE_SESSION_EVENT_ENDED:
             wpe_log_warn("the multiplayer game ended: %s", wpe_session_reason_name(e.reason));
+            wpe_replication_stop(engine->replication);
             break;
         case WPE_SESSION_EVENT_SCENE:
             if (!wpe_vfs_path_is_valid(e.text) || !wpe_vfs_exists(engine->vfs, e.text)) {
@@ -673,10 +715,14 @@ static void wpe__pump_session(WPE_Engine* engine) {
                 return;
             }
             snprintf(engine->pending_scene, sizeof engine->pending_scene, "%s", e.text);
+            engine->pending_from_host = true;
+            wpe_replication_stop(engine->replication); /* Until the host's scene has loaded. */
             break;
         case WPE_SESSION_EVENT_MESSAGE:
+            wpe_replication_receive(engine->replication, session, &e);
+            break; /* Script messages come with phase 11.5. */
         case WPE_SESSION_EVENT_NONE:
-            break; /* Replication and script messages come with the next milestone phases. */
+            break;
         }
     }
 }
@@ -693,6 +739,8 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
     wpe_game_feel_restore_shakes(&engine->feel, engine->ecs);
     /* Game time (slow motion, hit-stops) drives the simulation; the UI keeps real time. */
     const double dt = wpe_game_feel_advance(&engine->feel, real_dt);
+    /* Remote entities take their received poses before anything simulates (the network keeps real time). */
+    wpe_replication_apply(engine->replication, engine->session, real_dt);
     /* The UI reacts to this frame's input first, so scripts see its clicks in this frame. */
     WPE_Result result =
         wpe_ui_update(engine->ui, engine->project.width, engine->project.height, (float)real_dt);
@@ -741,6 +789,8 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
     /* After transforms, so emitters spawn where they are this frame. */
     if (result == WPE_RESULT_OK) result = wpe_particles_update(engine->ecs, engine->jobs, (float)dt);
     if (result == WPE_RESULT_OK) wpe_trail_update(engine->ecs, (float)dt);
+    /* This side's entities as they are after the frame's simulation. */
+    if (result == WPE_RESULT_OK) wpe_replication_send(engine->replication, engine->session);
     return result;
 }
 
@@ -972,7 +1022,8 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
         char path[WPE_VFS_PATH_MAX];
         memcpy(path, engine->pending_scene, sizeof path);
         engine->pending_scene[0] = '\0';
-        result = wpe_engine_load_scene(engine, path);
+        result = wpe__load_scene_file(engine, path, engine->pending_from_host);
+        engine->pending_from_host = false;
         engine->transition_loading = false;
     }
     wpe_session_flush(engine->session);

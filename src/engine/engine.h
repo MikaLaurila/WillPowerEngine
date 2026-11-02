@@ -40,6 +40,7 @@
 #include "engine/export.h"
 #include "engine/prefab.h"
 #include "engine/project.h"
+#include "engine/replication.h"
 #include "engine/scene_file.h"
 #include "input/input.h"
 #include "network/network.h"
@@ -242,6 +243,20 @@ void wpe_engine_net_stop(WPE_Engine* engine);
 
 /** The running session (also after it ENDED, until stopped), or NULL. @thread_safety Main thread only */
 WPE_Session* wpe_engine_session(const WPE_Engine* engine);
+
+/**
+ * Host: gives a networked entity (one with a WPE_NetIdentity, see replication.h) to a player, who
+ * simulates it from then on; everyone else shows it as that player sends it.
+ *
+ * @return As wpe_replication_set_owner().
+ *
+ * @thread_safety Main thread only
+ */
+WPE_Result wpe_engine_net_set_owner(WPE_Engine* engine, WPE_Entity entity, WPE_PlayerId player);
+
+/** Whether this side simulates the entity (always true outside a multiplayer game). @thread_safety Main
+ * thread only */
+bool wpe_engine_net_is_local(const WPE_Engine* engine, WPE_Entity entity);
 
 /**
  * The game's network identity: a hash of its project file, scenes, prefabs and scripts (line endings

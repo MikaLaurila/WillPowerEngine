@@ -2,10 +2,11 @@
  *
  * Every transport message starts with a kind byte. The session's own kinds:
  *   HELLO          player -> host   magic, protocol version, game id (64), name
- *   WELCOME        host -> player   your id, max players, scene, then each present player (id, name)
+ *   WELCOME        host -> player   your id, max players, scene epoch, scene, then each present player
+ *                                   (id, name)
  *   PLAYER_JOINED  host -> players  id, name
  *   PLAYER_LEFT    host -> players  id, reason
- *   SCENE          host -> players  path
+ *   SCENE          host -> players  epoch, path
  * Kinds from WPE_SESSION_KIND_FIRST up belong to the layers above and are passed through.
  * Strings are a varint length and bytes (bits.h). */
 #define WPE_LOG_MODULE "network"
@@ -67,6 +68,7 @@ struct WPE_Session {
     bool peer_pending[WPE_SESSION_MAX_PLAYERS]; /* Connected, no HELLO yet. */
     uint64_t peer_since[WPE_SESSION_MAX_PLAYERS];
     char scene[WPE_SESSION_SCENE_MAX];
+    uint32_t scene_epoch; /* Counts the host's scene changes (0: none yet). */
     wpe__Queued queue[WPE__QUEUE_MAX];
     uint32_t queue_head;
     uint32_t queue_count;
@@ -244,6 +246,7 @@ static void wpe__host_hello(WPE_Session* s, WPE_NetPeerId peer, WPE_BitReader* r
     wpe_bits_write(&w, WPE__WELCOME, 8);
     wpe_bits_write_varint(&w, p);
     wpe_bits_write_varint(&w, s->max_players);
+    wpe_bits_write_varint(&w, s->scene_epoch);
     wpe__write_text(&w, s->scene);
     wpe_bits_write_varint(&w, wpe__count_players(s));
     for (WPE_PlayerId q = 0; q < s->max_players; ++q) {
@@ -336,6 +339,7 @@ static void wpe__client_violation(WPE_Session* s) {
 static void wpe__client_welcome(WPE_Session* s, WPE_BitReader* r) {
     const uint32_t id = wpe_bits_read_varint(r);
     const uint32_t max_players = wpe_bits_read_varint(r);
+    const uint32_t epoch = wpe_bits_read_varint(r);
     char scene[WPE_SESSION_SCENE_MAX] = {0}; /* Zeroed: copied whole below. */
     const bool scene_ok = wpe__read_text(r, scene, sizeof scene, false);
     const uint32_t count = wpe_bits_read_varint(r);
@@ -365,12 +369,13 @@ static void wpe__client_welcome(WPE_Session* s, WPE_BitReader* r) {
     s->max_players = max_players;
     s->local = id;
     s->state = WPE__CLIENT_JOINED;
+    s->scene_epoch = epoch;
     memcpy(s->scene, scene, sizeof scene);
     wpe__enqueue(s, WPE_SESSION_EVENT_JOINED, id, 0, s->players[id].name);
     for (WPE_PlayerId p = 0; p < max_players; ++p)
         if (p != id && s->players[p].present)
             wpe__enqueue(s, WPE_SESSION_EVENT_PLAYER_JOINED, p, 0, s->players[p].name);
-    if (s->scene[0]) wpe__enqueue(s, WPE_SESSION_EVENT_SCENE, WPE_SESSION_HOST, 0, s->scene);
+    if (s->scene[0]) wpe__enqueue(s, WPE_SESSION_EVENT_SCENE, WPE_SESSION_HOST, epoch, s->scene);
 }
 
 static bool wpe__client_handle(WPE_Session* s, const WPE_NetEvent* e, WPE_SessionEvent* out) {
@@ -433,13 +438,15 @@ static bool wpe__client_handle(WPE_Session* s, const WPE_NetEvent* e, WPE_Sessio
             s->players[p].present = false;
             wpe__enqueue(s, WPE_SESSION_EVENT_PLAYER_LEFT, p, reason, s->players[p].name);
         } else if (kind == WPE__SCENE) {
+            const uint32_t epoch = wpe_bits_read_varint(&r);
             char scene[WPE_SESSION_SCENE_MAX] = {0}; /* Zeroed: copied whole below. */
-            if (!wpe__read_text(&r, scene, sizeof scene, false)) {
+            if (!wpe__read_text(&r, scene, sizeof scene, false) || r.error || epoch == 0) {
                 wpe__client_violation(s);
                 return false;
             }
             memcpy(s->scene, scene, sizeof scene);
-            wpe__enqueue(s, WPE_SESSION_EVENT_SCENE, WPE_SESSION_HOST, 0, scene);
+            s->scene_epoch = epoch;
+            wpe__enqueue(s, WPE_SESSION_EVENT_SCENE, WPE_SESSION_HOST, epoch, scene);
         } else {
             wpe__client_violation(s);
         }
@@ -606,9 +613,11 @@ WPE_Result wpe_session_set_scene(WPE_Session* session, const char* path) {
         return WPE_RESULT_ERROR_INVALID_ARG;
     }
     snprintf(session->scene, sizeof session->scene, "%s", path);
-    uint8_t message[WPE_SESSION_SCENE_MAX + 8];
+    ++session->scene_epoch;
+    uint8_t message[WPE_SESSION_SCENE_MAX + 16];
     WPE_BitWriter w = wpe_bits_writer(message, sizeof message);
     wpe_bits_write(&w, WPE__SCENE, 8);
+    wpe_bits_write_varint(&w, session->scene_epoch);
     wpe__write_text(&w, session->scene);
     wpe__host_tell_all(session, WPE_SESSION_NO_PLAYER, message, wpe_bits_writer_size(&w));
     return WPE_RESULT_OK;
@@ -658,6 +667,10 @@ bool wpe_session_player(const WPE_Session* session, WPE_PlayerId player, WPE_Ses
 
 uint32_t wpe_session_end_reason(const WPE_Session* session) {
     return session ? session->end_reason : 0;
+}
+
+uint32_t wpe_session_scene_epoch(const WPE_Session* session) {
+    return session ? session->scene_epoch : 0;
 }
 
 const char* wpe_session_scene(const WPE_Session* session) {
