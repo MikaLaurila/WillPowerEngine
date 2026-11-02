@@ -52,6 +52,8 @@ Running `wpe_editor` without arguments lists the templates. They live in the eng
 | `--screenshot <png>` | Save the last frame. |
 | `--workers <n>` | Render threads (default: one per core). |
 | `--save-dir <dir>` | Keep saved data (`wpe.save_data`) in this directory (made if missing) instead of the player's own (tests, portable installs). |
+| `--max-fps <n>` | Sleep so frames don't come faster than this (headless hosts default to 60). |
+| `--host [port]`, `--connect <address>`, `--name <player>`, `--local`, `--net-sim <settings>`, `--net-stats` | Multiplayer: host or join a game, with a simulated bad network and a stats overlay if wanted. See [Trying it out](networking.md#trying-it-out). A `--connect` run that never gets into the game exits with an error. |
 
 On Windows the runtime is a windowed (GUI) program: an exported game started by double-click opens no console. Started from a terminal it still logs there. A startup error shows a message box unless `--headless` is given. PowerShell does not wait for GUI programs unless their output is piped, so in scripts pipe it (`wpe_runtime ... | Out-Host`) or use `Start-Process -Wait`. The editor (`wpe_editor`) is a console program and needs neither.
 

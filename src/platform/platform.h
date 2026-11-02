@@ -140,6 +140,9 @@ WPE_PlatformRenderer* wpe_window_renderer(WPE_Window* window);
 /** @return Monotonic time in seconds since an unspecified point. @thread_safety Any thread */
 double wpe_platform_time_seconds(void);
 
+/** Blocks the calling thread for about `milliseconds` (at least that long). @thread_safety Any thread */
+void wpe_platform_sleep_ms(uint32_t milliseconds);
+
 /** An image in WPE_Color (0xAARRGGBB) pixels, rows tightly packed. */
 typedef struct WPE_Image {
     uint32_t width;
@@ -298,6 +301,28 @@ WPE_Result wpe_path_rename(const char* from, const char* to);
  * @thread_safety Any thread
  */
 WPE_Result wpe_platform_executable_path(char* out_path, size_t capacity);
+
+/** A program started by wpe_process_start(). */
+typedef struct WPE_Process WPE_Process;
+
+/**
+ * Starts a program. It shares this process's standard input and output and runs on its own; it is
+ * not stopped when this process ends.
+ *
+ * @param argv The program's path, then its arguments, then NULL (copied).
+ * @param out_process Receives the owned handle; release it with wpe_process_destroy().
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_IO (it can't be started; logged).
+ *
+ * @thread_safety Any thread
+ */
+[[nodiscard]] WPE_Result wpe_process_start(const char* const* argv, WPE_Process** out_process);
+
+/** Whether the program still runs. @thread_safety The thread that started it */
+bool wpe_process_running(WPE_Process* process);
+
+/** Ends the program if it still runs and frees the handle. NULL is a no-op. @thread_safety The thread that
+ * started it */
+void wpe_process_destroy(WPE_Process* process);
 
 /**
  * Gets (creating it if needed) the per-user directory where an application may write its data:

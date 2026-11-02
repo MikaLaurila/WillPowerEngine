@@ -223,7 +223,9 @@ WPE_Result wpe__editor_redo(WPE_Editor* editor) {
 
 /* ---- Modes ------------------------------------------------------------------------------------------ */
 
-WPE_Result wpe__editor_play(WPE_Editor* editor) {
+/* Starts play mode; with `start`, the game starts from that scene text instead of the world as it is (stop
+ * still brings back the world as it was). */
+static WPE_Result wpe__editor_play_from(WPE_Editor* editor, const wpe__Snapshot* start) {
     if (editor->mode == WPE_EDITOR_PAUSED) {
         editor->mode = WPE_EDITOR_PLAY;
         wpe_engine_set_simulating(editor->engine, true);
@@ -231,7 +233,12 @@ WPE_Result wpe__editor_play(WPE_Editor* editor) {
     }
     if (editor->mode == WPE_EDITOR_PLAY) return WPE_RESULT_OK;
     WPE_Result result = wpe__editor_snapshot(editor, &editor->play);
-    if (result != WPE_RESULT_OK) return result;
+    if (result == WPE_RESULT_OK && start) result = wpe__editor_restore(editor, start, editor->scene_path);
+    if (result != WPE_RESULT_OK) {
+        if (start) (void)wpe__editor_restore(editor, &editor->play, "play snapshot");
+        wpe__snapshot_free(&editor->play);
+        return result;
+    }
     /* The game runs without the editor's helpers, from its own camera. */
     wpe_ecs_despawn(wpe_engine_ecs(editor->engine), editor->camera);
     editor->camera = WPE_ENTITY_NULL;
@@ -242,6 +249,133 @@ WPE_Result wpe__editor_play(WPE_Editor* editor) {
     editor->mode = WPE_EDITOR_PLAY;
     wpe_engine_set_simulating(editor->engine, true);
     wpe_log_info("play");
+    return WPE_RESULT_OK;
+}
+
+WPE_Result wpe__editor_play(WPE_Editor* editor) {
+    return wpe__editor_play_from(editor, NULL);
+}
+
+/* The wpe_runtime next to this executable (the build puts both in bin/). */
+static WPE_Result wpe__runtime_path(char* out, size_t capacity) {
+    WPE_Result result = wpe_platform_executable_path(out, capacity);
+    if (result != WPE_RESULT_OK) return result;
+    char* slash = strrchr(out, '/');
+    char* backslash = strrchr(out, '\\');
+    if (backslash > slash) slash = backslash;
+    const size_t dir = slash ? (size_t)(slash - out) + 1 : 0;
+#if defined(_WIN32)
+    static const char name[] = "wpe_runtime.exe";
+#else
+    static const char name[] = "wpe_runtime";
+#endif
+    if (dir + sizeof name > capacity) return WPE_RESULT_ERROR_CAPACITY;
+    memcpy(out + dir, name, sizeof name);
+    int64_t modified = 0;
+    if (wpe_file_modified_time(out, &modified) != WPE_RESULT_OK) {
+        wpe_log_error("'%s' not found: the editor starts the other players with it", out);
+        return WPE_RESULT_ERROR_NOT_FOUND;
+    }
+    return WPE_RESULT_OK;
+}
+
+/* Ends the clients play_network started (the session closing has told them already). */
+static void wpe__editor_stop_clients(WPE_Editor* editor) {
+    for (uint32_t i = 0; i < editor->client_count; ++i)
+        wpe_process_destroy(editor->clients[i]);
+    editor->client_count = 0;
+}
+
+uint32_t wpe__editor_clients_running(WPE_Editor* editor) {
+    uint32_t running = 0;
+    for (uint32_t i = 0; i < editor->client_count; ++i)
+        running += wpe_process_running(editor->clients[i]) ? 1u : 0u;
+    return running;
+}
+
+/* Starts one client: wpe_runtime joining the editor's game. */
+static WPE_Result wpe__editor_start_client(WPE_Editor* editor, const char* runtime, const wpe__NetPlay* play,
+                                           uint16_t port, uint32_t number) {
+    char address[32], name[32], sim[96];
+    snprintf(address, sizeof address, "127.0.0.1:%u", (unsigned)port);
+    snprintf(name, sizeof name, "Player %u", (unsigned)number);
+    snprintf(sim, sizeof sim, "latency=%u,jitter=%u,loss=%g", (unsigned)play->conditions.latency_ms,
+             (unsigned)play->conditions.jitter_ms, (double)play->conditions.loss * 100.0);
+    const char* argv[24];
+    uint32_t n = 0;
+    argv[n++] = runtime;
+    argv[n++] = "--project";
+    argv[n++] = editor->project_dir;
+    argv[n++] = "--connect";
+    argv[n++] = address;
+    argv[n++] = "--name";
+    argv[n++] = name;
+    argv[n++] = "--local";
+    argv[n++] = "--net-sim";
+    argv[n++] = sim;
+    if (editor->view.network) argv[n++] = "--net-stats";
+    if (play->headless) {
+        argv[n++] = "--headless";
+        argv[n++] = "--max-fps";
+        argv[n++] = "60";
+    }
+    argv[n] = NULL;
+    WPE_Process* process = NULL;
+    const WPE_Result result = wpe_process_start(argv, &process);
+    if (result == WPE_RESULT_OK) editor->clients[editor->client_count++] = process;
+    return result;
+}
+
+WPE_Result wpe__editor_play_network(WPE_Editor* editor, const wpe__NetPlay* play, uint16_t* out_port) {
+    WPE_Result result = wpe__editor_stop(editor);
+    if (result != WPE_RESULT_OK) return result;
+    const uint32_t max_players = wpe_engine_project(editor->engine)->network.max_players;
+    if (play->clients < 1 || play->clients > WPE__EDITOR_MAX_CLIENTS || play->clients + 1 > max_players) {
+        wpe_log_error(
+            "1..%u other players can join (the project allows %u players)",
+            (unsigned)(max_players - 1 < WPE__EDITOR_MAX_CLIENTS ? max_players - 1 : WPE__EDITOR_MAX_CLIENTS),
+            (unsigned)max_players);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    /* The other players load the scene from its file, so the game must start from exactly that. */
+    if (!editor->scene_path[0] || editor->dirty) {
+        wpe_log_error("save the scene first: the other players load it from its file");
+        return WPE_RESULT_ERROR_INVALID_STATE;
+    }
+    static char runtime[4096];
+    result = wpe__runtime_path(runtime, sizeof runtime);
+    void* data = NULL;
+    size_t size = 0;
+    if (result == WPE_RESULT_OK)
+        result = wpe_vfs_read_all(wpe_engine_vfs(editor->engine), editor->scene_path, &data, &size);
+    if (result == WPE_RESULT_OK)
+        result = wpe__editor_play_from(editor, &(wpe__Snapshot){.text = data, .size = size});
+    wpe_free(data);
+    if (result != WPE_RESULT_OK) return result;
+
+    /* This machine only: no firewall prompt, and the editor's game is not offered on the LAN. */
+    /* Any free port: the clients are told which, and a game already running here can keep its own. */
+    const WPE_EngineNetDesc host = {.player_name = "Host",
+                                    .hidden = true,
+                                    .local_only = true,
+                                    .any_port = true,
+                                    .conditions = play->conditions,
+                                    .scene = editor->scene_path};
+    result = wpe_engine_net_start(editor->engine, &host);
+    if (result != WPE_RESULT_OK) {
+        (void)wpe__editor_stop(editor);
+        return result;
+    }
+    const uint16_t port = wpe_network_local_port(wpe_session_transport(wpe_engine_session(editor->engine)));
+    for (uint32_t i = 0; i < play->clients && result == WPE_RESULT_OK; ++i)
+        result = wpe__editor_start_client(editor, runtime, play, port, i + 1);
+    if (result != WPE_RESULT_OK) {
+        (void)wpe__editor_stop(editor);
+        return result;
+    }
+    wpe_log_info("playing as the host on port %u with %u more player(s)", (unsigned)port,
+                 (unsigned)play->clients);
+    if (out_port) *out_port = port;
     return WPE_RESULT_OK;
 }
 
@@ -256,6 +390,9 @@ WPE_Result wpe__editor_pause(WPE_Editor* editor) {
 
 WPE_Result wpe__editor_stop(WPE_Editor* editor) {
     if (editor->mode == WPE_EDITOR_EDIT) return WPE_RESULT_OK;
+    /* Multiplayer games end with play mode, whether play_network or a script started them. */
+    wpe_engine_net_stop(editor->engine);
+    wpe__editor_stop_clients(editor);
     wpe_engine_set_simulating(editor->engine, false);
     editor->mode = WPE_EDITOR_EDIT;
     /* Keys held when play stops would never see their release (the game stops getting key events). */
@@ -351,6 +488,7 @@ WPE_Result wpe_editor_create(const WPE_EditorDesc* desc, WPE_Editor** out_editor
                                     .grid_spacing = 1.0f,
                                     .icons = true,
                                     .hot_reload = true,
+                                    .network = true,
                                     .snap_move = 0.5f,
                                     .snap_rotate = 15.0f,
                                     .snap_scale = 0.1f,
@@ -382,6 +520,8 @@ WPE_Result wpe_editor_create(const WPE_EditorDesc* desc, WPE_Editor** out_editor
 
 void wpe_editor_destroy(WPE_Editor* editor) {
     if (!editor) return;
+    wpe_engine_net_stop(editor->engine);
+    wpe__editor_stop_clients(editor);
     wpe_engine_destroy(editor->engine);
     wpe__clear_stack(editor->undo, &editor->undo_count);
     wpe__clear_stack(editor->redo, &editor->redo_count);
@@ -455,7 +595,8 @@ WPE_Result wpe_editor_frame(WPE_Editor* editor, double dt) {
     wpe_engine_set_debug_draw(
         editor->engine, &(WPE_EngineDebugDraw){.physics = editor->view.physics,
                                                .grid = editor->view.grid && editing && !editor->view.view_2d,
-                                               .grid_spacing = editor->view.grid_spacing});
+                                               .grid_spacing = editor->view.grid_spacing,
+                                               .network = editor->view.network});
     const WPE_Result frame = wpe_engine_frame(editor->engine, dt);
     if (result == WPE_RESULT_OK) result = frame;
     /* A game that quits (wpe.quit) in play mode returns the editor to edit mode. */

@@ -678,7 +678,69 @@ static void test_engine_network_scene_files_keep_owners(void) {
     wpe_engine_destroy(engine);
 }
 
+/* ---- Tools: the editor's way of hosting, and the overlay ------------------------------------- */
+
+/* A copy of the framebuffer's colors. */
+static uint32_t* grab(const WPE_Engine* engine, size_t* out_count) {
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(engine));
+    *out_count = (size_t)fb->width * fb->height;
+    uint32_t* copy = wpe_alloc(*out_count * sizeof *copy);
+    WPE_TEST_ASSERT(copy != NULL);
+    memcpy(copy, fb->color, *out_count * sizeof *copy);
+    return copy;
+}
+
+static void test_engine_network_hosts_like_the_editor(void) {
+    write_game(ROOT "/tools", "return {}\n");
+    WPE_NetHub* hub = NULL;
+    WPE_TEST_ASSERT_OK(wpe_network_hub_create(&hub));
+    WPE_Engine* e[2] = {start_engine(ROOT "/tools", NULL), start_engine(ROOT "/tools", NULL)};
+    /* The editor's world comes from text (its snapshot of the saved file), so it names the file. */
+    const char* b =
+        "{\"format\": \"wpe.scene\", \"version\": 1, \"environment\": {\"gravity\": [0, -2, 0]}}\n";
+    WPE_TEST_ASSERT_OK(wpe_engine_load_scene_text(e[0], b, strlen(b), "snapshot"));
+    WPE_TEST_ASSERT_EQ_STR("", wpe_engine_scene_path(e[0]));
+    WPE_TEST_ASSERT_OK(wpe_engine_net_start(
+        e[0], &(WPE_EngineNetDesc){.hub = hub, .any_port = true, .scene = "scenes/b.scene"}));
+    const uint16_t port = wpe_network_local_port(wpe_session_transport(wpe_engine_session(e[0])));
+    WPE_TEST_ASSERT(port != 7100); /* Any free port, not the project's. */
+    char address[32];
+    snprintf(address, sizeof address, "127.0.0.1:%u", (unsigned)port);
+    WPE_TEST_ASSERT_OK(wpe_engine_net_start(e[1], &(WPE_EngineNetDesc){.hub = hub, .join = address}));
+    play(hub, e, 2, 10);
+    WPE_TEST_ASSERT_EQ_STR("scenes/b.scene", wpe_engine_scene_path(e[1]));
+    WPE_TEST_ASSERT_NEAR(-2.0, gravity_of(e[1]), 1e-6);
+
+    /* The overlay draws only while asked to and a game runs. */
+    size_t count = 0;
+    uint32_t* plain = grab(e[1], &count);
+    WPE_EngineDebugDraw debug = wpe_engine_debug_draw(e[1]);
+    debug.network = true;
+    wpe_engine_set_debug_draw(e[1], &debug);
+    play(hub, e, 2, 1);
+    uint32_t* shown = grab(e[1], &count);
+    WPE_TEST_ASSERT(memcmp(plain, shown, count * sizeof *plain) != 0);
+    wpe_engine_net_stop(e[1]);
+    play(hub, e, 2, 1);
+    uint32_t* alone = grab(e[1], &count);
+    WPE_TEST_ASSERT(memcmp(plain, alone, count * sizeof *plain) == 0);
+    wpe_free(alone);
+    wpe_free(shown);
+    wpe_free(plain);
+
+    /* A game file edited between games (in the editor) changes the id the next game uses. */
+    const uint64_t before = wpe_engine_game_id(e[0]);
+    write_text(ROOT "/tools/scripts/rules.luau", "return {edited = true}\n");
+    WPE_TEST_ASSERT_EQ_UINT(before, wpe_engine_game_id(e[0])); /* Cached while the game runs. */
+    WPE_TEST_ASSERT_OK(wpe_engine_net_start(e[0], &(WPE_EngineNetDesc){.hub = hub}));
+    WPE_TEST_ASSERT(wpe_engine_game_id(e[0]) != before);
+    wpe_engine_destroy(e[1]);
+    wpe_engine_destroy(e[0]);
+    wpe_network_hub_destroy(hub);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_engine_network_project_settings), WPE_TEST_CASE(test_engine_network_game_id),
+              WPE_TEST_CASE(test_engine_network_hosts_like_the_editor),
               WPE_TEST_CASE(test_engine_network_players_follow_the_host_scene),
               WPE_TEST_CASE(test_engine_network_refuses_another_build),
               WPE_TEST_CASE(test_engine_network_lan_discovery),

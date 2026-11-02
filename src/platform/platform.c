@@ -181,6 +181,10 @@ double wpe_platform_time_seconds(void) {
     return (double)SDL_GetTicksNS() / 1e9;
 }
 
+void wpe_platform_sleep_ms(uint32_t milliseconds) {
+    SDL_Delay(milliseconds);
+}
+
 /* ---- Images --------------------------------------------------------------------------------------- */
 
 WPE_Result wpe_image_save_png(const char* path, uint32_t width, uint32_t height, const WPE_Color* pixels) {
@@ -517,6 +521,44 @@ WPE_Result wpe_platform_executable_path(char* out_path, size_t capacity) {
     out_path[length] = '\0';
 #endif
     return WPE_RESULT_OK;
+}
+
+struct WPE_Process {
+    SDL_Process* process;
+    bool exited;
+};
+
+WPE_Result wpe_process_start(const char* const* argv, WPE_Process** out_process) {
+    if (!argv || !argv[0] || !out_process) return WPE_RESULT_ERROR_NULL_ARG;
+    *out_process = NULL;
+    WPE_Process* p = wpe_alloc_zeroed(1, sizeof *p);
+    if (!p) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    p->process = SDL_CreateProcess(argv, false);
+    if (!p->process) {
+        wpe_log_error("cannot start '%s': %s", argv[0], SDL_GetError());
+        wpe_free(p);
+        return WPE_RESULT_ERROR_IO;
+    }
+    *out_process = p;
+    return WPE_RESULT_OK;
+}
+
+bool wpe_process_running(WPE_Process* process) {
+    if (!process) return false;
+    int code = 0;
+    if (!process->exited && SDL_WaitProcess(process->process, false, &code)) process->exited = true;
+    return !process->exited;
+}
+
+void wpe_process_destroy(WPE_Process* process) {
+    if (!process) return;
+    if (wpe_process_running(process)) {
+        int code = 0;
+        (void)SDL_KillProcess(process->process, true);
+        (void)SDL_WaitProcess(process->process, true, &code); /* Reaps it (no zombie on Linux). */
+    }
+    SDL_DestroyProcess(process->process);
+    wpe_free(process);
 }
 
 void wpe_platform_attach_console(void) {

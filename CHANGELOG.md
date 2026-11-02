@@ -4,6 +4,24 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 11: networking, phase 6: the runtime and the editor)
+- `wpe_runtime --host [port]`, `--connect <address>`, `--name`, `--local`,
+  `--net-sim latency=,jitter=,loss=` and `--net-stats`; the settings also apply to games scripts host
+  or join. `--headless --host` is a dedicated server, paced at 60 frames per second (`--max-fps`,
+  `WPE_RunOptions.max_fps`). A `--connect` run that never gets in exits with an error.
+- The network overlay (`WPE_EngineDebugDraw.network`): the session, players with pings, traffic per
+  second and the simulated conditions, top left.
+- Editor: the **Network** menu and `play_network` (the editor hosts the saved scene on 127.0.0.1, any
+  free port, and starts 1..3 `wpe_runtime` players that join it; optional simulated network on every
+  side), `net_status`, `net_wait`, and the view's `network` setting. `stop` ends multiplayer games,
+  also ones scripts started.
+- Engine: `WPE_EngineNetDesc.scene` (the file to share when the world came from text) and `any_port`;
+  the game id is recomputed at each `wpe_engine_net_start`.
+- Platform: `wpe_process_start`/`_running`/`_destroy` (SDL3 processes), `wpe_platform_sleep_ms`.
+- Tests: `tools_network_cli` (a dedicated server and a player over UDP, a different game refused,
+  bad command lines, the editor's `play_network` with a headless player); the engine test covers the
+  overlay, `scene`, `any_port` and the refreshed game id.
+
 ### Added (Milestone 11: networking, phase 5: the Luau API)
 - `wpe.net_host`, `net_join`, `net_leave`, `net_status`, `net_is_host`, `net_player`, `net_players`,
   `net_send`, `net_is_local`, `net_owner`, `net_set_owner`, `net_kick`, `net_find_games`,

@@ -41,6 +41,15 @@ typedef struct wpe__QueuedNetEvent {
     uint32_t generation; /* The session it belongs to. */
 } wpe__QueuedNetEvent;
 
+/* Bytes per second in and out, measured over the last whole second (the network overlay). */
+typedef struct wpe__NetRates {
+    double since;  /* When the current second began. */
+    uint64_t sent; /* The transport's totals then. */
+    uint64_t received;
+    uint32_t generation; /* The session measured. */
+    double up, down;     /* The last second's rates. */
+} wpe__NetRates;
+
 struct WPE_Engine {
     WPE_ProjectSettings project;
     WPE_JobSystem* jobs;
@@ -94,6 +103,8 @@ struct WPE_Engine {
     wpe__QueuedNetEvent* net_events; /* For the scripts, delivered after on_update. */
     uint32_t net_event_count;
     uint32_t net_event_capacity;
+    wpe__NetRates net_rates;           /* Traffic per second, for the network overlay. */
+    WPE_NetConditions net_conditions;  /* The running session's simulated network (the overlay shows it). */
     bool pending_from_host;            /* pending_scene is the host's scene (a player follows it). */
     char scene_path[WPE_VFS_PATH_MAX]; /* The scene file last loaded ("" after a text load): a host shares it.
                                         */
@@ -665,6 +676,7 @@ void wpe_engine_set_net_defaults(WPE_Engine* engine, const WPE_EngineNetDesc* de
     engine->net_defaults = defaults ? *defaults : (WPE_EngineNetDesc){0};
     engine->net_defaults.join = NULL;
     engine->net_defaults.player_name = NULL;
+    engine->net_defaults.scene = NULL;
 }
 
 WPE_Result wpe_engine_net_set_owner(WPE_Engine* engine, WPE_Entity entity, WPE_PlayerId player) {
@@ -680,10 +692,15 @@ WPE_Result wpe_engine_net_start(WPE_Engine* engine, const WPE_EngineNetDesc* des
     if (!engine || !desc) return WPE_RESULT_ERROR_NULL_ARG;
     wpe_engine_net_stop(engine);
     ++engine->session_generation;
+    engine->game_id_known = false; /* The editor may have changed files since the last game. */
+    engine->net_conditions = desc->conditions;
+    const char* scene = desc->scene ? desc->scene : engine->scene_path;
     const WPE_ProjectNetwork* settings = &engine->project.network;
     const WPE_SessionDesc session = {
         .transport = {.hub = desc->hub,
-                      .port = desc->port ? desc->port : settings->port,
+                      .port = desc->any_port ? 0
+                              : desc->port   ? desc->port
+                                             : settings->port,
                       .timeout_ms = settings->timeout_ms,
                       .local_only = desc->local_only,
                       .conditions = desc->conditions},
@@ -705,8 +722,8 @@ WPE_Result wpe_engine_net_start(WPE_Engine* engine, const WPE_EngineNetDesc* des
         if (result == WPE_RESULT_OK) {
             wpe_log_info("hosting on port %u",
                          (unsigned)wpe_network_local_port(wpe_session_transport(engine->session)));
-            if (engine->scene_path[0]) {
-                (void)wpe_session_set_scene(engine->session, engine->scene_path);
+            if (scene[0]) {
+                (void)wpe_session_set_scene(engine->session, scene);
                 wpe_replication_scene_loaded(engine->replication, engine->session, true);
             }
         }
@@ -1230,6 +1247,105 @@ static void wpe__fill_captures(WPE_Engine* engine) {
         shatter->image = slot >= 1 && slot <= WPE__CAPTURE_SLOTS ? engine->capture_textures[slot - 1] : NULL;
     }
 }
+/* The width of a line of text in the font, in texels. */
+static float wpe__text_width(const WPE_BitmapFont* font, const char* text) {
+    float width = 0.0f;
+    for (const unsigned char* c = (const unsigned char*)text; *c; ++c)
+        if (*c >= WPE_FONT_FIRST_CHAR && *c <= WPE_FONT_LAST_CHAR)
+            width += (float)(font->glyphs[*c - WPE_FONT_FIRST_CHAR].width + font->glyph_spacing);
+    return width;
+}
+
+/* Refreshes the traffic rates once a second (and starts over with a new session). */
+static void wpe__measure_net_rates(WPE_Engine* engine) {
+    wpe__NetRates* r = &engine->net_rates;
+    const WPE_NetTransportStats totals = wpe_network_stats(wpe_session_transport(engine->session));
+    const double now = wpe_platform_time_seconds();
+    if (r->generation != engine->session_generation) {
+        *r = (wpe__NetRates){.since = now,
+                             .sent = totals.bytes_sent,
+                             .received = totals.bytes_received,
+                             .generation = engine->session_generation};
+    } else if (now - r->since >= 1.0) {
+        r->up = (double)(totals.bytes_sent - r->sent) / (now - r->since);
+        r->down = (double)(totals.bytes_received - r->received) / (now - r->since);
+        r->since = now;
+        r->sent = totals.bytes_sent;
+        r->received = totals.bytes_received;
+    }
+}
+
+/* "340 B/s" or "12.5 KB/s". */
+static void wpe__format_rate(char* out, size_t capacity, double bytes_per_second) {
+    if (bytes_per_second < 1000.0)
+        snprintf(out, capacity, "%.0f B/s", bytes_per_second);
+    else
+        snprintf(out, capacity, "%.1f KB/s", fmin(bytes_per_second, 1e9) / 1000.0);
+}
+
+/* The network overlay: who plays, their pings and the traffic, top left (over the scripts' 2D). */
+static void wpe__draw_net_stats(WPE_Engine* engine) {
+    const WPE_BitmapFont* font = wpe_asset_font(engine->assets, engine->font);
+    if (!engine->debug_draw.network || !engine->session || !font) return;
+    wpe__measure_net_rates(engine);
+    const WPE_Session* s = engine->session;
+    enum { LINES = WPE_SESSION_MAX_PLAYERS + 3, LINE = 128 };
+    char lines[LINES][LINE];
+    uint32_t count = 0;
+    const WPE_PlayerId me = wpe_session_local_player(s);
+    if (wpe_session_is_host(s)) {
+        snprintf(lines[count++], LINE, "hosting on port %u, %u/%u players",
+                 (unsigned)wpe_network_local_port(wpe_session_transport(s)),
+                 (unsigned)wpe_session_player_count(s), (unsigned)wpe_session_max_players(s));
+    } else if (me != WPE_SESSION_NO_PLAYER) {
+        snprintf(lines[count++], LINE, "joined as player %u, %u/%u players", (unsigned)me,
+                 (unsigned)wpe_session_player_count(s), (unsigned)wpe_session_max_players(s));
+    } else if (wpe_session_end_reason(s) != 0) {
+        snprintf(lines[count++], LINE, "game ended: %s", wpe_session_reason_name(wpe_session_end_reason(s)));
+    } else {
+        snprintf(lines[count++], LINE, "connecting...");
+    }
+    for (WPE_PlayerId p = 0; p < WPE_SESSION_MAX_PLAYERS; ++p) {
+        WPE_SessionPlayer player;
+        if (!wpe_session_player(s, p, &player)) continue;
+        if (p == me)
+            snprintf(lines[count++], LINE, " %u %s (you)", (unsigned)p, player.name);
+        else if (wpe_session_is_host(s))
+            snprintf(lines[count++], LINE, " %u %s  %u ms", (unsigned)p, player.name,
+                     (unsigned)player.rtt_ms);
+        else
+            snprintf(lines[count++], LINE, " %u %s", (unsigned)p, player.name);
+    }
+    /* A player measures its round trip to the host only. */
+    char up[24], down[24];
+    wpe__format_rate(up, sizeof up, engine->net_rates.up);
+    wpe__format_rate(down, sizeof down, engine->net_rates.down);
+    WPE_NetPeerStats peer;
+    if (!wpe_session_is_host(s) &&
+        wpe_network_peer_stats(wpe_session_transport(s), 0, &peer) == WPE_RESULT_OK)
+        snprintf(lines[count++], LINE, "ping %u ms, loss %.0f%%, up %s, down %s", (unsigned)peer.rtt_ms,
+                 (double)peer.packet_loss * 100.0, up, down);
+    else
+        snprintf(lines[count++], LINE, "up %s, down %s", up, down);
+    /* The simulated delay holds messages back after ENet has measured the ping, so it is not part of it. */
+    const WPE_NetConditions* sim = &engine->net_conditions;
+    if (sim->latency_ms > 0 || sim->jitter_ms > 0 || sim->loss > 0.0f)
+        snprintf(lines[count++], LINE, "simulated: +%u..%u ms in, %.0f%% lost", (unsigned)sim->latency_ms,
+                 (unsigned)(sim->latency_ms + sim->jitter_ms), (double)sim->loss * 100.0);
+
+    const float pad = 3.0f, line_height = (float)font->line_height;
+    float width = 0.0f;
+    for (uint32_t i = 0; i < count; ++i)
+        width = fmaxf(width, wpe__text_width(font, lines[i]));
+    wpe_draw2d_rect(engine->draw2d,
+                    (WPE_Rect){2.0f, 2.0f, width + 2.0f * pad, (float)count * line_height + 2.0f * pad},
+                    wpe_color_rgba8(0, 0, 0, 160));
+    for (uint32_t i = 0; i < count; ++i)
+        wpe_draw2d_text(engine->draw2d, font, 2.0f + pad, 2.0f + pad + (float)i * line_height, lines[i],
+                        i == 0 ? wpe_color_rgba8(255, 220, 120, 255) : wpe_color_rgba8(230, 230, 230, 255),
+                        1.0f);
+}
+
 /* Milliseconds since *mark, which moves to now. */
 static double wpe__ms_since(double* mark) {
     const double now = wpe_platform_time_seconds();
@@ -1286,6 +1402,7 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
     if (result == WPE_RESULT_OK) {
         if (camera != WPE_ENTITY_NULL) result = wpe__draw_debug(engine, camera);
         if (result == WPE_RESULT_OK && engine->draw_ui) result = wpe_ui_draw(engine->ui, engine->renderer);
+        wpe__draw_net_stats(engine);
         if (result == WPE_RESULT_OK) result = wpe_draw2d_submit(engine->draw2d, engine->renderer);
         const WPE_Result end = wpe_renderer_end_frame(engine->renderer);
         if (result == WPE_RESULT_OK) result = end;
@@ -1402,6 +1519,10 @@ WPE_Result wpe_engine_run(WPE_Engine* engine, const WPE_RunOptions* options) {
         if (result != WPE_RESULT_OK) {
             wpe_log_error("frame %u failed: %s", frame, wpe_result_to_string(result));
             return result;
+        }
+        if (options->max_fps > 0) {
+            const double spare = 1.0 / (double)options->max_fps - (wpe_platform_time_seconds() - now);
+            if (spare > 0.001) wpe_platform_sleep_ms((uint32_t)(spare * 1000.0));
         }
     }
     if (options->screenshot) result = wpe_engine_screenshot(engine, options->screenshot);

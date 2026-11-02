@@ -139,6 +139,7 @@ struct WPE_EditorUi {
     bool unsaved_popup;
     bool pending_after_save;
     bool layout_built;
+    bool slow_network; /* The Network menu's play_network items simulate a bad network. */
     bool quit;
 };
 
@@ -2984,6 +2985,8 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
             wpe__ui_set_view(ui, "icons", NULL, 0, !view.icons);
         if (igMenuItem_Bool("Reload changed scripts", NULL, view.hot_reload, true))
             wpe__ui_set_view(ui, "hot_reload", NULL, 0, !view.hot_reload);
+        if (igMenuItem_Bool("Network stats", NULL, view.network, true))
+            wpe__ui_set_view(ui, "network", NULL, 0, !view.network);
         igSeparator();
         if (igMenuItem_Bool("Snap", NULL, view.snap, true)) wpe__ui_set_view(ui, "snap", NULL, 0, !view.snap);
         const struct {
@@ -3002,6 +3005,31 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
                             steps[i].format, ImGuiSliderFlags_AlwaysClamp))
                 wpe__ui_set_view(ui, steps[i].key, NULL, value, false);
         }
+        igEndMenu();
+    }
+    if (igBeginMenu("Network", true)) {
+        /* The editor hosts; each other player is a game window joined to it (the saved scene is played). */
+        static const char* const items[] = {"Play with 1 other player", "Play with 2 other players",
+                                            "Play with 3 other players"};
+        for (int i = 0; i < 3; ++i) {
+            if (!igMenuItem_Bool(items[i], NULL, false, true)) continue;
+            WPE_JsonWriter* w = wpe__ui_begin("play_network");
+            if (w) {
+                wpe_json_write_key(w, "clients");
+                wpe_json_write_integer(w, i + 1);
+                if (ui->slow_network) {
+                    wpe_json_write_key(w, "latency_ms");
+                    wpe_json_write_integer(w, 120);
+                    wpe_json_write_key(w, "jitter_ms");
+                    wpe_json_write_integer(w, 30);
+                    wpe_json_write_key(w, "loss");
+                    wpe_json_write_double(w, 0.05);
+                }
+            }
+            (void)wpe__ui_send(ui, w);
+        }
+        igSeparator();
+        igMenuItem_BoolPtr("Simulate a slow network (120 ms, 5% loss)", NULL, &ui->slow_network, true);
         igEndMenu();
     }
     if (igBeginMenu("Window", true)) {

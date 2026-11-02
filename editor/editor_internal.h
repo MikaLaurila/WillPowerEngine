@@ -10,11 +10,20 @@
 
 #include "core/log.h"
 #include "editor/editor.h"
+#include "platform/platform.h"
 
 #define WPE__EDITOR_UNDO_MAX 64u
 #define WPE__EDITOR_LOG_LINES 256u
 #define WPE__EDITOR_LOG_TEXT 512u
 #define WPE__EDITOR_RELOAD_SECONDS 0.5 /* Hot reload: how often scripts are checked for changes. */
+#define WPE__EDITOR_MAX_CLIENTS 3u     /* play_network: other players besides the editor's host. */
+
+/* How play_network plays. */
+typedef struct wpe__NetPlay {
+    uint32_t clients;             /* Other players, each a wpe_runtime joined to the editor (1..3). */
+    bool headless;                /* The clients run without windows (tests, agents). */
+    WPE_NetConditions conditions; /* A simulated bad network, both ways. */
+} wpe__NetPlay;
 
 typedef struct wpe__Snapshot {
     char* text; /* A scene document (owned). */
@@ -55,7 +64,9 @@ struct WPE_Editor {
     uint32_t undo_count;
     wpe__Snapshot redo[WPE__EDITOR_UNDO_MAX];
     uint32_t redo_count;
-    wpe__Snapshot play; /* The scene as it was when play mode started. */
+    wpe__Snapshot play;                            /* The scene as it was when play mode started. */
+    WPE_Process* clients[WPE__EDITOR_MAX_CLIENTS]; /* play_network's other players (ended by stop). */
+    uint32_t client_count;
 
     WPE_EditorScreenshotFn screenshot;
     void* screenshot_user_data;
@@ -91,6 +102,12 @@ WPE_Result wpe__editor_redo(WPE_Editor* editor);
 WPE_Result wpe__editor_play(WPE_Editor* editor);
 WPE_Result wpe__editor_pause(WPE_Editor* editor);
 WPE_Result wpe__editor_stop(WPE_Editor* editor);
+
+/* Saved scene only: plays it as the host (this machine only, any free port, written to *out_port) and starts
+ * `play->clients` wpe_runtime processes that join it. Stop ends the game and the clients. */
+WPE_Result wpe__editor_play_network(WPE_Editor* editor, const wpe__NetPlay* play, uint16_t* out_port);
+/* How many of play_network's clients still run (a closed window ends one). */
+uint32_t wpe__editor_clients_running(WPE_Editor* editor);
 
 /* Scene files; paths are asset paths inside the project directory. */
 WPE_Result wpe__editor_new_scene(WPE_Editor* editor);

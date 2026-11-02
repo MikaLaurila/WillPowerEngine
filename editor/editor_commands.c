@@ -1157,6 +1157,8 @@ static WPE_Result wpe__write_view(WPE_JsonWriter* w, const WPE_EditorView* view)
     wpe_json_write_string(w, view->gizmo_local ? "local" : "world");
     wpe_json_write_key(w, "hot_reload");
     wpe_json_write_bool(w, view->hot_reload);
+    wpe_json_write_key(w, "network");
+    wpe_json_write_bool(w, view->network);
     wpe_json_write_key(w, "snap");
     wpe_json_write_bool(w, view->snap);
     wpe_json_write_key(w, "snap_move");
@@ -1184,6 +1186,7 @@ static WPE_Result wpe__read_view_key(wpe__Call* call, const char* key, const WPE
                  : strcmp(key, "physics") == 0    ? &view->physics
                  : strcmp(key, "icons") == 0      ? &view->icons
                  : strcmp(key, "hot_reload") == 0 ? &view->hot_reload
+                 : strcmp(key, "network") == 0    ? &view->network
                  : strcmp(key, "snap") == 0       ? &view->snap
                                                   : NULL;
     if (flag) {
@@ -1322,6 +1325,111 @@ static WPE_Result wpe__cmd_pause(wpe__Call* call) {
 
 static WPE_Result wpe__cmd_stop(wpe__Call* call) {
     return wpe__null(call, wpe__editor_stop(call->editor));
+}
+
+/* Optional number argument within [min, max]; false (with the failure written) when it is not. */
+static bool wpe__optional_number(wpe__Call* call, const char* key, double min, double max, double fallback,
+                                 double* out) {
+    const WPE_JsonValue* v = wpe_json_get(call->args, key);
+    *out = wpe_json_number(v, fallback);
+    if (v && (wpe_json_type(v) != WPE_JSON_NUMBER || !(*out >= min && *out <= max))) {
+        (void)wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"%s\" must be %g..%g", key, min, max);
+        return false;
+    }
+    return true;
+}
+
+static WPE_Result wpe__cmd_play_network(wpe__Call* call) {
+    double clients = 1, latency = 0, jitter = 0, loss = 0;
+    if (!wpe__optional_number(call, "clients", 1, WPE__EDITOR_MAX_CLIENTS, 1, &clients) ||
+        !wpe__optional_number(call, "latency_ms", 0, 5000, 0, &latency) ||
+        !wpe__optional_number(call, "jitter_ms", 0, 5000, 0, &jitter) ||
+        !wpe__optional_number(call, "loss", 0, 0.9, 0, &loss))
+        return wpe__null(call, WPE_RESULT_ERROR_INVALID_ARG);
+    const WPE_JsonValue* headless = wpe_json_get(call->args, "headless");
+    if (headless && wpe_json_type(headless) != WPE_JSON_BOOL)
+        return wpe__null(call,
+                         wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"headless\" must be true or false"));
+    const wpe__NetPlay play = {
+        .clients = (uint32_t)clients,
+        .headless = wpe_json_bool(headless, false),
+        .conditions = {.latency_ms = (uint32_t)latency, .jitter_ms = (uint32_t)jitter, .loss = (float)loss}};
+    uint16_t port = 0;
+    const WPE_Result result = wpe__editor_play_network(call->editor, &play, &port);
+    if (result == WPE_RESULT_ERROR_INVALID_STATE)
+        return wpe__null(call,
+                         wpe__fail(call, result, "save the scene first: the other players load its file"));
+    if (result != WPE_RESULT_OK)
+        return wpe__null(call, wpe__fail(call, result, "the networked game didn't start"));
+    WPE_JsonWriter* w = call->w;
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "port");
+    wpe_json_write_integer(w, port);
+    wpe_json_write_key(w, "clients");
+    wpe_json_write_integer(w, play.clients);
+    wpe_json_write_object_end(w);
+    return WPE_RESULT_OK;
+}
+
+/* The multiplayer game the editor plays, as the network overlay shows it. */
+static WPE_Result wpe__cmd_net_status(wpe__Call* call) {
+    const WPE_Session* s = wpe_engine_session(wpe_editor_engine(call->editor));
+    WPE_JsonWriter* w = call->w;
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "session");
+    const WPE_PlayerId me = s ? wpe_session_local_player(s) : WPE_SESSION_NO_PLAYER;
+    wpe_json_write_string(w, !s                               ? "offline"
+                             : wpe_session_is_host(s)         ? "hosting"
+                             : me != WPE_SESSION_NO_PLAYER    ? "joined"
+                             : wpe_session_end_reason(s) != 0 ? "ended"
+                                                              : "connecting");
+    wpe_json_write_key(w, "players");
+    wpe_json_write_array_begin(w, false);
+    for (WPE_PlayerId p = 0; s && p < WPE_SESSION_MAX_PLAYERS; ++p) {
+        WPE_SessionPlayer player;
+        if (!wpe_session_player(s, p, &player)) continue;
+        wpe_json_write_object_begin(w);
+        wpe_json_write_key(w, "id");
+        wpe_json_write_integer(w, p);
+        wpe_json_write_key(w, "name");
+        wpe_json_write_string(w, player.name);
+        wpe_json_write_key(w, "ping_ms");
+        wpe_json_write_integer(w, player.rtt_ms);
+        wpe_json_write_object_end(w);
+    }
+    wpe_json_write_array_end(w);
+    wpe_json_write_key(w, "clients_running");
+    wpe_json_write_integer(w, wpe__editor_clients_running(call->editor));
+    wpe_json_write_object_end(w);
+    return WPE_RESULT_OK;
+}
+
+/* Runs frames in real time until the game has `players` players (the clients take a moment to start). */
+static WPE_Result wpe__cmd_net_wait(wpe__Call* call) {
+    double players = 2, timeout = 10;
+    if (!wpe__optional_number(call, "players", 1, WPE_SESSION_MAX_PLAYERS, 2, &players) ||
+        !wpe__optional_number(call, "timeout", 0.1, 120, 10, &timeout))
+        return wpe__null(call, WPE_RESULT_ERROR_INVALID_ARG);
+    WPE_Engine* engine = wpe_editor_engine(call->editor);
+    const double start = wpe_platform_time_seconds();
+    double previous = start;
+    WPE_Result result = WPE_RESULT_OK;
+    for (;;) {
+        const WPE_Session* s = wpe_engine_session(engine);
+        if (!s)
+            return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_STATE, "no multiplayer game"));
+        if (wpe_session_player_count(s) >= (uint32_t)players) break;
+        const double now = wpe_platform_time_seconds();
+        if (now - start > timeout)
+            return wpe__null(call,
+                             wpe__fail(call, WPE_RESULT_ERROR_NOT_FOUND, "%u of %u players after %g s",
+                                       (unsigned)wpe_session_player_count(s), (unsigned)players, timeout));
+        result = wpe_editor_frame(call->editor, fmin(now - previous, 0.1));
+        previous = now;
+        if (result != WPE_RESULT_OK) return wpe__null(call, result);
+        wpe_platform_sleep_ms(5);
+    }
+    return wpe__cmd_net_status(call);
 }
 
 /* Frees the mouse a playing game captured (mouse look), so the editor's panels can be used again. */
@@ -1825,6 +1933,12 @@ static const struct {
     {"play", wpe__cmd_play, "{} (also resumes)"},
     {"pause", wpe__cmd_pause, "{}"},
     {"stop", wpe__cmd_stop, "{} (restores the scene as it was before play)"},
+    {"play_network", wpe__cmd_play_network,
+     "{\"clients\": 1..3, \"headless\"?, \"latency_ms\"?, \"jitter_ms\"?, \"loss\"?: 0..0.9} (plays the "
+     "saved "
+     "scene as the host; each client is a wpe_runtime that joins; stop ends them)"},
+    {"net_status", wpe__cmd_net_status, "{} (the multiplayer game: session, players with pings, clients)"},
+    {"net_wait", wpe__cmd_net_wait, "{\"players\": n, \"timeout\"?: seconds} (runs frames until n players)"},
     {"release_mouse", wpe__cmd_release_mouse,
      "{}: free the mouse the game captured (the game can capture it again)"},
     {"frames", wpe__cmd_frames, "{count = 1, dt = 1/60}: run frames"},

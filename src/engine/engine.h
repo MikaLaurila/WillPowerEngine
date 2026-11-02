@@ -143,6 +143,8 @@ typedef struct WPE_RunOptions {
     double fixed_dt;        /* Frame time to simulate instead of the real clock (0 = real time). */
     const char* screenshot; /* Save the last frame as PNG at this OS path (NULL = none). */
     bool watch;             /* Hot-reload changed scripts twice a second (directory projects). */
+    uint32_t max_fps;       /* Sleep so frames don't come faster than this (0 = no limit; a headless server
+                               would otherwise spin a core at full speed). */
 } WPE_RunOptions;
 
 /**
@@ -193,6 +195,7 @@ typedef struct WPE_EngineDebugDraw {
     bool physics;       /* Collider wireframes, colored by body type (see wpe_physics_debug_draw()). */
     bool grid;          /* A grid on the ground plane (y = 0) around the camera, X axis red, Z axis blue. */
     float grid_spacing; /* World units between grid lines (0 = 1); every 10th line is brighter. */
+    bool network;       /* The multiplayer session in the top-left corner: players, pings, traffic. */
 } WPE_EngineDebugDraw;
 
 /** Sets the debug overlays (all off by default). @thread_safety Main thread only */
@@ -217,12 +220,15 @@ bool wpe_engine_draws_scene(const WPE_Engine* engine);
 /** How to start a multiplayer session. Ports, player limits and timeouts come from the project. */
 typedef struct WPE_EngineNetDesc {
     const char* join; /* NULL: host a game; otherwise the host's address ("a.b.c.d[:port]", or a name). */
-    const char* player_name;      /* NULL: "Host" or "Player". */
-    bool hidden;                  /* Host: do not answer LAN discovery. */
-    bool local_only;              /* This machine only (127.0.0.1): tests, and no firewall prompt. */
-    uint16_t port;                /* Host: 0 means the project's port. */
+    const char* player_name; /* NULL: "Host" or "Player". */
+    bool hidden;             /* Host: do not answer LAN discovery. */
+    bool local_only;         /* This machine only (127.0.0.1): tests, and no firewall prompt. */
+    uint16_t port;           /* Host: 0 means the project's port. */
+    bool any_port; /* Host: listen on any free port instead (wpe_network_local_port() says which). */
     WPE_NetConditions conditions; /* A simulated bad network (see transport.h). */
     WPE_NetHub* hub;              /* Tests: play on this in-memory network instead of UDP. Borrowed. */
+    const char* scene; /* Host: the scene file to share when the world was loaded from text but matches that
+                          file (the editor plays its saved scene); NULL: wpe_engine_scene_path(). */
 } WPE_EngineNetDesc;
 
 /**
@@ -269,7 +275,8 @@ bool wpe_engine_net_is_local(const WPE_Engine* engine, WPE_Entity entity);
 
 /**
  * The game's network identity: a hash of its project file, scenes, prefabs and scripts (line endings
- * ignored), so only the same game and build can play together. Computed once, at first use.
+ * ignored), so only the same game and build can play together. Computed at first use and again at each
+ * wpe_engine_net_start() (files edited since, in the editor, change it).
  *
  * @thread_safety Main thread only
  */

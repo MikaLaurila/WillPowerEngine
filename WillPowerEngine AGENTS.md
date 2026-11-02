@@ -120,7 +120,7 @@ tests/
 ├── scene/          # Full scene playback tests (label `integration`)
 ├── golden/         # Reference-image comparisons
 ├── stress/         # Long-running, memory leak detection
-└── tools/          # CMake scripts driving the command-line tools (pak and export round trips)
+└── tools/          # CMake scripts driving the command-line tools (pak and export round trips, editor CLI, multiplayer CLI)
 ```
 
 ### 3.3 Test Patterns
@@ -427,7 +427,7 @@ willpower_engine/
 │   ├── scene/          # Transform, hierarchy, name components and systems
 │   ├── jobs/           # Worker thread pool (parallel_for)
 │   ├── renderer/       # Software rasterizer (no SDL dependency)
-│   ├── platform/       # SDL3 wrapper: window, present, time, file and PNG I/O
+│   ├── platform/       # SDL3 wrapper: window, present, time, file and PNG I/O, child processes
 │   ├── network/        # Message transport (ENet UDP or an in-memory network), bit packing, value wire format
 │   ├── assets/         # glTF models (cgltf), image decoding (stb_image), bitmap fonts
 │   ├── graphics/       # Mesh/camera/animator components, material shader, scene render, 2D
@@ -441,7 +441,7 @@ willpower_engine/
 ├── editor/             # wpe_editor: model and commands (editor.c, editor_commands.c), UI (editor_ui.c,
 │   │                   # ui_backend.c: ImGui on the GPU or the software rasterizer), main.c (window, server, CLI)
 │   └── main.c
-├── runtime/            # Standalone game runtime (wpe_runtime; exported games are this executable)
+├── runtime/            # Standalone game runtime (wpe_runtime; exported games are this executable; --host/--connect multiplayer)
 │   └── main.c
 ├── samples/            # Small demo programs (e.g. spinning_cubes) with --frames/--screenshot for automated checks
 ├── tests/              # Test suites

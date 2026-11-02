@@ -45,6 +45,12 @@ add_test(NAME tools_editor_cli
 set_tests_properties(tools_editor_cli PROPERTIES LABELS "tools;editor" TIMEOUT 600)
 add_dependencies(wpe_tests wpe_editor)
 
+# Multiplayer from the command line: a dedicated server and a player, and the editor's play_network.
+add_test(NAME tools_network_cli
+    COMMAND "${CMAKE_COMMAND}" -DWPE_RUNTIME=$<TARGET_FILE:wpe_runtime> -DWPE_EDITOR=$<TARGET_FILE:wpe_editor>
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/network_cli -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/network_cli.cmake)
+set_tests_properties(tools_network_cli PROPERTIES LABELS "tools;network" TIMEOUT 300)
+
 # Builds every test executable, then runs the whole suite.
 add_custom_target(test_all
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -C $<CONFIG>

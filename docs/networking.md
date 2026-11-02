@@ -13,6 +13,7 @@ networking milestone; sections marked *(coming)* describe parts that are not bui
 8. [Playing together: the engine and the project file](#playing-together)
 9. [Replication: keeping objects in sync](#replication)
 10. [Scripting multiplayer games](#scripting-multiplayer-games)
+11. [Trying it out: the command line, the overlay and the editor](#trying-it-out)
 
 ## The basics
 
@@ -469,3 +470,100 @@ end
 `wpe.net_is_local` is true for everything when not in a game, so the same script works in single
 player too. The host hands out entities with `wpe.net_set_owner(entity, player)`, for example a car
 for each player in `on_player_joined`.
+
+## Trying it out
+
+You don't need two computers to play a multiplayer game: two programs on one machine can talk
+through the **loopback** address 127.0.0.1, which never leaves the computer. Everything below works
+that way, and it works the same over a real network if you use the host computer's LAN address
+instead (`ipconfig` on Windows, `ip addr` on Linux, shows it; it usually starts with `192.168.`).
+
+### From the command line
+
+`wpe_runtime` can host or join a game without any lobby script:
+
+```bash
+# Window 1: host the game (on the project's port, 47810 unless project.json says otherwise).
+./build/bin/wpe_runtime --project templates/racing --host --net-stats
+
+# Window 2: join it, as "Alice".
+./build/bin/wpe_runtime --project templates/racing --connect 127.0.0.1 --name Alice --net-stats
+```
+
+| Option | Effect |
+|---|---|
+| `--host [port]` | Host a game, on the project's port or this one. |
+| `--connect <address>` | Join the game at `a.b.c.d`, `a.b.c.d:port` or a computer's name. |
+| `--name <player>` | The name the other players see. |
+| `--local` | Use this computer only (127.0.0.1). The game can't be joined from elsewhere, and Windows won't ask about the firewall. |
+| `--net-sim latency=120,jitter=30,loss=5` | Pretend the network is bad (see [Simulating a bad network](#simulating-a-bad-network)): milliseconds of delay, milliseconds of random extra delay, and percent of packets lost. Any of the three can be left out. |
+| `--net-stats` | Show the network overlay (below). |
+
+The first time a program hosts on the network (without `--local`), Windows asks whether to let it
+through the firewall. Allow it on private networks, or the other computers on your LAN can't reach
+it.
+
+These settings also apply to games that the game's own scripts host or join with `wpe.net_host` and
+`wpe.net_join`, so `--net-sim` is the quick way to see how a finished game copes with lag.
+
+A joining runtime that never gets in exits with an error, and the log says why: no answer in time,
+a full game, or *different game or build* (see [Sessions](#sessions)). That makes the command line
+usable from scripts, and the engine's own test (`tests/tools/network_cli.cmake`) uses it that way.
+
+**A dedicated server** is a host nobody plays on, often running on a computer without a screen. Add
+`--headless` to `--host`: there's no window and no sound, and the game runs at 60 frames a second
+(`--max-fps` changes that). Without the limit, a headless program would compute frames as fast as
+it can and use a whole processor core to do nothing useful. The server still counts as player 0, so
+a 4-player project leaves room for 3 others.
+
+### The network overlay
+
+`--net-stats` (and **View → Network stats** in the editor, on by default) draws what the session
+sees in the top-left corner:
+
+```
+joined as player 1, 2/4 players
+ 0 Host
+ 1 Alice (you)
+ping 16 ms, loss 0%, up 340 B/s, down 1.2 KB/s
+simulated: +120..150 ms in, 5% lost
+```
+
+- **ping** is the *round-trip time*: how long a packet takes to get to the host and an answer to
+  come back. The host sees each player's ping next to their name; a player sees its own to the
+  host. Under about 50 ms feels instant, over about 150 ms you start to notice it.
+- **loss** is the share of reliable packets that had to be sent again.
+- **up** and **down** are the bytes sent and received in the last second, everything included:
+  replication, script messages and ENet's own keep-alive packets. A few hundred bytes a second is
+  just the keep-alives.
+- **simulated** appears with `--net-sim`. ENet measures the ping *before* the simulated delay
+  holds a message back, so the delay is not part of the ping: it is shown on its own line.
+
+### From the editor
+
+The editor's **Network** menu plays the open scene with other players on this computer: **Play
+with 1 other player** (or 2, or 3). The editor becomes the host, and each other player is a
+`wpe_runtime` window started with `--connect` to the editor's game. **Simulate a slow network** in
+the same menu adds 120 ms of delay and 5% loss on every side. **Stop** ends the game and closes the
+other windows.
+
+Two details are worth knowing:
+
+- **The scene must be saved.** The other players load the scene from its file, as players always
+  do when they follow the host, so the editor plays the saved file too, not unsaved edits.
+  Otherwise each side would start from a different world.
+- **The editor's game is private.** It listens on 127.0.0.1 only, on any free port (so it never
+  clashes with a game already running), and doesn't answer LAN discovery.
+
+The same is available as editor commands, for agents and tests:
+
+```json
+{"cmd": "play_network", "clients": 1, "latency_ms": 120, "loss": 0.05}
+{"cmd": "net_wait", "players": 2, "timeout": 10}
+{"cmd": "net_status"}
+{"cmd": "stop"}
+```
+
+`net_wait` runs the game until that many players are in it (the other windows take a moment to
+start), and `net_status` lists the players with their pings. `"headless": true` starts the other
+players without windows.
