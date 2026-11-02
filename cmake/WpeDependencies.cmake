@@ -128,6 +128,23 @@ add_library(wpe_dep_zstd INTERFACE)
 target_link_libraries(wpe_dep_zstd INTERFACE libzstd_static)
 target_include_directories(wpe_dep_zstd SYSTEM INTERFACE "${zstd_SOURCE_DIR}/lib")
 
+# ENet v1.3.18 (MIT) — reliable UDP for networked games (connections, channels, reliable and
+# unreliable sequenced packets). Its own CMake project builds the static library `enet` and links
+# ws2_32/winmm on MinGW. Only src/network uses it.
+FetchContent_Declare(enet
+    URL https://github.com/lsalzman/enet/archive/refs/tags/v1.3.18.tar.gz
+    URL_HASH SHA256=28603c895f9ed24a846478180ee72c7376b39b4bb1287b73877e5eae7d96b0dd
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    EXCLUDE_FROM_ALL
+    SYSTEM)
+FetchContent_MakeAvailable(enet)
+if(NOT MSVC)
+    target_compile_options(enet PRIVATE -w)
+endif()
+add_library(wpe_dep_enet INTERFACE)
+target_link_libraries(wpe_dep_enet INTERFACE enet)
+target_include_directories(wpe_dep_enet SYSTEM INTERFACE "${enet_SOURCE_DIR}/include")
+
 # miniaudio 0.11.25 (public domain / MIT-0) — audio playback and decoding (WAV, FLAC, MP3). Only
 # the single-file library is used (its CMake project is not built); src/audio compiles miniaudio.c.
 FetchContent_Declare(miniaudio

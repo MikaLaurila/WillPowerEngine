@@ -4,6 +4,19 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 11: networking, phase 1: transport)
+- Network module (`src/network/`, `network/network.h`): `WPE_NetTransport` hosts or connects, with
+  a reliable ordered channel and an unreliable sequenced channel, connection and disconnection
+  events (reasons: closed, timeout, connect failed, or the game's own), peer round-trip/loss stats,
+  byte totals and IPv4 address parsing (with DNS) and formatting.
+- Two backends: real UDP through ENet, and an in-memory network (`WPE_NetHub`) whose clock moves
+  only when advanced, so networked tests are deterministic. Both take simulated conditions
+  (latency, jitter, loss, seed); over UDP, loss drops datagrams below ENet so reliable messages are
+  really resent. `wpe_network_hub_cut` pulls a transport's cable to test timeouts.
+- Dependency: ENet v1.3.18 (approved, MIT).
+- Tests: both channels on both backends, reliability under 20–30% loss, determinism, user
+  disconnect reasons, full hosts, timeouts, failed connections, argument checks, addresses.
+
 ### Added (Milestone 10: the editor)
 - `wpe_editor` (`editor/`, docs in `docs/editor.md`): Dear ImGui (cimgui) interface drawn by the
   engine's software rasterizer, with docked panels: viewport (fly camera, picking, move/rotate/scale

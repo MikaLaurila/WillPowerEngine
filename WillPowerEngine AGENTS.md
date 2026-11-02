@@ -428,6 +428,7 @@ willpower_engine/
 │   ├── jobs/           # Worker thread pool (parallel_for)
 │   ├── renderer/       # Software rasterizer (no SDL dependency)
 │   ├── platform/       # SDL3 wrapper: window, present, time, file and PNG I/O
+│   ├── network/        # Message transport: ENet (UDP) or an in-memory network for tests
 │   ├── assets/         # glTF models (cgltf), image decoding (stb_image), bitmap fonts
 │   ├── graphics/       # Mesh/camera/animator components, material shader, scene render, 2D
 │   ├── physics/        # Box3D wrapper
@@ -463,6 +464,7 @@ willpower_engine/
   - `renderer` depends on `core`, `math` and `jobs`.
   - `platform` depends on `core` and `renderer`, and uses SDL3 privately.
   - `vfs` depends on `core` and `platform`, and uses zstd privately.
+  - `network` depends only on `core`, and uses ENet privately.
   - `assets` depends on `core`, `math`, `renderer`, `jobs`, `platform` and `vfs`, and uses cgltf and stb_image privately.
   - `graphics` depends on `ecs`, `scene`, `renderer` and `assets`.
   - `physics` depends on `ecs`, `scene` and `assets`, and uses Box3D privately.
@@ -523,6 +525,7 @@ For non-trivial changes:
 | cgltf | glTF 2.0 / GLB parsing (approved for the glTF milestone) | Pinned release (v1.15) |
 | stb_image | JPEG/PNG decoding (approved for the glTF milestone) | Pinned commit |
 | zstd or LZ4 | Compression | Either, documented choice |
+| ENet | Networking: reliable UDP (approved for the networking milestone) | Pinned release (v1.3.18) |
 
 ### 7.2 Adding New Dependencies
 

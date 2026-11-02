@@ -70,7 +70,8 @@ cmake --build build --target test_all
 ## Dependencies
 
 Each dependency is added in the milestone that needs it. All are permissively licensed:
-SDL3, cglm, cgltf, stb_image, Luau, miniaudio, cimgui, Box3D, zstd.
+SDL3, cglm, cgltf, stb_image, Luau, miniaudio, cimgui, Box3D, zstd, ENet (networking: it gives
+UDP the reliability, ordering and fragmentation games need, in a small C library).
 
 ## License
 
