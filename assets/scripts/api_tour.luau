@@ -1,7 +1,7 @@
 -- Exercises every function of the `wpe` scripting API. Part of the master test scene
 -- (scenes/test_full.scene), which the scene test runs for 60 simulated seconds, and a living
--- reference. Fails loudly via assert. wpe.load_scene and wpe.quit end the scene, so the engine tests
--- cover them instead.
+-- reference. Fails loudly via assert. wpe.load_scene and wpe.quit end the scene, and wpe.net_host,
+-- wpe.net_join and wpe.net_find_games open network sockets, so the engine tests cover them instead.
 local JudgementCut = require("scripts/lib/judgement_cut")
 local Tour = {}
 
@@ -419,6 +419,23 @@ function Tour:on_start()
 	wpe.set_camera(camera)
 	assert(not pcall(wpe.set_camera, e)) -- the tour has no camera component
 	assert(not pcall(wpe.load_scene, "scenes/missing.scene"))
+
+	-- Multiplayer, offline: everything is local and nothing can be sent.
+	assert(wpe.net_status() == "offline" and not wpe.net_is_host() and wpe.net_player() == nil)
+	assert(#wpe.net_players() == 0)
+	assert(wpe.net_send("all", "hello", { 1, 2, vector.create(1, 2, 3) }) == false)
+	assert(wpe.net_send(1, "hello", nil, false) == false)
+	assert(not pcall(wpe.net_send, "everyone", "hello")) -- a player id, "host" or "all"
+	assert(not pcall(wpe.net_send, "all", "")) -- names are 1..31 bytes
+	assert(not pcall(wpe.net_send, "all", "f", print)) -- functions can't be sent
+	local cycle = {}
+	cycle.self = cycle
+	assert(not pcall(wpe.net_send, "all", "loop", cycle)) -- nor tables that contain themselves
+	assert(wpe.net_is_local(e) and wpe.net_owner(e) == nil)
+	assert(not pcall(wpe.net_set_owner, e, 1)) -- not networked
+	assert(wpe.net_kick(1) == false)
+	wpe.net_leave() -- not in a game: nothing happens
+	wpe.net_stop_finding()
 
 	-- 2D drawing (also every frame in on_update).
 	local tw, th = wpe.text_size("tour", 2)

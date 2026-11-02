@@ -701,7 +701,9 @@ const char* wpe_session_reason_name(uint32_t reason) {
         return "not accepting players";
     case WPE_SESSION_REASON_PROTOCOL:
         return "protocol error";
+    case WPE_SESSION_REASON_GAME:
+        return "kicked";
     default:
-        return reason >= WPE_SESSION_REASON_GAME ? "game reason" : "unknown";
+        return reason > WPE_SESSION_REASON_GAME ? "game reason" : "unknown";
     }
 }

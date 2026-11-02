@@ -385,6 +385,37 @@ Provided by the application running the scripts (the engine runtime). Elsewhere 
 | `wpe.screen_size() -> width, height` | The framebuffer (canvas) size in pixels. |
 | `wpe.world_to_screen(position) -> x, y, in_front` | Where a world point shows on screen, in pixels from the top-left, through the current camera (as it is now, even after a script moved it this frame). `in_front` is false for points behind the camera. |
 
+### Multiplayer
+
+Hosting, joining and talking to other players (the whole picture is in [networking.md](networking.md#scripting-multiplayer-games)). Players are numbered from 0, the host, as in scene files. Provided by the engine runtime; elsewhere they raise errors.
+
+| Function | Description |
+|---|---|
+| `wpe.net_host({name, hidden}?) -> ok` | Host a game on the project's port, as player 0 named `name` ("Host"); `hidden` keeps it out of LAN discovery. Ends any game this side was in. The current scene is shared: every scene the host loads, the players load too. False (logged) when the port can't be opened. |
+| `wpe.net_join(address, {name}?) -> ok` | Join the game at `address` (`"192.168.1.20"`, `"name.example.com:47811"`; the project's port when none), as `name` ("Player"). Joining takes a moment: `on_net_joined` follows, or `on_net_ended` with the reason. False for a malformed address. |
+| `wpe.net_leave()` | Leave (or, hosting, close) the game. The others see this player leave. |
+| `wpe.net_status() -> status, reason?` | `"offline"`, `"connecting"`, `"hosting"`, `"joined"` or `"ended"`, with the reason after an end: `"game full"`, `"different game or build"`, `"no answer"`, `"timed out"`, `"closed"` (the host left), `"kicked"`... |
+| `wpe.net_is_host() -> bool` | Whether this side hosts. |
+| `wpe.net_player() -> id?` | This side's player id (0 when hosting), or nil when not in a game. |
+| `wpe.net_players() -> {{id, name, ping}, ...}` | Everyone in the game, this side included. `ping` is the round trip in milliseconds as the host measures it (0 for yourself). |
+| `wpe.net_send(to, name, value?, reliable?) -> sent` | Sends a message `name` (1..31 bytes) with a value (nil, booleans, numbers, strings, vectors and tables of them, nested at most 16 deep) to a player id, `"host"` or `"all"` (everyone else). `reliable` (default true) messages always arrive, in order; unreliable ones may be lost, the newest wins (positions, aim). Players' messages travel through the host. False when not in a game, the player isn't there, or the encoded value is over 64 KB; raises for values that can't be sent (functions, entities as userdata, cycles). |
+| `wpe.net_is_local(entity) -> bool` | Whether this side simulates the entity: true for everything not networked and outside a game, and for networked entities this player owns. Scripts of networked entities check it before driving them (reading the controls, setting velocities). |
+| `wpe.net_owner(entity) -> id?` | The owner of a networked entity (scene key `net`), or nil for one that isn't. |
+| `wpe.net_set_owner(entity, player)` | Host: gives a networked entity to a player in the game, who simulates it from then on (raises for a non-networked entity, on a player, or for a player who isn't there). |
+| `wpe.net_kick(player) -> kicked` | Host: removes a player, whose game ends with `"kicked"`. |
+| `wpe.net_find_games() -> {{address, name, host, players, max_players, accepting}, ...}` | Games of this project hosted on the local network. The first call starts looking; the list fills within a second and keeps itself up to date while you call it each frame. Pass `address` to `wpe.net_join`. |
+| `wpe.net_stop_finding()` | Stops looking for LAN games. |
+
+Callbacks of every script (all optional). They run each frame right after `on_update`, so the scripts of a scene that has just loaded (a player following the host) have started and hear them too:
+
+```lua
+function Game:on_net_joined(player)               -- this side is in the game (the host: right after hosting)
+function Game:on_player_joined(player, name)      -- someone joined (a joiner hears of everyone already there)
+function Game:on_player_left(player, name, reason)
+function Game:on_net_ended(reason)                -- this player's game is over
+function Game:on_net_message(from, name, value)   -- a message from player `from`
+```
+
 ### Post-processing
 
 The scene's post effects (its file's `postfx` list, see [scenes.md](scenes.md)) can be changed while the game runs, and new ones added for a moment: flash a shockwave on a hit, blur the screen on a dash, refocus the depth of field on the player. Changes last until the scene is loaded again. An effect is a table `{effect = "shockwave", enabled = true, ...}` with its parameters by their scene-file names; missing ones keep their values (or the defaults, when adding), and values are clamped to each parameter's range.

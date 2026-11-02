@@ -4,6 +4,22 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 11: networking, phase 5: the Luau API)
+- `wpe.net_host`, `net_join`, `net_leave`, `net_status`, `net_is_host`, `net_player`, `net_players`,
+  `net_send`, `net_is_local`, `net_owner`, `net_set_owner`, `net_kick`, `net_find_games`,
+  `net_stop_finding`; callbacks `on_net_joined`, `on_player_joined`, `on_player_left`,
+  `on_net_ended`, `on_net_message`, delivered after `on_update` (so a just-loaded scene's scripts
+  hear them).
+- Script messages (session kind 18) carry a name and a Luau value in the network value format;
+  players' messages travel through the host, which passes them on (to one player or everyone) and
+  sets the sender. Malformed values are dropped.
+- Script host: `WPE_ScriptNet` services in `WPE_ScriptApp`, `wpe_script_host_net_event`. Engine:
+  `wpe_engine_set_net_defaults` (hub, conditions, local_only for scripts' sessions).
+- Sessions name `WPE_SESSION_REASON_GAME` "kicked".
+- Tests: three engines' scripts hosting, joining (one through LAN discovery), welcoming with nested
+  tables, thanking everyone, private and unreliable messages, kicking and leaving; the API tour
+  covers the offline behavior.
+
 ### Added (Milestone 11: networking, phase 4: replication)
 - Replication (`engine/replication.h`): `WPE_NetIdentity` (`WPE_COMP_NET_IDENTITY` 27, scene key
   `"net": {"owner": n}`) makes an entity networked. Its owner sends its state (position, rotation,

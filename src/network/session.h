@@ -220,7 +220,8 @@ const char* wpe_session_scene(const WPE_Session* session);
 /** The transport underneath, for statistics. @thread_safety Owning thread */
 const WPE_NetTransport* wpe_session_transport(const WPE_Session* session);
 
-/** A readable name for a WPE_NetReason or WPE_SessionReason ("game reason" for the game's own).
+/** A readable name for a WPE_NetReason or WPE_SessionReason ("kicked" for WPE_SESSION_REASON_GAME, "game
+ * reason" for the game's others).
  * @thread_safety Any thread */
 const char* wpe_session_reason_name(uint32_t reason);
 

@@ -12,7 +12,7 @@ networking milestone; sections marked *(coming)* describe parts that are not bui
 7. [LAN discovery: finding games on your network](#lan-discovery)
 8. [Playing together: the engine and the project file](#playing-together)
 9. [Replication: keeping objects in sync](#replication)
-10. Scripting multiplayer games *(coming)*
+10. [Scripting multiplayer games](#scripting-multiplayer-games)
 
 ## The basics
 
@@ -399,3 +399,73 @@ checks, frame by frame, that remote cars never move backwards or jump, under 60 
 of jitter and 10% loss; that both screens agree exactly once the cars stop; that ownership moves and
 comes back; that a player's forged states for another player's car are ignored; and that random
 replication messages harm nothing.
+
+## Scripting multiplayer games
+
+Everything above is available to Luau scripts through the `wpe.net_*` functions (the full list is
+in [scripting.md](scripting.md#multiplayer)). A small lobby script:
+
+```lua
+local Lobby = {}
+
+function Lobby:on_click()                  -- a "Host" button
+	wpe.net_host({ name = "Mika" })
+end
+
+function Lobby:on_update(dt)
+	-- A list of LAN games to pick from (refreshes itself while you keep asking).
+	for i, game in wpe.net_find_games() do
+		wpe.draw_text(game.host .. "'s game  " .. game.players .. "/" .. game.max_players, 8, 8 + i * 10)
+	end
+end
+
+function Lobby:join(address)               -- e.g. from a clicked list entry
+	wpe.net_stop_finding()
+	wpe.net_join(address, { name = "Alice" })
+end
+
+function Lobby:on_player_joined(player, name)
+	if wpe.net_is_host() then
+		wpe.net_send(player, "welcome", { message = "Hi " .. name, laps = 3 })
+	end
+end
+
+function Lobby:on_net_message(from, name, value)
+	if name == "welcome" then wpe.log(value.message, "- the race has", value.laps, "laps") end
+end
+
+function Lobby:on_net_ended(reason)        -- "game full", "kicked", "closed"...
+	wpe.log("the game ended:", reason)
+end
+
+return Lobby
+```
+
+**Messages** have a name and a value: nil, booleans, numbers, strings, vectors, and tables of them
+(they are packed as described in [Script values on the wire](#script-values-on-the-wire)). Send them
+to a player, to `"host"`, or to `"all"`. A player's messages travel through the host, which passes
+them on and fills in who sent them, so `from` can be trusted. Send things that must arrive
+**reliably** (the default): a lap finished, a chat line. Send things that are replaced constantly
+**unreliably** (`wpe.net_send(to, name, value, false)`): only the newest matters.
+
+**Callbacks** (`on_net_joined`, `on_player_joined`, `on_player_left`, `on_net_ended`,
+`on_net_message`) reach every script that has them, right after `on_update`. That timing matters
+when the host changes scene: a player's new scene has started its scripts by then, so they hear what
+arrives next.
+
+**Networked entities in scripts.** A script on a networked entity runs on *every* machine, but only
+the owner should drive it. Without a check, the other players' copies of your car would also read
+*their* keyboard! The one rule:
+
+```lua
+function Car:on_fixed_update(dt)
+	if not wpe.net_is_local(self.entity) then
+		return -- someone else drives this one; replication moves it here
+	end
+	-- read the controls, set the velocity...
+end
+```
+
+`wpe.net_is_local` is true for everything when not in a game, so the same script works in single
+player too. The host hands out entities with `wpe.net_set_owner(entity, player)`, for example a car
+for each player in `on_player_joined`.

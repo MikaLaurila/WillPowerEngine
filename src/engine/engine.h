@@ -241,6 +241,15 @@ typedef struct WPE_EngineNetDesc {
  * thread only */
 void wpe_engine_net_stop(WPE_Engine* engine);
 
+/**
+ * What scripts' wpe.net_host and wpe.net_join use besides their own arguments: the hub, local_only,
+ * conditions, port and hidden (join and player_name are ignored). The runtime sets them from its
+ * command line; tests point them at a hub. NULL resets them.
+ *
+ * @thread_safety Main thread only
+ */
+void wpe_engine_set_net_defaults(WPE_Engine* engine, const WPE_EngineNetDesc* defaults);
+
 /** The running session (also after it ENDED, until stopped), or NULL. @thread_safety Main thread only */
 WPE_Session* wpe_engine_session(const WPE_Engine* engine);
 

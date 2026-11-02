@@ -30,6 +30,17 @@
 #define WPE__CAPTURE_SLOTS 8u     /* wpe.capture_screen slots (and shatter's capture parameter). */
 #define WPE__SLASH_DISTORTIONS 8u /* Slashes whose distortion a frame shows (the first ones found). */
 
+/* A network event waiting for the scripts (see wpe__queue_script_event). */
+typedef struct wpe__QueuedNetEvent {
+    WPE_ScriptNetEventType type;
+    WPE_PlayerId player;
+    char text[32];
+    const char* reason; /* Static. */
+    uint8_t* value;     /* Owned. */
+    size_t size;
+    uint32_t generation; /* The session it belongs to. */
+} wpe__QueuedNetEvent;
+
 struct WPE_Engine {
     WPE_ProjectSettings project;
     WPE_JobSystem* jobs;
@@ -72,9 +83,17 @@ struct WPE_Engine {
     WPE_Texture* capture_textures[WPE__CAPTURE_SLOTS];
     uint32_t captures_pending; /* Slots to fill from this frame (bit per slot). */
     char capture_path[32];
-    char sky_image[WPE_VFS_PATH_MAX];  /* Its path. */
-    WPE_Session* session;              /* Multiplayer, when started (wpe_engine_net_start). */
-    WPE_Replication* replication;      /* Networked entities (works with the session). */
+    char sky_image[WPE_VFS_PATH_MAX]; /* Its path. */
+    WPE_Session* session;             /* Multiplayer, when started (wpe_engine_net_start). */
+    WPE_Replication* replication;     /* Networked entities (works with the session). */
+    uint32_t session_generation;      /* Changes whenever the session is started or stopped. */
+    WPE_EngineNetDesc
+        net_defaults; /* What scripts' wpe.net_host/net_join use (wpe_engine_set_net_defaults). */
+    WPE_DiscoveryBrowser* browser;   /* wpe.net_find_games, while looking. */
+    uint8_t* net_buffer;             /* Outgoing script messages (WPE_NET_MAX_MESSAGE_SIZE bytes, lazily). */
+    wpe__QueuedNetEvent* net_events; /* For the scripts, delivered after on_update. */
+    uint32_t net_event_count;
+    uint32_t net_event_capacity;
     bool pending_from_host;            /* pending_scene is the host's scene (a player follows it). */
     char scene_path[WPE_VFS_PATH_MAX]; /* The scene file last loaded ("" after a text load): a host shares it.
                                         */
@@ -92,6 +111,8 @@ struct WPE_Engine {
 };
 
 /* ---- Script services ---------------------------------------------------------------------------- */
+
+static void wpe__fill_net_services(WPE_ScriptNet* net); /* With the multiplayer code, below. */
 
 /* How much of the screen the running transition covers (0..1). */
 static float wpe__transition_coverage(const WPE_Engine* engine) {
@@ -368,6 +389,8 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                    .render_settings = wpe__app_render_settings,
                                    .game_feel = wpe__app_game_feel,
                                    .capture_screen = wpe__app_capture_screen};
+        WPE_ScriptApp with_net = app;
+        wpe__fill_net_services(&with_net.net);
         result =
             wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = engine->ecs,
                                                          .assets = engine->assets,
@@ -377,7 +400,7 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                                          .draw2d = engine->draw2d,
                                                          .font = engine->font,
                                                          .ui = engine->ui,
-                                                         .app = &app,
+                                                         .app = &with_net,
                                                          .memory_limit = (size_t)p->script_memory_mb << 20,
                                                          .time_limit_ms = p->script_time_limit_ms},
                                    &engine->scripts);
@@ -444,6 +467,11 @@ WPE_Result wpe_engine_create(const WPE_EngineDesc* desc, WPE_Engine** out_engine
 void wpe_engine_destroy(WPE_Engine* engine) {
     if (!engine) return;
     wpe_engine_net_stop(engine);
+    wpe_discovery_browser_destroy(engine->browser);
+    wpe_free(engine->net_buffer);
+    for (uint32_t i = 0; i < engine->net_event_count; ++i)
+        wpe_free(engine->net_events[i].value);
+    wpe_free(engine->net_events);
     /* Users of the world and its assets first, then the world, then what they read from. */
     wpe_script_host_destroy(engine->scripts);
     wpe_replication_destroy(engine->replication);
@@ -629,6 +657,14 @@ void wpe_engine_net_stop(WPE_Engine* engine) {
     wpe_replication_stop(engine->replication);
     wpe_session_destroy(engine->session);
     engine->session = NULL;
+    ++engine->session_generation; /* Whoever was reading the old session's events must stop. */
+}
+
+void wpe_engine_set_net_defaults(WPE_Engine* engine, const WPE_EngineNetDesc* defaults) {
+    if (!engine) return;
+    engine->net_defaults = defaults ? *defaults : (WPE_EngineNetDesc){0};
+    engine->net_defaults.join = NULL;
+    engine->net_defaults.player_name = NULL;
 }
 
 WPE_Result wpe_engine_net_set_owner(WPE_Engine* engine, WPE_Entity entity, WPE_PlayerId player) {
@@ -643,6 +679,7 @@ bool wpe_engine_net_is_local(const WPE_Engine* engine, WPE_Entity entity) {
 WPE_Result wpe_engine_net_start(WPE_Engine* engine, const WPE_EngineNetDesc* desc) {
     if (!engine || !desc) return WPE_RESULT_ERROR_NULL_ARG;
     wpe_engine_net_stop(engine);
+    ++engine->session_generation;
     const WPE_ProjectNetwork* settings = &engine->project.network;
     const WPE_SessionDesc session = {
         .transport = {.hub = desc->hub,
@@ -685,8 +722,134 @@ WPE_Session* wpe_engine_session(const WPE_Engine* engine) {
     return engine ? engine->session : NULL;
 }
 
-/* Takes the session's events: a player follows the host's scene; joins and leaves are logged. */
+/* ---- Script messages ----
+ * Session kind 18. Layout (bits.h): target (4 bits: a player, or 15 for everyone else), sender (4
+ * bits; the host fills it in when it passes a player's message on), name (varint length + bytes),
+ * then, byte aligned, the value in the network value format. Players talk to the host; the host
+ * passes on messages meant for others, so the sender field from the host can be trusted. */
+#define WPE__KIND_SCRIPT 18u
+#define WPE__TO_ALL 15u
+#define WPE__SCRIPT_NAME_MAX 32u
+
+/* The engine's buffer for outgoing script messages (made on first use). */
+static uint8_t* wpe__net_buffer(WPE_Engine* engine) {
+    if (!engine->net_buffer) engine->net_buffer = wpe_alloc(WPE_NET_MAX_MESSAGE_SIZE);
+    return engine->net_buffer;
+}
+
+/* Builds a script message into `out` (WPE_NET_MAX_MESSAGE_SIZE bytes); 0 when it does not fit. */
+static size_t wpe__script_message(uint8_t* out, uint32_t target, uint32_t from, const char* name,
+                                  const uint8_t* value, size_t size) {
+    WPE_BitWriter w = wpe_bits_writer(out, WPE_NET_MAX_MESSAGE_SIZE - 1);
+    wpe_bits_write(&w, target, 4);
+    wpe_bits_write(&w, from, 4);
+    const size_t length = strlen(name);
+    wpe_bits_write_varint(&w, (uint32_t)length);
+    wpe_bits_write_bytes(&w, name, length);
+    if (size) wpe_bits_write_bytes(&w, value, size);
+    return w.error ? 0 : wpe_bits_writer_size(&w);
+}
+
+/* Queues an event for the scripts (copied): they hear it after this frame's on_update, when scripts of a
+ * scene loaded at the end of the last frame have started too. Edit mode drops it (scripts don't run). */
+static void wpe__queue_script_event(WPE_Engine* engine, WPE_ScriptNetEventType type, WPE_PlayerId player,
+                                    const char* text, const char* reason, const uint8_t* value, size_t size) {
+    if (!engine->simulating) return;
+    if (engine->net_event_count == engine->net_event_capacity) {
+        const uint32_t capacity = engine->net_event_capacity ? engine->net_event_capacity * 2 : 16;
+        wpe__QueuedNetEvent* grown = wpe_realloc(engine->net_events, capacity * sizeof *grown);
+        if (!grown) return;
+        engine->net_events = grown;
+        engine->net_event_capacity = capacity;
+    }
+    uint8_t* copy = NULL;
+    if (size) {
+        copy = wpe_alloc(size);
+        if (!copy) return;
+        memcpy(copy, value, size);
+    }
+    wpe__QueuedNetEvent* q = &engine->net_events[engine->net_event_count++];
+    *q = (wpe__QueuedNetEvent){.type = type,
+                               .player = player,
+                               .reason = reason,
+                               .value = copy,
+                               .size = size,
+                               .generation = engine->session_generation};
+    snprintf(q->text, sizeof q->text, "%s", text ? text : "");
+}
+
+/* Hands the queued events to the scripts. A script may leave or start a game meanwhile: events of the
+ * game it left are dropped. */
+static void wpe__deliver_script_events(WPE_Engine* engine) {
+    for (uint32_t i = 0; i < engine->net_event_count; ++i) {
+        wpe__QueuedNetEvent* q = &engine->net_events[i];
+        if (q->generation == engine->session_generation) {
+            const WPE_ScriptNetEvent event = {.type = q->type,
+                                              .player = q->player,
+                                              .text = q->text,
+                                              .reason = q->reason,
+                                              .value = q->value,
+                                              .value_size = q->size};
+            (void)wpe_script_host_net_event(engine->scripts, &event);
+        }
+        q = &engine->net_events[i]; /* Callbacks may have queued more (and moved the array). */
+        wpe_free(q->value);
+        q->value = NULL;
+    }
+    engine->net_event_count = 0;
+}
+
+static void wpe__deliver_script_message(WPE_Engine* engine, uint32_t from, const char* name,
+                                        const uint8_t* value, size_t size) {
+    wpe__queue_script_event(engine, WPE_SCRIPT_NET_EVENT_MESSAGE, from, name, NULL, value, size);
+}
+
+/* A script message arrived from session player `sender`. */
+static void wpe__receive_script_message(WPE_Engine* engine, WPE_Session* session, const WPE_SessionEvent* e) {
+    WPE_BitReader r = wpe_bits_reader(e->data, e->size);
+    const uint32_t target = wpe_bits_read(&r, 4);
+    uint32_t from = wpe_bits_read(&r, 4);
+    const uint32_t length = wpe_bits_read_varint(&r);
+    if (r.error || length == 0 || length >= WPE__SCRIPT_NAME_MAX) return;
+    const uint8_t* bytes = wpe_bits_read_bytes(&r, length);
+    if (!bytes) return;
+    char name[WPE__SCRIPT_NAME_MAX];
+    memcpy(name, bytes, length);
+    name[length] = '\0';
+    if (memchr(name, '\0', length)) return;
+    const size_t value_size = wpe_bits_reader_remaining(&r) / 8;
+    const uint8_t* value = wpe_bits_read_bytes(&r, value_size);
+    if (!wpe_session_is_host(session)) {
+        if (from >= WPE_SESSION_MAX_PLAYERS) return;
+        wpe__deliver_script_message(engine, from, name, value, value_size);
+        return;
+    }
+    /* The host: the sender is who sent it, whatever the message says; pass it on where it goes. */
+    from = e->player;
+    if (target == WPE_SESSION_HOST || target == WPE__TO_ALL)
+        wpe__deliver_script_message(engine, from, name, value, value_size);
+    if (target == WPE_SESSION_HOST || target == from) return;
+    uint8_t* message = wpe__net_buffer(engine);
+    const size_t size = message ? wpe__script_message(message, target, from, name, value, value_size) : 0;
+    if (size == 0) return;
+    WPE_SessionPlayer info;
+    for (WPE_PlayerId p = 1; p < wpe_session_max_players(session); ++p) {
+        if (p == from || (target != WPE__TO_ALL && p != target) || !wpe_session_player(session, p, &info))
+            continue;
+        (void)wpe_session_send(session, p, e->channel, WPE__KIND_SCRIPT, message, size);
+    }
+}
+
+/* Tells the scripts about a session event (queued, see wpe__queue_script_event). */
+static void wpe__tell_scripts(WPE_Engine* engine, WPE_ScriptNetEventType type, WPE_PlayerId player,
+                              const char* text, const char* reason) {
+    wpe__queue_script_event(engine, type, player, text, reason, NULL, 0);
+}
+
+/* Takes the session's events: a player follows the host's scene, replication hears what concerns it,
+ * scripts get theirs queued, joins and leaves are logged. */
 static void wpe__pump_session(WPE_Engine* engine) {
+    if (engine->browser) wpe_discovery_browser_update(engine->browser);
     WPE_Session* session = engine->session;
     if (!session) return;
     WPE_SessionEvent e;
@@ -694,18 +857,24 @@ static void wpe__pump_session(WPE_Engine* engine) {
         switch (e.type) {
         case WPE_SESSION_EVENT_JOINED:
             if (!wpe_session_is_host(session)) wpe_log_info("joined the game as player %u", e.player);
+            wpe__tell_scripts(engine, WPE_SCRIPT_NET_EVENT_JOINED, e.player, e.text, NULL);
             break;
         case WPE_SESSION_EVENT_PLAYER_JOINED:
             wpe_log_info("%s joined (player %u)", e.text, e.player);
             wpe_replication_player_joined(engine->replication, session, e.player);
+            wpe__tell_scripts(engine, WPE_SCRIPT_NET_EVENT_PLAYER_JOINED, e.player, e.text, NULL);
             break;
         case WPE_SESSION_EVENT_PLAYER_LEFT:
             wpe_log_info("%s left (%s)", e.text, wpe_session_reason_name(e.reason));
             wpe_replication_player_left(engine->replication, session, e.player);
+            wpe__tell_scripts(engine, WPE_SCRIPT_NET_EVENT_PLAYER_LEFT, e.player, e.text,
+                              wpe_session_reason_name(e.reason));
             break;
         case WPE_SESSION_EVENT_ENDED:
             wpe_log_warn("the multiplayer game ended: %s", wpe_session_reason_name(e.reason));
             wpe_replication_stop(engine->replication);
+            wpe__tell_scripts(engine, WPE_SCRIPT_NET_EVENT_ENDED, WPE_SESSION_NO_PLAYER, NULL,
+                              wpe_session_reason_name(e.reason));
             break;
         case WPE_SESSION_EVENT_SCENE:
             if (!wpe_vfs_path_is_valid(e.text) || !wpe_vfs_exists(engine->vfs, e.text)) {
@@ -719,12 +888,158 @@ static void wpe__pump_session(WPE_Engine* engine) {
             wpe_replication_stop(engine->replication); /* Until the host's scene has loaded. */
             break;
         case WPE_SESSION_EVENT_MESSAGE:
-            wpe_replication_receive(engine->replication, session, &e);
-            break; /* Script messages come with phase 11.5. */
+            if (e.kind == WPE__KIND_SCRIPT)
+                wpe__receive_script_message(engine, session, &e);
+            else
+                wpe_replication_receive(engine->replication, session, &e);
+            break;
         case WPE_SESSION_EVENT_NONE:
             break;
         }
     }
+}
+
+/* ---- Multiplayer services for scripts (wpe.net_*) ---- */
+
+static WPE_Result wpe__net_host(void* user_data, const char* player_name, bool hidden) {
+    WPE_Engine* engine = user_data;
+    WPE_EngineNetDesc desc = engine->net_defaults;
+    desc.player_name = player_name;
+    desc.hidden = desc.hidden || hidden;
+    return wpe_engine_net_start(engine, &desc);
+}
+
+static WPE_Result wpe__net_join(void* user_data, const char* address, const char* player_name) {
+    WPE_Engine* engine = user_data;
+    WPE_EngineNetDesc desc = engine->net_defaults;
+    desc.join = address;
+    desc.player_name = player_name;
+    return wpe_engine_net_start(engine, &desc);
+}
+
+static void wpe__net_leave(void* user_data) {
+    wpe_engine_net_stop(user_data);
+}
+
+static WPE_ScriptNetStatus wpe__net_status(void* user_data, const char** out_reason) {
+    const WPE_Engine* engine = user_data;
+    const WPE_Session* session = engine->session;
+    if (out_reason) *out_reason = NULL;
+    if (!session) return WPE_SCRIPT_NET_OFFLINE;
+    if (wpe_session_is_host(session)) return WPE_SCRIPT_NET_HOSTING;
+    if (wpe_session_end_reason(session)) {
+        if (out_reason) *out_reason = wpe_session_reason_name(wpe_session_end_reason(session));
+        return WPE_SCRIPT_NET_ENDED;
+    }
+    return wpe_session_local_player(session) == WPE_SESSION_NO_PLAYER ? WPE_SCRIPT_NET_CONNECTING
+                                                                      : WPE_SCRIPT_NET_JOINED;
+}
+
+static uint32_t wpe__net_local_player(void* user_data) {
+    const WPE_Engine* engine = user_data;
+    return engine->session ? wpe_session_local_player(engine->session) : UINT32_MAX;
+}
+
+static uint32_t wpe__net_players(void* user_data, WPE_ScriptNetPlayer* out, uint32_t capacity) {
+    const WPE_Engine* engine = user_data;
+    uint32_t count = 0;
+    WPE_SessionPlayer info;
+    for (WPE_PlayerId p = 0; p < wpe_session_max_players(engine->session) && count < capacity; ++p) {
+        if (!wpe_session_player(engine->session, p, &info)) continue;
+        out[count] = (WPE_ScriptNetPlayer){.id = p, .ping_ms = info.rtt_ms};
+        snprintf(out[count].name, sizeof out[count].name, "%s", info.name);
+        ++count;
+    }
+    return count;
+}
+
+static bool wpe__net_send(void* user_data, int64_t target, const char* name, const uint8_t* value,
+                          size_t size, bool reliable) {
+    WPE_Engine* engine = user_data;
+    WPE_Session* session = engine->session;
+    const WPE_PlayerId local = wpe_session_local_player(session);
+    if (local == WPE_SESSION_NO_PLAYER) return false; /* Not in a game. */
+    const uint32_t to = target == WPE_SCRIPT_NET_ALL ? WPE__TO_ALL : (uint32_t)target;
+    if (to == local) return false;
+    WPE_SessionPlayer info;
+    if (to != WPE__TO_ALL && !wpe_session_player(session, to, &info)) return false;
+    uint8_t* message = wpe__net_buffer(engine);
+    const size_t length = message ? wpe__script_message(message, to, local, name, value, size) : 0;
+    if (length == 0) return false;
+    const WPE_NetChannel channel = reliable ? WPE_NET_CHANNEL_RELIABLE : WPE_NET_CHANNEL_UNRELIABLE;
+    if (!wpe_session_is_host(session)) /* Everything goes through the host. */
+        return wpe_session_send(session, WPE_SESSION_HOST, channel, WPE__KIND_SCRIPT, message, length) ==
+               WPE_RESULT_OK;
+    if (to == WPE__TO_ALL)
+        return wpe_session_broadcast(session, channel, WPE__KIND_SCRIPT, message, length) == WPE_RESULT_OK;
+    return wpe_session_send(session, to, channel, WPE__KIND_SCRIPT, message, length) == WPE_RESULT_OK;
+}
+
+static bool wpe__net_is_local(void* user_data, WPE_Entity entity) {
+    return wpe_engine_net_is_local(user_data, entity);
+}
+
+static bool wpe__net_owner(void* user_data, WPE_Entity entity, uint32_t* out_player) {
+    const WPE_Engine* engine = user_data;
+    const WPE_NetIdentity* n = wpe_ecs_get_component(engine->ecs, entity, WPE_COMP_NET_IDENTITY);
+    if (!n || n->net_id == 0) return false;
+    *out_player = n->owner;
+    return true;
+}
+
+static WPE_Result wpe__net_set_owner(void* user_data, WPE_Entity entity, uint32_t player) {
+    return wpe_engine_net_set_owner(user_data, entity, player);
+}
+
+static WPE_Result wpe__net_kick(void* user_data, uint32_t player) {
+    WPE_Engine* engine = user_data;
+    return wpe_session_kick(engine->session, player, WPE_SESSION_REASON_GAME);
+}
+
+static uint32_t wpe__net_find_games(void* user_data, WPE_ScriptNetGame* out, uint32_t capacity) {
+    WPE_Engine* engine = user_data;
+    if (!engine->browser) {
+        const WPE_DiscoveryDesc desc = {.hub = engine->net_defaults.hub,
+                                        .port = engine->project.network.discovery_port,
+                                        .local_only = engine->net_defaults.local_only,
+                                        .game_id = wpe_engine_game_id(engine)};
+        if (wpe_discovery_browser_create(&desc, &engine->browser) != WPE_RESULT_OK) return 0;
+        wpe_discovery_browser_update(engine->browser); /* The first query goes out now. */
+    }
+    uint32_t count = 0;
+    WPE_DiscoveredGame game;
+    for (uint32_t i = 0; count < capacity && wpe_discovery_browser_game(engine->browser, i, &game); ++i) {
+        WPE_ScriptNetGame* g = &out[count++];
+        *g = (WPE_ScriptNetGame){.players = game.info.players,
+                                 .max_players = game.info.max_players,
+                                 .accepting = game.info.accepting};
+        wpe_network_address_format(game.address, g->address, sizeof g->address);
+        snprintf(g->game_name, sizeof g->game_name, "%s", game.info.game_name);
+        snprintf(g->host_name, sizeof g->host_name, "%s", game.info.host_name);
+    }
+    return count;
+}
+
+static void wpe__net_stop_finding(void* user_data) {
+    WPE_Engine* engine = user_data;
+    wpe_discovery_browser_destroy(engine->browser);
+    engine->browser = NULL;
+}
+
+static void wpe__fill_net_services(WPE_ScriptNet* net) {
+    *net = (WPE_ScriptNet){.host = wpe__net_host,
+                           .join = wpe__net_join,
+                           .leave = wpe__net_leave,
+                           .status = wpe__net_status,
+                           .local_player = wpe__net_local_player,
+                           .players = wpe__net_players,
+                           .send = wpe__net_send,
+                           .is_local = wpe__net_is_local,
+                           .owner = wpe__net_owner,
+                           .set_owner = wpe__net_set_owner,
+                           .kick = wpe__net_kick,
+                           .find_games = wpe__net_find_games,
+                           .stop_finding = wpe__net_stop_finding};
 }
 
 /* ---- Frames -------------------------------------------------------------------------------------- */
@@ -771,6 +1086,8 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
     }
     engine->stats.fixed_steps = steps;
     if (result == WPE_RESULT_OK) result = wpe_script_host_update(engine->scripts, (float)dt);
+    /* After on_update: scripts of a scene that just loaded have started and hear them too. */
+    if (result == WPE_RESULT_OK) wpe__deliver_script_events(engine);
     /* State machines pick clips from what the scripts set, the animators play them, then the events the clips
      * passed reach the scripts. */
     if (result == WPE_RESULT_OK) wpe_anim_states_update(engine->ecs, (float)dt);

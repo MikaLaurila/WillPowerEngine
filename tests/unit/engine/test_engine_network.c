@@ -525,6 +525,136 @@ static void test_engine_network_survives_garbage_replication(void) {
     wpe_network_hub_destroy(hub);
 }
 
+/* ---- Scripts ------------------------------------------------------------------------------- */
+
+/* A lobby whose script logs every network callback into a shared module (scripts/netlog.luau), and
+ * answers: the host welcomes joiners with a table, joiners thank everyone. */
+static void write_script_game(const char* dir) {
+    write_game(dir, "return {}\n");
+    char path[256];
+    snprintf(path, sizeof path, "%s/scenes/lobby.scene", dir);
+    write_text(path,
+               "{\"format\": \"wpe.scene\", \"version\": 1, \"entities\": [\n"
+               "  {\"id\": 1, \"name\": \"game\", \"script\": {\"path\": \"scripts/netgame.luau\"}}]}\n");
+    snprintf(path, sizeof path, "%s/scripts/netlog.luau", dir);
+    write_text(path, "return {}\n");
+    snprintf(path, sizeof path, "%s/scripts/netgame.luau", dir);
+    write_text(
+        path,
+        "local Log = require(\"scripts/netlog\")\n"
+        "local G = {}\n"
+        "local function note(text) table.insert(Log, text) end\n"
+        "function G:on_net_joined(id) note(\"joined \" .. id .. \" \" .. wpe.net_status()) end\n"
+        "function G:on_player_joined(id, name)\n"
+        "  note(\"player \" .. id .. \" \" .. name)\n"
+        "  if wpe.net_is_host() then\n"
+        "    assert(wpe.net_send(id, \"welcome\", {text = \"hi \" .. name, list = {1, 2, 3},\n"
+        "      at = vector.create(1, 2, 3), deep = {a = {b = true}}, [7] = -0.5}))\n"
+        "  end\n"
+        "end\n"
+        "function G:on_player_left(id, name, reason) note(\"left \" .. id .. \" \" .. name .. \" \" .. "
+        "reason) end\n"
+        "function G:on_net_ended(reason) note(\"ended \" .. reason) end\n"
+        "function G:on_net_message(from, name, value)\n"
+        "  if name == \"welcome\" then\n"
+        "    assert(value.text:sub(1, 3) == \"hi \" and #value.list == 3 and value.list[3] == 3)\n"
+        "    assert(value.at == vector.create(1, 2, 3) and value.deep.a.b == true and value[7] == -0.5)\n"
+        "    note(\"welcome from \" .. from)\n"
+        "    assert(wpe.net_send(\"all\", \"thanks\", 42))\n"
+        "  else\n"
+        "    note(name .. \" \" .. tostring(value) .. \" from \" .. from)\n"
+        "  end\n"
+        "end\n"
+        "return G\n");
+}
+
+/* Runs Luau in an engine's VM (where `require` reaches the log module). */
+static void run_luau(WPE_Engine* engine, const char* source) {
+    WPE_TEST_ASSERT_MSG(wpe_script_host_run(wpe_engine_scripts(engine), "test", source) == WPE_RESULT_OK,
+                        "Luau failed: %s", source);
+}
+
+/* Asserts an engine's log is exactly `expected` (entries joined with "; "), printing it otherwise. */
+static void expect_log(WPE_Engine* engine, const char* expected) {
+    char source[1024];
+    snprintf(source, sizeof source,
+             "local got = table.concat(require(\"scripts/netlog\"), \"; \")\n"
+             "if got ~= \"%s\" then wpe.log(\"log: \" .. got) end\n"
+             "assert(got == \"%s\")\n",
+             expected, expected);
+    run_luau(engine, source);
+}
+
+static void test_engine_network_scripts_play_together(void) {
+    write_script_game(ROOT "/scripted");
+    WPE_NetHub* hub = NULL;
+    WPE_TEST_ASSERT_OK(wpe_network_hub_create(&hub));
+    WPE_Engine* e[3] = {0};
+    for (int i = 0; i < 3; ++i) {
+        e[i] = start_engine(ROOT "/scripted", "scenes/lobby.scene");
+        wpe_engine_set_net_defaults(e[i], &(WPE_EngineNetDesc){.hub = hub});
+    }
+    play(hub, e, 3, 1); /* Scripts start. */
+    run_luau(
+        e[0],
+        "assert(wpe.net_host({name = 'Mika'}))\nassert(wpe.net_status() == 'hosting' and wpe.net_is_host())");
+    run_luau(e[1],
+             "assert(wpe.net_join('127.0.0.1', {name = 'Alice'}))\nassert(wpe.net_status() == 'connecting')");
+    play(hub, e, 3, 10);
+    expect_log(e[0], "joined 0 hosting; player 1 Alice; thanks 42 from 1");
+    /* Alice followed the host into the lobby again (a new script instance), and heard all of it. */
+    expect_log(e[1], "joined 1 joined; player 0 Mika; welcome from 0");
+    run_luau(e[1], "assert(wpe.net_player() == 1 and not wpe.net_is_host() and #wpe.net_players() == 2)\n"
+                   "local p = wpe.net_players()\n"
+                   "assert(p[1].id == 0 and p[1].name == 'Mika' and p[2].name == 'Alice')");
+
+    /* Bob finds the game on the LAN and joins it from the list. */
+    for (int f = 0; f < 10; ++f) {
+        run_luau(
+            e[2],
+            "local games = wpe.net_find_games()\n"
+            "if #games > 0 and wpe.net_status() == 'offline' then\n"
+            "  assert(games[1].name == 'Net Test' and games[1].host == 'Mika' and games[1].players == 2)\n"
+            "  assert(wpe.net_join(games[1].address, {name = 'Bob'}))\n"
+            "end");
+        play(hub, e, 3, 1);
+    }
+    run_luau(e[2], "wpe.net_stop_finding()");
+    play(hub, e, 3, 10);
+    /* Bob's thanks went to everyone, through the host, signed with his id. */
+    expect_log(e[0], "joined 0 hosting; player 1 Alice; thanks 42 from 1; player 2 Bob; thanks 42 from 2");
+    expect_log(e[1], "joined 1 joined; player 0 Mika; welcome from 0; player 2 Bob; thanks 42 from 2");
+    expect_log(e[2], "joined 2 joined; player 0 Mika; player 1 Alice; welcome from 0");
+
+    /* Unreliable messages and messages between two players (through the host). */
+    run_luau(e[1],
+             "assert(wpe.net_send(2, 'psst', 'secret'))\nassert(wpe.net_send('host', 'pos', 5, false))\n"
+             "assert(not wpe.net_send(1, 'self', 0)) -- not to yourself");
+    play(hub, e, 3, 5);
+    expect_log(
+        e[0],
+        "joined 0 hosting; player 1 Alice; thanks 42 from 1; player 2 Bob; thanks 42 from 2; pos 5 from 1");
+    expect_log(e[2], "joined 2 joined; player 0 Mika; player 1 Alice; welcome from 0; psst secret from 1");
+
+    /* The host kicks Bob, then leaves. */
+    run_luau(e[0], "assert(wpe.net_kick(2))");
+    play(hub, e, 3, 5);
+    expect_log(
+        e[2],
+        "joined 2 joined; player 0 Mika; player 1 Alice; welcome from 0; psst secret from 1; ended kicked");
+    run_luau(e[2],
+             "local status, reason = wpe.net_status()\nassert(status == 'ended' and reason == 'kicked')");
+    expect_log(e[1], "joined 1 joined; player 0 Mika; welcome from 0; player 2 Bob; thanks 42 from 2; "
+                     "left 2 Bob kicked");
+    run_luau(e[0], "wpe.net_leave()\nassert(wpe.net_status() == 'offline')");
+    play(hub, e, 3, 5);
+    expect_log(e[1], "joined 1 joined; player 0 Mika; welcome from 0; player 2 Bob; thanks 42 from 2; "
+                     "left 2 Bob kicked; ended closed");
+    for (int i = 2; i >= 0; --i)
+        wpe_engine_destroy(e[i]);
+    wpe_network_hub_destroy(hub);
+}
+
 static void test_engine_network_scene_files_keep_owners(void) {
     write_race(ROOT "/files");
     WPE_Engine* engine = start_engine(ROOT "/files", "scenes/race.scene");
@@ -556,5 +686,6 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_engine_network_project_settings), WPE_TEST_CASE
               WPE_TEST_CASE(test_engine_network_replicates_over_a_bad_network),
               WPE_TEST_CASE(test_engine_network_ownership_moves),
               WPE_TEST_CASE(test_engine_network_ignores_forged_states),
+              WPE_TEST_CASE(test_engine_network_scripts_play_together),
               WPE_TEST_CASE(test_engine_network_survives_garbage_replication),
               WPE_TEST_CASE(test_engine_network_scene_files_keep_owners))

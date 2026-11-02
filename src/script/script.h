@@ -55,7 +55,7 @@
  * The Luau-side API (the read-only global `wpe`) is documented in docs/scripting.md.
  *
  * - Dependencies: core, math, ecs, scene, graphics, assets (asset manager, VFS), physics, audio, input, ui,
- *   Luau (private)
+ *   network (private: the value format of wpe.net_send), Luau (private)
  * - Thread affinity: main thread only (one VM per host)
  *
  * @author WillPowerEngine Team
@@ -88,6 +88,59 @@ typedef struct WPE_Script {
 } WPE_Script;
 
 typedef struct WPE_ScriptHost WPE_ScriptHost;
+
+/** Multiplayer state as scripts see it (wpe.net_status). */
+typedef enum WPE_ScriptNetStatus {
+    WPE_SCRIPT_NET_OFFLINE = 0,
+    WPE_SCRIPT_NET_CONNECTING,
+    WPE_SCRIPT_NET_HOSTING,
+    WPE_SCRIPT_NET_JOINED,
+    WPE_SCRIPT_NET_ENDED,
+} WPE_ScriptNetStatus;
+
+typedef struct WPE_ScriptNetPlayer {
+    uint32_t id; /* 0 is the host. */
+    char name[32];
+    uint32_t ping_ms;
+} WPE_ScriptNetPlayer;
+
+typedef struct WPE_ScriptNetGame {
+    char address[32]; /* "a.b.c.d:port", for wpe.net_join. */
+    char game_name[64];
+    char host_name[32];
+    uint32_t players;
+    uint32_t max_players;
+    bool accepting;
+} WPE_ScriptNetGame;
+
+/** wpe.net_send targets besides a player id. */
+#define WPE_SCRIPT_NET_ALL (-1)
+
+/**
+ * Multiplayer services (docs/networking.md); all optional (the wpe.net_* functions raise without
+ * them). Messages carry `value` already encoded in the network value format (network/value.h).
+ */
+typedef struct WPE_ScriptNet {
+    WPE_Result (*host)(void* user_data, const char* player_name, bool hidden);
+    WPE_Result (*join)(void* user_data, const char* address, const char* player_name);
+    void (*leave)(void* user_data);
+    /* The state, and (ENDED) why: a static string. */
+    WPE_ScriptNetStatus (*status)(void* user_data, const char** out_reason);
+    /* This side's player id, or UINT32_MAX when not in a game. */
+    uint32_t (*local_player)(void* user_data);
+    uint32_t (*players)(void* user_data, WPE_ScriptNetPlayer* out, uint32_t capacity);
+    /* To a player id or WPE_SCRIPT_NET_ALL (everyone else). False when not in a game or not sendable. */
+    bool (*send)(void* user_data, int64_t target, const char* name, const uint8_t* value, size_t size,
+                 bool reliable);
+    bool (*is_local)(void* user_data, WPE_Entity entity);
+    /* The owner of a networked entity; false for others. */
+    bool (*owner)(void* user_data, WPE_Entity entity, uint32_t* out_player);
+    WPE_Result (*set_owner)(void* user_data, WPE_Entity entity, uint32_t player);
+    WPE_Result (*kick)(void* user_data, uint32_t player);
+    /* Games found on the LAN (looking starts at the first call). */
+    uint32_t (*find_games)(void* user_data, WPE_ScriptNetGame* out, uint32_t capacity);
+    void (*stop_finding)(void* user_data);
+} WPE_ScriptNet;
 
 /**
  * Services of the application running the scripts (the engine runtime or the editor). Every
@@ -122,7 +175,26 @@ typedef struct WPE_ScriptApp {
     /* Captures this frame (as the scene renders it, before post effects and 2D) into slot 1..8, and
      * returns the image asset path that shows it (valid until the host goes), or NULL (logged). */
     const char* (*capture_screen)(void* user_data, uint32_t slot);
+    WPE_ScriptNet net; /* Multiplayer (wpe.net_*). */
 } WPE_ScriptApp;
+
+/** Something that happened in the multiplayer game, for the scripts' network callbacks. */
+typedef enum WPE_ScriptNetEventType {
+    WPE_SCRIPT_NET_EVENT_JOINED = 0,    /* on_net_joined(player): this side is in the game. */
+    WPE_SCRIPT_NET_EVENT_PLAYER_JOINED, /* on_player_joined(player, name) */
+    WPE_SCRIPT_NET_EVENT_PLAYER_LEFT,   /* on_player_left(player, name, reason) */
+    WPE_SCRIPT_NET_EVENT_ENDED,         /* on_net_ended(reason) */
+    WPE_SCRIPT_NET_EVENT_MESSAGE,       /* on_net_message(from, name, value) */
+} WPE_ScriptNetEventType;
+
+typedef struct WPE_ScriptNetEvent {
+    WPE_ScriptNetEventType type;
+    uint32_t player;      /* The player (MESSAGE: the sender). */
+    const char* text;     /* The player's name, or the message's name. */
+    const char* reason;   /* PLAYER_LEFT, ENDED. */
+    const uint8_t* value; /* MESSAGE: the encoded value (network/value.h); NULL or empty: nil. */
+    size_t value_size;
+} WPE_ScriptNetEvent;
 
 typedef struct WPE_ScriptHostDesc {
     WPE_Ecs* ecs;             /* Borrowed. Scene and graphics components must be registered. */
@@ -253,6 +325,17 @@ WPE_Result wpe_script_host_notify(WPE_ScriptHost* host, WPE_Entity entity, const
  */
 WPE_Result wpe_script_host_notify_value(WPE_ScriptHost* host, WPE_Entity entity, const char* method,
                                         const WPE_ScriptValue* value);
+
+/**
+ * Calls a network callback (see WPE_ScriptNetEventType) on every started script that has it. A
+ * message's value is decoded and checked first; a malformed one is dropped (logged as a warning).
+ * An error in one script disables that script only.
+ *
+ * @return WPE_RESULT_OK or WPE_RESULT_ERROR_NULL_ARG.
+ *
+ * @thread_safety Main thread
+ */
+WPE_Result wpe_script_host_net_event(WPE_ScriptHost* host, const WPE_ScriptNetEvent* event);
 
 /**
  * Recompiles every script file whose modification time changed since it was loaded.

@@ -164,6 +164,7 @@ struct WPE_ScriptHost {
     uint64_t errors;
     double time; /* Accumulated game time (seconds) from updates. */
     uint64_t frame;
+    uint8_t* net_scratch; /* wpe.net_send's encoding buffer (made on first use, freed with the host). */
 };
 
 /* Host services used by the bindings. */
@@ -197,5 +198,7 @@ int wpe__script_broadcast(lua_State* L);
 
 /* Installs the `wpe` library and `print` into the VM's globals (before sandboxing). */
 void wpe__script_api_register(lua_State* L);
+/* Adds the wpe.net_* functions to the table on top of the stack (script_net.c). */
+void wpe__script_net_register(lua_State* L);
 
 #endif /* WPE_SCRIPT_SCRIPT_INTERNAL_H */

@@ -1163,6 +1163,7 @@ void wpe_script_host_destroy(WPE_ScriptHost* host) {
     wpe_free(host->tweens); /* Their references went with the VM. */
     wpe_free(host->pending_destroy);
     wpe_free(host->snapshot);
+    wpe_free(host->net_scratch);
     wpe_free(host);
 }
 
