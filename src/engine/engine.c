@@ -119,6 +119,7 @@ struct WPE_Engine {
     bool draw_ui;         /* The UI is drawn over the scene (the editor's 3D view hides it). */
     bool draw_scene;      /* The 3D scene is rendered (the editor's 2D view of a scene without a camera). */
     bool mouse_captured;  /* As applied to the window. */
+    bool text_input;      /* The window composes typed text (a text field edits). */
     double audio_backlog; /* Device-less mixing: frames owed to the mixer (fractional). */
     float* audio_mix;
     WPE_EngineStats stats;
@@ -1113,6 +1114,17 @@ static uint8_t wpe__channel(float value) {
     return (uint8_t)(clamped * 255.0f + 0.5f);
 }
 
+/* While a text field edits, the keyboard types: its keys stop driving actions (typing "w" doesn't walk), and
+ * the window composes text (with the keyboard layout and IME). Outside play (the editor's edit mode) neither.
+ */
+static void wpe__apply_typing(WPE_Engine* engine) {
+    const bool typing = engine->simulating && wpe_ui_editing(engine->ui) != WPE_ENTITY_NULL;
+    wpe_input_set_keyboard_actions(engine->input, !typing);
+    if (engine->window && typing != engine->text_input) {
+        if (wpe_window_set_text_input(engine->window, typing) == WPE_RESULT_OK) engine->text_input = typing;
+    }
+}
+
 static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
     /* Shakes come off before anything reads or moves transforms; they go back on before transforms update. */
     wpe_game_feel_restore_shakes(&engine->feel, engine->ecs);
@@ -1132,8 +1144,18 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
         WPE_ScriptValue value = {.type = WPE_SCRIPT_VALUE_NIL};
         if (slider) value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_NUMBER, .number = slider->value};
         if (toggle) value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_BOOL, .boolean = toggle->on};
+        const char* typed = wpe_ui_input_text(engine->ecs, changed[i]);
+        if (typed) value = (WPE_ScriptValue){.type = WPE_SCRIPT_VALUE_STRING, .string = typed};
         result = wpe_script_host_notify_value(engine->scripts, changed[i], "on_change", &value);
     }
+    uint32_t submits = 0;
+    const WPE_Entity* submitted = wpe_ui_submits(engine->ui, &submits);
+    for (uint32_t i = 0; i < submits && result == WPE_RESULT_OK; ++i) {
+        const char* typed = wpe_ui_input_text(engine->ecs, submitted[i]);
+        const WPE_ScriptValue value = {.type = WPE_SCRIPT_VALUE_STRING, .string = typed ? typed : ""};
+        result = wpe_script_host_notify_value(engine->scripts, submitted[i], "on_submit", &value);
+    }
+    wpe__apply_typing(engine);
     uint32_t clicks = 0;
     const WPE_Entity* clicked = wpe_ui_clicks(engine->ui, &clicks);
     for (uint32_t i = 0; i < clicks && result == WPE_RESULT_OK; ++i)
@@ -1537,6 +1559,8 @@ void wpe_engine_handle_event(WPE_Engine* engine, const WPE_PlatformEvent* event)
 void wpe_engine_set_simulating(WPE_Engine* engine, bool simulating) {
     if (!wpe_check(engine != NULL) || engine->simulating == simulating) return;
     engine->simulating = simulating;
+    if (!simulating) wpe_ui_edit(engine->ui, WPE_ENTITY_NULL); /* Edit mode doesn't type into the game. */
+    wpe__apply_typing(engine);
     if (simulating) {
         /* Start from a clean clock so the first frame does not catch up on the paused time. */
         wpe_fixed_step_init(&engine->clock, 1.0 / engine->project.fixed_rate, engine->project.max_steps);

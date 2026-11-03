@@ -146,6 +146,15 @@ function Tour:on_start()
 	assert(near(wpe.ui_value(slider), 0.25) and near(wpe.ui_value(slider, 0.62), 0.6))
 	assert(wpe.ui_value(slider, 7) == 1 and wpe.ui_value(slider, -1) == 0)
 	assert(not pcall(wpe.ui_value, self.entity))
+	-- Text fields: scripts set the text (cut at max_length; printable ASCII only) and start or stop editing.
+	local field = wpe.find("tour field")
+	assert(wpe.ui_value(field) == "42" and wpe.ui_value(field, "8080123") == "80801")
+	assert(not pcall(wpe.ui_value, field, "caf\195\169") and wpe.ui_value(field) == "80801")
+	assert(wpe.ui_editing() == nil and wpe.ui_edit(field) and wpe.ui_editing() == field and wpe.ui_focused() == field)
+	assert(wpe.ui_edit(nil) and wpe.ui_editing() == nil)
+	assert(not wpe.ui_edit(slider)) -- not a text field
+	wpe.ui_value(field, "42")
+	wpe.ui_focus(nil)
 
 	-- Modules: loaded once, by path with or without ".luau".
 	local util = require("scripts/lib/util")

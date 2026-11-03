@@ -114,6 +114,24 @@ void wpe_window_size(const WPE_Window* window, uint32_t* out_width, uint32_t* ou
  */
 WPE_Result wpe_window_set_text_input(WPE_Window* window, bool enabled);
 
+/**
+ * Puts text on the system clipboard.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR (no clipboard, e.g. headless; logged).
+ *
+ * @thread_safety Main thread only
+ */
+WPE_Result wpe_clipboard_set_text(const char* text);
+
+/**
+ * Copies the system clipboard's text (UTF-8, cut at a whole character to fit `capacity`).
+ *
+ * @return The bytes written (0: empty, no text there, or no clipboard).
+ *
+ * @thread_safety Main thread only
+ */
+size_t wpe_clipboard_text(char* out, size_t capacity);
+
 /** Changes the window title (copied). @thread_safety Main thread only */
 void wpe_window_set_title(WPE_Window* window, const char* title);
 

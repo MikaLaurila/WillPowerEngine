@@ -274,6 +274,69 @@ static void test_input_keyboard_actions(void) {
     wpe_input_destroy(input);
 }
 
+static void push_text(const char* text) {
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = SDL_EVENT_TEXT_INPUT;
+    e.text.text = text; /* A literal: it outlives the queue. */
+    WPE_TEST_ASSERT(SDL_PushEvent(&e));
+}
+
+static void test_input_typing(void) {
+    WPE_Input* input = create_input(NULL);
+    WPE_InputActionDesc walk = make_action("walk");
+    add_binding(&walk, WPE_INPUT_SOURCE_KEY, WPE_KEY_A + ('w' - 'a'), 1.0f, WPE_AXIS_FULL);
+    add_binding(&walk, WPE_INPUT_SOURCE_MOUSE_BUTTON, WPE_MOUSE_LEFT, 1.0f, WPE_AXIS_FULL);
+    WPE_TEST_ASSERT_OK(wpe_input_set_actions(input, &walk, 1));
+    const WPE_InputAction action = wpe_input_find_action(input, "walk");
+
+    /* Text arrives as the layout made it, a frame at a time; key repeats count as typed keys. */
+    wpe_input_begin_frame(input);
+    push_text("ab");
+    push_text("C");
+    push_key(SDL_SCANCODE_BACKSPACE, true, false);
+    push_key(SDL_SCANCODE_BACKSPACE, true, true);
+    run_frame(input);
+    WPE_TEST_ASSERT_EQ_STR("abC", wpe_input_text(input));
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_input_key_typed(input, WPE_KEY_BACKSPACE));
+    wpe_input_begin_frame(input);
+    run_frame(input);
+    WPE_TEST_ASSERT_EQ_STR("", wpe_input_text(input));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_input_key_typed(input, WPE_KEY_BACKSPACE));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_input_key_typed(input, WPE_KEY_COUNT));
+
+    /* Without keyboard actions keys still read, but drive nothing; the mouse still does. */
+    wpe_input_set_keyboard_actions(input, false);
+    WPE_TEST_ASSERT(!wpe_input_keyboard_actions(input));
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_W, true, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_key_pressed(input, WPE_KEY_A + ('w' - 'a')));
+    WPE_TEST_ASSERT(!wpe_input_action_down(input, action, WPE_INPUT_ANY_PLAYER));
+    wpe_input_begin_frame(input);
+    push_mouse_button(SDL_BUTTON_LEFT, true, 0, 0);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_action_pressed(input, action, WPE_INPUT_ANY_PLAYER));
+    wpe_input_begin_frame(input);
+    push_mouse_button(SDL_BUTTON_LEFT, false, 0, 0);
+    run_frame(input);
+
+    /* Back on, the key still held from typing presses nothing until it is released and pressed again. */
+    wpe_input_set_keyboard_actions(input, true);
+    wpe_input_begin_frame(input);
+    run_frame(input);
+    WPE_TEST_ASSERT(!wpe_input_action_down(input, action, WPE_INPUT_ANY_PLAYER));
+    WPE_TEST_ASSERT(!wpe_input_action_pressed(input, action, WPE_INPUT_ANY_PLAYER));
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_W, false, false);
+    run_frame(input);
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_W, true, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_action_pressed(input, action, WPE_INPUT_ANY_PLAYER));
+    wpe_input_destroy(input);
+}
+
 static void test_input_rejects_invalid_configuration(void) {
     wpe_log_set_stderr_enabled(false);
     WPE_Input* input = create_input(NULL);
@@ -505,7 +568,7 @@ static void test_input_without_gamepads(void) {
 
 WPE_TEST_MAIN(WPE_TEST_CASE(test_input_names_round_trip), WPE_TEST_CASE(test_input_keyboard_edges),
               WPE_TEST_CASE(test_input_mouse), WPE_TEST_CASE(test_input_keyboard_actions),
-              WPE_TEST_CASE(test_input_rejects_invalid_configuration),
+              WPE_TEST_CASE(test_input_typing), WPE_TEST_CASE(test_input_rejects_invalid_configuration),
               WPE_TEST_CASE(test_input_gamepad_slots_and_hot_plug),
               WPE_TEST_CASE(test_input_gamepad_buttons_axes_and_actions),
               WPE_TEST_CASE(test_input_without_gamepads))

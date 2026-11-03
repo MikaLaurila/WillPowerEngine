@@ -78,6 +78,7 @@ Loading is **strict**. Unknown keys, wrong types, out-of-range values, dangling 
 | `button` | `interactable` (default true), and the tints `normal`, `focused`, `pressed`, `disabled` (`[r, g, b, a]`, 0..2, multiplying everything the button and its descendants draw; defaults 1, 1.25, 0.75 and 0.6 with alpha 0.6). |
 | `toggle` | With a `button`: `on` (default false), `mark_color` `[r, g, b, a]` (the mark drawn while on; alpha 0 for none), `mark_inset` (pixels from the edge, default 3). See [Toggles and sliders](#ui). |
 | `slider` | With a `button`: `value`, `min` (0), `max` (1), `step` (0 = any value; the value must be in range and on a step), `track_color`, `fill_color`, `handle_color` `[r, g, b, a]`, `handle_width` (pixels, default 6; 0 for none). |
+| `text_input` | With a `button`, a text field (see [Text fields](#ui)): `value` (the text, printable ASCII), `placeholder` (shown dimmed while empty), `max_length` (characters, 0 = 256, at most 4096), `filter` (`"any"`, `"digits"`, `"number"`, `"name"`: letters, digits, space, `_ - .`; `"address"`: letters, digits, `. : - [ ]`), `password` (draws `*`), `placeholder_color`, `cursor_color`, `selection_color` `[r, g, b, a]`, `padding` (pixels from the sides, default 3). A `text` on the entity gives the font, scale and color. |
 | `script` | `path` (asset path of a Luau script) and `properties` (an object of numbers, booleans, strings and `[x, y, z]` vectors, set on the instance before `on_start`; see [scripting.md](scripting.md#script-properties)). |
 | `components` | Game-defined components by name, read and written by the game's `WPE_ComponentSerializer`s. |
 
@@ -170,6 +171,13 @@ A click calls `on_click` on the button entity's script; scripts can also move th
 - **Toggle:** every click flips it. While on, it draws a mark in its rectangle (a check box over the button's sprite).
 - **Slider:** draws a track across the middle of its rectangle, filled up to the value, with a handle there. Pressing on it jumps the value there, and dragging follows the mouse until the button is released. While it has the focus, left and right step it (by `step`, or by 1/20 of the range without one), and up and down still move the focus.
 
+**Text fields.** Add a `text_input` to a button for a field the player types in (a name, an address). A click or the submit input (Return, A) on the focused field starts editing; while it edits, keys type into it and drive no input actions (so typing "w" doesn't walk; gamepads and the mouse still work, and a key still held when typing ends waits for its release). Arrows, Home and End move the cursor, Shift selects, Ctrl moves by words, Ctrl+A/C/X/V select all, copy, cut and paste, Backspace and Delete erase. Every change calls `on_change(text)`; Return ends editing and calls `on_submit(text)`; Escape puts back the text from before editing; Tab, Up, Down or a click elsewhere leave the field. The text is drawn in the element's rectangle, vertically centered, scrolled to keep the cursor in view. Fonts are bitmap fonts with ASCII glyphs, so other characters are dropped, and there is no on-screen keyboard. `templates/racing_online`'s menu types the host's address and the player's name in two.
+
+```json
+{"id": 8, "name": "player name", "ui": {"anchor_min": [0.5, 0.5], "anchor_max": [0.5, 0.5], "offset_min": [-60, -8], "offset_max": [60, 8]},
+ "sprite": {"color": [0.12, 0.13, 0.18, 1]}, "text": {"text": ""}, "button": {},
+ "text_input": {"placeholder": "your name", "max_length": 15, "filter": "name"}, "script": {"path": "scripts/name_field.luau"}}
+```
 ```json
 {"id": 7, "name": "volume", "parent": 3, "ui": {"anchor_max": [1, 0], "offset_min": [58, 100], "offset_max": [-12, 110]},
  "button": {}, "slider": {"value": 0.7, "step": 0.05}, "script": {"path": "scripts/volume_slider.luau"}}

@@ -387,7 +387,8 @@ Implemented in `src/ui/` (public API in `ui/ui.h`). Docs: `docs/scenes.md#ui`.
 - **Order and picking** follow the hierarchy: parents before children, top-level elements by `wpe_ecs_spawn_serial`. `wpe_ui_layout` stores each element's rectangle and `shown` flag in the component; picking and navigation use that layout.
 - **One focus.** The mouse, the arrow keys / D-pad / left stick (spatial navigation with repeat) and Return / Space / south button drive it. Project actions named `ui_up`... `ui_submit` replace an input's defaults. Clicks are collected per `wpe_ui_update` and the engine passes them to scripts (`wpe_script_host_notify(..., "on_click")`) before the fixed steps. The UI reacts only while simulating.
 - **Asset and string lifetime:** sprites and texts hold their image/font reference from their add hook to their remove hook; a text's add hook copies the string (the component owns the copy, `wpe_ui_set_text` replaces it).
-- NOTE(limitation): no rotation/scale for elements and no clipping of children; text is the bitmap font (no proportional TTF yet).
+- **Text fields** (`WPE_TextInput`, with a button) own their text. One field edits at a time (`wpe_ui_edit`); while it does, the engine turns keyboard actions off (`wpe_input_set_keyboard_actions`, keys held when they come back stay muted until released) and the window's text input on, so the layout's text (`wpe_input_text`) and key repeats (`wpe_input_key_typed`) drive it. Changes report through `wpe_ui_changes` (`on_change(text)`), Return through `wpe_ui_submits` (`on_submit(text)`).
+- NOTE(limitation): no rotation/scale for elements and no clipping of children; text is the bitmap font (no proportional TTF yet), so text fields take printable ASCII only, and there is no on-screen keyboard.
 
 ### 4.7 Engine runtime, scenes and export
 

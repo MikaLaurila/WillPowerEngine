@@ -65,13 +65,28 @@ static const char* wpe__string_arg(const wpe__Call* call, const char* key) {
 static const char* const wpe__component_keys[] = {
     "transform", "mesh",     "camera",    "light",     "billboard",    "particles",    "animator",
     "rigidbody", "collider", "character", "nav_agent", "nav_obstacle", "audio_source", "ui",
-    "sprite",    "text",     "button",    "toggle",    "slider",       "script"};
-static const WPE_ComponentType wpe__component_types[] = {
-    WPE_COMP_TRANSFORM,        WPE_COMP_MESH,      WPE_COMP_CAMERA,    WPE_COMP_LIGHT,
-    WPE_COMP_BILLBOARD,        WPE_COMP_PARTICLES, WPE_COMP_ANIMATOR,  WPE_COMP_PHYSICS_RIGIDBODY,
-    WPE_COMP_PHYSICS_COLLIDER, WPE_COMP_CHARACTER, WPE_COMP_NAV_AGENT, WPE_COMP_NAV_OBSTACLE,
-    WPE_COMP_AUDIO_SOURCE,     WPE_COMP_UI,        WPE_COMP_SPRITE,    WPE_COMP_TEXT,
-    WPE_COMP_BUTTON,           WPE_COMP_TOGGLE,    WPE_COMP_SLIDER,    WPE_COMP_SCRIPT};
+    "sprite",    "text",     "button",    "toggle",    "slider",       "text_input",   "script"};
+static const WPE_ComponentType wpe__component_types[] = {WPE_COMP_TRANSFORM,
+                                                         WPE_COMP_MESH,
+                                                         WPE_COMP_CAMERA,
+                                                         WPE_COMP_LIGHT,
+                                                         WPE_COMP_BILLBOARD,
+                                                         WPE_COMP_PARTICLES,
+                                                         WPE_COMP_ANIMATOR,
+                                                         WPE_COMP_PHYSICS_RIGIDBODY,
+                                                         WPE_COMP_PHYSICS_COLLIDER,
+                                                         WPE_COMP_CHARACTER,
+                                                         WPE_COMP_NAV_AGENT,
+                                                         WPE_COMP_NAV_OBSTACLE,
+                                                         WPE_COMP_AUDIO_SOURCE,
+                                                         WPE_COMP_UI,
+                                                         WPE_COMP_SPRITE,
+                                                         WPE_COMP_TEXT,
+                                                         WPE_COMP_BUTTON,
+                                                         WPE_COMP_TOGGLE,
+                                                         WPE_COMP_SLIDER,
+                                                         WPE_COMP_TEXT_INPUT,
+                                                         WPE_COMP_SCRIPT};
 static_assert(sizeof wpe__component_keys / sizeof wpe__component_keys[0] ==
                   sizeof wpe__component_types / sizeof wpe__component_types[0],
               "one type per component key");

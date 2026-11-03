@@ -681,6 +681,16 @@ static void net_tap(WPE_NetHub* hub, WPE_Engine** e, int count, int who, SDL_Sca
     play(hub, e, count, 1);
 }
 
+/* Text the keyboard layout typed, for this engine's next frame (then that frame). */
+static void type_text(WPE_Engine* engine, const char* text) {
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = SDL_EVENT_TEXT_INPUT;
+    e.text.text = text;
+    wpe_engine_handle_event(engine, (const WPE_PlatformEvent*)&e);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+}
+
 static void expect_phase(WPE_Engine* engine, const char* phase) {
     char code[160];
     snprintf(code, sizeof code,
@@ -724,6 +734,41 @@ static void test_templates_racing_online_plays(void) {
                         create_net_engine(dir, ROOT "/saves_player", hub)};
     play(hub, e, 2, 2);
     expect_phase(e[0], "menu");
+
+    /* The name is a text field: on its row, Return types; keys type instead of driving actions ("s" is the
+     * brake); Return keeps the name (and selects nothing in the menu); Esc puts the old text back. */
+    check_lua(e[0], "select the name", "wpe.get_script(wpe.find('menu')).selected = 6\n");
+    play(hub, e, 1, 2);
+    net_tap(hub, e, 1, 0, SDL_SCANCODE_RETURN);
+    check_lua(e[0], "typing", "assert(wpe.ui_editing() == wpe.find('name field'))\n");
+    key(e[0], SDL_SCANCODE_LCTRL, true);
+    net_tap(hub, e, 1, 0, SDL_SCANCODE_A);
+    key(e[0], SDL_SCANCODE_LCTRL, false);
+    type_text(e[0], "Ada");
+    key(e[0], SDL_SCANCODE_S, true);
+    type_text(e[0], "s");
+    check_lua(e[0], "keys type",
+              "assert(wpe.get_script(wpe.find('menu')).name == 'Adas')\n"
+              "assert(wpe.key_down('s') and not wpe.action_down('brake'))\n");
+    key(e[0], SDL_SCANCODE_S, false);
+    key(e[0], SDL_SCANCODE_RETURN, true);
+    play(hub, e, 1, 3); /* Held after typing ends: it selects nothing until let go. */
+    key(e[0], SDL_SCANCODE_RETURN, false);
+    play(hub, e, 1, 2);
+    check_lua(e[0], "the name is kept",
+              "local menu = wpe.get_script(wpe.find('menu'))\n"
+              "assert(wpe.ui_editing() == nil and menu.name == 'Adas' and menu.selected == 6)\n"
+              "assert(wpe.load_data('player').name == 'Adas')\n");
+    expect_phase(e[0], "menu");
+    net_tap(hub, e, 1, 0, SDL_SCANCODE_RETURN);
+    type_text(e[0], "!x"); /* '!' is no name character. */
+    check_lua(e[0], "filtered", "assert(wpe.get_script(wpe.find('menu')).name == 'Adasx')\n");
+    net_tap(hub, e, 1, 0, SDL_SCANCODE_ESCAPE);
+    play(hub, e, 1, 2);
+    check_lua(e[0], "Esc restores",
+              "assert(wpe.ui_editing() == nil and wpe.get_script(wpe.find('menu')).name == 'Adas')\n");
+    expect_phase(e[0], "menu");
+    WPE_TEST_ASSERT_EQ_UINT(0, script_errors(e[0]));
 
     /* Practice: car 1 is yours, the others are parked inside the track. */
     check_lua(e[0], "practice", "wpe.send(wpe.find('menu'), 'practice')\n");

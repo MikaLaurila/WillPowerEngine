@@ -257,7 +257,8 @@ static void test_engine_scene_round_trip(void) {
                                      WPE_COMP_SLASH,
                                      WPE_COMP_WATER,
                                      WPE_COMP_NAV_AGENT,
-                                     WPE_COMP_NAV_OBSTACLE};
+                                     WPE_COMP_NAV_OBSTACLE,
+                                     WPE_COMP_TEXT_INPUT};
     for (size_t i = 0; i < sizeof all / sizeof all[0]; ++i)
         WPE_TEST_ASSERT_MSG(count_of(&a, all[i]) > 0, "no component of type %u", all[i]);
     WPE_TEST_ASSERT_EQ_UINT(2, count_of(&a, WPE_COMP_CAMERA));

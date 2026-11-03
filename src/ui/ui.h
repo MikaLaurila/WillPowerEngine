@@ -18,6 +18,10 @@
  *   an on/off switch and a value dragged along a track. Their changes are collected like clicks
  *   (wpe_ui_changes()); the engine passes them to scripts as on_change(value). Without a button they
  *   are drawn but don't react.
+ * - WPE_COMP_TEXT_INPUT (WPE_TextInput): with a button on the same entity, a one-line text field the
+ *   player types into (a name, an address). A WPE_Text on the entity gives its font, scale, color and
+ *   vertical alignment (its own string isn't shown). Each edit is a change (wpe_ui_changes(); the
+ *   engine passes on_change(value)), and Return a submit (wpe_ui_submits(); on_submit(value)).
  *
  * Order: elements are drawn parent first, then children in hierarchy order; top-level elements in
  * the order they were created (later ones on top). A scene without a camera is a pure 2D scene.
@@ -30,6 +34,15 @@
  * navigation with input actions named "ui_up", "ui_down", "ui_left", "ui_right" and "ui_submit";
  * an action with one of those names replaces that input's defaults. Clicks are collected for the
  * application (wpe_ui_clicks()); the engine passes them to scripts as on_click.
+ *
+ * Text fields: clicking one, or submitting it (Return, Space, the pad's south button), starts editing it.
+ * While it edits, the keyboard types: printable characters (filtered as the field says), Backspace and
+ * Delete, Left/Right (Shift selects, Ctrl moves by words), Home/End, Ctrl+A/C/X/V (clipboard). Return
+ * submits and stops editing; Escape stops and restores the text it had when editing began; Tab, Up and Down
+ * stop and move the focus on. Clicking elsewhere stops editing. Only one field edits at a time
+ * (wpe_ui_editing()); the application turns the keyboard's actions off meanwhile (the engine does).
+ * NOTE(limitation): text is ASCII (the bitmap fonts' 95 glyphs); other characters typed are dropped.
+ * There is no on-screen keyboard for gamepads.
  *
  * Asset lifetime: sprites and texts hold a reference to their image and font from their add hook
  * to their remove hook, like mesh renderers. A text's string is copied by its add hook, so the
@@ -118,8 +131,33 @@ typedef struct WPE_Slider {
     float handle_width;                             /* Pixels (0: no handle). */
 } WPE_Slider;
 
-typedef struct WPE_Ui WPE_Ui;
+/* Which characters a text field accepts. */
+typedef enum WPE_TextFilter {
+    WPE_TEXT_FILTER_ANY = 0, /* Every printable character. */
+    WPE_TEXT_FILTER_DIGITS,  /* 0-9. */
+    WPE_TEXT_FILTER_NUMBER,  /* Digits, one '.' and a leading '-'. */
+    WPE_TEXT_FILTER_NAME,    /* Letters, digits, space, '_', '-' and '.' (player and file names). */
+    WPE_TEXT_FILTER_ADDRESS, /* Letters, digits, '.', ':', '-', '[' and ']' (host names, IPs, ports). */
+} WPE_TextFilter;
 
+typedef struct WPE_TextInput {
+    char* value;         /* The text (ASCII). Copied by the add hook; owned and freed by the component. */
+    char* placeholder;   /* Shown, dimmed, while the field is empty and not editing. Copied like `value`. */
+    uint32_t max_length; /* Most characters (0: 256). */
+    WPE_TextFilter filter;
+    bool password;                                             /* Shown as '*'. */
+    WPE_Vec4 placeholder_color, cursor_color, selection_color; /* RGBA (0..1). */
+    float padding; /* Pixels between the rectangle's sides and the text (default 3). */
+
+    /* State (read-only; reset by the add hook). */
+    bool editing;
+    uint32_t cursor, anchor; /* Character positions in `value`; the selection is between them. */
+    float scroll;            /* Pixels the text is scrolled left to keep the cursor in view. */
+    float blink;             /* Seconds into the cursor's blink. */
+    char* wpe__before;       /* The value when editing began (Escape restores it); owned. */
+} WPE_TextInput;
+
+typedef struct WPE_Ui WPE_Ui;
 typedef struct WPE_UiDesc {
     WPE_Ecs* ecs;             /* Borrowed; scene components must be registered. */
     WPE_AssetManager* assets; /* Borrowed: images and fonts. */
@@ -135,6 +173,8 @@ WPE_Text wpe_text_default(void);      /* Empty, white, scale 1, top-left, no wra
 WPE_Button wpe_button_default(void);  /* Interactable; focus brightens, press darkens, disabled dims. */
 WPE_Toggle wpe_toggle_default(void);  /* Off; a white mark inset 3 pixels. */
 WPE_Slider wpe_slider_default(void);  /* 0..1 at 0, no step; gray track, white fill and handle (6 px). */
+WPE_TextInput wpe_text_input_default(void); /* Empty, any characters, 256 at most; gray placeholder, white
+                                               cursor, blue selection, 3 px padding. */
 
 /** The value a slider gets when set to `value`: clamped to its range and snapped to its step.
  * @thread_safety Any thread */
@@ -181,6 +221,38 @@ const WPE_Entity* wpe_ui_clicks(const WPE_Ui* ui, uint32_t* out_count);
 /** @return The toggles and sliders whose value the player changed in the last wpe_ui_update(), each
  * once, in order (borrowed until the next update). @thread_safety Main thread */
 const WPE_Entity* wpe_ui_changes(const WPE_Ui* ui, uint32_t* out_count);
+
+/** @return The text fields submitted (Return) in the last wpe_ui_update(), in order (borrowed until the next
+ * update). @thread_safety Main thread */
+const WPE_Entity* wpe_ui_submits(const WPE_Ui* ui, uint32_t* out_count);
+
+/** @return The text field being edited, or WPE_ENTITY_NULL. @thread_safety Main thread */
+WPE_Entity wpe_ui_editing(const WPE_Ui* ui);
+
+/**
+ * Starts editing a text field (focusing it, with the cursor at the end), or stops editing with
+ * WPE_ENTITY_NULL (keeping the text).
+ *
+ * @return false when the entity isn't a focusable text field.
+ *
+ * @thread_safety Main thread
+ */
+bool wpe_ui_edit(WPE_Ui* ui, WPE_Entity field);
+
+/**
+ * Replaces a text field's text (cut to its max_length; the filter doesn't apply to text set by code); the
+ * cursor goes to the end and the selection is cleared.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_NOT_FOUND (no text field) or
+ *         WPE_RESULT_ERROR_OUT_OF_MEMORY (the old text is kept).
+ *
+ * @thread_safety Main thread
+ */
+WPE_Result wpe_ui_set_input_text(WPE_Ecs* ecs, WPE_Entity entity, const char* text);
+
+/** @return A text field's text (borrowed until it changes), or NULL without one. @thread_safety Main thread
+ */
+const char* wpe_ui_input_text(const WPE_Ecs* ecs, WPE_Entity entity);
 
 /**
  * Lays out the UI for the renderer's framebuffer and draws it into the recording frame (between

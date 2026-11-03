@@ -1727,7 +1727,8 @@ static void wpe__ui_create_emitter(WPE_EditorUi* ui) {
     wpe__ui_send(ui, w);
 }
 
-/* Adds a UI element: "panel", "text", "button" (with a label inside), "toggle", "slider" or an image's sprite
+/* Adds a UI element: "panel", "text", "button" (with a label inside), "toggle", "slider", "text_field" or an
+ * image's sprite
  * (`image` set, at the image's size). One undo step; it ends selected, and the editor switches to the 2D
  * view. In the 3D view an image becomes a billboard instead. */
 static void wpe__ui_create_element(WPE_EditorUi* ui, const char* kind, const char* image) {
@@ -1802,6 +1803,29 @@ static void wpe__ui_create_element(WPE_EditorUi* ui, const char* kind, const cha
                 wpe_json_write_number(w, 0.5);
                 wpe__write_color(w, "fill_color", 0.93f, 0.6f, 0.22f, 1);
             }
+            wpe_json_write_object_end(w);
+        }
+    } else if (strcmp(kind, "text_field") == 0) {
+        /* A dark box to type in; its text component gives the font, scale and color. */
+        w = wpe__begin_ui_element(ui, "text field", parent);
+        if (w) {
+            wpe__write_centered_ui(w, 120, 16);
+            wpe_json_write_key(w, "sprite");
+            wpe_json_write_object_begin(w);
+            wpe__write_color(w, "color", 0.12f, 0.13f, 0.18f, 1);
+            wpe_json_write_object_end(w);
+            wpe_json_write_key(w, "text");
+            wpe_json_write_object_begin(w);
+            wpe_json_write_key(w, "text");
+            wpe_json_write_string(w, "");
+            wpe_json_write_object_end(w);
+            wpe_json_write_key(w, "button");
+            wpe_json_write_object_begin(w);
+            wpe_json_write_object_end(w);
+            wpe_json_write_key(w, "text_input");
+            wpe_json_write_object_begin(w);
+            wpe_json_write_key(w, "placeholder");
+            wpe_json_write_string(w, "Type here");
             wpe_json_write_object_end(w);
         }
     } else {
@@ -1985,6 +2009,7 @@ static void wpe__ui_hierarchy(WPE_EditorUi* ui) {
         if (igMenuItem_Bool("Button", NULL, false, true)) wpe__ui_create_element(ui, "button", NULL);
         if (igMenuItem_Bool("Toggle", NULL, false, true)) wpe__ui_create_element(ui, "toggle", NULL);
         if (igMenuItem_Bool("Slider", NULL, false, true)) wpe__ui_create_element(ui, "slider", NULL);
+        if (igMenuItem_Bool("Text field", NULL, false, true)) wpe__ui_create_element(ui, "text_field", NULL);
         igEndPopup();
     }
     igSeparator();
@@ -2388,10 +2413,10 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
         wpe__ui_entity_command(ui, "fit_collider", entity);
     /* Adding a component: those needing an asset take the path typed here. */
     static const char* const addable[] = {
-        "transform", "mesh",     "camera",    "light",     "billboard",    "particles",
-        "rigidbody", "collider", "character", "nav_agent", "nav_obstacle", "audio_source",
-        "ui",        "sprite",   "text",      "button",    "toggle",       "slider",
-        "trail",     "slash",    "water",     "net",       "script"};
+        "transform",  "mesh",     "camera",    "light",     "billboard",    "particles",
+        "rigidbody",  "collider", "character", "nav_agent", "nav_obstacle", "audio_source",
+        "ui",         "sprite",   "text",      "button",    "toggle",       "slider",
+        "text_input", "trail",    "slash",     "water",     "net",          "script"};
     igSetNextItemWidth(-1.0f);
     igInputText("##asset_path", ui->add_path, sizeof ui->add_path, 0, NULL, NULL);
     (void)wpe__asset_drop(WPE__ASSET_ANY, ui->add_path,

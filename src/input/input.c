@@ -54,6 +54,11 @@ struct WPE_Input {
     bool gamepads_enabled;
 
     uint8_t keys[WPE_KEY_COUNT];
+    uint8_t typed[WPE_KEY_COUNT];  /* Presses plus the OS's key repeats this frame (text editing). */
+    bool muted[WPE_KEY_COUNT];     /* Held since typing ended: drives no action until released. */
+    char text[WPE_INPUT_TEXT_MAX]; /* UTF-8 typed this frame. */
+    uint32_t text_length;
+    bool keyboard_actions; /* Keys drive actions (false while the UI takes the keyboard for typing). */
     uint8_t mouse_buttons[WPE_MOUSE_BUTTON_MAX + 1];
     float mouse_x, mouse_y, mouse_dx, mouse_dy, wheel_x, wheel_y;
     bool mouse_captured;
@@ -333,6 +338,7 @@ WPE_Result wpe_input_create(const WPE_InputDesc* desc, WPE_Input** out_input) {
     WPE_Input* input = wpe_alloc_zeroed(1, sizeof *input);
     if (!input) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     input->settings = settings;
+    input->keyboard_actions = true;
     if (!desc->no_gamepads) {
         /* Reference-counted by SDL; also initializes the event queue so headless programs get pad events. */
         if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
@@ -364,6 +370,9 @@ void wpe_input_begin_frame(WPE_Input* input) {
     if (!wpe_check(input != NULL)) return;
     for (uint32_t i = 0; i < WPE_KEY_COUNT; ++i)
         input->keys[i] &= WPE__DOWN;
+    memset(input->typed, 0, sizeof input->typed);
+    input->text[0] = '\0';
+    input->text_length = 0;
     for (uint32_t i = 0; i <= WPE_MOUSE_BUTTON_MAX; ++i)
         input->mouse_buttons[i] &= WPE__DOWN;
     input->mouse_dx = input->mouse_dy = input->wheel_x = input->wheel_y = 0.0f;
@@ -394,9 +403,24 @@ void wpe_input_handle_event(WPE_Input* input, const WPE_PlatformEvent* platform_
     switch (event->type) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
-        if (!event->key.repeat && (uint32_t)event->key.scancode < WPE_KEY_COUNT)
-            wpe__set_button(&input->keys[event->key.scancode], event->key.down);
+        if ((uint32_t)event->key.scancode >= WPE_KEY_COUNT) break;
+        if (event->key.down && input->typed[event->key.scancode] < UINT8_MAX)
+            ++input->typed[event->key.scancode];
+        if (!event->key.repeat) wpe__set_button(&input->keys[event->key.scancode], event->key.down);
+        if (!event->key.down) input->muted[event->key.scancode] = false;
         break;
+    case SDL_EVENT_TEXT_INPUT: {
+        /* What the keyboard layout made of the keys, as UTF-8 (whole characters only: a frame's text is cut
+         * where the next character no longer fits). */
+        const char* text = event->text.text;
+        if (!text) break;
+        const size_t length = strlen(text);
+        if (input->text_length + length < WPE_INPUT_TEXT_MAX) {
+            memcpy(input->text + input->text_length, text, length + 1);
+            input->text_length += (uint32_t)length;
+        }
+        break;
+    }
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (event->button.button >= 1 && event->button.button <= WPE_MOUSE_BUTTON_MAX)
@@ -529,7 +553,9 @@ static float wpe__binding_value(const WPE_Input* input, const WPE_InputBinding* 
     switch (b->source) {
     case WPE_INPUT_SOURCE_KEY:
     case WPE_INPUT_SOURCE_MOUSE_BUTTON: {
-        if (!keyboard) return 0.0f;
+        if (!keyboard ||
+            (b->source == WPE_INPUT_SOURCE_KEY && (!input->keyboard_actions || input->muted[b->code])))
+            return 0.0f;
         const uint8_t state =
             b->source == WPE_INPUT_SOURCE_KEY ? input->keys[b->code] : input->mouse_buttons[b->code];
         if (state & WPE__PRESSED) *io_pressed = true;
@@ -555,6 +581,29 @@ static float wpe__binding_value(const WPE_Input* input, const WPE_InputBinding* 
         sum += value * scale;
     }
     return sum;
+}
+
+const char* wpe_input_text(const WPE_Input* input) {
+    return input ? input->text : "";
+}
+
+uint32_t wpe_input_key_typed(const WPE_Input* input, WPE_Key key) {
+    return input && (uint32_t)key < WPE_KEY_COUNT ? input->typed[key] : 0;
+}
+
+void wpe_input_set_keyboard_actions(WPE_Input* input, bool enabled) {
+    if (!wpe_check(input != NULL)) return;
+    /* Keys still held from typing (the Return that ended it) wait for their release, or they would press
+     * their actions now. */
+    if (enabled && !input->keyboard_actions) {
+        for (uint32_t k = 0; k < WPE_KEY_COUNT; ++k)
+            input->muted[k] = (input->keys[k] & WPE__DOWN) != 0;
+    }
+    input->keyboard_actions = enabled;
+}
+
+bool wpe_input_keyboard_actions(const WPE_Input* input) {
+    return input && input->keyboard_actions;
 }
 
 void wpe_input_update(WPE_Input* input) {

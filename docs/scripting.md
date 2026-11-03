@@ -576,7 +576,7 @@ wpe.set_water(lagoon, { amplitude = 0.3 * storm + 0.05, speed = 1 + 2 * storm })
 
 ### UI
 
-The scene's UI elements (`ui`, `sprite`, `text` and `button` components, see [scenes.md](scenes.md#ui)) are retained: change them and they stay changed. Functions raise when the entity lacks the component they need.
+The scene's UI elements (`ui`, `sprite`, `text`, `button`, `toggle`, `slider` and `text_input` components, see [scenes.md](scenes.md#ui)) are retained: change them and they stay changed. Functions raise when the entity lacks the component they need.
 
 | Function | Description |
 |---|---|
@@ -587,9 +587,20 @@ The scene's UI elements (`ui`, `sprite`, `text` and `button` components, see [sc
 | `wpe.ui_rect(entity) -> x, y, width, height` | Where the element is on screen, from the last layout (this frame's, which runs before scripts; changes made since show next frame). |
 | `wpe.set_interactable(entity, interactable)` | Enables or disables a button. |
 | `wpe.ui_focus(entity or nil) -> boolean` / `wpe.ui_focused() -> entity?` | Moves the focus to a shown, interactable button (false if it can't take it), or clears it. |
-| `wpe.ui_value(entity, [value]) -> value` | A toggle's state (boolean) or a slider's value (number, clamped to its range and snapped to its step). Setting it from a script doesn't call `on_change`. |
+| `wpe.ui_value(entity, [value]) -> value` | A toggle's state (boolean), a slider's value (number, clamped to its range and snapped to its step) or a text field's text (string, printable ASCII, cut at its `max_length`). Setting it from a script doesn't call `on_change`. |
+| `wpe.ui_edit(entity or nil) -> boolean` / `wpe.ui_editing() -> entity?` | Starts editing a text field (focusing it; false if it can't take the focus), or stops editing with nil; which field is being edited. |
 
-Toggles and sliders report the player's changes to their entity's script as `on_change(value)`, before `on_click`; a toggle's value is a boolean, a slider's a number. `scripts/volume_slider.luau` and `scripts/sound_toggle.luau` (on the title screen) set the music volume and mute the sound, and remember the settings with saved data.
+Toggles and sliders report the player's changes to their entity's script as `on_change(value)`, before `on_click`; a toggle's value is a boolean, a slider's a number.
+
+Text fields (`text_input`) edit when clicked or when the player presses the submit action (Return, the pad's A) on a focused one. While a field edits, keys type into it instead of driving actions (a game reading `wpe.action_down("jump")` sees nothing from the keyboard; gamepads and the mouse still work). The keys are the usual ones: arrows, Home/End, Shift to select, Ctrl to move by words, Ctrl+A/C/X/V, Backspace/Delete. Every change calls `on_change(text)`; Return ends editing and calls `on_submit(text)`; Escape puts back the text from before editing; Tab, Up and Down, or a click elsewhere, leave the field. Fonts are bitmap fonts with ASCII glyphs, so fields take printable ASCII only (other characters are dropped).
+
+```lua
+local Name = {}
+function Name:on_submit(text: string)
+	wpe.save_data("player_name", text)
+end
+return Name
+``` `scripts/volume_slider.luau` and `scripts/sound_toggle.luau` (on the title screen) set the music volume and mute the sound, and remember the settings with saved data.
 
 `assets/scripts/api_tour.luau` exercises every function above, as part of the master test scene that the scene test runs for 60 simulated seconds. `wpe.load_scene` and `wpe.quit` end a scene, so the engine tests cover those two instead.
 

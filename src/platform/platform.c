@@ -136,6 +136,30 @@ WPE_Result wpe_window_set_text_input(WPE_Window* window, bool enabled) {
     return WPE_RESULT_ERROR;
 }
 
+WPE_Result wpe_clipboard_set_text(const char* text) {
+    if (!text) return WPE_RESULT_ERROR_NULL_ARG;
+    if (SDL_SetClipboardText(text)) return WPE_RESULT_OK;
+    wpe_log_warn("cannot set the clipboard: %s", SDL_GetError());
+    return WPE_RESULT_ERROR;
+}
+
+size_t wpe_clipboard_text(char* out, size_t capacity) {
+    if (!out || capacity == 0) return 0;
+    out[0] = '\0';
+    char* text = SDL_HasClipboardText() ? SDL_GetClipboardText() : NULL;
+    if (!text) return 0;
+    size_t length = strlen(text);
+    if (length >= capacity) {
+        length = capacity - 1;
+        while (length > 0 && ((unsigned char)text[length] & 0xC0u) == 0x80u)
+            --length; /* Don't cut a character in two. */
+    }
+    memcpy(out, text, length);
+    out[length] = '\0';
+    SDL_free(text);
+    return length;
+}
+
 void wpe_window_set_title(WPE_Window* window, const char* title) {
     if (!wpe_check(window != NULL && title != NULL)) return;
     if (!SDL_SetWindowTitle(window->window, title))

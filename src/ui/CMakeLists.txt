@@ -3,5 +3,5 @@ add_library(wpe_ui STATIC
 add_library(wpe::ui ALIAS wpe_ui)
 
 target_link_libraries(wpe_ui PUBLIC wpe::core wpe::math wpe::ecs wpe::scene wpe::renderer wpe::assets wpe::graphics
-                                    wpe::input)
+                                    wpe::input wpe::platform)
 wpe_configure_target(wpe_ui)

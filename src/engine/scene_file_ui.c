@@ -14,6 +14,9 @@ static const char* const wpe__align_y[] = {"top", "middle", "bottom"};
 static const char* const wpe__billboard_modes[] = {"fixed", "axis_aligned", "axis_aligned_y",
                                                    "screen_aligned"};
 static const char* const wpe__billboard_blends[] = {"cutout", "alpha", "additive"};
+static const char* const wpe__text_filters[] = {"any", "digits", "number", "name", "address"};
+#define WPE__TEXT_FILTER_COUNT ((uint32_t)(sizeof(wpe__text_filters) / sizeof(wpe__text_filters[0])))
+static_assert(WPE__TEXT_FILTER_COUNT == WPE_TEXT_FILTER_ADDRESS + 1, "a name for every text filter");
 
 #define WPE__COUNT(array) ((uint32_t)(sizeof(array) / sizeof((array)[0])))
 #define WPE__DEGREES_PER_RADIAN (180.0 / 3.14159265358979323846)
@@ -122,6 +125,27 @@ void wpe__save_ui_components(wpe__Saver* s, WPE_Entity e) {
         wpe__write_floats(w, "handle_color", slider->handle_color.v, 4);
         wpe_json_write_key(w, "handle_width");
         wpe_json_write_number(w, slider->handle_width);
+        wpe_json_write_object_end(w);
+    }
+    const WPE_TextInput* field = wpe_ecs_get_component(ecs, e, WPE_COMP_TEXT_INPUT);
+    if (field) {
+        wpe_json_write_key(w, "text_input");
+        wpe_json_write_object_begin(w);
+        wpe_json_write_key(w, "value");
+        wpe_json_write_string(w, field->value ? field->value : "");
+        wpe_json_write_key(w, "placeholder");
+        wpe_json_write_string(w, field->placeholder ? field->placeholder : "");
+        wpe_json_write_key(w, "max_length");
+        wpe_json_write_integer(w, field->max_length);
+        wpe_json_write_key(w, "filter");
+        wpe_json_write_string(w, wpe__text_filters[field->filter]);
+        wpe_json_write_key(w, "password");
+        wpe_json_write_bool(w, field->password);
+        wpe__write_floats(w, "placeholder_color", field->placeholder_color.v, 4);
+        wpe__write_floats(w, "cursor_color", field->cursor_color.v, 4);
+        wpe__write_floats(w, "selection_color", field->selection_color.v, 4);
+        wpe_json_write_key(w, "padding");
+        wpe_json_write_number(w, field->padding);
         wpe_json_write_object_end(w);
     }
 }
@@ -454,4 +478,41 @@ bool wpe__load_slider(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
         return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE,
                               "a slider's \"value\" must be within min..max (and on its step)");
     return wpe__add(l, v, e, WPE_COMP_SLIDER, &slider, "slider");
+}
+
+bool wpe__load_text_input(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
+    WPE_TextInput field = wpe_text_input_default();
+    uint32_t filter = WPE_TEXT_FILTER_ANY;
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "text_input", "value", "placeholder", "max_length", "filter",
+                                "password", "placeholder_color", "cursor_color", "selection_color",
+                                "padding") ||
+        !wpe__json_read_uint(&l->r, v, "max_length", 0, 4096, &field.max_length) ||
+        !wpe__json_read_enum(&l->r, v, "filter", wpe__text_filters, WPE__TEXT_FILTER_COUNT, &filter) ||
+        !wpe__json_read_bool(&l->r, v, "password", &field.password) ||
+        !wpe__read_ranged(l, v, "placeholder_color", 4, 0.0, 1.0, field.placeholder_color.v) ||
+        !wpe__read_ranged(l, v, "cursor_color", 4, 0.0, 1.0, field.cursor_color.v) ||
+        !wpe__read_ranged(l, v, "selection_color", 4, 0.0, 1.0, field.selection_color.v) ||
+        !wpe__json_read_float(&l->r, v, "padding", 0.0f, 1e4f, &field.padding))
+        return false;
+    field.filter = (WPE_TextFilter)filter;
+    const char* keys[2] = {"value", "placeholder"};
+    char** targets[2] = {&field.value, &field.placeholder};
+    for (int i = 0; i < 2; ++i) {
+        const WPE_JsonValue* s = wpe_json_get(v, keys[i]);
+        if (!s) continue;
+        const char* text = wpe_json_string(s);
+        if (!text)
+            return wpe__json_fail(&l->r, s, WPE_RESULT_ERROR_PARSE, "\"%s\" must be a string", keys[i]);
+        for (const char* c = text; *c; ++c) {
+            if (*c < 32 || *c > 126)
+                return wpe__json_fail(&l->r, s, WPE_RESULT_ERROR_PARSE,
+                                      "a text field's \"%s\" may only hold printable ASCII", keys[i]);
+        }
+        *targets[i] = (char*)text; /* The add hook copies it. */
+    }
+    const uint32_t max = field.max_length ? field.max_length : 256u;
+    if (field.value && strlen(field.value) > max)
+        return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE,
+                              "a text field's \"value\" is longer than max_length");
+    return wpe__add(l, v, e, WPE_COMP_TEXT_INPUT, &field, "text field");
 }

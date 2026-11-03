@@ -3490,14 +3490,27 @@ static int wpe__api_ui_focused(lua_State* L) {
     return 1;
 }
 
-/* wpe.ui_value(entity, [value]): a toggle's on (boolean) or a slider's value (number); setting it
- * doesn't call on_change, which reports the player's changes. */
+/* wpe.ui_value(entity, [value]): a toggle's on (boolean), a slider's value (number) or a text field's
+ * text (string); setting it doesn't call on_change, which reports the player's changes. */
 static int wpe__api_ui_value(lua_State* L) {
     const WPE_ScriptHost* host = wpe__script_host_from(L);
     const WPE_Entity entity = wpe__check_entity(L, 1);
+    if (wpe_ecs_has_component(host->ecs, entity, WPE_COMP_TEXT_INPUT)) {
+        if (!lua_isnoneornil(L, 2)) {
+            const char* text = luaL_checkstring(L, 2);
+            for (const char* c = text; *c; ++c) {
+                if (*c < 32 || *c > 126)
+                    luaL_errorL(L, "wpe.ui_value: text fields hold printable ASCII only");
+            }
+            wpe__raise_result(L, "ui_value", wpe_ui_set_input_text(host->ecs, entity, text));
+        }
+        lua_pushstring(L, wpe_ui_input_text(host->ecs, entity));
+        return 1;
+    }
     WPE_Toggle* toggle = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_TOGGLE);
     WPE_Slider* slider = wpe_ecs_get_component(host->ecs, entity, WPE_COMP_SLIDER);
-    if (!toggle && !slider) luaL_errorL(L, "wpe.ui_value: entity 0x%08x has no toggle or slider", entity);
+    if (!toggle && !slider)
+        luaL_errorL(L, "wpe.ui_value: entity 0x%08x has no toggle, slider or text field", entity);
     if (toggle) {
         if (!lua_isnoneornil(L, 2)) toggle->on = luaL_checkboolean(L, 2);
         lua_pushboolean(L, toggle->on);
@@ -3510,6 +3523,24 @@ static int wpe__api_ui_value(lua_State* L) {
         slider->value = value;
     }
     lua_pushnumber(L, slider->value);
+    return 1;
+}
+
+/* wpe.ui_edit(field | nil): starts editing a text field (focusing it), or stops editing with nil. */
+static int wpe__api_ui_edit(lua_State* L) {
+    WPE_Ui* ui = wpe__check_ui(L);
+    const WPE_Entity entity = lua_isnoneornil(L, 1) ? WPE_ENTITY_NULL : wpe__check_entity(L, 1);
+    lua_pushboolean(L, wpe_ui_edit(ui, entity));
+    return 1;
+}
+
+static int wpe__api_ui_editing(lua_State* L) {
+    const WPE_Entity editing = wpe_ui_editing(wpe__check_ui(L));
+    if (editing == WPE_ENTITY_NULL) {
+        lua_pushnil(L);
+    } else {
+        lua_pushnumber(L, (double)editing);
+    }
     return 1;
 }
 
@@ -3694,6 +3725,8 @@ static const luaL_Reg wpe__api[] = {
     {"ui_focus", wpe__api_ui_focus},
     {"ui_focused", wpe__api_ui_focused},
     {"ui_value", wpe__api_ui_value},
+    {"ui_edit", wpe__api_ui_edit},
+    {"ui_editing", wpe__api_ui_editing},
     {"time", wpe__api_time},
     {"frame", wpe__api_frame},
     {NULL, NULL},

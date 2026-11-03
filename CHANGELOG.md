@@ -4,6 +4,22 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (v1.0: UI text fields)
+- Text fields: a `text_input` component (with a `button`) the player types in, with a cursor, selection
+  (mouse drag, Shift), word moves (Ctrl), the clipboard (Ctrl+A/C/X/V), a placeholder, a password mode,
+  `max_length` and filters (`digits`, `number`, `name`, `address`). Every change calls `on_change(text)`,
+  Return calls `on_submit(text)`, Escape restores the text from before editing. ASCII only (bitmap fonts).
+- While a field edits, keys type instead of driving input actions, and the window composes text (keyboard
+  layout, IME). A key still held when typing ends (the Return that submitted) waits for its release before
+  it drives actions again.
+- Scripts: `wpe.ui_value` reads and sets a field's text; `wpe.ui_edit(field | nil)` and `wpe.ui_editing()`.
+- Input: `wpe_input_text`, `wpe_input_key_typed` (presses plus key repeats), `wpe_input_set_keyboard_actions`;
+  the key codes `WPE_KEY_HOME`, `_DELETE`, `_END`, `_KP_ENTER`. Platform: `wpe_clipboard_set_text`, `wpe_clipboard_text`.
+- Editor: **+ Entity > Text field**, and `text_input` in Add component.
+
+### Changed
+- `racing_online`'s menu types the host's address and the player's name in text fields instead of scanning
+  keys (any keyboard layout works now; Return on the row types, Return again joins or keeps the name).
 ### Added (templates: the shooter)
 - `shooter` template: a first-person shooter to build on. A gun model in front of the camera
   (`scripts/gun.luau`) shooting rays from the screen's center, with a muzzle flash and light, recoil and

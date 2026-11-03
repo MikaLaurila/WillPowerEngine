@@ -96,6 +96,7 @@ enum WPE_BuiltinComponent {
     WPE_COMP_NET_IDENTITY = 27, /* Networked entities (engine/replication.h). */
     WPE_COMP_NAV_AGENT = 28,    /* Navigation agents and obstacles (navigation/nav_agents.h). */
     WPE_COMP_NAV_OBSTACLE = 29,
+    WPE_COMP_TEXT_INPUT = 30, /* UI text fields (ui/ui.h). */
     WPE_COMP_USER_FIRST = 32,
 };
 

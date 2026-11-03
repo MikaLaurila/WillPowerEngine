@@ -655,6 +655,240 @@ static void test_ui_navigation_uses_project_actions(void) {
     destroy_fixture(&f);
 }
 
+/* ---- Text fields ----------------------------------------------------------------------------------- */
+
+static void push_text(const char* text) {
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = SDL_EVENT_TEXT_INPUT;
+    e.text.text = text; /* A literal: it outlives the queue. */
+    WPE_TEST_ASSERT(SDL_PushEvent(&e));
+}
+
+static void type_text(Fixture* f, const char* text) {
+    push_text(text);
+    frame(f, 0.016f);
+}
+
+/* Taps `key` with `modifier` held. */
+static void chord(Fixture* f, SDL_Scancode modifier, SDL_Scancode key) {
+    push_key(modifier, true);
+    push_key(key, true);
+    frame(f, 0.016f);
+    push_key(key, false);
+    push_key(modifier, false);
+    frame(f, 0.016f);
+}
+
+static WPE_Entity add_field(Fixture* f, float x, float y, const char* value) {
+    const WPE_Entity e = add_element(f, WPE_ENTITY_NULL, fixed(x, y, 100, 12));
+    const WPE_Button button = wpe_button_default();
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f->ecs, e, WPE_COMP_BUTTON, &button, NULL));
+    WPE_TextInput field = wpe_text_input_default();
+    field.value = (char*)value; /* The add hook copies it. */
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f->ecs, e, WPE_COMP_TEXT_INPUT, &field, NULL));
+    return e;
+}
+
+static const char* field_text(const Fixture* f, WPE_Entity e) {
+    return wpe_ui_input_text(f->ecs, e);
+}
+
+static uint32_t submit_count(const Fixture* f) {
+    uint32_t count = 0;
+    wpe_ui_submits(f->ui, &count);
+    return count;
+}
+
+static void test_ui_text_field_editing(void) {
+    Fixture f = make_fixture(true);
+    const WPE_Entity field = add_field(&f, 10, 10, "ab");
+    const WPE_Entity below = add_button(&f, 10, 40);
+    wpe_input_begin_frame(f.input);
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_ui_editing(f.ui));
+
+    /* A click past the text edits with the cursor at its end; typing inserts and reports each change. */
+    click_at(&f, 100, 15);
+    WPE_TEST_ASSERT_EQ_UINT(field, wpe_ui_editing(f.ui));
+    WPE_TEST_ASSERT(
+        ((const WPE_TextInput*)wpe_ecs_get_component(f.ecs, field, WPE_COMP_TEXT_INPUT))->editing);
+    push_text("cd");
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT_EQ_STR("abcd", field_text(&f, field));
+    WPE_TEST_ASSERT_EQ_UINT(1, change_count(&f));
+    tap(&f, SDL_SCANCODE_BACKSPACE);
+    WPE_TEST_ASSERT_EQ_STR("abc", field_text(&f, field));
+    tap(&f, SDL_SCANCODE_LEFT);
+    tap(&f, SDL_SCANCODE_LEFT);
+    type_text(&f, "X");
+    WPE_TEST_ASSERT_EQ_STR("aXbc", field_text(&f, field));
+    tap(&f, SDL_SCANCODE_DELETE);
+    WPE_TEST_ASSERT_EQ_STR("aXc", field_text(&f, field));
+    /* Home, then Shift+End selects everything; typing replaces the selection. */
+    tap(&f, SDL_SCANCODE_HOME);
+    chord(&f, SDL_SCANCODE_LSHIFT, SDL_SCANCODE_END);
+    type_text(&f, "z");
+    WPE_TEST_ASSERT_EQ_STR("z", field_text(&f, field));
+    /* Ctrl+A and Backspace empty it; Ctrl+Backspace deletes a word. */
+    chord(&f, SDL_SCANCODE_LCTRL, SDL_SCANCODE_A);
+    tap(&f, SDL_SCANCODE_BACKSPACE);
+    WPE_TEST_ASSERT_EQ_STR("", field_text(&f, field));
+    type_text(&f, "one two");
+    chord(&f, SDL_SCANCODE_LCTRL, SDL_SCANCODE_BACKSPACE);
+    WPE_TEST_ASSERT_EQ_STR("one ", field_text(&f, field));
+    /* Keys typed with Ctrl held type nothing (the layout's text event is ignored). */
+    push_key(SDL_SCANCODE_LCTRL, true);
+    push_text("q");
+    frame(&f, 0.016f);
+    push_key(SDL_SCANCODE_LCTRL, false);
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT_EQ_STR("one ", field_text(&f, field));
+
+    /* Escape puts back the text from before editing and stops. */
+    tap(&f, SDL_SCANCODE_ESCAPE);
+    WPE_TEST_ASSERT_EQ_STR("ab", field_text(&f, field));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_ui_editing(f.ui));
+    WPE_TEST_ASSERT_EQ_UINT(field, wpe_ui_focused(f.ui));
+    /* Typing no longer edits. */
+    type_text(&f, "q");
+    WPE_TEST_ASSERT_EQ_STR("ab", field_text(&f, field));
+
+    /* Return on the focused field edits; Return again submits (not a click). */
+    tap(&f, SDL_SCANCODE_RETURN);
+    WPE_TEST_ASSERT_EQ_UINT(field, wpe_ui_editing(f.ui));
+    type_text(&f, "1");
+    push_key(SDL_SCANCODE_RETURN, true);
+    WPE_TEST_ASSERT_EQ_UINT(0, frame(&f, 0.016f));
+    WPE_TEST_ASSERT_EQ_UINT(1, submit_count(&f));
+    uint32_t count = 0;
+    WPE_TEST_ASSERT_EQ_UINT(field, wpe_ui_submits(f.ui, &count)[0]);
+    push_key(SDL_SCANCODE_RETURN, false);
+    WPE_TEST_ASSERT_EQ_UINT(0, frame(&f, 0.016f)); /* The release doesn't click the field either. */
+    WPE_TEST_ASSERT_EQ_UINT(0, submit_count(&f));
+    WPE_TEST_ASSERT_EQ_STR("ab1", field_text(&f, field));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_ui_editing(f.ui));
+
+    /* Down leaves the field for the button below; a click elsewhere stops editing too. */
+    WPE_TEST_ASSERT(wpe_ui_edit(f.ui, field));
+    tap(&f, SDL_SCANCODE_DOWN);
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_ui_editing(f.ui));
+    WPE_TEST_ASSERT_EQ_UINT(below, wpe_ui_focused(f.ui));
+    WPE_TEST_ASSERT(wpe_ui_edit(f.ui, field));
+    click_at(&f, 150, 90);
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_ui_editing(f.ui));
+    /* Tab moves on as well. */
+    WPE_TEST_ASSERT(wpe_ui_edit(f.ui, field));
+    tap(&f, SDL_SCANCODE_TAB);
+    WPE_TEST_ASSERT_EQ_UINT(below, wpe_ui_focused(f.ui));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_ui_editing(f.ui));
+
+    /* Only fields edit; a hidden field stops editing. */
+    WPE_TEST_ASSERT(!wpe_ui_edit(f.ui, below));
+    WPE_TEST_ASSERT(wpe_ui_edit(f.ui, field));
+    ((WPE_UiRect*)wpe_ecs_get_component(f.ecs, field, WPE_COMP_UI))->visible = false;
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_ui_editing(f.ui));
+    destroy_fixture(&f);
+}
+
+static void test_ui_text_field_filters_and_limits(void) {
+    Fixture f = make_fixture(true);
+    const WPE_Entity field = add_field(&f, 10, 10, "");
+    WPE_TextInput* settings = wpe_ecs_get_component(f.ecs, field, WPE_COMP_TEXT_INPUT);
+    settings->filter = WPE_TEXT_FILTER_DIGITS;
+    settings->max_length = 3;
+    wpe_input_begin_frame(f.input);
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT(wpe_ui_edit(f.ui, field));
+    type_text(&f, "a1b2");
+    WPE_TEST_ASSERT_EQ_STR("12", field_text(&f, field));
+    type_text(&f, "345");
+    WPE_TEST_ASSERT_EQ_STR("123", field_text(&f, field));
+    /* Non-ASCII (UTF-8) characters are dropped: the fonts have no glyphs for them. */
+    settings = wpe_ecs_get_component(f.ecs, field, WPE_COMP_TEXT_INPUT);
+    settings->filter = WPE_TEXT_FILTER_ANY;
+    settings->max_length = 0;
+    chord(&f, SDL_SCANCODE_LCTRL, SDL_SCANCODE_A);
+    type_text(&f, "caf\xc3\xa9!");
+    WPE_TEST_ASSERT_EQ_STR("caf!", field_text(&f, field));
+    /* Numbers: one leading '-', one '.'. */
+    settings = wpe_ecs_get_component(f.ecs, field, WPE_COMP_TEXT_INPUT);
+    settings->filter = WPE_TEXT_FILTER_NUMBER;
+    chord(&f, SDL_SCANCODE_LCTRL, SDL_SCANCODE_A);
+    type_text(&f, "-1.5.-2");
+    WPE_TEST_ASSERT_EQ_STR("-1.52", field_text(&f, field));
+    tap(&f, SDL_SCANCODE_HOME);
+    type_text(&f, "-");
+    WPE_TEST_ASSERT_EQ_STR("-1.52", field_text(&f, field));
+    /* A rejected character leaves a selection alone. */
+    chord(&f, SDL_SCANCODE_LCTRL, SDL_SCANCODE_A);
+    type_text(&f, "x");
+    WPE_TEST_ASSERT_EQ_STR("-1.52", field_text(&f, field));
+    /* Names and addresses. */
+    settings = wpe_ecs_get_component(f.ecs, field, WPE_COMP_TEXT_INPUT);
+    settings->filter = WPE_TEXT_FILTER_NAME;
+    type_text(&f, "Ada L_1!");
+    WPE_TEST_ASSERT_EQ_STR("Ada L_1", field_text(&f, field));
+    settings = wpe_ecs_get_component(f.ecs, field, WPE_COMP_TEXT_INPUT);
+    settings->filter = WPE_TEXT_FILTER_ADDRESS;
+    chord(&f, SDL_SCANCODE_LCTRL, SDL_SCANCODE_A);
+    type_text(&f, "192.168.0.1:47 ");
+    WPE_TEST_ASSERT_EQ_STR("192.168.0.1:47", field_text(&f, field));
+
+    /* Setting the text from code cuts it at the limit and moves the cursor to the end. */
+    settings = wpe_ecs_get_component(f.ecs, field, WPE_COMP_TEXT_INPUT);
+    settings->max_length = 4;
+    WPE_TEST_ASSERT_OK(wpe_ui_set_input_text(f.ecs, field, "abcdef"));
+    WPE_TEST_ASSERT_EQ_STR("abcd", field_text(&f, field));
+    WPE_TEST_ASSERT_EQ_UINT(
+        4, ((const WPE_TextInput*)wpe_ecs_get_component(f.ecs, field, WPE_COMP_TEXT_INPUT))->cursor);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND,
+                           wpe_ui_set_input_text(f.ecs, wpe_ecs_spawn(f.ecs), "x"));
+    WPE_TEST_ASSERT(wpe_ui_input_text(f.ecs, wpe_ecs_spawn(f.ecs)) == NULL);
+
+    /* A copied entity owns its own strings. */
+    const WPE_Entity copy = add_field(&f, 10, 40, field_text(&f, field));
+    WPE_TEST_ASSERT_OK(wpe_ui_set_input_text(f.ecs, field, "zz"));
+    WPE_TEST_ASSERT_EQ_STR("abcd", field_text(&f, copy));
+    destroy_fixture(&f); /* Despawning an editing field frees its strings (the leak check). */
+}
+
+static void test_ui_draws_text_fields(void) {
+    Fixture f = make_fixture(false);
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 120, .height = 32}, &renderer));
+    const WPE_Entity field = add_field(&f, 2, 2, "");
+    WPE_TextInput* settings = wpe_ecs_get_component(f.ecs, field, WPE_COMP_TEXT_INPUT);
+    settings->cursor_color = wpe_vec4(1, 0, 0, 1);
+    settings->placeholder_color = wpe_vec4(0, 1, 0, 1);
+    WPE_TEST_ASSERT_OK(wpe_ui_set_input_text(f.ecs, field, ""));
+    /* The placeholder shows while empty and not editing. */
+    char* hint = wpe_alloc(5);
+    memcpy(hint, "name", 5);
+    wpe_free(settings->placeholder);
+    settings->placeholder = hint;
+    const WPE_Framebuffer* fb = draw(&f, renderer);
+    WPE_TEST_ASSERT(count_color(fb, 0xFF00FF00u) > 0);
+    WPE_TEST_ASSERT_EQ_UINT(0, count_color(fb, 0xFFFF0000u));
+    /* Editing: no placeholder, a cursor. */
+    WPE_TEST_ASSERT_OK(wpe_ui_layout(f.ui, 120, 32));
+    WPE_TEST_ASSERT(wpe_ui_edit(f.ui, field));
+    fb = draw(&f, renderer);
+    WPE_TEST_ASSERT_EQ_UINT(0, count_color(fb, 0xFF00FF00u));
+    WPE_TEST_ASSERT(count_color(fb, 0xFFFF0000u) > 0);
+    /* A password draws stars: the same pixels for any text of one length. */
+    settings = wpe_ecs_get_component(f.ecs, field, WPE_COMP_TEXT_INPUT);
+    settings->password = true;
+    wpe_ui_edit(f.ui, WPE_ENTITY_NULL);
+    WPE_TEST_ASSERT_OK(wpe_ui_set_input_text(f.ecs, field, "abc"));
+    const uint32_t white = count_color(draw(&f, renderer), 0xFFFFFFFFu);
+    WPE_TEST_ASSERT(white > 0);
+    WPE_TEST_ASSERT_OK(wpe_ui_set_input_text(f.ecs, field, "xyz"));
+    WPE_TEST_ASSERT_EQ_UINT(white, count_color(draw(&f, renderer), 0xFFFFFFFFu));
+    wpe_renderer_destroy(renderer);
+    destroy_fixture(&f);
+}
 static void test_ui_create_validates(void) {
     WPE_Ui* ui = NULL;
     WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_ui_create(NULL, &ui));
@@ -666,12 +900,11 @@ static void test_ui_create_validates(void) {
     destroy_fixture(&f);
 }
 
-WPE_TEST_MAIN(WPE_TEST_CASE(test_ui_layout_anchors_and_visibility),
-              WPE_TEST_CASE(test_ui_pick_follows_drawing_order),
-              WPE_TEST_CASE(test_ui_draws_sprites_with_button_tints),
-              WPE_TEST_CASE(test_ui_nine_slice_keeps_borders),
-              WPE_TEST_CASE(test_ui_text_alignment_and_wrapping),
-              WPE_TEST_CASE(test_ui_keyboard_navigation_and_clicks),
-              WPE_TEST_CASE(test_ui_mouse_focus_and_clicks), WPE_TEST_CASE(test_ui_toggles_and_sliders),
-              WPE_TEST_CASE(test_ui_draws_toggles_and_sliders),
-              WPE_TEST_CASE(test_ui_navigation_uses_project_actions), WPE_TEST_CASE(test_ui_create_validates))
+WPE_TEST_MAIN(
+    WPE_TEST_CASE(test_ui_layout_anchors_and_visibility), WPE_TEST_CASE(test_ui_pick_follows_drawing_order),
+    WPE_TEST_CASE(test_ui_draws_sprites_with_button_tints), WPE_TEST_CASE(test_ui_nine_slice_keeps_borders),
+    WPE_TEST_CASE(test_ui_text_alignment_and_wrapping), WPE_TEST_CASE(test_ui_keyboard_navigation_and_clicks),
+    WPE_TEST_CASE(test_ui_mouse_focus_and_clicks), WPE_TEST_CASE(test_ui_toggles_and_sliders),
+    WPE_TEST_CASE(test_ui_draws_toggles_and_sliders), WPE_TEST_CASE(test_ui_navigation_uses_project_actions),
+    WPE_TEST_CASE(test_ui_text_field_editing), WPE_TEST_CASE(test_ui_text_field_filters_and_limits),
+    WPE_TEST_CASE(test_ui_draws_text_fields), WPE_TEST_CASE(test_ui_create_validates))

@@ -61,10 +61,14 @@ enum WPE_KeyCode {
     WPE_KEY_SPACE = 44,
     WPE_KEY_F1 = 58, /* F1..F12 are consecutive. */
     WPE_KEY_F12 = 69,
+    WPE_KEY_HOME = 74,
+    WPE_KEY_DELETE = 76,
+    WPE_KEY_END = 77,
     WPE_KEY_RIGHT = 79,
     WPE_KEY_LEFT = 80,
     WPE_KEY_DOWN = 81,
     WPE_KEY_UP = 82,
+    WPE_KEY_KP_ENTER = 88,
     WPE_KEY_LCTRL = 224,
     WPE_KEY_LSHIFT = 225,
     WPE_KEY_LALT = 226,
@@ -247,6 +251,30 @@ float wpe_input_action_value(const WPE_Input* input, WPE_InputAction action, uin
 bool wpe_input_key_down(const WPE_Input* input, WPE_Key key);
 bool wpe_input_key_pressed(const WPE_Input* input, WPE_Key key);
 bool wpe_input_key_released(const WPE_Input* input, WPE_Key key);
+
+/* ---- Typing (text fields; the window must have text input on, wpe_window_set_text_input()) ---------- */
+
+/** Most bytes of text one frame collects (more is dropped, whole characters at a time). */
+#define WPE_INPUT_TEXT_MAX 256u
+
+/** @return What was typed this frame, as UTF-8 (as the keyboard layout composes it: "A" with Shift, "ä" on
+ * a Finnish keyboard); "" when nothing was. Borrowed until the next frame. @thread_safety Main thread */
+const char* wpe_input_text(const WPE_Input* input);
+
+/** @return How many times a key went down this frame, the operating system's key repeats included (hold
+ * Backspace to delete several characters). @thread_safety Main thread */
+uint32_t wpe_input_key_typed(const WPE_Input* input, WPE_Key key);
+
+/**
+ * Whether keys drive actions (default true). While a text field takes the keyboard, the engine turns it
+ * off, so typing "w" in a name doesn't also walk forward; mouse buttons and gamepads keep working, and the
+ * key functions above still report every key. Turning it back on leaves keys that are still held (the
+ * Return that ended the typing) silent until they are released. Takes effect at the next wpe_input_update.
+ *
+ * @thread_safety Main thread
+ */
+void wpe_input_set_keyboard_actions(WPE_Input* input, bool enabled);
+bool wpe_input_keyboard_actions(const WPE_Input* input);
 
 bool wpe_input_mouse_down(const WPE_Input* input, WPE_MouseButton button);
 bool wpe_input_mouse_pressed(const WPE_Input* input, WPE_MouseButton button);

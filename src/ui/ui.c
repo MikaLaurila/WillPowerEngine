@@ -7,6 +7,7 @@
 #include "core/alloc.h"
 #include "core/debug.h"
 #include "core/log.h"
+#include "platform/platform.h"
 #include "scene/scene.h"
 
 #define WPE__NAV_DELAY 0.4f   /* Seconds a held direction waits before repeating. */
@@ -40,9 +41,13 @@ struct WPE_Ui {
     uint32_t root_capacity;
     WPE_Entity* clicks;
     uint32_t click_count, click_capacity;
-    WPE_Entity* changes; /* Toggles and sliders the player changed this update. */
+    WPE_Entity* changes; /* Toggles, sliders and text fields the player changed this update. */
     uint32_t change_count, change_capacity;
-    wpe__Line* lines; /* Scratch for text. */
+    WPE_Entity* submits; /* Text fields submitted (Return) this update. */
+    uint32_t submit_count, submit_capacity;
+    WPE_Entity editing;   /* The text field being edited. */
+    WPE_Entity selecting; /* The text field the mouse drags a selection in. */
+    wpe__Line* lines;     /* Scratch for text. */
     uint32_t line_capacity;
     WPE_Entity focus;
     WPE_Entity mouse_target;  /* The button the left mouse button went down on. */
@@ -76,6 +81,13 @@ WPE_Button wpe_button_default(void) {
 
 WPE_Toggle wpe_toggle_default(void) {
     return (WPE_Toggle){.mark_color = wpe_vec4(1, 1, 1, 1), .mark_inset = 3.0f};
+}
+
+WPE_TextInput wpe_text_input_default(void) {
+    return (WPE_TextInput){.placeholder_color = wpe_vec4(1, 1, 1, 0.45f),
+                           .cursor_color = wpe_vec4(1, 1, 1, 1),
+                           .selection_color = wpe_vec4(0.3f, 0.5f, 1.0f, 0.55f),
+                           .padding = 3.0f};
 }
 
 WPE_Slider wpe_slider_default(void) {
@@ -149,6 +161,33 @@ static void wpe__text_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component
     text->glyphs = NULL;
 }
 
+static void wpe__text_input_on_add(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
+    (void)ecs;
+    (void)user_data;
+    WPE_TextInput* field = component;
+    field->value = wpe__copy_string(field->value ? field->value : "");
+    field->placeholder = wpe__copy_string(field->placeholder ? field->placeholder : "");
+    if (!field->value || !field->placeholder)
+        wpe_log_error("out of memory copying the text field of 0x%08x", entity);
+    /* A copy of another field starts fresh: not editing, the cursor at the end. */
+    field->editing = false;
+    field->cursor = field->anchor = field->value ? (uint32_t)strlen(field->value) : 0;
+    field->scroll = 0.0f;
+    field->blink = 0.0f;
+    field->wpe__before = NULL;
+}
+
+static void wpe__text_input_on_remove(WPE_Ecs* ecs, WPE_Entity entity, void* component, void* user_data) {
+    (void)ecs;
+    (void)entity;
+    (void)user_data;
+    WPE_TextInput* field = component;
+    wpe_free(field->value);
+    wpe_free(field->placeholder);
+    wpe_free(field->wpe__before);
+    field->value = field->placeholder = field->wpe__before = NULL;
+}
+
 /* ---- Lifecycle ------------------------------------------------------------------------------------ */
 
 WPE_Result wpe_ui_create(const WPE_UiDesc* desc, WPE_Ui** out_ui) {
@@ -176,6 +215,12 @@ WPE_Result wpe_ui_create(const WPE_UiDesc* desc, WPE_Ui** out_ui) {
         {WPE_COMP_BUTTON, {.name = "Button", .size = sizeof(WPE_Button), .alignment = alignof(WPE_Button)}},
         {WPE_COMP_TOGGLE, {.name = "Toggle", .size = sizeof(WPE_Toggle), .alignment = alignof(WPE_Toggle)}},
         {WPE_COMP_SLIDER, {.name = "Slider", .size = sizeof(WPE_Slider), .alignment = alignof(WPE_Slider)}},
+        {WPE_COMP_TEXT_INPUT,
+         {.name = "TextInput",
+          .size = sizeof(WPE_TextInput),
+          .alignment = alignof(WPE_TextInput),
+          .on_add = wpe__text_input_on_add,
+          .on_remove = wpe__text_input_on_remove}},
     };
     for (size_t i = 0; i < sizeof components / sizeof components[0]; ++i) {
         const WPE_Result result =
@@ -218,6 +263,7 @@ void wpe_ui_destroy(WPE_Ui* ui) {
     wpe_free(ui->roots);
     wpe_free(ui->clicks);
     wpe_free(ui->changes);
+    wpe_free(ui->submits);
     wpe_free(ui->lines);
     wpe_free(ui);
 }
@@ -353,6 +399,13 @@ WPE_Entity wpe_ui_pick(const WPE_Ui* ui, float x, float y, bool any_element) {
     return WPE_ENTITY_NULL;
 }
 
+/* Text fields (defined with their section, below). */
+static void wpe__stop_editing(WPE_Ui* ui);
+static void wpe__start_editing(WPE_Ui* ui, WPE_Entity entity);
+static void wpe__field_mouse(WPE_Ui* ui, WPE_Entity hovered);
+static void wpe__field_keys(WPE_Ui* ui, float dt);
+static WPE_TextInput* wpe__field(const WPE_Ui* ui, WPE_Entity entity);
+
 /* Whether a button can take the focus: alive, shown by the last layout and interactable. */
 static bool wpe__focusable(const WPE_Ui* ui, WPE_Entity entity) {
     const WPE_Button* button = wpe_ecs_get_component(ui->ecs, entity, WPE_COMP_BUTTON);
@@ -371,6 +424,7 @@ static WPE_Entity wpe__owning_button(const WPE_Ui* ui, WPE_Entity entity) {
 bool wpe_ui_focus(WPE_Ui* ui, WPE_Entity button) {
     if (!ui) return false;
     if (button != WPE_ENTITY_NULL && !wpe__focusable(ui, button)) return false;
+    if (button != ui->editing) wpe__stop_editing(ui);
     ui->focus = button;
     return true;
 }
@@ -566,7 +620,10 @@ static WPE_Entity wpe__mouse_input(WPE_Ui* ui) {
     WPE_Entity hovered = wpe__owning_button(ui, wpe_ui_pick(ui, x, y, false));
     if (hovered != WPE_ENTITY_NULL && !wpe__focusable(ui, hovered)) hovered = WPE_ENTITY_NULL;
     const bool pressed = wpe_input_mouse_pressed(ui->input, WPE_MOUSE_LEFT);
-    if (hovered != WPE_ENTITY_NULL && (dx != 0.0f || dy != 0.0f || pressed)) ui->focus = hovered;
+    /* While a field edits, only a press moves the focus (passing over buttons doesn't). */
+    if (hovered != WPE_ENTITY_NULL && (dx != 0.0f || dy != 0.0f || pressed) &&
+        (ui->editing == WPE_ENTITY_NULL || pressed))
+        ui->focus = hovered;
     if (pressed) ui->mouse_target = hovered;
     if (wpe_input_mouse_released(ui->input, WPE_MOUSE_LEFT)) {
         if (ui->mouse_target != WPE_ENTITY_NULL && ui->mouse_target == hovered) wpe__click(ui, hovered);
@@ -579,8 +636,13 @@ WPE_Result wpe_ui_update(WPE_Ui* ui, uint32_t width, uint32_t height, float dt) 
     if (!ui) return WPE_RESULT_ERROR_NULL_ARG;
     ui->click_count = 0;
     ui->change_count = 0;
+    ui->submit_count = 0;
     const WPE_Result result = wpe_ui_layout(ui, width, height);
     if (result != WPE_RESULT_OK) return result;
+    /* A field that went away, hid or lost the focus stops editing. */
+    if (ui->editing != WPE_ENTITY_NULL &&
+        (!wpe__focusable(ui, ui->editing) || !wpe__field(ui, ui->editing) || ui->focus != ui->editing))
+        wpe__stop_editing(ui);
     /* Buttons that were removed, hidden or disabled let go of the focus and of presses. */
     if (ui->focus != WPE_ENTITY_NULL && !wpe__focusable(ui, ui->focus)) ui->focus = WPE_ENTITY_NULL;
     if (ui->mouse_target != WPE_ENTITY_NULL && !wpe__focusable(ui, ui->mouse_target))
@@ -600,8 +662,17 @@ WPE_Result wpe_ui_update(WPE_Ui* ui, uint32_t width, uint32_t height, float dt) 
         wpe__slide_to(ui, ui->mouse_target, dragged,
                       wpe__slider_value_at(dragged, wpe__element(ui, ui->mouse_target)->rect, x));
     }
-    wpe__navigate(ui, dt);
-    wpe__submit_input(ui);
+    const WPE_Entity was_editing = ui->editing;
+    wpe__field_mouse(ui, hovered);
+    if (ui->editing != WPE_ENTITY_NULL) {
+        /* The keyboard types. A field that just started editing takes keys from the next frame. */
+        if (ui->editing == was_editing) wpe__field_keys(ui, dt);
+    } else if (wpe__field(ui, ui->focus) && wpe__submit(ui->input).pressed) {
+        wpe__start_editing(ui, ui->focus); /* Submitting a field edits it (no click). */
+    } else {
+        wpe__navigate(ui, dt);
+        wpe__submit_input(ui);
+    }
     if (ui->submit_target != WPE_ENTITY_NULL) {
         ui->pressed = ui->submit_target;
     } else if (ui->mouse_target != WPE_ENTITY_NULL && ui->mouse_target == hovered &&
@@ -619,6 +690,395 @@ const WPE_Entity* wpe_ui_clicks(const WPE_Ui* ui, uint32_t* out_count) {
 const WPE_Entity* wpe_ui_changes(const WPE_Ui* ui, uint32_t* out_count) {
     if (out_count) *out_count = ui ? ui->change_count : 0;
     return ui ? ui->changes : NULL;
+}
+
+/* ---- Text fields ---------------------------------------------------------------------------------- */
+
+#define WPE__FIELD_MAX 256u /* Characters when max_length is 0. */
+#define WPE__FIELD_LIMIT 4096u
+#define WPE__BLINK 1.0f /* Seconds per cursor blink (shown the first half). */
+
+static WPE_TextInput* wpe__field(const WPE_Ui* ui, WPE_Entity entity) {
+    return entity != WPE_ENTITY_NULL ? wpe_ecs_get_component(ui->ecs, entity, WPE_COMP_TEXT_INPUT) : NULL;
+}
+
+static const char* wpe__field_value(const WPE_TextInput* field) {
+    return field->value ? field->value : "";
+}
+
+static uint32_t wpe__field_max(const WPE_TextInput* field) {
+    const uint32_t max = field->max_length ? field->max_length : WPE__FIELD_MAX;
+    return max < WPE__FIELD_LIMIT ? max : WPE__FIELD_LIMIT;
+}
+
+static bool wpe__is_alnum(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+/* Whether `c` may go in at `at` (number filters look at the rest of the text). */
+static bool wpe__accepts(const WPE_TextInput* field, const char* value, uint32_t at, char c) {
+    if (c < 32 || c > 126) return false; /* The fonts' glyphs. */
+    switch (field->filter) {
+    case WPE_TEXT_FILTER_DIGITS:
+        return c >= '0' && c <= '9';
+    case WPE_TEXT_FILTER_NUMBER:
+        if (c >= '0' && c <= '9') return true;
+        if (c == '-') return at == 0 && value[0] != '-';
+        return c == '.' && !strchr(value, '.');
+    case WPE_TEXT_FILTER_NAME:
+        return wpe__is_alnum(c) || c == ' ' || c == '_' || c == '-' || c == '.';
+    case WPE_TEXT_FILTER_ADDRESS:
+        return wpe__is_alnum(c) || c == '.' || c == ':' || c == '-' || c == '[' || c == ']';
+    case WPE_TEXT_FILTER_ANY:
+        break;
+    }
+    return true;
+}
+
+/* Replaces [from, to) with `insert` (n bytes); the cursor ends after it. @return false when out of memory. */
+static bool wpe__replace(WPE_TextInput* field, uint32_t from, uint32_t to, const char* insert, size_t n) {
+    const char* value = wpe__field_value(field);
+    const size_t length = strlen(value);
+    char* next = wpe_alloc(length - (to - from) + n + 1);
+    if (!next) {
+        wpe_log_error("out of memory editing a text field");
+        return false;
+    }
+    memcpy(next, value, from);
+    memcpy(next + from, insert, n);
+    memcpy(next + from + n, value + to, length - to + 1);
+    wpe_free(field->value);
+    field->value = next;
+    field->cursor = field->anchor = from + (uint32_t)n;
+    return true;
+}
+
+static uint32_t wpe__selection_lo(const WPE_TextInput* f) {
+    return f->cursor < f->anchor ? f->cursor : f->anchor;
+}
+
+static uint32_t wpe__selection_hi(const WPE_TextInput* f) {
+    return f->cursor < f->anchor ? f->anchor : f->cursor;
+}
+
+/* Inserts typed or pasted text where the cursor is (over the selection), keeping what the filter accepts and
+ * what fits. @return Whether the text changed. */
+static bool wpe__type(WPE_TextInput* field, const char* text) {
+    const uint32_t lo = wpe__selection_lo(field), hi = wpe__selection_hi(field);
+    const char* value = wpe__field_value(field);
+    const size_t length = strlen(value) - (hi - lo);
+    char accepted[WPE__FIELD_LIMIT];
+    size_t n = 0;
+    for (const char* c = text; *c && length + n < wpe__field_max(field); ++c) {
+        /* The text as it would be so far (for the number filter's one '-' and one '.'). */
+        char sample[2 * WPE__FIELD_LIMIT + 1];
+        const size_t tail = strlen(value + hi);
+        memcpy(sample, value, lo);
+        memcpy(sample + lo, accepted, n);
+        memcpy(sample + lo + n, value + hi, tail + 1);
+        if (wpe__accepts(field, sample, lo + (uint32_t)n, *c)) accepted[n++] = *c;
+    }
+    if (n == 0) return false; /* Nothing accepted: a selection stays, too. */
+    return wpe__replace(field, lo, hi, accepted, n);
+}
+
+/* Where the cursor lands moving by a word: the next word's start going right, the current one's going left.
+ */
+static uint32_t wpe__word(const char* value, uint32_t from, int direction) {
+    uint32_t at = from;
+    const uint32_t length = (uint32_t)strlen(value);
+    if (direction < 0) {
+        while (at > 0 && !wpe__is_alnum(value[at - 1]))
+            --at;
+        while (at > 0 && wpe__is_alnum(value[at - 1]))
+            --at;
+    } else {
+        while (at < length && wpe__is_alnum(value[at]))
+            ++at;
+        while (at < length && !wpe__is_alnum(value[at]))
+            ++at;
+    }
+    return at;
+}
+
+/* The font and scale a field draws with: its entity's text, else the UI's default font at scale 1. */
+static const WPE_BitmapFont* wpe__field_font(const WPE_Ui* ui, WPE_Entity entity, float* out_scale) {
+    const WPE_Text* text = wpe_ecs_get_component(ui->ecs, entity, WPE_COMP_TEXT);
+    *out_scale = text && text->scale > 0.0f ? text->scale : 1.0f;
+    return text && text->glyphs ? text->glyphs : wpe_asset_font(ui->assets, ui->font);
+}
+
+static char wpe__shown_char(const WPE_TextInput* field, const char* value, uint32_t i) {
+    return field->password ? '*' : value[i];
+}
+
+/* The x of the gap before character `index`, in pixels from the text's start. */
+static float wpe__caret_x(const WPE_BitmapFont* font, float scale, const WPE_TextInput* field,
+                          uint32_t index) {
+    const char* value = wpe__field_value(field);
+    float x = 0.0f;
+    for (uint32_t i = 0; i < index && value[i]; ++i)
+        x += (float)(wpe_font_glyph(font, wpe__shown_char(field, value, i))->width + font->glyph_spacing) *
+             scale;
+    return x;
+}
+
+/* The character gap nearest to `x` (pixels from the text's start). */
+static uint32_t wpe__caret_at(const WPE_BitmapFont* font, float scale, const WPE_TextInput* field, float x) {
+    const char* value = wpe__field_value(field);
+    float left = 0.0f;
+    uint32_t i = 0;
+    for (; value[i]; ++i) {
+        const float advance =
+            (float)(wpe_font_glyph(font, wpe__shown_char(field, value, i))->width + font->glyph_spacing) *
+            scale;
+        if (x < left + advance * 0.5f) return i;
+        left += advance;
+    }
+    return i;
+}
+
+/* Scrolls the field so its cursor stays inside it. */
+static void wpe__scroll_to_cursor(const WPE_Ui* ui, WPE_Entity entity, WPE_TextInput* field) {
+    float scale;
+    const WPE_BitmapFont* font = wpe__field_font(ui, entity, &scale);
+    const WPE_UiRect* element = wpe__element(ui, entity);
+    if (!font || !element) return;
+    const float inner = element->rect.width - 2.0f * field->padding;
+    const float caret = wpe__caret_x(font, scale, field, field->cursor);
+    const float total = wpe__caret_x(font, scale, field, (uint32_t)strlen(wpe__field_value(field)));
+    if (caret - field->scroll > inner - scale) field->scroll = caret - inner + scale;
+    if (caret - field->scroll < 0.0f) field->scroll = caret;
+    /* No empty space past the end while text is hidden on the left. */
+    const float most = total + scale - inner;
+    if (field->scroll > most) field->scroll = most > 0.0f ? most : 0.0f;
+}
+
+static void wpe__stop_editing(WPE_Ui* ui) {
+    WPE_TextInput* field = wpe__field(ui, ui->editing);
+    if (field) {
+        field->editing = false;
+        field->scroll = 0.0f;
+        field->anchor = field->cursor;
+        wpe_free(field->wpe__before);
+        field->wpe__before = NULL;
+    }
+    ui->editing = WPE_ENTITY_NULL;
+    ui->selecting = WPE_ENTITY_NULL;
+}
+
+static void wpe__start_editing(WPE_Ui* ui, WPE_Entity entity) {
+    if (ui->editing == entity) return;
+    wpe__stop_editing(ui);
+    WPE_TextInput* field = wpe__field(ui, entity);
+    if (!field) return;
+    ui->editing = entity;
+    ui->focus = entity;
+    field->editing = true;
+    field->blink = 0.0f;
+    field->cursor = field->anchor = (uint32_t)strlen(wpe__field_value(field));
+    field->wpe__before = wpe__copy_string(wpe__field_value(field));
+}
+
+static void wpe__submitted(WPE_Ui* ui, WPE_Entity entity) {
+    if (!wpe__reserve((void**)&ui->submits, &ui->submit_capacity, ui->submit_count + 1,
+                      sizeof *ui->submits)) {
+        wpe_log_error("out of memory: a submit of 0x%08x was not reported", entity);
+        return;
+    }
+    ui->submits[ui->submit_count++] = entity;
+}
+
+/* The next (or previous) focusable element in drawing order, wrapping around. */
+static WPE_Entity wpe__tab_order(const WPE_Ui* ui, WPE_Entity from, int direction) {
+    if (ui->order_count == 0) return WPE_ENTITY_NULL;
+    uint32_t start = 0;
+    for (uint32_t i = 0; i < ui->order_count; ++i) {
+        if (ui->order[i] == from) start = i;
+    }
+    for (uint32_t step = 1; step <= ui->order_count; ++step) {
+        const uint32_t i = (start + ui->order_count + (uint32_t)((int)step * direction)) % ui->order_count;
+        if (wpe__focusable(ui, ui->order[i])) return ui->order[i];
+    }
+    return WPE_ENTITY_NULL;
+}
+
+/* The mouse in text fields: a press starts editing with the cursor there, dragging selects, a press anywhere
+ * else stops editing. */
+static void wpe__field_mouse(WPE_Ui* ui, WPE_Entity hovered) {
+    if (wpe_input_mouse_captured(ui->input)) return;
+    float x, y;
+    wpe_input_mouse_position(ui->input, &x, &y);
+    const bool pressed = wpe_input_mouse_pressed(ui->input, WPE_MOUSE_LEFT);
+    if (pressed) {
+        if (wpe__field(ui, hovered)) {
+            wpe__start_editing(ui, hovered);
+            ui->selecting = hovered;
+        } else {
+            wpe__stop_editing(ui);
+        }
+    }
+    WPE_TextInput* field = wpe__field(ui, ui->selecting);
+    if (field && field->editing && wpe_input_mouse_down(ui->input, WPE_MOUSE_LEFT)) {
+        float scale;
+        const WPE_BitmapFont* font = wpe__field_font(ui, ui->selecting, &scale);
+        if (font) {
+            const float local = x - wpe__element(ui, ui->selecting)->rect.x - field->padding + field->scroll;
+            field->cursor = wpe__caret_at(font, scale, field, local);
+            if (pressed) field->anchor = field->cursor;
+            field->blink = 0.0f;
+        }
+    } else {
+        ui->selecting = WPE_ENTITY_NULL;
+    }
+}
+
+/* The keyboard while a field edits. */
+static void wpe__field_keys(WPE_Ui* ui, float dt) {
+    const WPE_Entity entity = ui->editing;
+    WPE_TextInput* field = wpe__field(ui, entity);
+    if (!field) return;
+    const WPE_Input* in = ui->input;
+    const bool ctrl = wpe_input_key_down(in, WPE_KEY_LCTRL) || wpe_input_key_down(in, WPE_KEY_RCTRL);
+    const bool shift = wpe_input_key_down(in, WPE_KEY_LSHIFT) || wpe_input_key_down(in, WPE_KEY_RSHIFT);
+    bool changed = false, moved = false;
+    /* Typed characters (the layout's; Ctrl shortcuts type nothing). */
+    if (!ctrl && wpe_input_text(in)[0]) changed |= wpe__type(field, wpe_input_text(in));
+    for (uint32_t n = wpe_input_key_typed(in, WPE_KEY_BACKSPACE); n > 0; --n) {
+        const uint32_t lo = wpe__selection_lo(field), hi = wpe__selection_hi(field);
+        const uint32_t from = lo != hi ? lo
+                              : ctrl   ? wpe__word(wpe__field_value(field), lo, -1)
+                              : lo > 0 ? lo - 1
+                                       : 0;
+        if (from != hi) changed |= wpe__replace(field, from, hi, "", 0);
+    }
+    for (uint32_t n = wpe_input_key_typed(in, WPE_KEY_DELETE); n > 0; --n) {
+        const uint32_t lo = wpe__selection_lo(field), hi = wpe__selection_hi(field);
+        const uint32_t length = (uint32_t)strlen(wpe__field_value(field));
+        const uint32_t to = lo != hi      ? hi
+                            : ctrl        ? wpe__word(wpe__field_value(field), hi, 1)
+                            : hi < length ? hi + 1
+                                          : hi;
+        if (to != lo) changed |= wpe__replace(field, lo, to, "", 0);
+    }
+    const uint32_t length = (uint32_t)strlen(wpe__field_value(field));
+    for (int dir = -1; dir <= 1; dir += 2) {
+        const WPE_Key key = dir < 0 ? WPE_KEY_LEFT : WPE_KEY_RIGHT;
+        for (uint32_t n = wpe_input_key_typed(in, key); n > 0; --n) {
+            const uint32_t lo = wpe__selection_lo(field), hi = wpe__selection_hi(field);
+            uint32_t to;
+            if (ctrl) {
+                to = wpe__word(wpe__field_value(field), field->cursor, dir);
+            } else if (lo != hi && !shift) {
+                to = dir < 0 ? lo : hi; /* Collapse the selection to its side. */
+            } else {
+                to = dir < 0 ? (field->cursor > 0 ? field->cursor - 1 : 0)
+                             : (field->cursor < length ? field->cursor + 1 : length);
+            }
+            field->cursor = to;
+            if (!shift) field->anchor = to;
+            moved = true;
+        }
+    }
+    if (wpe_input_key_typed(in, WPE_KEY_HOME) || wpe_input_key_typed(in, WPE_KEY_END)) {
+        field->cursor = wpe_input_key_typed(in, WPE_KEY_HOME) ? 0 : length;
+        if (!shift) field->anchor = field->cursor;
+        moved = true;
+    }
+    if (ctrl && wpe_input_key_typed(in, WPE_KEY_A)) {
+        field->anchor = 0;
+        field->cursor = length;
+        moved = true;
+    }
+    const uint32_t lo = wpe__selection_lo(field), hi = wpe__selection_hi(field);
+    if (ctrl &&
+        (wpe_input_key_typed(in, WPE_KEY_A + ('c' - 'a')) ||
+         wpe_input_key_typed(in, WPE_KEY_A + ('x' - 'a'))) &&
+        lo != hi && !field->password) {
+        char copy[WPE__FIELD_LIMIT + 1];
+        memcpy(copy, wpe__field_value(field) + lo, hi - lo);
+        copy[hi - lo] = '\0';
+        (void)wpe_clipboard_set_text(copy); /* Logged when there is no clipboard. */
+        if (wpe_input_key_typed(in, WPE_KEY_A + ('x' - 'a'))) changed |= wpe__replace(field, lo, hi, "", 0);
+    }
+    if (ctrl && wpe_input_key_typed(in, WPE_KEY_A + ('v' - 'a'))) {
+        char pasted[WPE__FIELD_LIMIT + 1];
+        if (wpe_clipboard_text(pasted, sizeof pasted) > 0) changed |= wpe__type(field, pasted);
+    }
+    field->blink = changed || moved ? 0.0f : field->blink + dt;
+    if (changed) wpe__changed(ui, entity);
+    wpe__scroll_to_cursor(ui, entity, field);
+
+    /* Leaving the field. */
+    if (wpe_input_key_typed(in, WPE_KEY_RETURN) || wpe_input_key_typed(in, WPE_KEY_KP_ENTER)) {
+        wpe__stop_editing(ui);
+        wpe__submitted(ui, entity);
+    } else if (wpe_input_key_typed(in, WPE_KEY_ESCAPE)) {
+        if (field->wpe__before && strcmp(field->wpe__before, wpe__field_value(field)) != 0) {
+            wpe_free(field->value);
+            field->value = field->wpe__before;
+            field->wpe__before = NULL;
+            field->cursor = field->anchor = (uint32_t)strlen(field->value);
+            wpe__changed(ui, entity);
+        }
+        wpe__stop_editing(ui);
+    } else if (wpe_input_key_typed(in, WPE_KEY_TAB)) {
+        wpe__stop_editing(ui);
+        const WPE_Entity next = wpe__tab_order(ui, entity, shift ? -1 : 1);
+        if (next != WPE_ENTITY_NULL) ui->focus = next;
+    } else if (wpe_input_key_typed(in, WPE_KEY_UP) || wpe_input_key_typed(in, WPE_KEY_DOWN)) {
+        wpe__stop_editing(ui);
+        const WPE_Entity next =
+            wpe__neighbor(ui, entity, wpe_input_key_typed(in, WPE_KEY_UP) ? WPE__DIR_UP : WPE__DIR_DOWN);
+        if (next != WPE_ENTITY_NULL) ui->focus = next;
+        ui->held = wpe_input_key_down(in, WPE_KEY_UP) ? WPE__DIR_UP : WPE__DIR_DOWN; /* No second step. */
+        ui->repeat_timer = WPE__NAV_DELAY;
+    }
+}
+
+const WPE_Entity* wpe_ui_submits(const WPE_Ui* ui, uint32_t* out_count) {
+    if (out_count) *out_count = ui ? ui->submit_count : 0;
+    return ui ? ui->submits : NULL;
+}
+
+WPE_Entity wpe_ui_editing(const WPE_Ui* ui) {
+    return ui ? ui->editing : WPE_ENTITY_NULL;
+}
+
+bool wpe_ui_edit(WPE_Ui* ui, WPE_Entity field) {
+    if (!ui) return false;
+    if (field == WPE_ENTITY_NULL) {
+        wpe__stop_editing(ui);
+        return true;
+    }
+    if (!wpe__field(ui, field) || !wpe__focusable(ui, field)) return false;
+    wpe__start_editing(ui, field);
+    return true;
+}
+
+WPE_Result wpe_ui_set_input_text(WPE_Ecs* ecs, WPE_Entity entity, const char* text) {
+    if (!ecs || !text) return WPE_RESULT_ERROR_NULL_ARG;
+    WPE_TextInput* field = wpe_ecs_get_component(ecs, entity, WPE_COMP_TEXT_INPUT);
+    if (!field) return WPE_RESULT_ERROR_NOT_FOUND;
+    size_t length = strlen(text);
+    if (length > wpe__field_max(field)) length = wpe__field_max(field);
+    char* copy = wpe_alloc(length + 1);
+    if (!copy) {
+        wpe_log_error("out of memory setting the text field of entity 0x%08x", entity);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    memcpy(copy, text, length);
+    copy[length] = '\0';
+    wpe_free(field->value);
+    field->value = copy;
+    field->cursor = field->anchor = (uint32_t)length;
+    field->scroll = 0.0f;
+    return WPE_RESULT_OK;
+}
+
+const char* wpe_ui_input_text(const WPE_Ecs* ecs, WPE_Entity entity) {
+    const WPE_TextInput* field = ecs ? wpe_ecs_get_component(ecs, entity, WPE_COMP_TEXT_INPUT) : NULL;
+    return field ? wpe__field_value(field) : NULL;
 }
 
 /* ---- Text ----------------------------------------------------------------------------------------- */
@@ -783,6 +1243,53 @@ static void wpe__draw_slider(WPE_Ui* ui, const WPE_Slider* slider, WPE_Rect rect
                   slider->handle_color, tint);
 }
 
+/* A text field: one line, vertically centered, scrolled and clipped to its rectangle (glyphs that don't fit
+ * whole are left out), with the selection behind it and the blinking cursor while it edits. */
+static void wpe__draw_field(WPE_Ui* ui, WPE_Entity entity, const WPE_TextInput* field, WPE_Rect rect,
+                            WPE_Vec4 tint) {
+    float scale;
+    const WPE_BitmapFont* font = wpe__field_font(ui, entity, &scale);
+    if (!font) return;
+    const WPE_Text* text = wpe_ecs_get_component(ui->ecs, entity, WPE_COMP_TEXT);
+    const char* value = wpe__field_value(field);
+    const bool empty = value[0] == '\0';
+    const bool placeholder = empty && !field->editing && field->placeholder && field->placeholder[0];
+    const float line = (float)font->line_height * scale;
+    const float left = rect.x + field->padding, right = rect.x + rect.width - field->padding;
+    const float y = floorf(rect.y + (rect.height - line) * 0.5f + 0.5f);
+    const float origin = floorf(left - (field->editing ? field->scroll : 0.0f) + 0.5f);
+    if (field->editing && field->cursor != field->anchor) {
+        const uint32_t lo = wpe__selection_lo(field), hi = wpe__selection_hi(field);
+        float x0 = origin + wpe__caret_x(font, scale, field, lo),
+              x1 = origin + wpe__caret_x(font, scale, field, hi);
+        x0 = x0 < left ? left : x0;
+        x1 = x1 > right ? right : x1;
+        if (x1 > x0) wpe__fill(ui, (WPE_Rect){x0, y, x1 - x0, line}, field->selection_color, tint);
+    }
+    const WPE_Vec4 base = placeholder ? field->placeholder_color : text ? text->color : wpe_vec4(1, 1, 1, 1);
+    const WPE_Color color = wpe__color(wpe__mul(base, tint));
+    const char* shown = placeholder ? field->placeholder : value;
+    float x = origin;
+    for (uint32_t i = 0; shown[i]; ++i) {
+        const char c = placeholder ? shown[i] : wpe__shown_char(field, value, i);
+        const WPE_FontGlyph* g = wpe_font_glyph(font, c);
+        const float w = (float)g->width * scale;
+        if (x >= left - 0.01f && x + w <= right + 0.01f) {
+            const WPE_Rect source = {(float)g->x, (float)g->y, (float)g->width, (float)g->height};
+            wpe_draw2d_image(ui->draw2d, font->atlas, source, (WPE_Rect){x, y, w, (float)g->height * scale},
+                             color);
+        }
+        x += (float)(g->width + font->glyph_spacing) * scale;
+        if (x > right) break;
+    }
+    if (field->editing && fmodf(field->blink, WPE__BLINK) < WPE__BLINK * 0.5f) {
+        const float caret =
+            floorf(origin + wpe__caret_x(font, scale, field, field->cursor) - scale * 0.5f + 0.5f);
+        if (caret >= left - scale && caret <= right)
+            wpe__fill(ui, (WPE_Rect){caret, y, scale > 1.0f ? scale : 1.0f, line}, field->cursor_color, tint);
+    }
+}
+
 WPE_Result wpe_ui_draw(WPE_Ui* ui, WPE_Renderer* renderer) {
     if (!ui || !renderer) return WPE_RESULT_ERROR_NULL_ARG;
     const WPE_Framebuffer* fb = wpe_renderer_framebuffer(renderer);
@@ -797,12 +1304,17 @@ WPE_Result wpe_ui_draw(WPE_Ui* ui, WPE_Renderer* renderer) {
         const WPE_Text* text = wpe_ecs_get_component(ui->ecs, e, WPE_COMP_TEXT);
         const WPE_Toggle* toggle = wpe_ecs_get_component(ui->ecs, e, WPE_COMP_TOGGLE);
         const WPE_Slider* slider = wpe_ecs_get_component(ui->ecs, e, WPE_COMP_SLIDER);
-        if (!sprite && !text && !toggle && !slider) continue;
+        const WPE_TextInput* field = wpe__field(ui, e);
+        if (!sprite && !text && !toggle && !slider && !field) continue;
         const WPE_Vec4 tint = wpe__tint(ui, e);
         if (sprite) wpe__draw_sprite(ui, sprite, element->rect, wpe__color(wpe__mul(sprite->color, tint)));
         if (toggle && toggle->on) wpe__draw_mark(ui, toggle, element->rect, tint);
         if (slider) wpe__draw_slider(ui, slider, element->rect, tint);
-        if (text) wpe__draw_text(ui, text, element->rect, wpe__color(wpe__mul(text->color, tint)));
+        if (field) {
+            wpe__draw_field(ui, e, field, element->rect, tint); /* Its text component styles it. */
+        } else if (text) {
+            wpe__draw_text(ui, text, element->rect, wpe__color(wpe__mul(text->color, tint)));
+        }
     }
     return wpe_draw2d_submit(ui->draw2d, renderer);
 }
