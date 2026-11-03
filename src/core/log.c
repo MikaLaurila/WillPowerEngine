@@ -2,6 +2,7 @@
 
 #include <stdatomic.h>
 #include <stdio.h>
+#include <string.h>
 
 #if defined(WPE_DEBUG)
 #define WPE__LOG_DEFAULT_MIN_LEVEL WPE_LOG_LEVEL_DEBUG
@@ -53,13 +54,24 @@ static void wpe__log_unlock(void) {
     atomic_flag_clear_explicit(&wpe__g_log.lock, memory_order_release);
 }
 
+/* One line, written whole: stderr is unbuffered on Windows, where a multi-part fprintf goes out in pieces and
+ * the lines of processes sharing a pipe (a host and a player under one test) interleave mid-line. */
 static void wpe__log_write_stderr(const WPE_LogMessage* message) {
-    if (message->level >= WPE_LOG_LEVEL_ERROR) {
-        fprintf(stderr, "[%s][%s] %s (%s:%d)\n", wpe_log_level_name(message->level), message->module,
-                message->text, message->file, message->line);
-    } else {
-        fprintf(stderr, "[%s][%s] %s\n", wpe_log_level_name(message->level), message->module, message->text);
+    char line[2048];
+    const int length =
+        message->level >= WPE_LOG_LEVEL_ERROR
+            ? snprintf(line, sizeof line, "[%s][%s] %s (%s:%d)\n", wpe_log_level_name(message->level),
+                       message->module, message->text, message->file, message->line)
+            : snprintf(line, sizeof line, "[%s][%s] %s\n", wpe_log_level_name(message->level),
+                       message->module, message->text);
+    if (length < 0) return;
+    size_t size = (size_t)length;
+    if (size >= sizeof line) {
+        /* Too long for one line: cut, and say so. */
+        memcpy(line + sizeof line - 5, "...\n", 5);
+        size = sizeof line - 1;
     }
+    fwrite(line, 1, size, stderr);
 }
 
 const char* wpe_log_level_name(WPE_LogLevel level) {
