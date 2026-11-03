@@ -17,6 +17,7 @@
 #define WPE__EDITOR_LOG_TEXT 512u
 #define WPE__EDITOR_RELOAD_SECONDS 0.5 /* Hot reload: how often scripts are checked for changes. */
 #define WPE__EDITOR_MAX_CLIENTS 3u     /* play_network: other players besides the editor's host. */
+#define WPE__EDITOR_NAV_SETTLE 0.25    /* Seconds edits must rest before the shown nav grid is rebuilt. */
 
 /* How play_network plays. */
 typedef struct wpe__NetPlay {
@@ -55,7 +56,12 @@ struct WPE_Editor {
     bool coalesced;      /* The current change joined the previous step. */
     bool quit_requested; /* The "quit" command (the window closes after the current frame). */
     WPE_EditorView view;
-    double since_reload; /* Seconds since scripts were last checked for changes. */
+    double since_reload;  /* Seconds since scripts were last checked for changes. */
+    uint64_t nav_changes; /* `changes` when the nav grid was last made current (edit mode). */
+    double nav_waiting;   /* Seconds the shown grid has been out of date. */
+    bool nav_shown;       /* The navigation view was on last frame. */
+    WPE_Vec3* nav_probe;  /* The nav_path command's test path, drawn in edit mode (owned; NULL: none). */
+    uint32_t nav_probe_count;
     /* A script the "open_script" command asked the script panel to show ("" when none), and the line. */
     char open_script[WPE_VFS_PATH_MAX];
     uint32_t open_script_line, open_script_column;
@@ -108,6 +114,12 @@ WPE_Result wpe__editor_stop(WPE_Editor* editor);
 WPE_Result wpe__editor_play_network(WPE_Editor* editor, const wpe__NetPlay* play, uint16_t* out_port);
 /* How many of play_network's clients still run (a closed window ends one). */
 uint32_t wpe__editor_clients_running(WPE_Editor* editor);
+
+/* Makes the engine's nav grid match the scene being edited (rebuilt when the scene changed since it was
+ * made), and carves the obstacles where they are. Edit mode only; play mode keeps the game's grid. */
+void wpe__editor_nav_current(WPE_Editor* editor);
+/* Replaces the test path drawn in edit mode (NULL or 0: none). */
+WPE_Result wpe__editor_set_nav_probe(WPE_Editor* editor, const WPE_Vec3* points, uint32_t count);
 
 /* Scene files; paths are asset paths inside the project directory. */
 WPE_Result wpe__editor_new_scene(WPE_Editor* editor);

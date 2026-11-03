@@ -140,6 +140,9 @@ struct WPE_EditorUi {
     bool pending_after_save;
     bool layout_built;
     bool slow_network; /* The Network menu's play_network items simulate a bad network. */
+    /* View > Test a path: 1 waits for the start click in the viewport, 2 for the goal (0: off). */
+    int nav_probe_stage;
+    WPE_Vec3 nav_probe_start;
     bool quit;
 };
 
@@ -2385,9 +2388,10 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
         wpe__ui_entity_command(ui, "fit_collider", entity);
     /* Adding a component: those needing an asset take the path typed here. */
     static const char* const addable[] = {
-        "transform", "mesh",      "camera",       "light", "billboard", "particles", "rigidbody",
-        "collider",  "character", "audio_source", "ui",    "sprite",    "text",      "button",
-        "toggle",    "slider",    "trail",        "slash", "water",     "net",       "script"};
+        "transform", "mesh",     "camera",    "light",     "billboard",    "particles",
+        "rigidbody", "collider", "character", "nav_agent", "nav_obstacle", "audio_source",
+        "ui",        "sprite",   "text",      "button",    "toggle",       "slider",
+        "trail",     "slash",    "water",     "net",       "script"};
     igSetNextItemWidth(-1.0f);
     igInputText("##asset_path", ui->add_path, sizeof ui->add_path, 0, NULL, NULL);
     (void)wpe__asset_drop(WPE__ASSET_ANY, ui->add_path,
@@ -2846,6 +2850,9 @@ static void wpe__ui_performance(WPE_EditorUi* ui) {
     igEnd();
 }
 
+static bool wpe__ui_nav_probe(WPE_EditorUi* ui,
+                              ImDrawList* draw); /* With the View menu's navigation items. */
+
 static void wpe__ui_viewport(WPE_EditorUi* ui) {
     igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2_c){0, 0});
     const bool open =
@@ -2897,9 +2904,10 @@ static void wpe__ui_viewport(WPE_EditorUi* ui) {
     /* The 2D view edits UI rectangles; the 3D view has the light icons and the transform gizmo. */
     const bool canvas = view_2d && wpe__ui_canvas(ui, draw);
     const WPE_Entity light = view_2d ? WPE_ENTITY_NULL : wpe__ui_light_icons(ui, draw);
-    const bool gizmo = !view_2d && wpe__ui_gizmo(ui, draw);
+    const bool probe = !view_2d && wpe__ui_nav_probe(ui, draw);
+    const bool gizmo = !view_2d && !probe && wpe__ui_gizmo(ui, draw);
     if (!view_2d) ui->canvas_edges = 0;
-    if (!canvas && !view_2d && !gizmo && ui->view_hovered &&
+    if (!canvas && !view_2d && !gizmo && !probe && ui->nav_probe_stage == 0 && ui->view_hovered &&
         igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) &&
         wpe_editor_mode(ui->editor) == WPE_EDITOR_EDIT) {
         /* Icons are drawn over the scene, so they are picked before it. */
@@ -2931,6 +2939,83 @@ static void wpe__ui_viewport(WPE_EditorUi* ui) {
         ImDrawList_AddText_Vec2(draw, at, WPE__COL(255, 255, 255, 220), hint, NULL);
     }
     igEnd();
+}
+
+/* View > Navigation: the grid overlay, its numbers, a rebuild, and the path test. */
+static void wpe__ui_navigation_menu(WPE_EditorUi* ui, const WPE_EditorView* view) {
+    if (igMenuItem_Bool("Navigation", "N", view->navigation, true))
+        wpe__ui_set_view(ui, "navigation", NULL, 0, !view->navigation);
+    if (igIsItemHovered(0))
+        igSetTooltip("Where characters can walk (the scene's static colliders), agents' paths and obstacles");
+    if (!view->navigation) return;
+    const bool editing = wpe_editor_mode(ui->editor) == WPE_EDITOR_EDIT;
+    const WPE_NavGrid* grid = wpe_engine_nav_grid(wpe_editor_engine(ui->editor));
+    if (grid) {
+        const WPE_NavGridInfo info = wpe_nav_grid_info(grid);
+        igTextDisabled("    %u cells, %u islands (%u x %u)", info.cell_count, info.island_count, info.width,
+                       info.depth);
+    } else {
+        igTextDisabled("    No grid: the scene has no static colliders");
+    }
+    if (igMenuItem_Bool("    Rebuild navigation", NULL, false, editing)) wpe__ui_simple(ui, "nav_rebuild");
+    if (igMenuItem_Bool("    Test a path...", NULL, ui->nav_probe_stage != 0, editing && grid))
+        ui->nav_probe_stage = 1;
+    if (igIsItemHovered(0)) igSetTooltip("Click the start, then the goal, in the viewport (Esc cancels)");
+    if (igMenuItem_Bool("    Clear the test path", NULL, false, editing)) {
+        WPE_JsonWriter* w = wpe__ui_begin("nav_path");
+        if (w) {
+            wpe_json_write_key(w, "clear");
+            wpe_json_write_bool(w, true);
+            wpe__ui_send(ui, w);
+        }
+    }
+}
+
+/* The path test's clicks: a ray onto the scene's colliders. @return Whether it took the click. */
+static bool wpe__ui_nav_probe(WPE_EditorUi* ui, ImDrawList* draw) {
+    if (ui->nav_probe_stage == 0) return false;
+    if (wpe_editor_mode(ui->editor) != WPE_EDITOR_EDIT || igIsKeyPressed_Bool(ImGuiKey_Escape, false)) {
+        ui->nav_probe_stage = 0;
+        return false;
+    }
+    const char* hint = ui->nav_probe_stage == 1 ? "Path test: click where it starts (Esc cancels)"
+                                                : "Path test: click the goal (Esc cancels)";
+    const ImVec2_c size = igCalcTextSize(hint, NULL, false, -1.0f);
+    const ImVec2_c at = {ui->image_x + (ui->image_w - size.x) * 0.5f, ui->image_y + 24};
+    ImDrawList_AddRectFilled(draw, (ImVec2_c){at.x - 6, at.y - 3},
+                             (ImVec2_c){at.x + size.x + 6, at.y + size.y + 3}, WPE__COL(120, 30, 120, 200),
+                             4.0f, 0);
+    ImDrawList_AddText_Vec2(draw, at, WPE__COL(255, 255, 255, 230), hint, NULL);
+    if (!ui->view_hovered || !igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) return false;
+    const ImVec2_c mouse = igGetMousePos();
+    WPE_Vec3 origin, direction;
+    WPE_RaycastHit hit;
+    if (!wpe__ray(ui, mouse.x, mouse.y, &origin, &direction) ||
+        !wpe_physics_raycast(wpe_engine_physics(wpe_editor_engine(ui->editor)), origin, direction, 10000.0f,
+                             NULL, &hit))
+        return true; /* Nothing there: wait for another click. */
+    if (ui->nav_probe_stage == 1) {
+        ui->nav_probe_start = hit.point;
+        ui->nav_probe_stage = 2;
+        return true;
+    }
+    ui->nav_probe_stage = 0;
+    WPE_JsonWriter* w = wpe__ui_begin("nav_path");
+    if (w) {
+        const WPE_Vec3 ends[2] = {ui->nav_probe_start, hit.point};
+        const char* keys[2] = {"from", "to"};
+        for (int e = 0; e < 2; ++e) {
+            wpe_json_write_key(w, keys[e]);
+            wpe_json_write_array_begin(w, true);
+            for (int i = 0; i < 3; ++i)
+                wpe_json_write_number(w, ends[e].v[i]);
+            wpe_json_write_array_end(w);
+        }
+        wpe_json_write_key(w, "partial");
+        wpe_json_write_bool(w, true); /* Show how near it gets, even when the goal is out of reach. */
+        wpe__ui_send(ui, w);
+    }
+    return true;
 }
 
 static void wpe__ui_menu(WPE_EditorUi* ui) {
@@ -2981,6 +3066,7 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
             wpe__ui_set_view(ui, "grid_spacing", NULL, spacing, false);
         if (igMenuItem_Bool("Physics shapes", "P", view.physics, true))
             wpe__ui_set_view(ui, "physics", NULL, 0, !view.physics);
+        wpe__ui_navigation_menu(ui, &view);
         if (igMenuItem_Bool("Icons (lights, particles)", "L", view.icons, true))
             wpe__ui_set_view(ui, "icons", NULL, 0, !view.icons);
         if (igMenuItem_Bool("Reload changed scripts", NULL, view.hot_reload, true))
@@ -3225,6 +3311,8 @@ static void wpe__ui_shortcuts(WPE_EditorUi* ui) {
         if (igIsKeyPressed_Bool(ImGuiKey_G, false)) wpe__ui_set_view(ui, "grid", NULL, 0, !view.grid);
         if (igIsKeyPressed_Bool(ImGuiKey_P, false)) wpe__ui_set_view(ui, "physics", NULL, 0, !view.physics);
         if (igIsKeyPressed_Bool(ImGuiKey_L, false)) wpe__ui_set_view(ui, "icons", NULL, 0, !view.icons);
+        if (igIsKeyPressed_Bool(ImGuiKey_N, false))
+            wpe__ui_set_view(ui, "navigation", NULL, 0, !view.navigation);
     }
 }
 

@@ -63,15 +63,15 @@ static const char* wpe__string_arg(const wpe__Call* call, const char* key) {
 /* ---- Queries ---------------------------------------------------------------------------------------- */
 
 static const char* const wpe__component_keys[] = {
-    "transform", "mesh",      "camera",   "light",     "billboard",    "particles",
-    "animator",  "rigidbody", "collider", "character", "audio_source", "ui",
-    "sprite",    "text",      "button",   "toggle",    "slider",       "script"};
+    "transform", "mesh",     "camera",    "light",     "billboard",    "particles",    "animator",
+    "rigidbody", "collider", "character", "nav_agent", "nav_obstacle", "audio_source", "ui",
+    "sprite",    "text",     "button",    "toggle",    "slider",       "script"};
 static const WPE_ComponentType wpe__component_types[] = {
-    WPE_COMP_TRANSFORM,        WPE_COMP_MESH,      WPE_COMP_CAMERA,       WPE_COMP_LIGHT,
-    WPE_COMP_BILLBOARD,        WPE_COMP_PARTICLES, WPE_COMP_ANIMATOR,     WPE_COMP_PHYSICS_RIGIDBODY,
-    WPE_COMP_PHYSICS_COLLIDER, WPE_COMP_CHARACTER, WPE_COMP_AUDIO_SOURCE, WPE_COMP_UI,
-    WPE_COMP_SPRITE,           WPE_COMP_TEXT,      WPE_COMP_BUTTON,       WPE_COMP_TOGGLE,
-    WPE_COMP_SLIDER,           WPE_COMP_SCRIPT};
+    WPE_COMP_TRANSFORM,        WPE_COMP_MESH,      WPE_COMP_CAMERA,    WPE_COMP_LIGHT,
+    WPE_COMP_BILLBOARD,        WPE_COMP_PARTICLES, WPE_COMP_ANIMATOR,  WPE_COMP_PHYSICS_RIGIDBODY,
+    WPE_COMP_PHYSICS_COLLIDER, WPE_COMP_CHARACTER, WPE_COMP_NAV_AGENT, WPE_COMP_NAV_OBSTACLE,
+    WPE_COMP_AUDIO_SOURCE,     WPE_COMP_UI,        WPE_COMP_SPRITE,    WPE_COMP_TEXT,
+    WPE_COMP_BUTTON,           WPE_COMP_TOGGLE,    WPE_COMP_SLIDER,    WPE_COMP_SCRIPT};
 static_assert(sizeof wpe__component_keys / sizeof wpe__component_keys[0] ==
                   sizeof wpe__component_types / sizeof wpe__component_types[0],
               "one type per component key");
@@ -1171,6 +1171,8 @@ static WPE_Result wpe__write_view(WPE_JsonWriter* w, const WPE_EditorView* view)
     wpe_json_write_string(w, view->view_2d ? "2d" : "3d");
     wpe_json_write_key(w, "snap_ui");
     wpe_json_write_number(w, view->snap_ui);
+    wpe_json_write_key(w, "navigation");
+    wpe_json_write_bool(w, view->navigation);
     wpe_json_write_object_end(w);
     return WPE_RESULT_OK;
 }
@@ -1188,6 +1190,7 @@ static WPE_Result wpe__read_view_key(wpe__Call* call, const char* key, const WPE
                  : strcmp(key, "hot_reload") == 0 ? &view->hot_reload
                  : strcmp(key, "network") == 0    ? &view->network
                  : strcmp(key, "snap") == 0       ? &view->snap
+                 : strcmp(key, "navigation") == 0 ? &view->navigation
                                                   : NULL;
     if (flag) {
         if (wpe_json_type(v) != WPE_JSON_BOOL)
@@ -1240,7 +1243,7 @@ static WPE_Result wpe__read_view_key(wpe__Call* call, const char* key, const WPE
     }
     return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
                      "unknown view setting \"%s\" (grid, grid_spacing, physics, icons, gizmo, gizmo_space, "
-                     "hot_reload, snap, snap_move, snap_rotate, snap_scale, mode, snap_ui)",
+                     "hot_reload, snap, snap_move, snap_rotate, snap_scale, mode, snap_ui, navigation)",
                      key);
 }
 
@@ -1887,6 +1890,128 @@ static WPE_Result wpe__cmd_help(wpe__Call* call);
 
 /* ---- Dispatch --------------------------------------------------------------------------------------- */
 
+/* ---- Navigation ------------------------------------------------------------------------------------- */
+
+static bool wpe__vec3_value(const WPE_JsonValue* v, WPE_Vec3* out) {
+    if (wpe_json_count(v) != 3 || wpe_json_type(v) != WPE_JSON_ARRAY) return false;
+    for (uint32_t i = 0; i < 3; ++i) {
+        const WPE_JsonValue* n = wpe_json_at(v, i);
+        if (wpe_json_type(n) != WPE_JSON_NUMBER || !isfinite(wpe_json_number(n, 0.0))) return false;
+        out->v[i] = (float)wpe_json_number(n, 0.0);
+    }
+    return true;
+}
+
+static void wpe__write_vec3_value(WPE_JsonWriter* w, WPE_Vec3 v) {
+    wpe_json_write_array_begin(w, true);
+    for (int i = 0; i < 3; ++i)
+        wpe_json_write_number(w, v.v[i]);
+    wpe_json_write_array_end(w);
+}
+
+/* The scene's grid, current with the edits (built if needed); NULL (and an error) when there is none. */
+static const WPE_NavGrid* wpe__nav_grid(wpe__Call* call) {
+    wpe__editor_nav_current(call->editor);
+    const WPE_NavGrid* grid = wpe_engine_nav_grid(call->editor->engine);
+    if (!grid)
+        wpe__fail(call, WPE_RESULT_ERROR_NOT_FOUND,
+                  "the scene has no navigation grid: it needs static colliders to walk on (see the log)");
+    return grid;
+}
+
+static WPE_Result wpe__write_nav_info(wpe__Call* call, const WPE_NavGrid* grid, double build_ms) {
+    const WPE_NavGridInfo info = wpe_nav_grid_info(grid);
+    WPE_JsonWriter* w = call->w;
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "width");
+    wpe_json_write_integer(w, info.width);
+    wpe_json_write_key(w, "depth");
+    wpe_json_write_integer(w, info.depth);
+    wpe_json_write_key(w, "cells");
+    wpe_json_write_integer(w, info.cell_count);
+    wpe_json_write_key(w, "islands");
+    wpe_json_write_integer(w, info.island_count);
+    wpe_json_write_key(w, "max_layers");
+    wpe_json_write_integer(w, info.max_layers);
+    wpe_json_write_key(w, "memory");
+    wpe_json_write_integer(w, (int64_t)info.memory);
+    wpe_json_write_key(w, "origin");
+    wpe__write_vec3_value(w, info.origin);
+    wpe_json_write_key(w, "bounds_max");
+    wpe__write_vec3_value(w, info.settings.bounds_max);
+    if (build_ms >= 0.0) {
+        wpe_json_write_key(w, "build_ms");
+        wpe_json_write_number(w, build_ms);
+    }
+    wpe_json_write_object_end(w);
+    return WPE_RESULT_OK;
+}
+
+static WPE_Result wpe__cmd_nav_info(wpe__Call* call) {
+    const WPE_NavGrid* grid = wpe__nav_grid(call);
+    return grid ? wpe__write_nav_info(call, grid, -1.0) : wpe__null(call, WPE_RESULT_ERROR_NOT_FOUND);
+}
+
+static WPE_Result wpe__cmd_nav_rebuild(wpe__Call* call) {
+    WPE_Editor* editor = call->editor;
+    if (editor->mode != WPE_EDITOR_EDIT)
+        return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_STATE, "stop play mode first"));
+    wpe_engine_invalidate_nav_grid(editor->engine);
+    editor->nav_changes = editor->changes;
+    const double start = wpe_platform_time_seconds();
+    const WPE_NavGrid* grid = wpe__nav_grid(call);
+    const double build_ms = (wpe_platform_time_seconds() - start) * 1000.0;
+    return grid ? wpe__write_nav_info(call, grid, build_ms) : wpe__null(call, WPE_RESULT_ERROR_NOT_FOUND);
+}
+
+static WPE_Result wpe__cmd_nav_path(wpe__Call* call) {
+    WPE_Editor* editor = call->editor;
+    if (wpe_json_bool(wpe_json_get(call->args, "clear"), false))
+        return wpe__null(call, wpe__editor_set_nav_probe(editor, NULL, 0));
+    WPE_Vec3 from, to;
+    if (!wpe__vec3_value(wpe_json_get(call->args, "from"), &from) ||
+        !wpe__vec3_value(wpe_json_get(call->args, "to"), &to))
+        return wpe__null(
+            call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"from\" and \"to\" are [x, y, z] points"));
+    if (!wpe__nav_grid(call)) return wpe__null(call, WPE_RESULT_ERROR_NOT_FOUND);
+    WPE_NavSystem* nav = wpe_engine_navigation(editor->engine);
+    WPE_NavPathOptions options = wpe_nav_path_options_default();
+    options.allow_partial = wpe_json_bool(wpe_json_get(call->args, "partial"), false);
+    options.raw = wpe_json_bool(wpe_json_get(call->args, "raw"), false);
+    options.search_radius = (float)wpe_json_number(wpe_json_get(call->args, "radius"), options.search_radius);
+    if (wpe_json_bool(wpe_json_get(call->args, "obstacles"), true))
+        options.blockers = wpe_nav_system_blockers(nav);
+    WPE_NavPath path;
+    const WPE_Result result = wpe_nav_find_path(wpe_nav_system_query(nav), from, to, &options, &path);
+    if (result != WPE_RESULT_OK) {
+        (void)wpe__editor_set_nav_probe(editor, NULL, 0);
+        return wpe__null(call,
+                         wpe__fail(call, result,
+                                   result == WPE_RESULT_ERROR_NOT_FOUND
+                                       ? "no path: an end is off the walkable area, or nothing connects them "
+                                         "(try \"partial\": true)"
+                                       : "the path search failed"));
+    }
+    if (wpe_json_bool(wpe_json_get(call->args, "show"), true)) {
+        const WPE_Result shown = wpe__editor_set_nav_probe(editor, path.points, path.count);
+        if (shown != WPE_RESULT_OK) return wpe__null(call, shown);
+    }
+    WPE_JsonWriter* w = call->w;
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "points");
+    wpe_json_write_array_begin(w, false);
+    for (uint32_t i = 0; i < path.count; ++i)
+        wpe__write_vec3_value(w, path.points[i]);
+    wpe_json_write_array_end(w);
+    wpe_json_write_key(w, "length");
+    wpe_json_write_number(w, path.length);
+    wpe_json_write_key(w, "partial");
+    wpe_json_write_bool(w, path.partial);
+    wpe_json_write_key(w, "visited");
+    wpe_json_write_integer(w, path.visited);
+    wpe_json_write_object_end(w);
+    return WPE_RESULT_OK;
+}
 static const struct {
     const char* name;
     WPE_Result (*fn)(wpe__Call* call);
@@ -1922,7 +2047,7 @@ static const struct {
     {"set_environment", wpe__cmd_set_environment, "{value: {...}} (merged) -> the environment"},
     {"get_view", wpe__cmd_get_view,
      "{} -> {grid, grid_spacing, physics, icons, gizmo, gizmo_space, hot_reload, snap, snap_move, "
-     "snap_rotate, snap_scale, mode: \"2d\"|\"3d\", snap_ui}"},
+     "snap_rotate, snap_scale, mode: \"2d\"|\"3d\", snap_ui, navigation}"},
     {"set_view", wpe__cmd_set_view, "{value: {...}} (merged; not saved or undone) -> the view"},
     {"new_scene", wpe__cmd_new_scene, "{discard = false} (refused with unsaved changes unless discard)"},
     {"load_scene", wpe__cmd_load_scene,
@@ -1945,6 +2070,15 @@ static const struct {
     {"screenshot", wpe__cmd_screenshot, "{path, target = \"game\"|\"editor\"}"},
     {"camera", wpe__cmd_camera, "{position: [x,y,z], target: [x,y,z]}: place the editor camera"},
     {"focus", wpe__cmd_focus, "{id = selection}: frame the entity and its children -> {position, target}"},
+    {"nav_info", wpe__cmd_nav_info,
+     "{} -> {width, depth, cells, islands, max_layers, memory, origin, bounds_max}: the scene's navigation "
+     "grid, "
+     "rebuilt if the scene changed"},
+    {"nav_rebuild", wpe__cmd_nav_rebuild,
+     "{} -> nav_info's result and build_ms: build the navigation grid now"},
+    {"nav_path", wpe__cmd_nav_path,
+     "{from: [x,y,z], to: [x,y,z], partial = false, raw = false, radius = 1, obstacles = true, show = true} "
+     "-> {points, length, partial, visited}: a path on the grid (shown in the viewport until {clear: true})"},
     {"fit_collider", wpe__cmd_fit_collider,
      "{id = selection}: size the collider (a new box if none) to the meshes of the entity and its children "
      "-> "

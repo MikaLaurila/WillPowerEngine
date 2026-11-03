@@ -101,6 +101,16 @@ Things to look for:
 - **The tops of crates and walls show up.** That is correct: a character fits there. They are separate
   islands, so nothing paths onto them.
 
+## In the editor
+
+Press **N** in the viewport (or View > Navigation) to see the grid while you build the level. It is rebuilt a
+moment after you stop changing the scene, so you can drag a wall and watch the walkable area change. The
+View menu shows how many cells and islands the grid has, and has **Test a path...**: click a start and a goal
+in the viewport, and the path an agent would walk shows in magenta. The navigation settings are in the
+**Environment** panel; `nav_agent` and `nav_obstacle` are added like any component (Inspector > Add
+component). Agents only walk in play mode. Tools and AI assistants driving the editor get the same through the `nav_info`, `nav_rebuild` and
+`nav_path` commands ([editor.md](editor.md#commands)).
+
 ## Agents
 
 An **agent** is an entity that walks itself to a destination. Give an entity a `nav_agent` in the scene

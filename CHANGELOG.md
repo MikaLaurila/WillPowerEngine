@@ -4,6 +4,23 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 12: navigation, phase 4: the editor)
+- View > Navigation (N): the grid, agents' footprints and ways ahead, obstacles' boxes and the cells they
+  close, in edit and play mode. In edit mode the grid is rebuilt a moment after the edits stop, and
+  obstacles carve as they are moved. The menu shows the grid's cells and islands, and has **Rebuild
+  navigation**, **Test a path...** (click a start and a goal in the viewport) and **Clear the test path**.
+- Commands `nav_info`, `nav_rebuild` and `nav_path` (a path on the grid, drawn in the viewport until
+  cleared); `set_view`'s `navigation`.
+- `nav_agent` and `nav_obstacle` in the inspector's Add component list (and `list_entities`); the
+  Environment panel lists every navigation setting.
+- `WPE_EngineDebugDraw.extra_lines`: a tool's own lines drawn with the overlays. `wpe_nav_system_refresh`
+  carves obstacles without moving agents. The navigation overlay draws agents' footprints and obstacles'
+  boxes.
+
+### Changed
+- `wpe_scene_write_environment` (the editor's environment, `get_environment`) includes every navigation
+  setting; scene files still only save the ones that differ from the defaults.
+
 ### Added (Milestone 12: navigation, phase 3: agents, obstacles and the Luau API)
 - Navigation agents (`WPE_NavAgent`, component 28, scene key `nav_agent`): entities that walk to a
   destination or after another entity by themselves. They plan around walls and obstacles, slow down

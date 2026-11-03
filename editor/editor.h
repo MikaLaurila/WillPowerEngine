@@ -66,6 +66,9 @@ typedef struct WPE_EditorView {
      * the 3D view from the editor camera, without the UI. Play mode always shows the game. */
     bool view_2d;
     float snap_ui; /* UI offset step in pixels (default 8): snapped offsets land on its multiples. */
+    /* The navigation grid (docs/navigation.md), with agents, obstacles and the nav_path test path, in edit
+     * and play mode (default off). In edit mode the grid is rebuilt a moment after the scene changes. */
+    bool navigation;
 } WPE_EditorView;
 
 /**

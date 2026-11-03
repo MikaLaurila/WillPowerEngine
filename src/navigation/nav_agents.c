@@ -576,31 +576,72 @@ WPE_Result wpe_nav_system_update(WPE_NavSystem* system, float dt) {
     return WPE_RESULT_OK;
 }
 
+WPE_Result wpe_nav_system_refresh(WPE_NavSystem* system) {
+    if (!system) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!wpe_nav_system_grid(system)) return WPE_RESULT_ERROR_NOT_FOUND;
+    (void)wpe__carve(system); /* Only when an obstacle moved since. */
+    return WPE_RESULT_OK;
+}
+
 /* ---- Debug drawing ----------------------------------------------------------------------------------- */
 
+#define WPE__AGENT_COLOR 0x40D0F0u
+#define WPE__PATH_COLOR 0xFFD040u
+#define WPE__OBSTACLE_COLOR 0xF0A040u
+#define WPE__BLOCKED_COLOR 0xF04040u
+
 void wpe_nav_system_debug_draw(WPE_NavSystem* system, WPE_NavSystemLineFn line, void* user_data) {
-    if (!system || !line || !system->grid) return;
-    const WPE_NavGrid* g = system->grid;
+    if (!system || !line) return;
+    const WPE_NavGrid* g = system->grid; /* May be NULL: then only the boxes and footprints. */
+    const float radius = g ? g->settings.agent_radius : wpe_nav_settings_default().agent_radius;
     const WPE_Vec3 lift = wpe_vec3(0, 0.1f, 0);
     WPE_EcsIter it = wpe_ecs_query(system->ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_NAV_AGENT)});
     while (wpe_ecs_iter_next(&it)) {
         const WPE_NavAgent* a = wpe_ecs_iter_get(&it, WPE_COMP_NAV_AGENT);
         WPE_Vec3 from;
-        if (a->state != WPE_NAV_AGENT_MOVING || a->wpe__count == 0 ||
-            !wpe__world_position(system->ecs, it.entity, &from))
-            continue;
+        if (!wpe__world_position(system->ecs, it.entity, &from)) continue;
+        /* Its footprint: the circle its center keeps from walls. */
+        enum { SEGMENTS = 16 };
+        for (int i = 0; i < SEGMENTS; ++i) {
+            const float t0 = 2.0f * WPE__PI * (float)i / SEGMENTS,
+                        t1 = 2.0f * WPE__PI * (float)(i + 1) / SEGMENTS;
+            line(wpe_vec3(from.x + radius * cosf(t0), from.y + 0.05f, from.z + radius * sinf(t0)),
+                 wpe_vec3(from.x + radius * cosf(t1), from.y + 0.05f, from.z + radius * sinf(t1)),
+                 WPE__AGENT_COLOR, user_data);
+        }
+        if (a->state != WPE_NAV_AGENT_MOVING) continue;
         for (uint32_t i = a->wpe__next; i < a->wpe__count; ++i) {
-            line(wpe_vec3_add(from, lift), wpe_vec3_add(a->wpe__path[i], lift), 0xFFD040u, user_data);
+            line(wpe_vec3_add(from, lift), wpe_vec3_add(a->wpe__path[i], lift), WPE__PATH_COLOR, user_data);
             from = a->wpe__path[i];
         }
     }
+    it = wpe_ecs_query(system->ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_NAV_OBSTACLE)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_NavObstacle* o = wpe_ecs_iter_get(&it, WPE_COMP_NAV_OBSTACLE);
+        WPE_Mat4 world;
+        if (!wpe_scene_compute_world_matrix(system->ecs, it.entity, &world)) continue;
+        WPE_Vec3 corners[8];
+        for (uint32_t i = 0; i < 8; ++i) {
+            const WPE_Vec3 local = wpe_vec3(o->offset.x + ((i & 1u) ? 0.5f : -0.5f) * o->size.x,
+                                            o->offset.y + ((i & 2u) ? 0.5f : -0.5f) * o->size.y,
+                                            o->offset.z + ((i & 4u) ? 0.5f : -0.5f) * o->size.z);
+            corners[i] = wpe_mat4_transform_point(&world, local);
+        }
+        /* The 12 edges: corner pairs differing in one bit. */
+        for (uint32_t i = 0; i < 8; ++i) {
+            for (uint32_t bit = 1; bit < 8; bit <<= 1) {
+                if (!(i & bit)) line(corners[i], corners[i | bit], WPE__OBSTACLE_COLOR, user_data);
+            }
+        }
+    }
+    if (!g || !system->blockers || system->blockers->count == 0) return;
     const float half = g->settings.cell_size * 0.5f;
-    for (uint32_t cell = 0; cell < g->cell_count && system->blockers && system->blockers->count; ++cell) {
+    for (uint32_t cell = 0; cell < g->cell_count; ++cell) {
         if (!system->blockers->blocked[cell]) continue;
         const WPE_Vec3 c = wpe_vec3_add(wpe__nav_center(g, cell), wpe_vec3(0, 0.06f, 0));
         const WPE_Vec3 k[4] = {wpe_vec3(c.x - half, c.y, c.z - half), wpe_vec3(c.x + half, c.y, c.z - half),
                                wpe_vec3(c.x + half, c.y, c.z + half), wpe_vec3(c.x - half, c.y, c.z + half)};
         for (int e = 0; e < 4; ++e)
-            line(k[e], k[(e + 1) % 4], 0xF04040u, user_data);
+            line(k[e], k[(e + 1) % 4], WPE__BLOCKED_COLOR, user_data);
     }
 }

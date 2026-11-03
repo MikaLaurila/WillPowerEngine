@@ -447,7 +447,7 @@ static void test_nav_system_validation_and_grid_changes(void) {
 }
 
 typedef struct Lines {
-    uint32_t path, blocked;
+    uint32_t path, blocked, footprint, box;
 } Lines;
 
 static void count_line(WPE_Vec3 a, WPE_Vec3 b, uint32_t color, void* user_data) {
@@ -456,6 +456,8 @@ static void count_line(WPE_Vec3 a, WPE_Vec3 b, uint32_t color, void* user_data) 
     Lines* lines = user_data;
     lines->path += color == 0xFFD040u;
     lines->blocked += color == 0xF04040u;
+    lines->footprint += color == 0x40D0F0u;
+    lines->box += color == 0xF0A040u;
 }
 
 static void test_nav_system_debug_draw(void) {
@@ -465,6 +467,17 @@ static void test_nav_system_debug_draw(void) {
     const WPE_Entity crate = spawn_at(&w, wpe_vec3(-3, 0.5f, 3));
     const WPE_NavObstacle o = wpe_nav_obstacle_default();
     WPE_TEST_ASSERT_OK(wpe_ecs_add_component(w.ecs, crate, WPE_COMP_NAV_OBSTACLE, &o, NULL));
+    /* Before any grid: the footprint and the box only. */
+    Lines before = {0};
+    wpe_nav_system_debug_draw(w.nav, count_line, &before);
+    WPE_TEST_ASSERT_EQ_UINT(16, before.footprint);
+    WPE_TEST_ASSERT_EQ_UINT(12, before.box);
+    WPE_TEST_ASSERT_EQ_UINT(0, before.blocked + before.path);
+    /* A refresh (the editor's edit mode) takes the grid and carves, moving nobody. */
+    WPE_TEST_ASSERT_OK(wpe_nav_system_refresh(w.nav));
+    WPE_TEST_ASSERT(wpe_nav_blockers_count(wpe_nav_system_blockers(w.nav)) > 0);
+    WPE_TEST_ASSERT_NEAR(-3.0f, position_of(&w, agent).x, 1e-6);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_nav_system_refresh(NULL));
     WPE_TEST_ASSERT_OK(wpe_nav_agent_set_destination(w.nav, agent, wpe_vec3(3, 0, -3)));
     step(&w, agent, NULL);
     Lines lines = {0};

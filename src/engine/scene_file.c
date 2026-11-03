@@ -177,14 +177,15 @@ static bool wpe__same_vec3(WPE_Vec3 a, WPE_Vec3 b) {
     return a.x == b.x && a.y == b.y && a.z == b.z;
 }
 
-/* "navigation", only when it differs from the defaults (most scenes never set it, and keep their text). */
-static void wpe__save_navigation(WPE_JsonWriter* w, const WPE_NavSettings* n) {
+/* "navigation": in scene files only when it differs from the defaults (most scenes never set it, and keep
+ * their text); `always` (the editor's environment panel) writes all of it. */
+static void wpe__save_navigation(WPE_JsonWriter* w, const WPE_NavSettings* n, bool always) {
     const WPE_NavSettings d = wpe_nav_settings_default();
-    const bool bounds =
-        !wpe__same_vec3(n->bounds_min, d.bounds_min) || !wpe__same_vec3(n->bounds_max, d.bounds_max);
-    if (n->cell_size == d.cell_size && n->cell_height == d.cell_height && n->agent_radius == d.agent_radius &&
-        n->agent_height == d.agent_height && n->max_slope == d.max_slope && n->step_height == d.step_height &&
-        !bounds)
+    const bool bounds = always || !wpe__same_vec3(n->bounds_min, d.bounds_min) ||
+                        !wpe__same_vec3(n->bounds_max, d.bounds_max);
+    if (!always && n->cell_size == d.cell_size && n->cell_height == d.cell_height &&
+        n->agent_radius == d.agent_radius && n->agent_height == d.agent_height &&
+        n->max_slope == d.max_slope && n->step_height == d.step_height && !bounds)
         return;
     wpe_json_write_key(w, "navigation");
     wpe_json_write_object_begin(w);
@@ -201,7 +202,7 @@ static void wpe__save_navigation(WPE_JsonWriter* w, const WPE_NavSettings* n) {
     wpe_json_write_object_end(w);
 }
 
-static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment* env) {
+static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment* env, bool all_navigation) {
     const WPE_SceneRenderSettings* r = &env->render;
     wpe_json_write_object_begin(w);
     wpe__write_vec3(w, "clear_color", env->clear_color);
@@ -255,7 +256,7 @@ static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment*
     wpe__write_vec3(w, "color", r->default_sun_color);
     wpe_json_write_object_end(w);
     wpe__write_vec3(w, "gravity", env->gravity);
-    wpe__save_navigation(w, &env->navigation);
+    wpe__save_navigation(w, &env->navigation, all_navigation);
     if (env->music[0]) {
         wpe_json_write_key(w, "music");
         wpe_json_write_object_begin(w);
@@ -631,7 +632,7 @@ WPE_Result wpe_scene_save(const WPE_SceneContext* context, const WPE_SceneEnviro
     wpe__write_string(writer, "format", "wpe.scene");
     wpe__write_integer(writer, "version", WPE_SCENE_FORMAT_VERSION);
     wpe_json_write_key(writer, "environment");
-    wpe__save_environment(writer, environment);
+    wpe__save_environment(writer, environment, false);
     wpe__write_ref(&s, "camera", camera);
     wpe_json_write_key(writer, "entities");
     wpe_json_write_array_begin(writer, false);
@@ -1997,7 +1998,7 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
 
 WPE_Result wpe_scene_write_environment(const WPE_SceneEnvironment* environment, WPE_JsonWriter* writer) {
     if (!environment || !writer) return WPE_RESULT_ERROR_NULL_ARG;
-    wpe__save_environment(writer, environment);
+    wpe__save_environment(writer, environment, true); /* Editors show every navigation setting. */
     return WPE_RESULT_OK;
 }
 

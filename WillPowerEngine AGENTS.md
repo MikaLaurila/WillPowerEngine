@@ -427,6 +427,7 @@ Implemented in `editor/` (docs: `docs/editor.md`).
   - **Keep GPU vertices interleaved**: SDL's software renderer mis-strides separate UV arrays.
 - **No hidden state.** Every editor feature must be reachable through a command; when adding UI, add or reuse a command first.
 - **Prefabs are linked, and overrides are computed.** Instances keep a baseline (their prefab as instantiated). Saving writes only the differences from it, so no editing path needs to record what it changed. Applying an instance rewrites the prefab file, and the editor then rebuilds the other instances by reloading the scene. Instances keep their prefab's structure; restructuring means unpacking.
+- **Navigation in edit mode** follows the edits without simulating: the shown grid is rebuilt once the edits rest (`WPE__EDITOR_NAV_SETTLE`) and obstacles are carved each frame (`wpe_nav_system_refresh`), as physics is synced. Agents only move in play mode. `nav_path` lets agents and people test paths; its result is drawn through the engine's `extra_lines` overlay hook.
 - **Unsaved work is lost only on purpose.** Commands that replace the scene (`new_scene`, `load_scene`, `quit`) refuse while it has unsaved changes, unless they say `"discard": true`. The UI asks first, Save / Don't save / Cancel, and the window's close button goes through the same prompt. A new command that drops the scene must follow the same rule.
 
 ---

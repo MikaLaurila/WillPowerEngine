@@ -1247,7 +1247,7 @@ static void wpe__draw_grid(WPE_DebugLines* lines, WPE_Vec3 eye, float spacing) {
 /* The debug overlays, into a recording frame (after post-processing, depth tested against the scene). */
 static WPE_Result wpe__draw_debug(WPE_Engine* engine, WPE_Entity camera) {
     const WPE_EngineDebugDraw* debug = &engine->debug_draw;
-    if (!debug->physics && !debug->grid && !debug->navigation) return WPE_RESULT_OK;
+    if (!debug->physics && !debug->grid && !debug->navigation && !debug->extra_lines) return WPE_RESULT_OK;
     const WPE_NavGrid* nav = debug->navigation ? wpe_engine_nav_grid(engine) : NULL;
     const WPE_Framebuffer* fb = wpe_renderer_framebuffer(engine->renderer);
     WPE_Mat4 view, projection;
@@ -1267,6 +1267,8 @@ static WPE_Result wpe__draw_debug(WPE_Engine* engine, WPE_Entity camera) {
         wpe_nav_grid_debug_draw(nav, wpe__physics_line, engine->debug_lines); /* Same line format. */
         wpe_nav_system_debug_draw(engine->nav, wpe__physics_line, engine->debug_lines);
     }
+    if (debug->extra_lines)
+        debug->extra_lines(wpe__physics_line, engine->debug_lines, debug->extra_lines_user_data);
     return wpe_debug_lines_submit(engine->debug_lines, engine->renderer, true);
 }
 

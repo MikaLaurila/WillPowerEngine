@@ -389,6 +389,113 @@ static void test_editor_view_settings_and_overlays(void) {
     wpe_editor_destroy(editor);
 }
 
+static uint32_t nav_number(WPE_Editor* editor, const char* key) {
+    WPE_JsonDocument* info = run(editor, "{\"cmd\": \"nav_info\"}", true);
+    const uint32_t value = (uint32_t)wpe_json_number(wpe_json_get(result_of(info), key), 0);
+    wpe_json_free(info);
+    return value;
+}
+
+static uint32_t shown_cells(WPE_Editor* editor) {
+    return wpe_nav_grid_info(wpe_engine_nav_grid(wpe_editor_engine(editor))).cell_count;
+}
+
+/* Navigation in the editor: the grid follows edits, commands ask it, the view draws it. */
+static void test_editor_navigation(void) {
+    WPE_Editor* editor = open_editor();
+    /* The start scene has no colliders: no grid yet. */
+    wpe_json_free(run(editor, "{\"cmd\": \"nav_info\"}", false));
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"floor\", \"transform\": "
+                   "{\"position\": [0, -0.5, "
+                   "0]}, \"collider\": {\"shape\": \"box\", \"size\": [10, 1, 10]}}}");
+    WPE_TEST_ASSERT_EQ_UINT(36u * 36u, nav_number(editor, "cells"));
+    WPE_TEST_ASSERT_EQ_UINT(1, nav_number(editor, "islands"));
+    WPE_JsonDocument* path =
+        run(editor, "{\"cmd\": \"nav_path\", \"from\": [-3, 0, 0], \"to\": [3, 0, 0], \"show\": true}", true);
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_json_count(wpe_json_get(result_of(path), "points")));
+    WPE_TEST_ASSERT_NEAR(6.0, wpe_json_number(wpe_json_get(result_of(path), "length"), 0), 1e-3);
+    wpe_json_free(path);
+    WPE_TEST_ASSERT_EQ_UINT(2, editor->nav_probe_count); /* Kept to draw. */
+
+    /* A wall across: two islands, no path; a partial one goes as near as it can. */
+    WPE_JsonDocument* created = run(editor,
+                                    "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"wall\", "
+                                    "\"transform\": {\"position\": [0, 1, 0]}, "
+                                    "\"collider\": {\"shape\": \"box\", \"size\": [0.5, 2, 10]}}}",
+                                    true);
+    const WPE_Entity wall = (WPE_Entity)wpe_json_number(result_of(created), 0);
+    wpe_json_free(created);
+    WPE_TEST_ASSERT(nav_number(editor, "islands") >= 2);
+    wpe_json_free(run(editor, "{\"cmd\": \"nav_path\", \"from\": [-3, 0, 0], \"to\": [3, 0, 0]}", false));
+    WPE_TEST_ASSERT_EQ_UINT(0, editor->nav_probe_count); /* A failed test clears the old path. */
+    path = run(editor, "{\"cmd\": \"nav_path\", \"from\": [-3, 0, 0], \"to\": [3, 0, 0], \"partial\": true}",
+               true);
+    WPE_TEST_ASSERT(wpe_json_bool(wpe_json_get(result_of(path), "partial"), false));
+    wpe_json_free(path);
+    wpe_json_free(run(editor, "{\"cmd\": \"nav_path\", \"from\": [1, 2]}", false));
+    run_ok(editor, "{\"cmd\": \"nav_path\", \"clear\": true}");
+    WPE_TEST_ASSERT_EQ_UINT(0, editor->nav_probe_count);
+
+    /* The view: drawn over the scene; the shown grid follows an edit once the edits rest a moment. */
+    run_ok(editor, "{\"cmd\": \"camera\", \"position\": [0, 8, 8], \"target\": [0, 0, 0]}");
+    run_ok(editor, "{\"cmd\": \"set_view\", \"value\": {\"grid\": false}}");
+    static WPE_Color frame[64 * 48];
+    frame_changes(editor, frame);
+    WPE_JsonDocument* view = run(editor, "{\"cmd\": \"set_view\", \"value\": {\"navigation\": true}}", true);
+    WPE_TEST_ASSERT(wpe_json_bool(wpe_json_get(result_of(view), "navigation"), false));
+    wpe_json_free(view);
+    WPE_TEST_ASSERT(frame_changes(editor, frame) > 20);
+    const uint32_t walled = shown_cells(editor);
+    char command[160];
+    snprintf(command, sizeof command, "{\"cmd\": \"delete_entity\", \"id\": %u}", wall);
+    run_ok(editor, command);
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 0.1));
+    WPE_TEST_ASSERT_EQ_UINT(walled, shown_cells(editor)); /* Not yet. */
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 0.2));
+    WPE_TEST_ASSERT_EQ_UINT(36u * 36u, shown_cells(editor));
+
+    /* Obstacles carve in edit mode too; agents and obstacles are components like the others. */
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"cart\", \"transform\": "
+                   "{\"position\": [0, 0.5, "
+                   "0]}, \"nav_obstacle\": {\"size\": [2, 1, 1]}}}");
+    created = run(
+        editor,
+        "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"guard\", \"transform\": {\"position\": [-3, "
+        "0, 3]}, \"nav_agent\": {\"speed\": 2}}}",
+        true);
+    const WPE_Entity guard = (WPE_Entity)wpe_json_number(result_of(created), 0);
+    wpe_json_free(created);
+    for (int i = 0; i < 20; ++i)
+        WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 30.0));
+    WPE_TEST_ASSERT(wpe_nav_blockers_count(
+                        wpe_nav_system_blockers(wpe_engine_navigation(wpe_editor_engine(editor)))) > 0);
+    snprintf(command, sizeof command, "{\"cmd\": \"get_entity\", \"id\": %u}", guard);
+    WPE_JsonDocument* entity = run(editor, command, true);
+    WPE_TEST_ASSERT_NEAR(
+        2.0, wpe_json_number(wpe_json_get(wpe_json_get(result_of(entity), "nav_agent"), "speed"), 0), 1e-6);
+    wpe_json_free(entity);
+    /* Edit mode doesn't move agents. */
+    const WPE_Transform* t =
+        wpe_ecs_get_component(wpe_engine_ecs(wpe_editor_engine(editor)), guard, WPE_COMP_TRANSFORM);
+    WPE_TEST_ASSERT_NEAR(-3.0, t->position.x, 1e-6);
+
+    /* The environment's navigation settings (all of them listed, defaults too) change the grid. */
+    WPE_JsonDocument* environment = run(editor, "{\"cmd\": \"get_environment\"}", true);
+    const WPE_JsonValue* navigation = wpe_json_get(result_of(environment), "navigation");
+    WPE_TEST_ASSERT_NEAR(0.4, wpe_json_number(wpe_json_get(navigation, "agent_radius"), 0), 1e-6);
+    wpe_json_free(environment);
+    run_ok(editor, "{\"cmd\": \"set_environment\", \"value\": {\"navigation\": {\"agent_radius\": 0.1}}}");
+    WPE_JsonDocument* rebuilt = run(editor, "{\"cmd\": \"nav_rebuild\"}", true);
+    WPE_TEST_ASSERT(wpe_json_number(wpe_json_get(result_of(rebuilt), "build_ms"), -1) >= 0.0);
+    WPE_TEST_ASSERT(wpe_json_number(wpe_json_get(result_of(rebuilt), "cells"), 0) > 36.0 * 36.0);
+    wpe_json_free(rebuilt);
+    /* Play mode keeps the game's grid. */
+    run_ok(editor, "{\"cmd\": \"play\"}");
+    wpe_json_free(run(editor, "{\"cmd\": \"nav_rebuild\"}", false));
+    run_ok(editor, "{\"cmd\": \"stop\"}");
+    wpe_editor_destroy(editor);
+}
+
 static bool raycast_down(WPE_Editor* editor, float x, WPE_RaycastHit* hit) {
     return wpe_physics_raycast(wpe_engine_physics(wpe_editor_engine(editor)), wpe_vec3(x, 10, 0),
                                wpe_vec3(0, -1, 0), 20.0f, NULL, hit);
@@ -1204,10 +1311,10 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_editor_fits_colliders_to_meshes), WPE_TEST_CASE(test_editor_guards_unsaved_changes),
     WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
     WPE_TEST_CASE(test_editor_view_settings_and_overlays), WPE_TEST_CASE(test_editor_physics_follows_edits),
-    WPE_TEST_CASE(test_editor_hot_reloads_scripts), WPE_TEST_CASE(test_editor_script_files),
-    WPE_TEST_CASE(test_editor_new_script), WPE_TEST_CASE(test_editor_asset_files),
-    WPE_TEST_CASE(test_editor_every_api_function_is_documented), WPE_TEST_CASE(test_editor_script_properties),
-    WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
+    WPE_TEST_CASE(test_editor_navigation), WPE_TEST_CASE(test_editor_hot_reloads_scripts),
+    WPE_TEST_CASE(test_editor_script_files), WPE_TEST_CASE(test_editor_new_script),
+    WPE_TEST_CASE(test_editor_asset_files), WPE_TEST_CASE(test_editor_every_api_function_is_documented),
+    WPE_TEST_CASE(test_editor_script_properties), WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
     WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
     WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
     WPE_TEST_CASE(test_editor_play_mode_restores_the_scene))

@@ -526,6 +526,7 @@ void wpe_editor_destroy(WPE_Editor* editor) {
     wpe__clear_stack(editor->undo, &editor->undo_count);
     wpe__clear_stack(editor->redo, &editor->redo_count);
     wpe__snapshot_free(&editor->play);
+    wpe_free(editor->nav_probe);
     if (editor->log_sink) wpe_log_remove_sink(editor->log_sink);
     SDL_DestroyMutex(editor->log_mutex);
     wpe_free(editor);
@@ -575,6 +576,51 @@ static WPE_Result wpe__editor_preview_particles(WPE_Editor* editor, double dt) {
     return wanted != WPE_ENTITY_NULL ? wpe_particles_preview(ecs, wanted, (float)dt) : WPE_RESULT_OK;
 }
 
+void wpe__editor_nav_current(WPE_Editor* editor) {
+    if (editor->mode != WPE_EDITOR_EDIT) return;
+    if (editor->nav_changes != editor->changes) {
+        wpe_engine_invalidate_nav_grid(editor->engine);
+        editor->nav_changes = editor->changes;
+    }
+    editor->nav_waiting = 0.0;
+    (void)wpe_nav_system_refresh(wpe_engine_navigation(editor->engine)); /* No grid: nothing to carve. */
+}
+
+WPE_Result wpe__editor_set_nav_probe(WPE_Editor* editor, const WPE_Vec3* points, uint32_t count) {
+    WPE_Vec3* copy = NULL;
+    if (points && count) {
+        copy = wpe_alloc((size_t)count * sizeof *copy);
+        if (!copy) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        memcpy(copy, points, (size_t)count * sizeof *copy);
+    }
+    wpe_free(editor->nav_probe);
+    editor->nav_probe = copy;
+    editor->nav_probe_count = copy ? count : 0;
+    return WPE_RESULT_OK;
+}
+
+/* The test path, magenta, a little above the floor. */
+static void wpe__editor_draw_probe(WPE_EngineLineFn line, void* line_data, void* user_data) {
+    const WPE_Editor* editor = user_data;
+    const WPE_Vec3 lift = wpe_vec3(0, 0.15f, 0);
+    for (uint32_t i = 1; i < editor->nav_probe_count; ++i)
+        line(wpe_vec3_add(editor->nav_probe[i - 1], lift), wpe_vec3_add(editor->nav_probe[i], lift),
+             0xF050F0u, line_data);
+    for (uint32_t i = 0; i < editor->nav_probe_count; ++i) /* A post at each corner. */
+        line(editor->nav_probe[i], wpe_vec3_add(editor->nav_probe[i], wpe_vec3(0, 0.6f, 0)), 0xF050F0u,
+             line_data);
+}
+
+/* Edit mode with the navigation view on: the grid follows the edits, once they rest for a moment (dragging
+ * a wall doesn't rebuild every frame). Turning the view on shows a current grid at once. */
+static void wpe__editor_nav_frame(WPE_Editor* editor, double dt) {
+    const bool shown = editor->view.navigation && editor->mode == WPE_EDITOR_EDIT;
+    if (shown && (!editor->nav_shown || editor->nav_changes == editor->changes ||
+                  (editor->nav_waiting += dt) >= WPE__EDITOR_NAV_SETTLE))
+        wpe__editor_nav_current(editor);
+    editor->nav_shown = shown;
+}
+
 WPE_Result wpe_editor_frame(WPE_Editor* editor, double dt) {
     if (!editor) return WPE_RESULT_ERROR_NULL_ARG;
     const bool editing = editor->mode == WPE_EDITOR_EDIT;
@@ -592,11 +638,16 @@ WPE_Result wpe_editor_frame(WPE_Editor* editor, double dt) {
     if (result == WPE_RESULT_OK && editing) result = wpe__editor_preview_particles(editor, dt);
     /* Scrolling textures and water move while editing too (their runtime state is never saved). */
     if (editing) wpe_surface_update(wpe_engine_ecs(editor->engine), (float)dt);
+    wpe__editor_nav_frame(editor, dt);
+    const bool probe = editing && editor->nav_probe_count > 1;
     wpe_engine_set_debug_draw(
         editor->engine, &(WPE_EngineDebugDraw){.physics = editor->view.physics,
                                                .grid = editor->view.grid && editing && !editor->view.view_2d,
                                                .grid_spacing = editor->view.grid_spacing,
-                                               .network = editor->view.network});
+                                               .network = editor->view.network,
+                                               .navigation = editor->view.navigation && !editor->view.view_2d,
+                                               .extra_lines = probe ? wpe__editor_draw_probe : NULL,
+                                               .extra_lines_user_data = editor});
     const WPE_Result frame = wpe_engine_frame(editor->engine, dt);
     if (result == WPE_RESULT_OK) result = frame;
     /* A game that quits (wpe.quit) in play mode returns the editor to edit mode. */

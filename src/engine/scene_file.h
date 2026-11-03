@@ -198,8 +198,8 @@ WPE_Result wpe_scene_set_component(const WPE_SceneContext* context, WPE_Entity e
  * key; logged). @thread_safety Owning thread */
 WPE_Result wpe_scene_remove_component(const WPE_SceneContext* context, WPE_Entity entity, const char* key);
 
-/** Writes an environment as the JSON object stored under a scene's "environment". @thread_safety Any thread
- */
+/** Writes an environment as the JSON object stored under a scene's "environment", with every "navigation"
+ * setting (scene files leave out default ones) for editors to show. @thread_safety Any thread */
 WPE_Result wpe_scene_write_environment(const WPE_SceneEnvironment* environment, WPE_JsonWriter* writer);
 
 /** Applies an "environment" object onto an environment (keys not given keep their values; a given

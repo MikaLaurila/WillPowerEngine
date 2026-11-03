@@ -195,6 +195,9 @@ WPE_SceneEnvironment* wpe_engine_environment(WPE_Engine* engine);
 /** The game clock's speed (slow motion, hit-stops) and shakes; reset by every scene load. */
 WPE_GameFeel* wpe_engine_game_feel(WPE_Engine* engine);
 
+/** A debug line (world space, 0xRRGGBB). */
+typedef void (*WPE_EngineLineFn)(WPE_Vec3 a, WPE_Vec3 b, uint32_t color, void* line_data);
+
 /** Debug overlays drawn over the scene (depth tested, not post-processed, under the scripts' 2D). */
 typedef struct WPE_EngineDebugDraw {
     bool physics;       /* Collider wireframes, colored by body type (see wpe_physics_debug_draw()). */
@@ -204,6 +207,10 @@ typedef struct WPE_EngineDebugDraw {
     /* The walkable area of wpe_engine_nav_grid() (built when needed), colored by island, with the agents'
      * ways ahead (yellow) and the cells obstacles close (red). */
     bool navigation;
+    /* Optional: a tool's own lines (the editor's path test), added through `line` every frame with the
+     * other overlays. */
+    void (*extra_lines)(WPE_EngineLineFn line, void* line_data, void* user_data);
+    void* extra_lines_user_data;
 } WPE_EngineDebugDraw;
 
 /** Sets the debug overlays (all off by default). @thread_safety Main thread only */

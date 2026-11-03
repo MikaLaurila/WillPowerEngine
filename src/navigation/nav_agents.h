@@ -164,6 +164,16 @@ const WPE_NavBlockers* wpe_nav_system_blockers(WPE_NavSystem* system);
  */
 WPE_Result wpe_nav_system_update(WPE_NavSystem* system, float dt);
 
+/**
+ * Takes the grid (from the provider, if not yet) and carves the obstacles where they are now, without moving
+ * any agent: for tools that show an edited world without simulating it (the editor's edit mode).
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_NOT_FOUND (no grid).
+ *
+ * @thread_safety Owning thread
+ */
+WPE_Result wpe_nav_system_refresh(WPE_NavSystem* system);
+
 /** @return The events of the last update (borrowed until the next one). @thread_safety Owning thread */
 const WPE_NavEvent* wpe_nav_system_events(const WPE_NavSystem* system, uint32_t* out_count);
 
@@ -190,7 +200,8 @@ WPE_Result wpe_nav_agent_stop(WPE_NavSystem* system, WPE_Entity entity);
  * the corner it walks to now; NULL when it has none. @thread_safety Owning thread */
 const WPE_Vec3* wpe_nav_agent_path(const WPE_NavSystem* system, WPE_Entity entity, uint32_t* out_count);
 
-/** Emits debug lines: each moving agent's way ahead and the blocked cells' outlines. @thread_safety Owning
+/** Emits debug lines: each agent's footprint (the grid's agent radius) and way ahead, each obstacle's box,
+ * and the blocked cells' outlines. @thread_safety Owning
  * thread */
 void wpe_nav_system_debug_draw(WPE_NavSystem* system, WPE_NavSystemLineFn line, void* user_data);
 
