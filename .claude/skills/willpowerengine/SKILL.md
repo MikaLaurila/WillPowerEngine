@@ -3,7 +3,7 @@ name: willpowerengine
 description: >
   Build games with WillPowerEngine: Luau scripts on ECS entities, JSON scene and prefab files, the
   editor's JSON command interface, and the templates (first_person, third_person, platformer, racing,
-  racing_online, stealth). Translates the generic game-dev skills (game-ai, camera-systems, game-feel,
+  racing_online, stealth, shooter). Translates the generic game-dev skills (game-ai, camera-systems, game-feel,
   input-systems, level-design, save-systems, game-ui-ux, audio-design, physics-tuning, genres) into this
   engine's API. Use when making or changing a game in a WillPowerEngine project: a directory with
   project.json ("format": "wpe.project"), scenes/*.scene, scripts/*.luau, or when the user mentions wpe_,
@@ -74,6 +74,7 @@ function Enemy:take_damage(n) end                    -- any method: wpe.send(e, 
 return Enemy
 ```
 
+- Script properties are instance fields, so they hide methods of the same name: a property `impact` makes `self:impact()` call a number. Name them differently.
 - Find entities once (`wpe.find(name)`) and keep the handle; `wpe.get_script(e)` is another script's
   `self`; `wpe.broadcast(method, ...)` calls everyone who has the method.
 - Angles: scripts use radians (`wpe.set_rotation(e, vector.create(0, yaw, 0))`), scene files degrees
@@ -102,7 +103,7 @@ return Enemy
 | performance-optimization | The target is a CPU rasterizer at low resolution: keep triangle counts modest, use frustum culling (on), `max_texture_size`, fewer lights with shadows. Measure with the editor's Performance panel or the `stats` command. |
 | shader-programming | No user shaders (software renderer). Use materials (glTF PBR, emissive, vertex colors), `texture_filter`, water, UV scrolling, and the post-effect chain. |
 | dialogue-systems, card-game, visual-novel | No built-in system: `text`/`button` UI entities plus a script holding the data (Luau tables in a `require`d module). |
-| genres | platformer → `platformer`; fps-shooter → `first_person`; action/adventure → `third_person`; racing → `racing` / `racing_online`; stealth / enemy AI → `stealth`. Copy the closest template. |
+| genres | platformer → `platformer`; fps-shooter → `shooter` (gun, hitscan, ammo, targets; `first_person` without the gun); action/adventure → `third_person`; racing → `racing` / `racing_online`; stealth / enemy AI → `stealth`. Copy the closest template. |
 
 ## Working as an agent
 

@@ -4,6 +4,17 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (templates: the shooter)
+- `shooter` template: a first-person shooter to build on. A gun model in front of the camera
+  (`scripts/gun.luau`) shooting rays from the screen's center, with a muzzle flash and light, recoil and
+  view kick, walking bob, a magazine with reloading, impact sparks, a crosshair with a hit marker, and a
+  pull-back near walls. Targets take damage through `on_shot`; three training dummies wander with the
+  navigation system, topple when shot and get back up. Generated sounds to replace.
+
+### Fixed
+- Log lines go to stderr in one write. On Windows stderr is unbuffered, so lines from processes sharing a
+  pipe interleaved mid-line (a flaky `tools_network_cli` failure on Windows Release).
+
 ### Added (Milestone 12: navigation, phase 5: the stealth template)
 - `stealth` template: get past three guards to the exit. Guards (`scripts/guard.luau`) walk with the
   navigation system: they patrol routes (entities whose children are the points), see in a cone with a

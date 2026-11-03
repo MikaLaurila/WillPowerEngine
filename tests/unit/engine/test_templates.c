@@ -342,6 +342,70 @@ static void test_templates_third_person_plays(void) {
     remove_project(dir);
 }
 
+/* ---- Shooter --------------------------------------------------------------------------------------- */
+
+/* Shots knock a dummy down (it gets up again), use up the magazine and reload it; R reloads; the gun pulls
+ * back from a wall in front of it. */
+static void test_templates_shooter_plays(void) {
+    char dir[256];
+    create_project("shooter", dir, sizeof dir);
+    WPE_Engine* engine = create_engine(dir);
+    frames(engine, 15);
+    check_lua(engine, "loaded", "local g = wpe.get_script(wpe.find('gun'))\nassert(g.ammo == g.magazine)\n");
+    /* Stand 5 m in front of a dummy (keeping it still), looking at its chest. */
+    check_lua(engine, "aim",
+              "local d = wpe.find('dummy')\n"
+              "local s = wpe.get_script(d)\n"
+              "s.resting = 1000\n"
+              "wpe.nav_stop(d)\n"
+              "local p = wpe.find('player')\n"
+              "wpe.set_position(p, wpe.get_position(d) + vector.create(0, 0, 5))\n"
+              "local ps = wpe.get_script(p)\n"
+              "ps.yaw = 0; ps.pitch = -0.17\n");
+    frames(engine, 10);
+    for (int shot = 0; shot < 3; ++shot) {
+        check_lua(engine, "fire", "assert(wpe.get_script(wpe.find('gun')):fire())\n");
+        frames(engine, 6); /* Past the cooldown. */
+    }
+    check_lua(engine, "knocked down",
+              "local g = wpe.get_script(wpe.find('gun'))\n"
+              "local d = wpe.get_script(wpe.find('dummy'))\n"
+              "assert(d.down > 0, 'the dummy should be down')\n"
+              "assert(g.hits == 1 and g.ammo == g.magazine - 3)\n");
+    frames(engine, 150); /* down_time (4 s) passes. */
+    check_lua(engine, "back up",
+              "local d = wpe.get_script(wpe.find('dummy'))\n"
+              "assert(d.down <= 0 and d.hp == d.health)\n");
+
+    /* An empty magazine reloads by itself; R reloads a partly used one. */
+    check_lua(engine, "empty",
+              "local g = wpe.get_script(wpe.find('gun'))\n"
+              "g.ammo = 0\n"
+              "assert(not g:fire() and g.reloading > 0)\n");
+    frames(engine, 40);
+    check_lua(engine, "reloaded",
+              "local g = wpe.get_script(wpe.find('gun'))\nassert(g.ammo == g.magazine)\n");
+    check_lua(engine, "one shot", "assert(wpe.get_script(wpe.find('gun')):fire())\n");
+    frames(engine, 6);
+    tap(engine, SDL_SCANCODE_R);
+    check_lua(engine, "reloading", "assert(wpe.get_script(wpe.find('gun')).reloading > 0)\n");
+    frames(engine, 40);
+
+    /* Facing a wall up close, the gun pulls back toward the camera. */
+    check_lua(engine, "to the wall",
+              "local p = wpe.find('player')\n"
+              "wpe.set_position(p, vector.create(0, 0, -19.4))\n"
+              "local ps = wpe.get_script(p)\n"
+              "ps.yaw = 0; ps.pitch = 0\n");
+    frames(engine, 10);
+    check_lua(engine, "pulled back",
+              "local g = wpe.get_script(wpe.find('gun'))\n"
+              "assert(wpe.get_position(wpe.find('gun')).z > g.rest.z + 0.1, 'the gun should pull back')\n");
+    WPE_TEST_ASSERT_EQ_UINT(0, script_errors(engine));
+    wpe_engine_destroy(engine);
+    remove_project(dir);
+}
+
 /* ---- Stealth --------------------------------------------------------------------------------------- */
 
 /* A guard's state (guard.luau), checked from Luau. */
@@ -817,6 +881,6 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_templates_create_projects_that_run),
               WPE_TEST_CASE(test_templates_reject_unknown_names),
               WPE_TEST_CASE(test_templates_first_person_plays),
               WPE_TEST_CASE(test_templates_third_person_plays), WPE_TEST_CASE(test_templates_stealth_plays),
-              WPE_TEST_CASE(test_templates_platformer_plays), WPE_TEST_CASE(test_templates_racing_plays),
-              WPE_TEST_CASE(test_templates_racing_online_plays),
+              WPE_TEST_CASE(test_templates_shooter_plays), WPE_TEST_CASE(test_templates_platformer_plays),
+              WPE_TEST_CASE(test_templates_racing_plays), WPE_TEST_CASE(test_templates_racing_online_plays),
               WPE_TEST_CASE(test_templates_racing_online_from_the_command_line))
