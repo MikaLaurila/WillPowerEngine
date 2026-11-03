@@ -24,6 +24,9 @@ Development runs in milestones; the user reviews each one before the next starts
 11. Networking (done): 11.1 transport → 11.2 serialization → 11.3 session + LAN discovery → 11.4 replication → 11.5 Luau API → 11.6 runtime/editor → 11.7 `racing_online` template
 12. Navigation (done): 12.1 nav grid built from static colliders (our own 2.5D multi-layer grid, not Recast; done) → 12.2 pathfinding (A*, smoothing, flow fields; done) → 12.3 agents, obstacles, Luau API, `docs/navigation.md` (done) → 12.4 editor (done) → 12.5 stealth/arena enemy template + a `willpowerengine` skill (done)
 
+**Toward v1.0.0** (items the user has agreed to; v1.0.0 is released when the list is done):
+- `wpe_editor <dir> --init` installs the `willpowerengine` skill into the new project (`.claude/skills/willpowerengine/`), with a `references/` copy of the docs its links point to (scripting, scenes, runtime, editor, navigation, networking, assets), so Claude can help in game projects outside this repository; plus a way to refresh a project's copy after an engine update. The skill's copy must match the engine version it came with.
+
 Do not look outside the working directory. Third-party libraries come in through CMake FetchContent, pinned to release tags or commits. Only use the approved list in AGENTS.md §7 (SDL3, cglm, cgltf, stb_image, miniaudio, Luau, cimgui (with Dear ImGui), Box3D, zstd, ENet); anything else needs the user's approval. Add each one in the milestone that needs it, wrapped so its API is not exposed in public headers, and compiled *without* `wpe_configure_target` so its warnings don't break the build.
 
 ## Commands
