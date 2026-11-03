@@ -4,6 +4,25 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 12: navigation, phase 2: pathfinding)
+- `navigation/nav_path.h`: finding the way on a nav grid.
+  - `wpe_nav_grid_nearest` (the nearest walkable point within limits), `wpe_nav_grid_reachable`
+    (same island, O(1)) and `wpe_nav_grid_line_walkable` (a straight walk, following floors up and
+    down, never squeezing past a wall's corner).
+  - `wpe_nav_find_path`: A* over straight and diagonal moves (diagonals only where both ways around
+    the corner are open), pulled straight into corner points. Start and goal snap onto the walkable
+    area within `search_radius`; `allow_partial` returns the way to the reachable point nearest an
+    unreachable goal; `max_visited` bounds the work; `raw` keeps the cell centers. Searches run in a
+    reusable `WPE_NavQuery` and don't allocate once warmed up; results are deterministic.
+  - Flow fields (`WPE_NavFlowField`): walking distances from every cell to the nearest of several
+    goals in one pass, the next cell toward them, and `wpe_nav_flow_direction` for steering many
+    agents at once.
+- `stress_navigation`: A* checked against Dijkstra on a random 100 x 100 m maze, every move and
+  smoothed segment checked walkable, and Release performance budgets.
+
+### Changed
+- Nav grids are limited to 65535 columns along either axis, and keep each cell's column.
+
 ### Added (Milestone 12: navigation, phase 1: the nav grid)
 - New `navigation` module (`navigation/navigation.h`): a 2.5D, multi-layer grid of where a character
   of a given size can stand and walk, built from triangles. Our own design, not Recast: triangles

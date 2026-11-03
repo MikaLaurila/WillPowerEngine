@@ -471,16 +471,17 @@ static WPE_Result wpe__erode(wpe__Build* b) {
     return WPE_RESULT_OK;
 }
 
-/* Numbers the connected areas by flood fill, in cell order (so the numbering is stable). */
+/* Records each cell's column (kept in the grid), then numbers the connected areas by flood fill, in cell
+ * order (so the numbering is stable). */
 static WPE_Result wpe__find_islands(WPE_NavGrid* g) {
     g->island_count = 0;
     if (g->cell_count == 0) return WPE_RESULT_OK;
     uint32_t* stack = wpe_alloc((size_t)g->cell_count * sizeof *stack);
-    uint32_t* column_of = wpe_alloc((size_t)g->cell_count * sizeof *column_of);
+    g->cell_columns = wpe_alloc((size_t)g->cell_count * sizeof *g->cell_columns);
+    uint32_t* column_of = g->cell_columns;
     if (!stack || !column_of) {
         wpe_free(stack);
-        wpe_free(column_of);
-        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY; /* The grid frees cell_columns. */
     }
     for (uint32_t column = 0; column < g->width * g->depth; ++column) {
         for (uint32_t cell = g->columns[column]; cell < g->columns[column + 1]; ++cell)
@@ -507,7 +508,6 @@ static WPE_Result wpe__find_islands(WPE_NavGrid* g) {
         }
     }
     wpe_free(stack);
-    wpe_free(column_of);
     return WPE_RESULT_OK;
 }
 
@@ -520,7 +520,7 @@ static WPE_Result wpe__size_grid(WPE_NavGrid* g, WPE_Vec3 min, WPE_Vec3 max, uin
     const double depth = ceil(((double)max.z - min.z) / s->cell_size);
     const double height = ceil(((double)max.y - min.y) / s->cell_height) + 1.0;
     const double w = width < 1.0 ? 1.0 : width, d = depth < 1.0 ? 1.0 : depth;
-    if (w * d > (double)WPE_NAV_MAX_COLUMNS) {
+    if (w * d > (double)WPE_NAV_MAX_COLUMNS || w > 65535.0 || d > 65535.0) {
         wpe_log_error(
             "the navigation region (%.1f x %.1f) needs %.0f columns of %g; the most is %u: use larger "
             "cells or smaller bounds",
@@ -638,5 +638,6 @@ void wpe_nav_grid_destroy(WPE_NavGrid* grid) {
     if (!grid) return;
     wpe_free(grid->columns);
     wpe_free(grid->cells);
+    wpe_free(grid->cell_columns);
     wpe_free(grid);
 }

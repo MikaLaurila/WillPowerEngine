@@ -17,22 +17,8 @@ WPE_NavGridInfo wpe_nav_grid_info(const WPE_NavGrid* grid) {
         .island_count = grid->island_count,
         .max_layers = grid->max_layers,
         .memory = sizeof *grid + ((size_t)grid->width * grid->depth + 1u) * sizeof *grid->columns +
-                  (size_t)grid->cell_count * sizeof *grid->cells,
+                  (size_t)grid->cell_count * (sizeof *grid->cells + sizeof *grid->cell_columns),
     };
-}
-
-/* The column holding `cell`: the last column starting at or before it. */
-static uint32_t wpe__column_of(const WPE_NavGrid* g, uint32_t cell) {
-    uint32_t lo = 0, hi = g->width * g->depth; /* columns[lo] <= cell < columns[hi] */
-    while (hi - lo > 1) {
-        const uint32_t mid = lo + (hi - lo) / 2u;
-        if (g->columns[mid] <= cell) {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    return lo;
 }
 
 static float wpe__floor_y(const WPE_NavGrid* g, uint32_t cell) {
@@ -41,7 +27,7 @@ static float wpe__floor_y(const WPE_NavGrid* g, uint32_t cell) {
 
 bool wpe_nav_grid_cell(const WPE_NavGrid* grid, uint32_t cell, WPE_NavCellInfo* out_info) {
     if (!grid || !out_info || cell >= grid->cell_count) return false;
-    const uint32_t column = wpe__column_of(grid, cell);
+    const uint32_t column = grid->cell_columns[cell];
     const uint32_t x = column % grid->width, z = column / grid->width;
     const wpe__NavCell* c = &grid->cells[cell];
     const float cs = grid->settings.cell_size;

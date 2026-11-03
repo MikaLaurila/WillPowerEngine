@@ -54,7 +54,7 @@
 #define WPE_NAV_CELL_NONE UINT32_MAX
 /** Most cells in one column (floors stacked above each other); higher ones are dropped. */
 #define WPE_NAV_MAX_LAYERS 254u
-/** Most columns in a grid (width * depth), about 4096 x 4096. */
+/** Most columns in a grid (width * depth), about 4096 x 4096; at most 65535 along either axis. */
 #define WPE_NAV_MAX_COLUMNS (16u * 1024u * 1024u)
 
 /** The four link directions, in this order: +X, +Z, -X, -Z. */
