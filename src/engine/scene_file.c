@@ -57,7 +57,8 @@ WPE_SceneEnvironment wpe_scene_environment_default(void) {
     return (WPE_SceneEnvironment){.clear_color = wpe_vec3(0.11f, 0.125f, 0.17f),
                                   .render = wpe_scene_render_settings_default(),
                                   .gravity = wpe_vec3(0.0f, -9.81f, 0.0f),
-                                  .music_fade = 1.0f};
+                                  .music_fade = 1.0f,
+                                  .navigation = wpe_nav_settings_default()};
 }
 
 uint32_t wpe_scene_environment_effects(const WPE_SceneEnvironment* environment, WPE_PostEffect* out_effects) {
@@ -171,6 +172,34 @@ void wpe__write_asset(wpe__Saver* s, const char* key, WPE_AssetHandle handle) {
     }
 }
 
+static bool wpe__same_vec3(WPE_Vec3 a, WPE_Vec3 b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+}
+
+/* "navigation", only when it differs from the defaults (most scenes never set it, and keep their text). */
+static void wpe__save_navigation(WPE_JsonWriter* w, const WPE_NavSettings* n) {
+    const WPE_NavSettings d = wpe_nav_settings_default();
+    const bool bounds =
+        !wpe__same_vec3(n->bounds_min, d.bounds_min) || !wpe__same_vec3(n->bounds_max, d.bounds_max);
+    if (n->cell_size == d.cell_size && n->cell_height == d.cell_height && n->agent_radius == d.agent_radius &&
+        n->agent_height == d.agent_height && n->max_slope == d.max_slope && n->step_height == d.step_height &&
+        !bounds)
+        return;
+    wpe_json_write_key(w, "navigation");
+    wpe_json_write_object_begin(w);
+    wpe__write_number(w, "cell_size", n->cell_size);
+    wpe__write_number(w, "cell_height", n->cell_height);
+    wpe__write_number(w, "agent_radius", n->agent_radius);
+    wpe__write_number(w, "agent_height", n->agent_height);
+    wpe__write_number(w, "max_slope", n->max_slope);
+    wpe__write_number(w, "step_height", n->step_height);
+    if (bounds) {
+        wpe__write_vec3(w, "bounds_min", n->bounds_min);
+        wpe__write_vec3(w, "bounds_max", n->bounds_max);
+    }
+    wpe_json_write_object_end(w);
+}
+
 static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment* env) {
     const WPE_SceneRenderSettings* r = &env->render;
     wpe_json_write_object_begin(w);
@@ -225,6 +254,7 @@ static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment*
     wpe__write_vec3(w, "color", r->default_sun_color);
     wpe_json_write_object_end(w);
     wpe__write_vec3(w, "gravity", env->gravity);
+    wpe__save_navigation(w, &env->navigation);
     if (env->music[0]) {
         wpe_json_write_key(w, "music");
         wpe_json_write_object_begin(w);
@@ -898,8 +928,26 @@ static bool wpe__load_sky(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvir
 static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvironment* env) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "environment", "clear_color", "ambient", "fog", "sky", "shadows",
                                 "dither_transparency", "texture_filter", "frustum_culling", "subdivision",
-                                "default_sun", "gravity", "music", "postfx"))
+                                "default_sun", "gravity", "navigation", "music", "postfx"))
         return false;
+    const WPE_JsonValue* nav = wpe_json_get(v, "navigation");
+    if (nav) {
+        WPE_NavSettings* n = &env->navigation;
+        if (!WPE__JSON_CHECK_OBJECT(&l->r, nav, "navigation", "cell_size", "cell_height", "agent_radius",
+                                    "agent_height", "max_slope", "step_height", "bounds_min", "bounds_max") ||
+            !wpe__json_read_float(&l->r, nav, "cell_size", 0.01, 100, &n->cell_size) ||
+            !wpe__json_read_float(&l->r, nav, "cell_height", 0.001, 100, &n->cell_height) ||
+            !wpe__json_read_float(&l->r, nav, "agent_radius", 0, 100, &n->agent_radius) ||
+            !wpe__json_read_float(&l->r, nav, "agent_height", 0.01, 100, &n->agent_height) ||
+            !wpe__json_read_float(&l->r, nav, "max_slope", 0, 89.9, &n->max_slope) ||
+            !wpe__json_read_float(&l->r, nav, "step_height", 0, 100, &n->step_height) ||
+            !wpe__json_read_vec3(&l->r, nav, "bounds_min", &n->bounds_min) ||
+            !wpe__json_read_vec3(&l->r, nav, "bounds_max", &n->bounds_max))
+            return false;
+        if (n->step_height >= n->agent_height)
+            return wpe__json_fail(&l->r, nav, WPE_RESULT_ERROR_PARSE,
+                                  "navigation \"step_height\" must be below \"agent_height\"");
+    }
     if (!wpe__load_sky(l, wpe_json_get(v, "sky"), env)) return false;
     WPE_SceneRenderSettings* r = &env->render;
     uint32_t texture_filter = r->texture_filtering;

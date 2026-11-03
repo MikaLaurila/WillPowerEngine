@@ -33,6 +33,7 @@
 #include "ecs/ecs.h"
 #include "graphics/postfx.h"
 #include "graphics/scene_render.h"
+#include "navigation/navigation.h"
 #include "script/script.h"
 
 /** Scene file format version written by this engine (files with a newer version are rejected). */
@@ -52,6 +53,7 @@ typedef struct WPE_SceneEnvironment {
     char sky_image[WPE_VFS_PATH_MAX]; /* The panorama sky's image ("" = none); render.sky.panorama is set from
                                          it by the engine. */
     float music_fade;                 /* Crossfade into the track, seconds. */
+    WPE_NavSettings navigation; /* How the scene's navigation grid is built (navigation/navigation.h). */
 } WPE_SceneEnvironment;
 
 /** Maps entities to file ids while saving and file ids to entities while loading. Opaque. */
@@ -101,7 +103,7 @@ struct WPE_SceneContext {
 };
 
 /** @return The default environment: render defaults, no post-processing, gravity -9.81 Y, a dark blue
- * background, no music. @thread_safety Any thread */
+ * background, no music, default navigation settings. @thread_safety Any thread */
 WPE_SceneEnvironment wpe_scene_environment_default(void);
 
 /**

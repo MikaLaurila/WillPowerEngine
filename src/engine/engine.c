@@ -70,6 +70,8 @@ struct WPE_Engine {
     WPE_Input* input;
     WPE_Ui* ui;
     WPE_ScriptHost* scripts;
+    WPE_NavGrid* nav_grid; /* The scene's, once asked for (wpe_engine_nav_grid). */
+    bool nav_tried;        /* A build ran since the last load or invalidation (NULL grid: it failed). */
 
     WPE_SceneEnvironment environment;
     WPE_Entity camera;
@@ -485,6 +487,7 @@ void wpe_engine_destroy(WPE_Engine* engine) {
     wpe_free(engine->net_events);
     /* Users of the world and its assets first, then the world, then what they read from. */
     wpe_script_host_destroy(engine->scripts);
+    wpe_nav_grid_destroy(engine->nav_grid);
     wpe_replication_destroy(engine->replication);
     wpe_audio_destroy(engine->audio);
     wpe_physics_destroy(engine->physics);
@@ -531,7 +534,8 @@ static void wpe__apply_music(WPE_Engine* engine) {
 WPE_Result wpe_engine_load_scene_text(WPE_Engine* engine, const char* text, size_t size, const char* name) {
     if (!engine || !text) return WPE_RESULT_ERROR_NULL_ARG;
     if (!name) name = "scene";
-    engine->scene_path[0] = '\0'; /* wpe_engine_load_scene() sets it once a file has loaded. */
+    engine->scene_path[0] = '\0';           /* wpe_engine_load_scene() sets it once a file has loaded. */
+    wpe_engine_invalidate_nav_grid(engine); /* The next scene has its own level. */
     WPE_Result result = wpe_scene_clear(engine->ecs);
     engine->camera = WPE_ENTITY_NULL;
     engine->environment = wpe_scene_environment_default();
@@ -575,6 +579,7 @@ static WPE_Result wpe__load_scene_file(WPE_Engine* engine, const char* path, boo
         }
     } else {
         /* As with a failed load, the world is left empty. */
+        wpe_engine_invalidate_nav_grid(engine);
         const WPE_Result cleared = wpe_scene_clear(engine->ecs);
         engine->camera = WPE_ENTITY_NULL;
         if (cleared != WPE_RESULT_OK) result = cleared;
@@ -610,6 +615,27 @@ WPE_Entity wpe_engine_camera(const WPE_Engine* engine) {
     WPE_EcsIter it = wpe_ecs_query(
         engine->ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_CAMERA) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
     return wpe_ecs_iter_next(&it) ? it.entity : WPE_ENTITY_NULL;
+}
+
+/* ---- Navigation ---------------------------------------------------------------------------------- */
+
+const WPE_NavGrid* wpe_engine_nav_grid(WPE_Engine* engine) {
+    if (!engine) return NULL;
+    if (!engine->nav_tried) {
+        engine->nav_tried = true;
+        const WPE_Result result = wpe_nav_grid_build_from_world(
+            engine->ecs, engine->assets, &engine->environment.navigation, &engine->nav_grid);
+        if (result != WPE_RESULT_OK)
+            wpe_log_warn("the scene has no navigation grid: %s", wpe_result_to_string(result));
+    }
+    return engine->nav_grid;
+}
+
+void wpe_engine_invalidate_nav_grid(WPE_Engine* engine) {
+    if (!engine) return;
+    wpe_nav_grid_destroy(engine->nav_grid);
+    engine->nav_grid = NULL;
+    engine->nav_tried = false;
 }
 
 /* ---- Multiplayer --------------------------------------------------------------------------------- */
@@ -1191,7 +1217,8 @@ static void wpe__draw_grid(WPE_DebugLines* lines, WPE_Vec3 eye, float spacing) {
 /* The debug overlays, into a recording frame (after post-processing, depth tested against the scene). */
 static WPE_Result wpe__draw_debug(WPE_Engine* engine, WPE_Entity camera) {
     const WPE_EngineDebugDraw* debug = &engine->debug_draw;
-    if (!debug->physics && !debug->grid) return WPE_RESULT_OK;
+    if (!debug->physics && !debug->grid && !debug->navigation) return WPE_RESULT_OK;
+    const WPE_NavGrid* nav = debug->navigation ? wpe_engine_nav_grid(engine) : NULL;
     const WPE_Framebuffer* fb = wpe_renderer_framebuffer(engine->renderer);
     WPE_Mat4 view, projection;
     if (!wpe_scene_camera_matrices(engine->ecs, camera, (float)fb->width / (float)fb->height, &view,
@@ -1206,6 +1233,7 @@ static WPE_Result wpe__draw_debug(WPE_Engine* engine, WPE_Entity camera) {
                            debug->grid_spacing > 0.0f ? debug->grid_spacing : 1.0f);
     }
     if (debug->physics) wpe_physics_debug_draw(engine->physics, wpe__physics_line, engine->debug_lines);
+    if (nav) wpe_nav_grid_debug_draw(nav, wpe__physics_line, engine->debug_lines); /* Same line format. */
     return wpe_debug_lines_submit(engine->debug_lines, engine->renderer, true);
 }
 

@@ -16,6 +16,8 @@
  *     --screenshot <png>    save the last frame
  *     --workers <n>         render worker threads (default: one per core)
  *     --save-dir <dir>      keep saved data in this existing directory instead of the player's
+ *     --debug-physics       draw collider wireframes
+ *     --debug-nav           draw the navigation grid's walkable area (navigation/navigation.h)
  *
  *   Multiplayer (docs/networking.md):
  *     --host [port]         host a game (default: the project's port); with --headless, a dedicated server
@@ -49,6 +51,8 @@ typedef struct Options {
     bool host;
     WPE_EngineNetDesc net; /* join, player_name, port, local_only, conditions */
     bool net_stats;
+    bool debug_physics;
+    bool debug_nav;
 } Options;
 
 static int usage(void) {
@@ -56,6 +60,7 @@ static int usage(void) {
             "usage: wpe_runtime [--project <dir> | --pak <archive>] [--scene <path>] [--watch] [--mute]\n"
             "                   [--headless] [--frames <n>] [--fixed-dt <seconds>] [--max-fps <n>]\n"
             "                   [--screenshot <png>] [--workers <n>] [--save-dir <dir>]\n"
+            "                   [--debug-physics] [--debug-nav]\n"
             "                   [--host [port] | --connect <address[:port]>] [--name <player>] [--local]\n"
             "                   [--net-sim latency=<ms>,jitter=<ms>,loss=<percent>] [--net-stats]\n");
     return EXIT_FAILURE;
@@ -122,6 +127,10 @@ static bool parse_options(int argc, char** argv, Options* o) {
             o->net.local_only = true;
         } else if (strcmp(arg, "--net-stats") == 0) {
             o->net_stats = true;
+        } else if (strcmp(arg, "--debug-physics") == 0) {
+            o->debug_physics = true;
+        } else if (strcmp(arg, "--debug-nav") == 0) {
+            o->debug_nav = true;
         } else if (value && strcmp(arg, "--connect") == 0) {
             o->net.join = argv[++i];
         } else if (value && strcmp(arg, "--name") == 0) {
@@ -213,11 +222,11 @@ int main(int argc, char** argv) {
     if (result == WPE_RESULT_OK) {
         if (o.mute) wpe_audio_set_volume(wpe_engine_audio(engine), WPE_AUDIO_BUS_MASTER, 0.0f);
         wpe_engine_set_net_defaults(engine, &o.net); /* Games the scripts start get the same settings. */
-        if (o.net_stats) {
-            WPE_EngineDebugDraw debug = wpe_engine_debug_draw(engine);
-            debug.network = true;
-            wpe_engine_set_debug_draw(engine, &debug);
-        }
+        WPE_EngineDebugDraw debug = wpe_engine_debug_draw(engine);
+        debug.network = o.net_stats;
+        debug.physics = o.debug_physics;
+        debug.navigation = o.debug_nav;
+        wpe_engine_set_debug_draw(engine, &debug);
         if (o.host || o.net.join) result = wpe_engine_net_start(engine, &o.net);
     }
     if (result == WPE_RESULT_OK) {

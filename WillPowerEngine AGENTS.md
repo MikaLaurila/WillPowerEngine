@@ -300,6 +300,16 @@ return MyEntity
   - Walks and teleports: the body follows a walk (to where `wpe_character_move()` left the entity) with velocity over the step, so it pushes bodies; any other change of the entity's position is game code moving it, and the body is placed there directly (at the next move or step). Sending it across with velocity would take several steps for long distances (Box3D caps body speed) and enter every trigger on the way.
 - NOTE: limitation. The solver is single-threaded, because Box3D's task API needs asynchronous tasks that the job system doesn't provide yet. Colliders don't combine across the hierarchy into compound bodies.
 
+### 4.3.2 Navigation
+
+**Implementation:** `src/navigation/` (public API in `navigation/navigation.h`; decided in Milestone 12: our own grid, not Recast/Detour).
+- **A 2.5D multi-layer grid.** Columns of `cell_size` seen from above; each column lists its walkable *cells* bottom to top (floor, ceiling, a link per direction to the neighboring column's cell, an island number). Cells are numbered column by column, so a cell id is an index and a column's cells are a range.
+- **Built from triangles** (`WPE_NavGeometry`), which `wpe_nav_geometry_add_colliders()` collects from a world's *static* colliders exactly as physics builds their shapes (no rigid body or a static one; triggers, kinematic and dynamic bodies and character controllers are obstacles for later, not level geometry). The build never touches Box3D.
+- **Build steps** (`nav_build.c`): rasterize triangles into solid spans per column (clipped against the column grid; a face lying exactly on a column line belongs to the side its solid is on, so grid-snapped walls don't leak into the open column beside them) → low-obstacle filter → cells where a walkable top has `agent_height` of room → links (floors within `step_height`, shared room ≥ `agent_height`) → erosion by a chamfer distance field (a cell's *center* must be `agent_radius` from the nearest edge) → islands by flood fill. Everything is serial and deterministic; the result is immutable and safe to query from any thread.
+- **Defaults match `wpe_character_default()`** (radius 0.4, height 1.8, slope 45°, step 0.3), so what the grid calls walkable a character controller can walk.
+- **The engine owns the scene's grid** (`wpe_engine_nav_grid`): built on first request after a scene load or `wpe_engine_invalidate_nav_grid`, with `WPE_SceneEnvironment.navigation` (scene key `environment.navigation`, saved only when it differs from the defaults). `WPE_EngineDebugDraw.navigation` (`wpe_runtime --debug-nav`) draws its outline and a meter grid, colored by island.
+- NOTE(limitation): convex colliders add their mesh's triangles (the hull only for convex meshes); the build is single-threaded (fast enough at scene scale: the master scene's 240 x 240 grid adds about 10 ms to a Debug run).
+
 **Script host responsibilities:**
 - Expose ECS API to Luau (entity manipulation, component access).
 - Hot reload: detect script changes, restart scripts preserving state.
@@ -432,6 +442,7 @@ willpower_engine/
 │   ├── assets/         # glTF models (cgltf), image decoding (stb_image), bitmap fonts
 │   ├── graphics/       # Mesh/camera/animator components, material shader, scene render, 2D
 │   ├── physics/        # Box3D wrapper
+│   ├── navigation/     # Navigation grids built from static colliders (walkable cells, links, islands)
 │   ├── audio/          # miniaudio wrapper: sounds, sources, music, buses
 │   ├── vfs/            # Virtual file system and .pak archives (zstd)
 │   ├── script/         # Luau VM and bindings
@@ -468,6 +479,7 @@ willpower_engine/
   - `assets` depends on `core`, `math`, `renderer`, `jobs`, `platform` and `vfs`, and uses cgltf and stb_image privately.
   - `graphics` depends on `ecs`, `scene`, `renderer` and `assets`.
   - `physics` depends on `ecs`, `scene` and `assets`, and uses Box3D privately.
+  - `navigation` depends on `ecs`, `scene`, `assets` and `physics` (for the collider component types only).
   - `audio` depends on `ecs`, `scene` and `assets`, and uses miniaudio privately.
   - `input` depends on `core` and `platform`, and uses SDL3 privately.
   - `script` depends on `graphics`, `assets`, `physics`, `audio`, `input` and `platform`, and uses Luau privately.

@@ -43,6 +43,7 @@
 #include "engine/replication.h"
 #include "engine/scene_file.h"
 #include "input/input.h"
+#include "navigation/navigation.h"
 #include "network/network.h"
 #include "physics/physics.h"
 #include "renderer/renderer.h"
@@ -196,6 +197,7 @@ typedef struct WPE_EngineDebugDraw {
     bool grid;          /* A grid on the ground plane (y = 0) around the camera, X axis red, Z axis blue. */
     float grid_spacing; /* World units between grid lines (0 = 1); every 10th line is brighter. */
     bool network;       /* The multiplayer session in the top-left corner: players, pings, traffic. */
+    bool navigation; /* The walkable area of wpe_engine_nav_grid() (built when needed), colored by island. */
 } WPE_EngineDebugDraw;
 
 /** Sets the debug overlays (all off by default). @thread_safety Main thread only */
@@ -214,6 +216,25 @@ bool wpe_engine_draws_ui(const WPE_Engine* engine);
  * @thread_safety Main thread only */
 void wpe_engine_set_draw_scene(WPE_Engine* engine, bool draw_scene);
 bool wpe_engine_draws_scene(const WPE_Engine* engine);
+
+/* ---- Navigation (navigation/navigation.h) -------------------------------------------------------- */
+
+/**
+ * The current scene's navigation grid: where a character can walk, built from the scene's static
+ * colliders with the environment's navigation settings. It is built the first time it is asked for
+ * after a scene load or wpe_engine_invalidate_nav_grid() (scenes that never use navigation never pay
+ * for it), from the colliders' current transforms.
+ *
+ * @return The grid, borrowed until the next scene load or invalidation; NULL when the scene has no
+ *         static colliders or the build failed (logged once, until the next load or invalidation).
+ *
+ * @thread_safety Main thread only
+ */
+const WPE_NavGrid* wpe_engine_nav_grid(WPE_Engine* engine);
+
+/** Drops the navigation grid, so the next wpe_engine_nav_grid() builds it again: after moving level
+ * geometry, or changing wpe_engine_environment()->navigation. @thread_safety Main thread only */
+void wpe_engine_invalidate_nav_grid(WPE_Engine* engine);
 
 /* ---- Multiplayer (docs/networking.md) ------------------------------------------------------------ */
 

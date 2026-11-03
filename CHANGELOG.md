@@ -4,6 +4,24 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 12: navigation, phase 1: the nav grid)
+- New `navigation` module (`navigation/navigation.h`): a 2.5D, multi-layer grid of where a character
+  of a given size can stand and walk, built from triangles. Our own design, not Recast: triangles
+  are rasterized into solid spans per column, walkable span tops with headroom become cells, cells
+  link to neighbors within a step, cells too close to an edge for the agent's radius are eroded away,
+  and connected areas are numbered as islands. Floors stack (the ground under a bridge and the deck
+  are two cells of one column).
+- `wpe_nav_geometry_add_colliders`: the triangles of a world's static colliders (boxes, spheres,
+  capsules, convex and mesh colliders), sized exactly as physics builds them; triggers and moving
+  bodies are left out. `wpe_nav_grid_build_from_world` does both steps.
+- Queries: `wpe_nav_grid_info`, `wpe_nav_grid_cell` (position, ceiling, layer, island, linked
+  neighbors) and `wpe_nav_grid_find_cell` (the cell a point stands on). `wpe_nav_grid_debug_draw`
+  emits the walkable area's outline and a meter grid, colored by island.
+- Engine: `wpe_engine_nav_grid` builds the scene's grid on first use (again after a scene load or
+  `wpe_engine_invalidate_nav_grid`). Scenes set its agent size and resolution with
+  `environment.navigation` (defaults match the default character controller).
+- Debug overlay `WPE_EngineDebugDraw.navigation`; `wpe_runtime --debug-nav` and `--debug-physics`.
+
 ### Added (Milestone 11: networking, phase 7: the racing_online template)
 - `racing_online` template: the arcade racer for 1–4 players. A menu (practice, host, join on this
   computer, at a typed address or from LAN discovery, player name), a lobby to warm up in, a host-run

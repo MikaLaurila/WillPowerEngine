@@ -218,6 +218,9 @@ static void test_engine_scene_round_trip(void) {
                     env.postfx[2].ps1.levels == 32);
     WPE_TEST_ASSERT_EQ_STR("music/ambient.wav", env.music);
     WPE_TEST_ASSERT_EQ_INT(WPE_FOG_EXPONENTIAL, env.render.fog.mode);
+    WPE_TEST_ASSERT_NEAR(0.35, env.navigation.agent_radius, 1e-6);
+    WPE_TEST_ASSERT_NEAR(1.8, env.navigation.agent_height, 1e-6); /* Not given: the default. */
+    WPE_TEST_ASSERT_NEAR(15.0, env.navigation.bounds_max.y, 1e-6);
     const WPE_ComponentType all[] = {WPE_COMP_TRANSFORM,
                                      WPE_COMP_HIERARCHY,
                                      WPE_COMP_NAME,
@@ -389,6 +392,13 @@ static void test_engine_scene_rejects_mistakes_and_rolls_back(void) {
          WPE_RESULT_ERROR_PARSE},
         {"{\"format\": \"wpe.scene\", \"version\": 1, \"environment\": {\"default_sun\": {\"direction\": [0, "
          "0, 0]}}}",
+         WPE_RESULT_ERROR_PARSE},
+        {"{\"format\": \"wpe.scene\", \"version\": 1, \"environment\": {\"navigation\": {\"agent_height\": "
+         "0.2}}}",
+         WPE_RESULT_ERROR_PARSE}, /* Not above the default step height. */
+        {"{\"format\": \"wpe.scene\", \"version\": 1, \"environment\": {\"navigation\": {\"radius\": 1}}}",
+         WPE_RESULT_ERROR_PARSE},
+        {"{\"format\": \"wpe.scene\", \"version\": 1, \"environment\": {\"navigation\": {\"cell_size\": 0}}}",
          WPE_RESULT_ERROR_PARSE},
         {"{\"format\": \"wpe.scene\", \"version\": 1, \"camera\": 1, \"entities\": [{\"id\": 1}]}",
          WPE_RESULT_ERROR_PARSE},
@@ -1025,6 +1035,77 @@ static void test_engine_captures_the_frame_before_post_effects(void) {
     wpe_engine_destroy(engine);
 }
 
+static uint32_t lit_pixels(const WPE_Engine* engine) {
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(engine));
+    uint32_t lit = 0;
+    for (uint32_t i = 0; i < fb->width * fb->height; ++i)
+        lit += (fb->color[i] & 0xFFFFFFu) != 0;
+    return lit;
+}
+
+/* The engine builds the scene's navigation grid when asked, with the scene's settings, and draws it. */
+static void test_engine_navigation_grid(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/nav/scenes"));
+    write_text(ROOT "/nav/project.json",
+               "{\"format\": \"wpe.project\", \"version\": 1, \"name\": \"Nav\", \"start_scene\": "
+               "\"scenes/level.scene\", \"display\": {\"width\": 64, \"height\": 48}}\n");
+    write_text(ROOT "/nav/scenes/level.scene",
+               "{\"format\": \"wpe.scene\", \"version\": 1,\n"
+               " \"environment\": {\"clear_color\": [0, 0, 0], \"navigation\": {\"agent_radius\": 0.2}},\n"
+               " \"entities\": [{\"id\": 1, \"name\": \"eye\", \"transform\": {\"position\": [0, 6, 8], "
+               "\"euler\": [-35, 0, 0]}, \"camera\": {}},\n"
+               "              {\"id\": 2, \"name\": \"floor\", \"transform\": {\"position\": [0, -0.5, 0]}, "
+               "\"collider\": {\"shape\": \"box\", \"size\": [10, 1, 10]}}]}\n");
+    write_text(ROOT "/nav/scenes/empty.scene", "{\"format\": \"wpe.scene\", \"version\": 1}\n");
+    WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_engine_create(
+        &(WPE_EngineDesc){.project_dir = ROOT "/nav", .headless = true, .workers = 2}, &engine));
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    const uint32_t without = lit_pixels(engine);
+    WPE_TEST_ASSERT_EQ_UINT(0, without);
+
+    const WPE_NavGrid* grid = wpe_engine_nav_grid(engine);
+    WPE_TEST_ASSERT(grid != NULL);
+    WPE_TEST_ASSERT(wpe_engine_nav_grid(engine) == grid); /* Built once. */
+    const WPE_NavGridInfo info = wpe_nav_grid_info(grid);
+    WPE_TEST_ASSERT_NEAR(0.2, info.settings.agent_radius, 1e-6); /* The scene's settings. */
+    WPE_TEST_ASSERT_EQ_UINT(38u * 38u, info.cell_count);         /* One column off each edge. */
+    WPE_TEST_ASSERT(wpe_nav_grid_find_cell(grid, wpe_vec3(0, 0, 0), 0.1f) != WPE_NAV_CELL_NONE);
+
+    WPE_EngineDebugDraw debug = wpe_engine_debug_draw(engine);
+    debug.navigation = true;
+    wpe_engine_set_debug_draw(engine, &debug);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    WPE_TEST_ASSERT(lit_pixels(engine) > 100); /* The floor's outline and grid. */
+
+    /* Moved level geometry counts after an invalidation. */
+    WPE_EcsIter it =
+        wpe_ecs_query(wpe_engine_ecs(engine), (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_PHYSICS_COLLIDER)});
+    WPE_TEST_ASSERT(wpe_ecs_iter_next(&it));
+    WPE_Transform* floor = wpe_ecs_get_component(wpe_engine_ecs(engine), it.entity, WPE_COMP_TRANSFORM);
+    floor->position.y = 1.5f;
+    wpe_engine_invalidate_nav_grid(engine);
+    grid = wpe_engine_nav_grid(engine);
+    WPE_TEST_ASSERT(wpe_nav_grid_find_cell(grid, wpe_vec3(0, 2, 0), 0.1f) != WPE_NAV_CELL_NONE);
+    wpe_engine_environment(engine)->navigation.agent_radius = 0.0f;
+    wpe_engine_invalidate_nav_grid(engine);
+    WPE_TEST_ASSERT_EQ_UINT(40u * 40u, wpe_nav_grid_info(wpe_engine_nav_grid(engine)).cell_count);
+
+    /* A scene without colliders has none (reported once), and still draws. */
+    WPE_TEST_ASSERT_OK(wpe_engine_load_scene(engine, "scenes/empty.scene"));
+    quiet(true);
+    WPE_TEST_ASSERT(wpe_engine_nav_grid(engine) == NULL);
+    quiet(false);
+    WPE_TEST_ASSERT(wpe_engine_nav_grid(engine) == NULL);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    /* Loading the level again builds its grid again. */
+    WPE_TEST_ASSERT_OK(wpe_engine_load_scene(engine, "scenes/level.scene"));
+    WPE_TEST_ASSERT(wpe_engine_nav_grid(engine) != NULL);
+    WPE_TEST_ASSERT(wpe_engine_nav_grid(NULL) == NULL);
+    wpe_engine_invalidate_nav_grid(NULL);
+    wpe_engine_destroy(engine);
+}
+
 static void test_engine_runs_scenes_headless(void) {
     write_tiny_game();
     WPE_Engine* engine = NULL;
@@ -1125,7 +1206,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_engine_scene_game_components), WPE_TEST_CASE(test_engine_scene_editing_functions),
     WPE_TEST_CASE(test_engine_scene_save_filter), WPE_TEST_CASE(test_engine_embedded_edit_mode),
     WPE_TEST_CASE(test_engine_captures_the_frame_before_post_effects),
-    WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts),
-    WPE_TEST_CASE(test_engine_hit_stop_and_shake), WPE_TEST_CASE(test_engine_scene_transition),
-    WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
+    WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_navigation_grid),
+    WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts), WPE_TEST_CASE(test_engine_hit_stop_and_shake),
+    WPE_TEST_CASE(test_engine_scene_transition), WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
     WPE_TEST_CASE(test_engine_creates_new_projects), WPE_TEST_CASE(test_engine_export_embeds_the_project))
