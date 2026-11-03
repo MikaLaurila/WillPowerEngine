@@ -445,6 +445,52 @@ static void test_engine_network_ownership_moves(void) {
     wpe_network_hub_destroy(hub);
 }
 
+/* The host's car jumps (its first pose on a joining player's screen, then a teleport): the player sees
+ * it here, then there, never in between, and the crate standing between the two places stays put. */
+static void test_engine_network_remote_entities_jump(void) {
+    write_game(ROOT "/jumps", "return {}\n");
+    write_text(ROOT "/jumps/scenes/jumps.scene",
+               "{\"format\": \"wpe.scene\", \"version\": 1, \"environment\": {\"gravity\": [0, 0, 0]},\n"
+               " \"entities\": [\n"
+               "  {\"id\": 1, \"name\": \"car1\", \"transform\": {\"position\": [0, 0, 0]}, \"net\": {},\n"
+               "   \"rigidbody\": {\"type\": \"dynamic\"}, \"collider\": {\"shape\": \"sphere\", \"size\": "
+               "[1, 1, 1]}},\n"
+               "  {\"id\": 2, \"name\": \"crate\", \"transform\": {\"position\": [10, 0, 0]},\n"
+               "   \"rigidbody\": {\"type\": \"dynamic\"}, \"collider\": {\"shape\": \"box\", \"size\": [2, "
+               "2, 2]}}]}\n");
+    WPE_NetHub* hub = NULL;
+    WPE_TEST_ASSERT_OK(wpe_network_hub_create(&hub));
+    WPE_Engine* e[2] = {start_engine(ROOT "/jumps", "scenes/jumps.scene"),
+                        start_engine(ROOT "/jumps", "scenes/menu.scene")};
+    WPE_TEST_ASSERT_OK(wpe_engine_net_start(e[0], &(WPE_EngineNetDesc){.hub = hub}));
+    play(hub, e, 1, 2);
+    WPE_Transform* car =
+        wpe_ecs_get_component(wpe_engine_ecs(e[0]), find_named(e[0], "car1"), WPE_COMP_TRANSFORM);
+    car->position = wpe_vec3(20, 0, 0); /* Moved before the player arrives. */
+    play(hub, e, 1, 2);
+    WPE_TEST_ASSERT_OK(wpe_engine_net_start(e[1], &(WPE_EngineNetDesc){.hub = hub, .join = "127.0.0.1"}));
+    for (int jump = 0; jump < 2; ++jump) {
+        if (jump == 1) {
+            car = wpe_ecs_get_component(wpe_engine_ecs(e[0]), find_named(e[0], "car1"), WPE_COMP_TRANSFORM);
+            car->position = wpe_vec3(0, 0, 0); /* A teleport. */
+        }
+        for (int f = 0; f < 40; ++f) {
+            play(hub, e, 2, 1);
+            if (strcmp(wpe_engine_scene_path(e[1]), "scenes/jumps.scene") != 0) continue; /* Still joining. */
+            const float x = position_of(e[1], "car1").x;
+            WPE_TEST_ASSERT_MSG(x < 0.01f || x > 19.99f, "jump %d, frame %d: the car is shown at x %g", jump,
+                                f, (double)x);
+            WPE_TEST_ASSERT_MSG(fabsf(position_of(e[1], "crate").x - 10.0f) < 1e-3f,
+                                "jump %d, frame %d: the crate was pushed to x %g", jump, f,
+                                (double)position_of(e[1], "crate").x);
+        }
+        WPE_TEST_ASSERT_NEAR(jump == 0 ? 20.0 : 0.0, position_of(e[1], "car1").x, 1e-3);
+    }
+    wpe_engine_destroy(e[1]);
+    wpe_engine_destroy(e[0]);
+    wpe_network_hub_destroy(hub);
+}
+
 /* A state for car2 at x = 999, as player `forger` would send it. */
 static size_t forge_car2_state(const WPE_Engine* forger, uint8_t* out, size_t capacity, uint32_t time) {
     WPE_BitWriter w = wpe_bits_writer(out, capacity);
@@ -747,6 +793,7 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_engine_network_project_settings), WPE_TEST_CASE
               WPE_TEST_CASE(test_engine_network_replicates_owned_entities),
               WPE_TEST_CASE(test_engine_network_replicates_over_a_bad_network),
               WPE_TEST_CASE(test_engine_network_ownership_moves),
+              WPE_TEST_CASE(test_engine_network_remote_entities_jump),
               WPE_TEST_CASE(test_engine_network_ignores_forged_states),
               WPE_TEST_CASE(test_engine_network_scripts_play_together),
               WPE_TEST_CASE(test_engine_network_survives_garbage_replication),

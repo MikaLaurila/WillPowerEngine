@@ -1,7 +1,7 @@
 # Networking
 
-This guide explains how WillPowerEngine's networking works, from the ground up. It grows with the
-networking milestone; sections marked *(coming)* describe parts that are not built yet.
+This guide explains how WillPowerEngine's networking works, from the ground up, and ends with a
+complete game to read: the `racing_online` template.
 
 1. [The basics: packets, UDP and why games use it](#the-basics)
 2. [Transports: connecting and sending messages](#transports)
@@ -14,6 +14,7 @@ networking milestone; sections marked *(coming)* describe parts that are not bui
 9. [Replication: keeping objects in sync](#replication)
 10. [Scripting multiplayer games](#scripting-multiplayer-games)
 11. [Trying it out: the command line, the overlay and the editor](#trying-it-out)
+12. [A complete game: the racing_online template](#a-complete-game-racing-online)
 
 ## The basics
 
@@ -185,7 +186,7 @@ safely.
 
 ## Script values on the wire
 
-Scripts will send each other values (`wpe.net_send` *(coming)*): numbers, strings, booleans,
+Scripts send each other values (`wpe.net_send`): numbers, strings, booleans,
 vectors and tables of them. `network/value.h` is their wire format:
 
 | Value | Encoding |
@@ -213,7 +214,7 @@ host, and players talk only to the host. The host sees everything and decides wh
 finished first, whose turn it is) and relays what the others need to know. The alternative, every
 player connected to every other (peer-to-peer), has no referee and gets complicated quickly, so
 most small games use a star with a player hosting (a *listen server*). A host that only serves,
-without playing, is a *dedicated server* (the runtime gets options for that later in this milestone).
+without playing, is a *dedicated server* (see [Trying it out](#trying-it-out)).
 
 **Players** are numbered: the host is player 0, and joiners get the lowest free number from 1
 (a player who leaves frees the number for the next one). Everyone knows every player's name.
@@ -382,12 +383,28 @@ the blue car's owner's screen, the blue car is pushed by the (kinematic) red one
 sends where it ended up. When ownership comes back, the body is dynamic again and carries on with
 the velocity it was last seen moving at.
 
+### Jumps
+
+Following with velocity has a catch. When the owner *teleports* an entity (a respawn, a car put back
+on the starting grid), a kinematic copy that followed with velocity would fly across the world in a
+single physics step, at hundreds of metres per second, and knock over everything on the way. The
+same goes for the first state a player receives: a car that the scene file puts on the grid may
+really be parked somewhere else by now.
+
+So replication treats both as **jumps**. A state further from the one before than an entity could
+plausibly travel in between (faster than `WPE_NET_JUMP_SPEED`, 100 m/s) is marked as a jump: the
+entity is never drawn between the two states, it stays at the old place until the new state's time
+and then is at the new one. The physics body jumps with it (`wpe_physics_teleport`): it pushes
+nothing and passes through no trigger on the way. An entity's first pose after it became remote is
+always a jump.
+
 ### How entities are recognized
 
 Messages name entities by a **network id**. Nobody needs to send those: every machine loads the
 same scene file, so the networked entities are numbered in the order the scene creates them, and
 the numbers agree everywhere. (The game id check guarantees the files are the same.) Entities a
-script creates later are not networked yet.
+script creates later are not networked yet: a game with networked objects puts them all in the scene
+file (the racing template has all four cars there, and parks the ones nobody drives).
 
 Every message also carries the **scene epoch**, a count of the host's scene changes, so a state or
 an ownership change meant for one scene is never applied to the next one, even when it arrives
@@ -567,3 +584,95 @@ The same is available as editor commands, for agents and tests:
 `net_wait` runs the game until that many players are in it (the other windows take a moment to
 start), and `net_status` lists the players with their pings. `"headless": true` starts the other
 players without windows.
+
+## A complete game: racing online
+
+The `racing_online` template puts all of the above together: an arcade racer for one to four
+players, with a menu to host or join, a lobby, a 3-2-1 start, laps, positions and results. It is
+meant to be read. Start a project from it, or play it straight from the engine's source tree:
+
+```bash
+./build/bin/wpe_editor my_race --init --template racing_online   # your own copy, in the editor
+./build/bin/wpe_runtime --project templates/racing_online           # window 1: choose "Host a game"
+./build/bin/wpe_runtime --project templates/racing_online           # window 2: "Join a game on this computer"
+```
+
+In the menu, **Practice** races alone, **Host a game** opens a game that others on the network can
+find, and a player joins with **Join a game on this computer** (127.0.0.1), by typing the host's
+address into **Join:**, or from **Find games on the network** (LAN discovery). **Name:** is what the
+others see. The command line skips the menu: `--host` starts in the lobby, and `--connect <address>`
+joins right away. In the lobby everyone can drive around; the host presses **Return** to start the
+race. **Esc** leaves.
+
+### The files
+
+| File | What it does |
+|---|---|
+| `scenes/main.scene` | The track, four cars (`car 1`..`car 4`, each with `"net": {}`, as is its child `body`), the camera, and the `race` and `menu` entities. One scene for everything: the menu is drawn over the track. |
+| `scripts/car.luau` | Drives a car (the `racing` template's arcade physics), but only on the machine that owns it. |
+| `scripts/race.luau` | The race: phases, who drives which car, laps, standings, results, the HUD. Most of the networking is here. |
+| `scripts/checkpoint.luau` | Tells the race when *your own* car crosses a checkpoint. |
+| `scripts/menu.luau` | The title menu: practice, host, join, LAN games, your name. |
+| `scripts/chase_camera.luau` | Follows your car, or circles the track in the menu. |
+| `scripts/notice.luau` | A shared module holding the menu's message ("The host closed the game") across scene loads. |
+
+### What travels over the network, and why
+
+The first decision in any multiplayer game is what goes over the network, and who has the last word
+on each thing. Here:
+
+**Car positions: replication.** Each car is a networked entity; whoever owns it simulates it, and
+the engine sends its position, rotation and velocity 30 times a second. The car's `body` child is
+networked too, because the car's *heading* lives there (the physics sphere itself never rotates).
+The lean of the body in turns is *not* sent: every machine works it out from how fast the heading
+changes. Anything that can be derived from what already arrives should be, since it costs nothing.
+
+**Who drives which car: ownership.** All four cars belong to the host in the scene file. When a player
+joins, the host gives them a car with `wpe.net_set_owner`: player 1 gets car 2, and so on, the
+same on every machine without anyone sending a table of who is who. The host parks the cars that
+nobody drives on the grass inside the track. When a player leaves, the engine gives their car back
+to the host, which parks it.
+
+**Only the owner moves a car.** `car.luau` checks `wpe.net_is_local(self.entity)` before reading the
+controls. A second check, `is_mine()`, compares the car's `player` property with `wpe.net_player()`:
+the host simulates the parked cars too, but must not drive them with its keyboard. The same rule
+applies to teleporting a car back to the grid (`place`): only the owner can, because replication puts
+a remote car wherever its owner says it is.
+
+**The race itself: messages.** The phase (lobby, countdown, racing, finished), the list of racers and
+the results are the host's to decide. It sends them as one `"race"` message to everyone whenever
+they change, and to a player who just arrived (who asks with `"ready"`). Sending the *whole* state,
+not just "the race started", means a late joiner catches up with a single message.
+
+**Laps: the owners count their own.** Every machine sees every car cross every checkpoint, but only
+the owner sees its car exactly where it is: everyone else draws it 100 ms in the past. So each
+racer's own machine counts its laps (`checkpoint.luau` ignores other cars) and tells everyone how far
+it got with `"progress"` messages. Those feed the position display ("2/3") on every screen and let
+the host see who finished.
+
+**Times: measured by each racer.** The start message takes longer to reach a player far from the
+host than one next door, so a countdown started by the message ends a little later for them. Each
+racer therefore times itself from *its own* GO, and the host ranks the finish times, so the delay of
+the start message does not count against anyone. (A cheater could report a faster time, the price of
+owner authority mentioned in [Replication](#replication). Between friends that is fine.)
+
+| Message | From → to | Value | Meaning |
+|---|---|---|---|
+| `ready` | player → host | none | "I have loaded the scene: what is going on?" |
+| `race` | host → everyone | `{phase, timer, racers, results}` | The race's state: the phase, the countdown left, who races, the results |
+| `progress` | racer → everyone | `{lap, next, time}` | The racer's lap, its next checkpoint, and its time once finished |
+
+All three are reliable: they are rare and must not be lost. Positions, which are sent constantly and
+replaced at once, go through replication instead, which uses the unreliable channel.
+
+### Things to try
+
+- Play with **Simulate a slow network** in the editor's Network menu (or `--net-sim
+  latency=150,loss=5`) and watch the other car: smooth, but about a quarter of a second behind.
+- Change `"interpolation_ms"` in `project.json`'s `network` block: smaller shows the others more up to
+  date, but stutters on a bad network.
+- A dedicated server (`--headless --host`) can't start a race here, because nobody presses Return
+  on it, and its own car is never driven. Making the race start when every player has pressed
+  "ready" would fix both: a good first change to make.
+- Add a chat line: a `wpe.net_send("all", "chat", text)` and an `on_net_message` that shows it.
+

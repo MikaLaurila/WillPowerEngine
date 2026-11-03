@@ -868,6 +868,21 @@ static void wpe__place_body(WPE_Physics* physics, WPE_Entity entity, uint64_t st
         b3Body_SetTransform(body, wpe__b3_vec(pose.position), wpe__b3_quat(pose.rotation));
 }
 
+WPE_Result wpe_physics_teleport(WPE_Physics* physics, WPE_Entity entity) {
+    if (!physics) return WPE_RESULT_ERROR_NULL_ARG;
+    WPE_RigidBody* rb = wpe_ecs_get_component(physics->ecs, entity, WPE_COMP_PHYSICS_RIGIDBODY);
+    wpe__Pose pose;
+    if (!rb || rb->wpe__state != WPE__STATE_CREATED || !wpe__world_pose(physics->ecs, entity, &pose))
+        return WPE_RESULT_ERROR_NOT_FOUND;
+    const b3BodyId body = b3LoadBodyId(rb->wpe__body);
+    b3Body_SetTransform(body, wpe__b3_vec(pose.position), wpe__b3_quat(pose.rotation));
+    b3Body_SetLinearVelocity(body, (b3Vec3){0.0f, 0.0f, 0.0f});
+    b3Body_SetAngularVelocity(body, (b3Vec3){0.0f, 0.0f, 0.0f});
+    rb->wpe__target_move = false;
+    if (rb->type == WPE_BODY_DYNAMIC) b3Body_SetAwake(body, true);
+    return WPE_RESULT_OK;
+}
+
 WPE_Result wpe_physics_sync(WPE_Physics* physics) {
     if (!physics) return WPE_RESULT_ERROR_NULL_ARG;
     WPE_Ecs* ecs = physics->ecs;

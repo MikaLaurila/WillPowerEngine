@@ -243,6 +243,19 @@ WPE_Result wpe_physics_refresh(WPE_Physics* physics, WPE_Entity entity);
  */
 WPE_Result wpe_physics_sync(WPE_Physics* physics);
 
+/**
+ * Puts an entity's rigid body at the entity's world pose now, stopped: a jump rather than a move. A
+ * kinematic body whose entity is moved otherwise travels there over the next step with velocity,
+ * pushing what is in the way; this one pushes nothing and passes through no trigger on the way (a
+ * respawn, or replication showing a remote entity that jumped).
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_NOT_FOUND (no rigid body
+ *         simulated yet, or no usable transform).
+ *
+ * @thread_safety Owning thread
+ */
+WPE_Result wpe_physics_teleport(WPE_Physics* physics, WPE_Entity entity);
+
 /** @return Events of the most recent step (borrowed until the next step). @thread_safety Owning thread */
 const WPE_PhysicsEvent* wpe_physics_events(const WPE_Physics* physics, uint32_t* out_count);
 

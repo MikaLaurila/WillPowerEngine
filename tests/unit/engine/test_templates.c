@@ -489,8 +489,239 @@ static void test_templates_racing_plays(void) {
     remove_project(dir);
 }
 
+/* ---- Racing online --------------------------------------------------------------------------------- */
+
+/* Frames of every engine, with the hub's clock moving in step. */
+static void play(WPE_NetHub* hub, WPE_Engine** engines, int count, uint32_t frame_count) {
+    for (uint32_t f = 0; f < frame_count; ++f) {
+        wpe_network_hub_advance(hub, 33);
+        for (int i = 0; i < count; ++i)
+            if (engines[i]) WPE_TEST_ASSERT_OK(wpe_engine_frame(engines[i], 1.0 / 30.0));
+    }
+}
+
+/* An engine on the project whose games go through `hub`, saving in its own directory (two players on
+ * one machine keep their own best laps). */
+static WPE_Engine* create_net_engine(const char* project_dir, const char* save_dir, WPE_NetHub* hub) {
+    WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_engine_create(&(WPE_EngineDesc){.project_dir = project_dir,
+                                                           .embedded = true,
+                                                           .no_audio_device = true,
+                                                           .save_dir = save_dir,
+                                                           .workers = 2},
+                                         &engine));
+    wpe_engine_set_net_defaults(engine, &(WPE_EngineNetDesc){.hub = hub});
+    return engine;
+}
+
+/* A key going down or up in one engine of a game, or tapped (down for one frame of everyone). */
+static void net_tap(WPE_NetHub* hub, WPE_Engine** e, int count, int who, SDL_Scancode scancode) {
+    key(e[who], scancode, true);
+    play(hub, e, count, 1);
+    key(e[who], scancode, false);
+    play(hub, e, count, 1);
+}
+
+static void expect_phase(WPE_Engine* engine, const char* phase) {
+    char code[160];
+    snprintf(code, sizeof code,
+             "local race = wpe.get_script(wpe.find('race'))\n"
+             "if race.phase ~= '%s' then wpe.log('the phase is ' .. race.phase) end\n"
+             "assert(race.phase == '%s')\n",
+             phase, phase);
+    check_lua(engine, phase, code);
+}
+
+/* Drives `car` (in the engine that owns it) through the checkpoints for three laps. */
+static void drive_laps(WPE_NetHub* hub, WPE_Engine** e, int count, int who, const char* car) {
+    static const float route[][2] = {{60.0f, 0.0f}, {0.0f, 35.0f}, {-60.0f, 0.0f}, {0.0f, -35.0f}};
+    for (int lap = 1; lap <= 3; ++lap) {
+        for (size_t i = 0; i < sizeof route / sizeof route[0]; ++i) {
+            play(hub, e, count, 10); /* Some lap time. */
+            for (int step = 0; step < 2; ++step) {
+                char code[256];
+                snprintf(code, sizeof code,
+                         "local car = wpe.find('%s')\n"
+                         "wpe.set_position(car, vector.create(%g, 0.1, %g))\n"
+                         "wpe.set_velocity(car, vector.create(0, 0, 0))\n",
+                         car, (double)route[i][0], (double)(route[i][1] + (step == 0 ? 3.0f : 0.0f)));
+                check_lua(e[who], "place the car", code);
+                play(hub, e, count, 3);
+            }
+        }
+    }
+}
+
+/* Practice alone (the free cars parked, laps, Esc to the menu), then a host and a player on the
+ * in-memory hub: each drives its own car and sees the other's, the host starts the race, each counts its
+ * own laps and the host ranks them; a player who leaves has its car parked, and the host closing the game
+ * sends the player back to the menu with a notice. */
+static void test_templates_racing_online_plays(void) {
+    char dir[256];
+    create_project("racing_online", dir, sizeof dir);
+    WPE_NetHub* hub = NULL;
+    WPE_TEST_ASSERT_OK(wpe_network_hub_create(&hub));
+    WPE_Engine* e[2] = {create_net_engine(dir, ROOT "/saves_host", hub),
+                        create_net_engine(dir, ROOT "/saves_player", hub)};
+    play(hub, e, 2, 2);
+    expect_phase(e[0], "menu");
+
+    /* Practice: car 1 is yours, the others are parked inside the track. */
+    check_lua(e[0], "practice", "wpe.send(wpe.find('menu'), 'practice')\n");
+    play(hub, e, 1, 10); /* (Return is taken a moment after a phase begins: the menu's press was Return.) */
+    expect_phase(e[0], "lobby");
+    WPE_Ecs* host_ecs = wpe_engine_ecs(e[0]);
+    WPE_TEST_ASSERT_NEAR(-22.0, position(host_ecs, find(host_ecs, "car 3")).z, 0.2);
+    net_tap(hub, e, 1, 0, SDL_SCANCODE_RETURN);
+    expect_phase(e[0], "countdown");
+    play(hub, e, 1, 95);
+    expect_phase(e[0], "racing");
+    key(e[0], SDL_SCANCODE_W, true);
+    play(hub, e, 1, 30);
+    key(e[0], SDL_SCANCODE_W, false);
+    WPE_TEST_ASSERT(position(host_ecs, find(host_ecs, "car 1")).x > -4.0f);
+    drive_laps(hub, e, 1, 0, "car 1");
+    expect_phase(e[0], "finished");
+    check_lua(e[0], "a practice result",
+              "local race = wpe.get_script(wpe.find('race'))\n"
+              "assert(#race.results == 1 and race.results[1].time > 0 and race.best)\n");
+    net_tap(hub, e, 1, 0, SDL_SCANCODE_ESCAPE);
+    play(hub, e, 1, 2);
+    host_ecs = wpe_engine_ecs(e[0]);
+    expect_phase(e[0], "menu");
+
+    /* Mika hosts, Alice joins on this computer. */
+    check_lua(e[0], "host",
+              "local menu = wpe.get_script(wpe.find('menu'))\nmenu.name = 'Mika'\nmenu:host()\n");
+    play(hub, e, 2, 2);
+    expect_phase(e[0], "lobby");
+    check_lua(e[1], "join",
+              "local menu = wpe.get_script(wpe.find('menu'))\nmenu.name = 'Alice'\nmenu:join('127.0.0.1')\n");
+    play(hub, e, 2, 1);
+    expect_phase(e[1], "joining");
+    play(hub, e, 2, 20);
+    expect_phase(e[1], "lobby");
+    WPE_Ecs* player_ecs = wpe_engine_ecs(e[1]);
+    check_lua(e[0], "the host gave car 2 away",
+              "local car = wpe.find('car 2')\n"
+              "assert(wpe.net_owner(car) == 1 and not wpe.net_is_local(car))\n"
+              "assert(wpe.net_owner(wpe.get_script(car).body) == 1)\n"
+              "assert(wpe.net_is_local(wpe.find('car 3'))) -- parked, the host's\n");
+    check_lua(e[1], "Alice drives car 2",
+              "assert(wpe.net_player() == 1 and wpe.net_is_local(wpe.find('car 2')))\n"
+              "assert(not wpe.net_is_local(wpe.find('car 1')))\n");
+    WPE_TEST_ASSERT_NEAR(-8.0, position(player_ecs, find(player_ecs, "car 2")).x, 0.2); /* On the grid. */
+
+    /* Warming up in the lobby: Alice drives, and Mika sees her car go (and its body turn). */
+    key(e[1], SDL_SCANCODE_W, true);
+    key(e[1], SDL_SCANCODE_D, true);
+    play(hub, e, 2, 30);
+    key(e[1], SDL_SCANCODE_W, false);
+    key(e[1], SDL_SCANCODE_D, false);
+    play(hub, e, 2, 10);
+    WPE_TEST_ASSERT_MSG(position(host_ecs, find(host_ecs, "car 2")).x > -4.0f, "the host sees car 2 at x %g",
+                        (double)position(host_ecs, find(host_ecs, "car 2")).x);
+    check_lua(e[0], "car 2 turned",
+              "local car = wpe.get_script(wpe.find('car 2'))\n"
+              "assert(math.abs(car:body_yaw() + math.pi / 2) > 0.1)\n");
+
+    /* Mika starts the race: both cars go back to the grid for the countdown. */
+    net_tap(hub, e, 2, 0, SDL_SCANCODE_RETURN);
+    play(hub, e, 2, 5);
+    expect_phase(e[0], "countdown");
+    expect_phase(e[1], "countdown");
+    WPE_TEST_ASSERT_NEAR(-8.0, position(player_ecs, find(player_ecs, "car 2")).x, 0.2);
+    play(hub, e, 2, 95);
+    expect_phase(e[0], "racing");
+    expect_phase(e[1], "racing");
+
+    key(e[0], SDL_SCANCODE_W, true);
+    key(e[1], SDL_SCANCODE_W, true);
+    play(hub, e, 2, 45);
+    key(e[0], SDL_SCANCODE_W, false);
+    key(e[1], SDL_SCANCODE_W, false);
+    /* Mika laps first, then Alice; each machine counts its own car. */
+    drive_laps(hub, e, 2, 0, "car 1");
+    check_lua(e[0], "Mika finished",
+              "wpe.send(wpe.find('car 1'), 'place', 'home')\n"
+              "assert(wpe.get_script(wpe.find('race')).finish_time)\n");
+    play(hub, e, 2, 3);
+    expect_phase(e[0], "racing");
+    check_lua(e[1], "Alice heard",
+              "local race = wpe.get_script(wpe.find('race'))\n"
+              "assert(race.progress[0] and race.progress[0].time)\n"
+              "assert(race.finish_time == nil)\n");
+    drive_laps(hub, e, 2, 1, "car 2");
+    play(hub, e, 2, 5);
+    for (int i = 0; i < 2; ++i) {
+        expect_phase(e[i], "finished");
+        check_lua(e[i], "results",
+                  "local r = wpe.get_script(wpe.find('race')).results\n"
+                  "assert(#r == 2 and r[1].name == 'Mika' and r[2].name == 'Alice')\n"
+                  "assert(r[1].time and r[2].time and r[1].time < r[2].time)\n");
+    }
+
+    /* Back to the lobby; Alice leaves, and her car goes back to Mika, who parks it. */
+    play(hub, e, 2, 10);
+    net_tap(hub, e, 2, 0, SDL_SCANCODE_RETURN);
+    play(hub, e, 2, 3);
+    expect_phase(e[1], "lobby");
+    net_tap(hub, e, 2, 1, SDL_SCANCODE_ESCAPE);
+    play(hub, e, 2, 5);
+    expect_phase(e[1], "menu");
+    check_lua(e[0], "car 2 is back",
+              "assert(wpe.net_is_local(wpe.find('car 2')) and #wpe.net_players() == 1)\n");
+    WPE_TEST_ASSERT_NEAR(-22.0, position(host_ecs, find(host_ecs, "car 2")).z, 0.2);
+
+    /* She joins again; then Mika closes the game, and Alice is told in the menu. */
+    check_lua(e[1], "join again", "wpe.get_script(wpe.find('menu')):join('127.0.0.1')\n");
+    play(hub, e, 2, 20);
+    expect_phase(e[1], "lobby");
+    net_tap(hub, e, 2, 0, SDL_SCANCODE_ESCAPE);
+    play(hub, e, 2, 10);
+    expect_phase(e[0], "menu");
+    expect_phase(e[1], "menu");
+    check_lua(e[1], "told",
+              "assert(require('scripts/notice').text == 'The host closed the game')\n"
+              "assert(wpe.net_status() == 'ended')\n");
+
+    WPE_TEST_ASSERT_EQ_UINT(0, script_errors(e[0]));
+    WPE_TEST_ASSERT_EQ_UINT(0, script_errors(e[1]));
+    wpe_engine_destroy(e[1]);
+    wpe_engine_destroy(e[0]);
+    wpe_network_hub_destroy(hub);
+    remove_project(dir);
+}
+
+/* wpe_runtime --host and --connect start the game before the scene's scripts have run: the host opens
+ * the lobby by itself, and the player waits in "joining" until it is in. */
+static void test_templates_racing_online_from_the_command_line(void) {
+    char dir[256];
+    create_project("racing_online", dir, sizeof dir);
+    WPE_NetHub* hub = NULL;
+    WPE_TEST_ASSERT_OK(wpe_network_hub_create(&hub));
+    WPE_Engine* e[2] = {create_net_engine(dir, ROOT "/saves_host", hub),
+                        create_net_engine(dir, ROOT "/saves_player", hub)};
+    WPE_TEST_ASSERT_OK(wpe_engine_net_start(e[0], &(WPE_EngineNetDesc){.hub = hub, .player_name = "Server"}));
+    WPE_TEST_ASSERT_OK(wpe_engine_net_start(e[1], &(WPE_EngineNetDesc){.hub = hub, .join = "127.0.0.1"}));
+    play(hub, e, 2, 1);
+    expect_phase(e[0], "lobby");
+    expect_phase(e[1], "joining");
+    play(hub, e, 2, 20);
+    expect_phase(e[1], "lobby");
+    check_lua(e[1], "car 2", "assert(wpe.net_is_local(wpe.find('car 2')))\n");
+    WPE_TEST_ASSERT_EQ_UINT(0, script_errors(e[0]));
+    WPE_TEST_ASSERT_EQ_UINT(0, script_errors(e[1]));
+    wpe_engine_destroy(e[1]);
+    wpe_engine_destroy(e[0]);
+    wpe_network_hub_destroy(hub);
+    remove_project(dir);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_templates_create_projects_that_run),
               WPE_TEST_CASE(test_templates_reject_unknown_names),
               WPE_TEST_CASE(test_templates_first_person_plays),
               WPE_TEST_CASE(test_templates_third_person_plays),
-              WPE_TEST_CASE(test_templates_platformer_plays), WPE_TEST_CASE(test_templates_racing_plays))
+              WPE_TEST_CASE(test_templates_platformer_plays), WPE_TEST_CASE(test_templates_racing_plays),
+              WPE_TEST_CASE(test_templates_racing_online_plays),
+              WPE_TEST_CASE(test_templates_racing_online_from_the_command_line))

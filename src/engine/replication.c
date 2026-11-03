@@ -18,6 +18,7 @@
 #define WPE__ROTATION_BITS 15u
 #define WPE__VELOCITY_BITS 16u
 #define WPE__MAX_NET_IDS 65535u
+#define WPE__JUMP_SLACK 0.5 /* Metres a state may be off on top of WPE_NET_JUMP_SPEED (clock jitter). */
 
 struct WPE_Replication {
     WPE_Ecs* ecs;
@@ -278,8 +279,13 @@ static void wpe__track_clock(WPE_Replication* r, WPE_PlayerId source, double sen
 }
 
 static void wpe__add_sample(WPE_NetIdentity* n, WPE_NetSample sample) {
-    if (n->wpe__sample_count > 0 && sample.time_ms <= n->wpe__samples[n->wpe__sample_count - 1].time_ms)
-        return;
+    if (n->wpe__sample_count > 0) {
+        const WPE_NetSample* last = &n->wpe__samples[n->wpe__sample_count - 1];
+        if (sample.time_ms <= last->time_ms) return;
+        /* Faster than anything travels: it jumped (a respawn, a teleport). */
+        const double reach = (sample.time_ms - last->time_ms) / 1000.0 * WPE_NET_JUMP_SPEED + WPE__JUMP_SLACK;
+        sample.jump = wpe_vec3_length(wpe_vec3_sub(sample.position, last->position)) > reach;
+    }
     if (n->wpe__sample_count == WPE_NET_SAMPLES) {
         memmove(&n->wpe__samples[0], &n->wpe__samples[1], (WPE_NET_SAMPLES - 1) * sizeof n->wpe__samples[0]);
         --n->wpe__sample_count;
@@ -382,6 +388,11 @@ static void wpe__pose_at(const WPE_NetIdentity* n, double t, WPE_Vec3* out_posit
             *out_rotation = s[i].rotation;
             return;
         }
+        if (s[i + 1].jump) { /* Stays until the jump's time, then is there: never in between. */
+            *out_position = s[i].position;
+            *out_rotation = s[i].rotation;
+            return;
+        }
         const float f = (float)((t - s[i].time_ms) / (s[i + 1].time_ms - s[i].time_ms));
         *out_position = wpe_vec3_lerp(s[i].position, s[i + 1].position, f);
         *out_rotation = wpe_quat_slerp(s[i].rotation, s[i + 1].rotation, f);
@@ -392,6 +403,7 @@ static void wpe__pose_at(const WPE_NetIdentity* n, double t, WPE_Vec3* out_posit
 /* Switches an entity between local and remote: a remote dynamic body is made kinematic. */
 static void wpe__set_remote(WPE_Replication* r, WPE_Entity e, WPE_NetIdentity* n, bool remote) {
     n->wpe__remote = remote;
+    n->wpe__posed = false;
     WPE_RigidBody* body = wpe_ecs_get_component(r->ecs, e, WPE_COMP_PHYSICS_RIGIDBODY);
     if (remote && body && body->type == WPE_BODY_DYNAMIC) {
         body->type = WPE_BODY_KINEMATIC;
@@ -427,7 +439,15 @@ void wpe_replication_apply(WPE_Replication* replication, WPE_Session* session, d
         if (remote != n->wpe__remote) wpe__set_remote(r, e, n, remote);
         if (!remote || n->wpe__sample_count == 0) continue;
         WPE_Transform* t = wpe_ecs_get_component(r->ecs, e, WPE_COMP_TRANSFORM);
-        if (t) wpe__pose_at(n, show_at, &t->position, &t->rotation);
+        if (!t) continue;
+        const WPE_Vec3 before = t->position;
+        wpe__pose_at(n, show_at, &t->position, &t->rotation);
+        /* The first pose, or a jump in the states: the body jumps too, rather than travelling there with
+         * velocity through whatever is in between. */
+        const double reach = real_dt * WPE_NET_JUMP_SPEED + WPE__JUMP_SLACK;
+        const bool jumped = !n->wpe__posed || wpe_vec3_length(wpe_vec3_sub(t->position, before)) > reach;
+        n->wpe__posed = true;
+        if (jumped && r->physics) (void)wpe_physics_teleport(r->physics, e);
     }
 }
 

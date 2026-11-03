@@ -4,6 +4,23 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 11: networking, phase 7: the racing_online template)
+- `racing_online` template: the arcade racer for 1–4 players. A menu (practice, host, join on this
+  computer, at a typed address or from LAN discovery, player name), a lobby to warm up in, a host-run
+  countdown, laps each racer's own machine counts, live positions, results ranked by the host from
+  the racers' own times, names over the other cars, and back to the menu with a notice when the game
+  ends. Four networked cars (and their turning `body` children) are handed out by the host with
+  `wpe.net_set_owner`; the free ones are parked. `wpe_runtime --host`/`--connect` skip the menu.
+- `wpe_physics_teleport`: puts a body at its entity's pose at once, stopped (no kinematic move).
+- docs/networking.md: "Jumps" and a walkthrough of the template (what travels over the network, who
+  decides what, its messages, things to try).
+
+### Fixed
+- Replication: a remote entity that jumps (its first pose on a player's screen, or a teleport by its
+  owner: states implying more than `WPE_NET_JUMP_SPEED`, 100 m/s) is no longer interpolated across
+  the gap, and its kinematic body jumps instead of travelling there with velocity, which flung away
+  whatever stood in between (a parked car crossing the grid hit the joining player's car).
+
 ### Added (Milestone 11: networking, phase 6: the runtime and the editor)
 - `wpe_runtime --host [port]`, `--connect <address>`, `--name`, `--local`,
   `--net-sim latency=,jitter=,loss=` and `--net-stats`; the settings also apply to games scripts host

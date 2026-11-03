@@ -288,7 +288,7 @@ return MyEntity
 
 **Implementation:** `src/physics/` (public API in `physics/physics.h`), wrapping Box3D privately.
 - `WPE_RigidBody` and `WPE_Collider` are ECS components (one collider per entity). A collider without a rigid body is static level geometry.
-- Physics steps at the fixed rate. Each step creates missing bodies, follows game-code moves of entities, simulates, writes dynamic and kinematic poses back into the parent-relative Transform, and collects contact and trigger events.
+- Physics steps at the fixed rate. Each step creates missing bodies, follows game-code moves of entities, simulates, writes dynamic and kinematic poses back into the parent-relative Transform, and collects contact and trigger events. A kinematic body follows its entity with velocity (it pushes what it meets); `wpe_physics_teleport()` makes it jump instead, which replication uses for remote entities that jump (their first pose, and states implying more than `WPE_NET_JUMP_SPEED`).
 - Settings and world scale are read when a body or shape is created; `wpe_physics_refresh()` rebuilds them.
 - Box3D allocates through `wpe_alloc`, and its assertions go through the engine's assert handler.
 - Queries: rays, shape casts (box, sphere, capsule) and overlaps, all through a `WPE_QueryFilter` (ignore an entity, include triggers). Box3D's queries report triggers too, so every callback filters.

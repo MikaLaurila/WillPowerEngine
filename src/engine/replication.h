@@ -14,7 +14,10 @@
  *
  * Remote entities with a dynamic rigid body become kinematic while someone else owns them: they
  * follow the received states with velocity, so they still push the owner's local bodies (cars still
- * bump). They become dynamic again when ownership comes back.
+ * bump). They become dynamic again when ownership comes back. Jumps are not moves: an entity's first
+ * pose, and a state further from the one before than WPE_NET_JUMP_SPEED allows, put the body there
+ * at once (wpe_physics_teleport), without interpolating, so a respawned car never sweeps across the
+ * track hitting everything on the way.
  *
  * Network ids: every machine loads the same scene file, so the entities with a NetIdentity are
  * numbered in spawn order when a scene loads (1, 2, 3...) and agree everywhere without sending
@@ -57,7 +60,12 @@ typedef struct WPE_NetSample {
     WPE_Vec3 position;
     WPE_Quat rotation;
     WPE_Vec3 velocity;
+    bool jump; /* Further from the previous state than WPE_NET_JUMP_SPEED allows: shown as a jump. */
 } WPE_NetSample;
+
+/** A remote entity that seems to travel faster than this (m/s) between two states jumped there (a
+ * respawn, a teleport): it is shown jumping, never sweeping across everything in between. */
+#define WPE_NET_JUMP_SPEED 100.0f
 
 /** A networked entity. Only `owner` is saved; the rest is managed at runtime. */
 typedef struct WPE_NetIdentity {
@@ -69,6 +77,7 @@ typedef struct WPE_NetIdentity {
     uint32_t wpe__sample_count;
     bool wpe__remote;         /* Shown from received states. */
     bool wpe__made_kinematic; /* Its dynamic body was made kinematic while remote. */
+    bool wpe__posed;          /* Posed from a state since it became remote (the first pose is a jump). */
 } WPE_NetIdentity;
 
 typedef struct WPE_Replication WPE_Replication;
