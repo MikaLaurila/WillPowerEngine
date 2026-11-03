@@ -323,6 +323,101 @@ static void test_templates_third_person_plays(void) {
     const WPE_Vec3 focus = wpe_vec3_add(position(ecs, player), wpe_vec3(0.0f, 1.5f, 0.0f));
     WPE_TEST_ASSERT_MSG(eye.y < 3.0f && wpe_vec3_length(wpe_vec3_sub(eye, focus)) < 2.5f,
                         "the camera is at (%g, %g, %g)", (double)eye.x, (double)eye.y, (double)eye.z);
+    /* The villager wanders by itself (a nav agent), near its home and on the ground. */
+    const WPE_Entity villager = find(ecs, "villager");
+    WPE_TEST_ASSERT(villager != WPE_ENTITY_NULL);
+    const WPE_Vec3 home = wpe_vec3(12, 0, 4);
+    float farthest = 0.0f;
+    for (int i = 0; i < 20; ++i) {
+        frames(engine, 15);
+        const WPE_Vec3 at = position(ecs, villager);
+        farthest = fmaxf(farthest, wpe_vec3_length(wpe_vec3_sub(at, home)));
+        WPE_TEST_ASSERT_MSG(fabsf(at.y) < 0.1f && wpe_vec3_length(wpe_vec3_sub(at, home)) < 7.5f,
+                            "the villager wandered to (%g, %g, %g)", (double)at.x, (double)at.y,
+                            (double)at.z);
+    }
+    WPE_TEST_ASSERT_MSG(farthest > 1.0f, "the villager stayed at home");
+    WPE_TEST_ASSERT_EQ_UINT(0, script_errors(engine));
+    wpe_engine_destroy(engine);
+    remove_project(dir);
+}
+
+/* ---- Stealth --------------------------------------------------------------------------------------- */
+
+/* A guard's state (guard.luau), checked from Luau. */
+static void expect_guard(WPE_Engine* engine, const char* guard, const char* states) {
+    char code[512];
+    snprintf(code, sizeof code,
+             "local g = wpe.get_script(wpe.find('%s'))\n"
+             "assert(string.find('%s', g.state, 1, true), '%s is ' .. g.state .. ', not %s')\n",
+             guard, states, guard, states);
+    check_lua(engine, guard, code);
+}
+
+/* Puts the player `distance` m in front of a guard (in plain sight). */
+static void show_player_to(WPE_Engine* engine, const char* guard, float distance) {
+    char code[256];
+    snprintf(code, sizeof code,
+             "local g = wpe.find('%s')\n"
+             "wpe.set_position(wpe.find('player'), wpe.get_world_position(g) + wpe.forward(g) * %g)\n",
+             guard, (double)distance);
+    check_lua(engine, "show the player", code);
+}
+
+/* Guards patrol, notice the player in their cone, hear noise, chase, lose track and search, go back to
+ * their routes, and catch; reaching the exit wins. */
+static void test_templates_stealth_plays(void) {
+    char dir[256];
+    create_project("stealth", dir, sizeof dir);
+    WPE_Engine* engine = create_engine(dir);
+    WPE_Ecs* ecs = wpe_engine_ecs(engine);
+    const WPE_Entity guard = find(ecs, "guard 1");
+    WPE_TEST_ASSERT(guard != WPE_ENTITY_NULL);
+    const WPE_Vec3 start = position(ecs, guard);
+    frames(engine, 150); /* Waits at its first point, then walks the lane. */
+    WPE_TEST_ASSERT_MSG(wpe_vec3_length(wpe_vec3_sub(position(ecs, guard), start)) > 1.0f,
+                        "guard 1 didn't patrol");
+    expect_guard(engine, "guard 1", "patrol");
+
+    /* A noise behind guard 2 (it can't see there): it goes to look, then back to its route. */
+    check_lua(engine, "noise behind guard 2",
+              "local g = wpe.find('guard 2')\n"
+              "local p = wpe.find('player')\n"
+              "wpe.set_position(p, wpe.get_world_position(g) - wpe.forward(g) * 3)\n"
+              "wpe.get_script(p):make_noise(9)\n");
+    frames(engine, 1);
+    expect_guard(engine, "guard 2", "investigate look");
+    check_lua(engine, "away", "wpe.set_position(wpe.find('player'), vector.create(0, 0, 17))\n");
+    frames(engine, 450);
+    expect_guard(engine, "guard 2", "return patrol");
+
+    /* In plain sight of guard 3: suspicious, then a chase; out of sight it searches, then gives up. */
+    show_player_to(engine, "guard 3", 4.0f);
+    frames(engine, 6);
+    expect_guard(engine, "guard 3", "suspicious chase");
+    frames(engine, 30);
+    expect_guard(engine, "guard 3", "chase");
+    check_lua(engine, "hide", "wpe.set_position(wpe.find('player'), vector.create(0, 0, 17))\n");
+    frames(engine, 120);
+    expect_guard(engine, "guard 3", "search");
+    frames(engine, 450);
+    expect_guard(engine, "guard 3", "return patrol");
+
+    /* Caught by guard 1: the game ends (the player frozen), then the level starts over. */
+    show_player_to(engine, "guard 1", 3.0f);
+    frames(engine, 90);
+    check_lua(engine, "caught",
+              "assert(wpe.get_script(wpe.find('game')).result == 'caught')\n"
+              "assert(wpe.get_script(wpe.find('player')).frozen)\n"
+              "assert(wpe.get_script(wpe.find('guard 1')).done)\n");
+    frames(engine, 100);
+    check_lua(engine, "started over", "assert(wpe.get_script(wpe.find('game')).result == nil)\n");
+
+    /* Into the exit: escaped. */
+    frames(engine, 5);
+    check_lua(engine, "to the exit", "wpe.set_position(wpe.find('player'), vector.create(0, 0, -18))\n");
+    frames(engine, 10);
+    check_lua(engine, "escaped", "assert(wpe.get_script(wpe.find('game')).result == 'escaped')\n");
     WPE_TEST_ASSERT_EQ_UINT(0, script_errors(engine));
     wpe_engine_destroy(engine);
     remove_project(dir);
@@ -721,7 +816,7 @@ static void test_templates_racing_online_from_the_command_line(void) {
 WPE_TEST_MAIN(WPE_TEST_CASE(test_templates_create_projects_that_run),
               WPE_TEST_CASE(test_templates_reject_unknown_names),
               WPE_TEST_CASE(test_templates_first_person_plays),
-              WPE_TEST_CASE(test_templates_third_person_plays),
+              WPE_TEST_CASE(test_templates_third_person_plays), WPE_TEST_CASE(test_templates_stealth_plays),
               WPE_TEST_CASE(test_templates_platformer_plays), WPE_TEST_CASE(test_templates_racing_plays),
               WPE_TEST_CASE(test_templates_racing_online_plays),
               WPE_TEST_CASE(test_templates_racing_online_from_the_command_line))

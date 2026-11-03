@@ -4,6 +4,20 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 12: navigation, phase 5: the stealth template)
+- `stealth` template: get past three guards to the exit. Guards (`scripts/guard.luau`) walk with the
+  navigation system: they patrol routes (entities whose children are the points), see in a cone with a
+  line-of-sight ray, grow suspicious (`?` with a bar) and then chase (`!`), call nearby guards, lose track
+  and search around where they last saw you, and go back to their routes. The player is heard sprinting
+  and landing (`on_noise` broadcasts). `scripts/game.luau` shows the goal and the guards' alertness and
+  starts over when you are caught or escape. A pushable crate is a nav obstacle.
+- `third_person` template: a villager that wanders around on its own (`scripts/wanderer.luau`, a nav
+  agent walking to random reachable spots near its home).
+- docs/navigation.md: a walkthrough of the stealth template; docs/runtime.md lists it.
+- A `willpowerengine` agent skill (`.claude/skills/willpowerengine/SKILL.md`): the engine's workflow and
+  pitfalls, and the generic game-dev skills (game AI, cameras, game feel, input, UI, saving...) mapped to
+  its API and templates.
+
 ### Added (Milestone 12: navigation, phase 4: the editor)
 - View > Navigation (N): the grid, agents' footprints and ways ahead, obstacles' boxes and the cells they
   close, in edit and play mode. In edit mode the grid is rebuilt a moment after the edits stop, and

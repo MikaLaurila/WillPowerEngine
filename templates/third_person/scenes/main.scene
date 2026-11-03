@@ -244,6 +244,21 @@
       "transform": {"position": [-10, 3.25, 6], "scale": [5, 0.5, 6]},
       "mesh": {"model": "meshes/accent.prim"},
       "collider": {"shape": "box"}
+    },
+    {
+      "id": 34,
+      "name": "villager",
+      "transform": {"position": [12, 0, 4]},
+      "character": {"radius": 0.35, "height": 1.8, "offset": [0, 0.9, 0]},
+      "nav_agent": {"speed": 1.5, "turn_speed": 360},
+      "script": {"path": "scripts/wanderer.luau", "properties": {"radius": 6}}
+    },
+    {
+      "id": 35,
+      "name": "figure",
+      "parent": 34,
+      "transform": {"euler": [0, 180, 0]},
+      "instance": {"model": "meshes/RiggedFigure.glb", "animation": 0}
     }
   ]
 }

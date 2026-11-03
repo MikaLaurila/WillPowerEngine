@@ -219,6 +219,56 @@ local wander = wpe.nav_random_point(home, 8)              -- somewhere reachable
 unreachable goal, `raw = true` keeps every cell, and `obstacles = false` ignores obstacles. The full
 list is in [scripting.md](scripting.md#navigation).
 
+## A complete game: the stealth template
+
+```
+./build/bin/wpe_editor my_heist --init --template stealth   # your own copy, in the editor
+./build/bin/wpe_runtime --project templates/stealth           # or just play it
+```
+
+Get from the start to the green exit past three guards. It puts everything on this page to work, and
+each guard is one readable script (`scripts/guard.luau`) on top of the navigation system.
+
+**The guard entity** has a character controller, a `nav_agent` and the guard script. The script never
+moves the guard. It decides where to go (`wpe.nav_move_to`, `wpe.nav_follow`), and the agent does the
+walking. Its states:
+
+| State | What the guard does | Moves on when |
+|---|---|---|
+| patrol | Walks its route's points in order, waiting `wait` seconds at each. | It sees or hears you. |
+| suspicious | Stands and stares toward you while its suspicion fills: `?` and a bar over its head. | Full: chase. You slip away for a moment: investigate where it saw you. |
+| investigate | Walks to a noise, or to where it last saw you. | It gets there: look. |
+| look | Turns slowly on the spot, looking around. | A few seconds pass: return. |
+| chase | Runs after you (`wpe.nav_follow`), `!` over its head, and calls guards within `alarm_radius` to come and search. | It reaches you: caught. You stay out of sight for `lose_time`: search. |
+| search | Goes to where it saw you last, then checks random reachable spots around it (`wpe.nav_random_point`). | `search_time` runs out: return. |
+| return | Walks back to the nearest point of its route. | It gets there: patrol. |
+
+**Seeing** is three tests, in `Guard:sees_player`. First, are you near enough (`view_distance`)? Second,
+are you inside the cone in front of it (`view_angle` either side of where it faces)? Third, does a ray from its eyes
+(`wpe.raycast`, ignoring its own capsule) reach your chest before anything else? Cover blocks the ray,
+so hiding behind a pillar works even right in front of a guard. Suspicion fills in `notice_time` seconds
+at the far end of the cone, and up to three times faster close by, so you can be glimpsed at a distance
+but not up close.
+
+**Hearing**: the player script broadcasts `on_noise(where, radius)` for each sprinting footstep and for
+hard landings. Every guard within `radius` (times its `hearing`) comes to investigate. Walking makes no
+sound, so sprinting past a guard's back is a gamble.
+
+**Routes** are plain entities: `route 1` has child entities named `point`, and their positions are
+the patrol, in order. Move them in the editor (turn on View > Navigation to see the lanes), or make a
+new route and type its name in a guard's `route` property. **Test a path...** shows how a guard will get
+between two points.
+
+Things to try:
+- Make a guard sharper: `view_distance = 14`, `notice_time = 0.5`. Or deaf: `hearing = 0`.
+- Add a fourth guard: duplicate one (Ctrl+D), give it a new route.
+- Make the crate in the first room a door. It is a `nav_obstacle` already, so guards path around it
+  wherever it is pushed.
+- Give guards a flashlight: a spot light child pointing along the cone makes the cone visible.
+
+The **third_person** template has a smaller example: a villager (`scripts/wanderer.luau`) that walks to
+random spots near its home, rests, and walks on. It is about 70 lines, half of them for playing the animation.
+
 ## How paths are found (for the curious)
 
 **A\*** searches the cells outward from the start. It always expands next the cell whose distance
