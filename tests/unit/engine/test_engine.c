@@ -138,10 +138,16 @@ typedef struct World {
     WPE_TestAssets assets;
     WPE_Ecs* ecs;
     WPE_Physics* physics;
+    WPE_NavSystem* nav;
     WPE_Audio* audio;
     WPE_Ui* ui;
     WPE_ScriptHost* scripts;
 } World;
+
+static const WPE_NavGrid* no_grid(void* user_data) {
+    (void)user_data;
+    return NULL; /* Scene file tests don't walk. */
+}
 
 static World make_world(void) {
     World w = {.assets = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 16)};
@@ -152,18 +158,24 @@ static World make_world(void) {
     WPE_TEST_ASSERT_OK(wpe_physics_create(
         &(WPE_PhysicsDesc){.ecs = w.ecs, .assets = w.assets.assets, .gravity = {{0, -9.81f, 0}}},
         &w.physics));
+    WPE_TEST_ASSERT_OK(wpe_nav_system_create(
+        &(WPE_NavSystemDesc){.ecs = w.ecs, .physics = w.physics, .grid = no_grid}, &w.nav));
     WPE_TEST_ASSERT_OK(wpe_audio_create(
         &(WPE_AudioDesc){.ecs = w.ecs, .assets = w.assets.assets, .no_device = true}, &w.audio));
     WPE_TEST_ASSERT_OK(wpe_ui_create(&(WPE_UiDesc){.ecs = w.ecs, .assets = w.assets.assets}, &w.ui));
-    WPE_TEST_ASSERT_OK(wpe_script_host_create(
-        &(WPE_ScriptHostDesc){
-            .ecs = w.ecs, .assets = w.assets.assets, .physics = w.physics, .audio = w.audio, .ui = w.ui},
-        &w.scripts));
+    WPE_TEST_ASSERT_OK(wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = w.ecs,
+                                                                    .assets = w.assets.assets,
+                                                                    .physics = w.physics,
+                                                                    .navigation = w.nav,
+                                                                    .audio = w.audio,
+                                                                    .ui = w.ui},
+                                              &w.scripts));
     return w;
 }
 
 static void free_world(World* w) {
     wpe_script_host_destroy(w->scripts);
+    wpe_nav_system_destroy(w->nav);
     wpe_audio_destroy(w->audio);
     wpe_physics_destroy(w->physics);
     wpe_ecs_destroy(w->ecs);
@@ -243,7 +255,9 @@ static void test_engine_scene_round_trip(void) {
                                      WPE_COMP_SLIDER,
                                      WPE_COMP_TRAIL,
                                      WPE_COMP_SLASH,
-                                     WPE_COMP_WATER};
+                                     WPE_COMP_WATER,
+                                     WPE_COMP_NAV_AGENT,
+                                     WPE_COMP_NAV_OBSTACLE};
     for (size_t i = 0; i < sizeof all / sizeof all[0]; ++i)
         WPE_TEST_ASSERT_MSG(count_of(&a, all[i]) > 0, "no component of type %u", all[i]);
     WPE_TEST_ASSERT_EQ_UINT(2, count_of(&a, WPE_COMP_CAMERA));

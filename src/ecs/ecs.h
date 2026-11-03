@@ -94,6 +94,8 @@ enum WPE_BuiltinComponent {
     WPE_COMP_WATER = 25,        /* Retro water surfaces (graphics/graphics.h). */
     WPE_COMP_ANIM_STATES = 26,  /* Animation state machines (graphics/anim_states.h). */
     WPE_COMP_NET_IDENTITY = 27, /* Networked entities (engine/replication.h). */
+    WPE_COMP_NAV_AGENT = 28,    /* Navigation agents and obstacles (navigation/nav_agents.h). */
+    WPE_COMP_NAV_OBSTACLE = 29,
     WPE_COMP_USER_FIRST = 32,
 };
 

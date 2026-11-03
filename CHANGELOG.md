@@ -4,6 +4,28 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (Milestone 12: navigation, phase 3: agents, obstacles and the Luau API)
+- Navigation agents (`WPE_NavAgent`, component 28, scene key `nav_agent`): entities that walk to a
+  destination or after another entity by themselves. They plan around walls and obstacles, slow down
+  on arrival, sidestep each other and turn to face their way. With a character controller they walk
+  through it (with gravity); without one they move along the floor. An unreachable destination is
+  walked to as near as possible. Run by `WPE_NavSystem` (`navigation/nav_agents.h`), which the engine
+  steps in every fixed step before physics.
+- Obstacles (`WPE_NavObstacle`, component 29, scene key `nav_obstacle`): moving boxes whose cells close
+  to paths wherever they go (`WPE_NavBlockers` in `nav_path.h`, also usable by paths, straight lines and
+  flow fields from C). Agents whose way gets blocked plan again; one caught inside walks out.
+- Script callbacks `on_nav_arrived` and `on_nav_failed`, and the Luau API: `wpe.add_nav_agent`,
+  `remove_nav_agent`, `get_nav_agent`, `nav_move_to`, `nav_follow`, `nav_stop`, `nav_state`,
+  `nav_path`, `add_nav_obstacle`, `remove_nav_obstacle`, `nav_find_path`, `nav_nearest`,
+  `nav_can_walk`, `nav_reachable` and `nav_random_point`.
+- The navigation overlay also shows agents' ways ahead and closed cells. `wpe_engine_navigation`.
+- docs/navigation.md: a guide to navigation, from how the grid is built to agents, obstacles and the C API.
+- The master test scene has a patrolling guard (`scripts/nav_guard.luau`) and an obstacle; the API tour
+  covers every navigation function.
+
+### Changed
+- `wpe_nav_flow_build` takes the blocked cells to route around (NULL for none).
+
 ### Added (Milestone 12: navigation, phase 2: pathfinding)
 - `navigation/nav_path.h`: finding the way on a nav grid.
   - `wpe_nav_grid_nearest` (the nearest walkable point within limits), `wpe_nav_grid_reachable`

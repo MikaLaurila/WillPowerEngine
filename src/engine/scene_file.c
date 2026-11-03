@@ -22,6 +22,7 @@
 #include "engine/prefab.h"
 #include "engine/replication.h"
 #include "engine/scene_file_internal.h"
+#include "navigation/nav_agents.h"
 #include "graphics/graphics.h"
 #include "physics/physics.h"
 #include "platform/platform.h"
@@ -444,6 +445,32 @@ void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
         wpe__write_number(w, "max_slope", character->max_slope);
         wpe__write_number(w, "step_height", character->step_height);
         wpe__write_number(w, "snap_distance", character->snap_distance);
+        wpe_json_write_object_end(w);
+    }
+    const WPE_NavAgent* agent = wpe_ecs_is_registered(ecs, WPE_COMP_NAV_AGENT)
+                                    ? wpe_ecs_get_component(ecs, e, WPE_COMP_NAV_AGENT)
+                                    : NULL;
+    if (agent) {
+        wpe_json_write_key(w, "nav_agent");
+        wpe_json_write_object_begin(w);
+        wpe__write_number(w, "speed", agent->speed);
+        wpe__write_number(w, "acceleration", agent->acceleration);
+        wpe__write_number(w, "arrive_distance", agent->arrive_distance);
+        wpe__write_number(w, "slow_distance", agent->slow_distance);
+        wpe__write_number(w, "turn_speed", agent->turn_speed);
+        wpe__write_number(w, "repath_interval", agent->repath_interval);
+        wpe__write_bool(w, "avoid_others", agent->avoid_others);
+        wpe_json_write_object_end(w);
+    }
+    const WPE_NavObstacle* obstacle = wpe_ecs_is_registered(ecs, WPE_COMP_NAV_OBSTACLE)
+                                          ? wpe_ecs_get_component(ecs, e, WPE_COMP_NAV_OBSTACLE)
+                                          : NULL;
+    if (obstacle) {
+        wpe_json_write_key(w, "nav_obstacle");
+        wpe_json_write_object_begin(w);
+        wpe__write_vec3(w, "size", obstacle->size);
+        wpe__write_vec3(w, "offset", obstacle->offset);
+        wpe__write_bool(w, "carve", obstacle->carve);
         wpe_json_write_object_end(w);
     }
     const WPE_AudioSource* source = wpe_ecs_get_component(ecs, e, WPE_COMP_AUDIO_SOURCE);
@@ -1267,6 +1294,40 @@ static bool wpe__load_character(wpe__Loader* l, WPE_Entity e, const WPE_JsonValu
     return wpe__add(l, v, e, WPE_COMP_CHARACTER, &c, "character controller");
 }
 
+static bool wpe__load_nav_agent(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "nav_agent", "speed", "acceleration", "arrive_distance",
+                                "slow_distance", "turn_speed", "repath_interval", "avoid_others"))
+        return false;
+    if (!wpe_ecs_is_registered(l->context->ecs, WPE_COMP_NAV_AGENT))
+        return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_UNSUPPORTED,
+                              "navigation is not enabled for this world");
+    WPE_NavAgent a = wpe_nav_agent_default();
+    if (!wpe__json_read_float(&l->r, v, "speed", 0.0f, 1e4f, &a.speed) ||
+        !wpe__json_read_float(&l->r, v, "acceleration", 0.0f, 1e5f, &a.acceleration) ||
+        !wpe__json_read_float(&l->r, v, "arrive_distance", 0.01f, 1e4f, &a.arrive_distance) ||
+        !wpe__json_read_float(&l->r, v, "slow_distance", 0.0f, 1e4f, &a.slow_distance) ||
+        !wpe__json_read_float(&l->r, v, "turn_speed", 0.0f, 1e5f, &a.turn_speed) ||
+        !wpe__json_read_float(&l->r, v, "repath_interval", 0.05f, 1e4f, &a.repath_interval) ||
+        !wpe__json_read_bool(&l->r, v, "avoid_others", &a.avoid_others))
+        return false;
+    return wpe__add(l, v, e, WPE_COMP_NAV_AGENT, &a, "nav agent");
+}
+
+static bool wpe__load_nav_obstacle(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "nav_obstacle", "size", "offset", "carve")) return false;
+    if (!wpe_ecs_is_registered(l->context->ecs, WPE_COMP_NAV_OBSTACLE))
+        return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_UNSUPPORTED,
+                              "navigation is not enabled for this world");
+    WPE_NavObstacle o = wpe_nav_obstacle_default();
+    if (!wpe__json_read_vec3(&l->r, v, "size", &o.size) ||
+        !wpe__json_read_vec3(&l->r, v, "offset", &o.offset) ||
+        !wpe__json_read_bool(&l->r, v, "carve", &o.carve))
+        return false;
+    if (!(o.size.x > 0.0f && o.size.y > 0.0f && o.size.z > 0.0f))
+        return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE, "a nav obstacle's \"size\" must be positive");
+    return wpe__add(l, v, e, WPE_COMP_NAV_OBSTACLE, &o, "nav obstacle");
+}
+
 static bool wpe__load_audio_source(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "audio_source", "sound", "volume", "pitch", "min_distance",
                                 "max_distance", "bus", "loop", "spatial", "playing"))
@@ -1529,8 +1590,8 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
         if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "entity", "id", "name", "parent", "transform", "instance",
                                     "mesh", "camera", "light", "billboard", "particles", "trail", "slash",
                                     "water", "net", "animator", "rigidbody", "collider", "character",
-                                    "audio_source", "ui", "sprite", "text", "button", "toggle", "slider",
-                                    "script", "components", "prefab"))
+                                    "nav_agent", "nav_obstacle", "audio_source", "ui", "sprite", "text",
+                                    "button", "toggle", "slider", "script", "components", "prefab"))
             return false;
         uint32_t id = 0;
         if (!wpe__read_file_id(l, wpe_json_get(v, "id"), v, &id))
@@ -1602,6 +1663,8 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
         {"rigidbody", wpe__load_rigidbody},
         {"collider", wpe__load_collider},
         {"character", wpe__load_character},
+        {"nav_agent", wpe__load_nav_agent},
+        {"nav_obstacle", wpe__load_nav_obstacle},
         {"audio_source", wpe__load_audio_source},
         {"ui", wpe__load_ui},
         {"sprite", wpe__load_sprite},
@@ -1762,6 +1825,8 @@ static const struct {
     {"rigidbody", WPE_COMP_PHYSICS_RIGIDBODY, wpe__load_rigidbody},
     {"collider", WPE_COMP_PHYSICS_COLLIDER, wpe__load_collider},
     {"character", WPE_COMP_CHARACTER, wpe__load_character},
+    {"nav_agent", WPE_COMP_NAV_AGENT, wpe__load_nav_agent},
+    {"nav_obstacle", WPE_COMP_NAV_OBSTACLE, wpe__load_nav_obstacle},
     {"audio_source", WPE_COMP_AUDIO_SOURCE, wpe__load_audio_source},
     {"ui", WPE_COMP_UI, wpe__load_ui},
     {"sprite", WPE_COMP_SPRITE, wpe__load_sprite},
@@ -1880,9 +1945,9 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
     /* "id" is accepted and ignored, so a saved entity (wpe_scene_save_entity) can be fed back as a copy. */
     if (!WPE__JSON_CHECK_OBJECT(&l.r, description, "entity", "id", "name", "parent", "transform", "instance",
                                 "mesh", "camera", "light", "billboard", "particles", "trail", "slash",
-                                "water", "net", "animator", "rigidbody", "collider", "character",
-                                "audio_source", "ui", "sprite", "text", "button", "toggle", "slider",
-                                "script", "components", "prefab"))
+                                "water", "net", "animator", "rigidbody", "collider", "character", "nav_agent",
+                                "nav_obstacle", "audio_source", "ui", "sprite", "text", "button", "toggle",
+                                "slider", "script", "components", "prefab"))
         return l.r.result;
     /* A prefab instance starts from its prefab; the description's parts then replace the root's. */
     const WPE_JsonValue* prefab = wpe_json_get(description, "prefab");
@@ -1896,9 +1961,10 @@ WPE_Result wpe_scene_create_entity(const WPE_SceneContext* context, const WPE_Js
     }
     /* The scene-file order: identity first, then components, scripts last. */
     static const char* const order[] = {
-        "name",      "transform",    "parent", "instance", "mesh", "camera",   "light",     "billboard",
-        "particles", "trail",        "slash",  "water",    "net",  "animator", "rigidbody", "collider",
-        "character", "audio_source", "ui",     "sprite",   "text", "button",   "toggle",    "slider"};
+        "name",      "transform", "parent",    "instance",  "mesh",         "camera",       "light",
+        "billboard", "particles", "trail",     "slash",     "water",        "net",          "animator",
+        "rigidbody", "collider",  "character", "nav_agent", "nav_obstacle", "audio_source", "ui",
+        "sprite",    "text",      "button",    "toggle",    "slider"};
     bool ok = true;
     for (size_t i = 0; ok && i < sizeof order / sizeof order[0]; ++i) {
         const WPE_JsonValue* value = wpe_json_get(description, order[i]);

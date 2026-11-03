@@ -27,6 +27,7 @@ set_tests_properties(vfs_vfs PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINAR
 wpe_add_test(physics_physics SOURCES physics/test_physics.c LIBS wpe::physics LABELS unit physics)
 wpe_add_test(navigation_grid SOURCES navigation/test_navigation.c LIBS wpe::navigation LABELS unit navigation)
 wpe_add_test(navigation_path SOURCES navigation/test_nav_path.c LIBS wpe::navigation LABELS unit navigation)
+wpe_add_test(navigation_agents SOURCES navigation/test_nav_agents.c LIBS wpe::navigation LABELS unit navigation)
 wpe_add_test(script_script SOURCES script/test_script.c LIBS wpe::script wpe_dep_sdl3 LABELS unit script)
 target_compile_definitions(test_script_script PRIVATE WPE_TEST_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/script_assets")

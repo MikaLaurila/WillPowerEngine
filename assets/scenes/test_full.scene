@@ -40,6 +40,20 @@
       "camera": {"orthographic": true, "ortho_height": 34, "near": 0.5, "far": 100}
     },
     {
+      "id": 51,
+      "name": "nav guard",
+      "transform": {"position": [22, 0, -20]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "nav_agent": {"speed": 3, "turn_speed": 540, "arrive_distance": 0.25},
+      "script": {"path": "scripts/nav_guard.luau"}
+    },
+    {
+      "id": 52,
+      "name": "nav cart",
+      "transform": {"position": [24, 0.5, -26]},
+      "nav_obstacle": {"size": [3, 1, 1]}
+    },
+    {
       "id": 3,
       "name": "sun",
       "transform": {"euler": [-50, 30, 0]},

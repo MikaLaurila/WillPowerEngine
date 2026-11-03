@@ -21,6 +21,7 @@ struct WPE_NavFlowField {
         nodes; /* key: the distance to the nearest goal (INFINITY: unreached); parent: the next cell. */
     uint32_t* items;
     wpe__FlowGoal* goals;
+    const WPE_NavBlockers* blockers; /* Of the last build (borrowed). */
     uint32_t goal_count, goal_capacity;
 };
 
@@ -57,9 +58,10 @@ static bool wpe__finite3(WPE_Vec3 v) {
 }
 
 WPE_Result wpe_nav_flow_build(WPE_NavFlowField* field, const WPE_Vec3* goals, uint32_t goal_count,
-                              float max_distance) {
+                              float max_distance, const WPE_NavBlockers* blockers) {
     if (!field || (goal_count && !goals)) return WPE_RESULT_ERROR_NULL_ARG;
-    if (!(max_distance >= 0.0f)) return WPE_RESULT_ERROR_INVALID_ARG;
+    if (!(max_distance >= 0.0f) || (blockers && blockers->grid != field->grid))
+        return WPE_RESULT_ERROR_INVALID_ARG;
     for (uint32_t i = 0; i < goal_count; ++i) {
         if (!wpe__finite3(goals[i])) return WPE_RESULT_ERROR_INVALID_ARG;
     }
@@ -75,6 +77,7 @@ WPE_Result wpe_nav_flow_build(WPE_NavFlowField* field, const WPE_Vec3* goals, ui
         nodes[i] = (wpe__NavNode){.key = INFINITY, .pos = WPE__NAV_NOT_QUEUED, .parent = WPE_NAV_CELL_NONE};
     wpe__NavHeap heap = {.items = field->items, .nodes = nodes};
     field->goal_count = 0;
+    field->blockers = blockers;
     const float standing = g->settings.agent_height * 0.5f;
     for (uint32_t i = 0; i < goal_count; ++i) {
         WPE_Vec3 point;
@@ -90,10 +93,21 @@ WPE_Result wpe_nav_flow_build(WPE_NavFlowField* field, const WPE_Vec3* goals, ui
     /* Dijkstra: cells leave the heap in order of distance, each final when it does. */
     while (heap.count > 0) {
         const uint32_t cell = wpe__nav_heap_pop(&heap);
-        uint32_t moves[8], straight = 0;
-        const uint32_t n = wpe__nav_moves(g, cell, moves, &straight);
+        /* Walking the flow goes from `other` to `cell`, the reverse of the search, under the rule paths keep:
+         * from an open cell only the moves open cells allow (never into a closed cell or past a closed
+         * corner); from a closed cell any (leaving its closed area). */
+        uint32_t moves[8], straight = 0, open_moves[8], open_straight = 0, open_count = 0;
+        const uint32_t n = wpe__nav_moves(g, NULL, cell, moves, &straight);
+        if (blockers && !blockers->blocked[cell])
+            open_count = wpe__nav_moves(g, blockers->blocked, cell, open_moves, &open_straight);
         for (uint32_t m = 0; m < n; ++m) {
             const uint32_t other = moves[m];
+            if (blockers && !blockers->blocked[other]) {
+                bool allowed = false;
+                for (uint32_t k = 0; k < open_count && !allowed; ++k)
+                    allowed = open_moves[k] == other;
+                if (!allowed) continue;
+            }
             const float d = nodes[cell].key + wpe__nav_move_cost(g, cell, other, m >= straight);
             if (d >= nodes[other].key || (max_distance > 0.0f && d > max_distance)) continue;
             nodes[other].key = d;
@@ -141,13 +155,13 @@ bool wpe_nav_flow_direction(const WPE_NavFlowField* field, WPE_Vec3 position, WP
         const uint32_t further = field->nodes[step].parent;
         const WPE_Vec3 point = field->nodes[further].parent == further ? wpe__goal_point(field, further)
                                                                        : wpe__nav_center(g, further);
-        if (!wpe__nav_line(g, cell, here, point, further, 0.0f)) break;
+        if (!wpe__nav_line(g, field->blockers, cell, here, point, further, 0.0f)) break;
         target = point;
         step = further;
     }
     if (field->nodes[step].parent == step && step != cell) {
         const WPE_Vec3 goal = wpe__goal_point(field, step); /* The goal itself, when in sight. */
-        if (wpe__nav_line(g, cell, here, goal, step, 0.0f)) target = goal;
+        if (wpe__nav_line(g, field->blockers, cell, here, goal, step, 0.0f)) target = goal;
     }
     const WPE_Vec3 d = wpe_vec3(target.x - here.x, 0.0f, target.z - here.z);
     const float length = wpe_vec3_length(d);

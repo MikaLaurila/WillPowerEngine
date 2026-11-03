@@ -76,6 +76,7 @@
 #include "graphics/transition.h"
 #include "scene/game_feel.h"
 #include "input/input.h"
+#include "navigation/nav_agents.h"
 #include "physics/physics.h"
 #include "ui/ui.h"
 
@@ -197,11 +198,12 @@ typedef struct WPE_ScriptNetEvent {
 } WPE_ScriptNetEvent;
 
 typedef struct WPE_ScriptHostDesc {
-    WPE_Ecs* ecs;             /* Borrowed. Scene and graphics components must be registered. */
-    WPE_AssetManager* assets; /* Borrowed: scripts and prefabs are asset paths in its VFS. */
-    WPE_Physics* physics;     /* Optional, borrowed: enables the physics API and collision callbacks. */
-    WPE_Audio* audio;         /* Optional, borrowed: enables the audio API. */
-    WPE_Input* input;         /* Optional, borrowed: enables the input API. */
+    WPE_Ecs* ecs;              /* Borrowed. Scene and graphics components must be registered. */
+    WPE_AssetManager* assets;  /* Borrowed: scripts and prefabs are asset paths in its VFS. */
+    WPE_Physics* physics;      /* Optional, borrowed: enables the physics API and collision callbacks. */
+    WPE_NavSystem* navigation; /* Optional, borrowed: enables the navigation API (wpe.nav_*). */
+    WPE_Audio* audio;          /* Optional, borrowed: enables the audio API. */
+    WPE_Input* input;          /* Optional, borrowed: enables the input API. */
     /* Optional, borrowed: enables 2D drawing (the application begins and submits the batch each
      * frame). Text needs `font` too, a WPE_ASSET_FONT handle the host keeps a reference to. */
     WPE_Draw2D* draw2d;

@@ -309,6 +309,8 @@ return MyEntity
 - **Defaults match `wpe_character_default()`** (radius 0.4, height 1.8, slope 45°, step 0.3), so what the grid calls walkable a character controller can walk.
 - **The engine owns the scene's grid** (`wpe_engine_nav_grid`): built on first request after a scene load or `wpe_engine_invalidate_nav_grid`, with `WPE_SceneEnvironment.navigation` (scene key `environment.navigation`, saved only when it differs from the defaults). `WPE_EngineDebugDraw.navigation` (`wpe_runtime --debug-nav`) draws its outline and a meter grid, colored by island.
 - **Finding the way** (`navigation/nav_path.h`): moves are the 4 links plus diagonals open both ways around the corner (never cutting a wall's corner), costing their 3D length. `wpe_nav_find_path` runs A* (octile heuristic; ties go to the deeper node, then the lower cell number, so results are deterministic) in a reusable `WPE_NavQuery` (per-cell search state packed in one node struct, stamped per search so nothing is cleared; no allocation once warmed up), then pulls the chain straight with `wpe_nav_grid_line_walkable` (a grid traversal along links; lines within 1e-4 of a cell corner must have both ways open). Different islands fail in O(1); `allow_partial` returns the way to the nearest reachable point. Flow fields (`WPE_NavFlowField`) are one Dijkstra pass from any number of goals; `wpe_nav_flow_direction` aims at the farthest of the next 8 cells in straight sight.
+- **Obstacles** (`WPE_NavBlockers`): moving boxes close cells (footprint grown by the agent's radius, under the box's height range) to paths, lines and flow fields without rebuilding the grid. A path may leave the closed area it starts in, never enter one.
+- **Agents** (`navigation/nav_agents.h`): `WPE_NavAgent` (component 28) and `WPE_NavObstacle` (29), run by a `WPE_NavSystem` the engine steps in every fixed step before physics. Agents plan (A* with obstacles, partial when unreachable), steer (slow near the end, sidestep other agents when the move stays walkable), move through their character controller with gravity (or along the floor without one) and turn to face their way. Arrivals and failures reach the agent's script as `on_nav_arrived`/`on_nav_failed`. Only the owning side of a networked entity moves it. Scripts use `wpe.nav_*` (`script/script_nav.c`); scenes carry the settings (`nav_agent`, `nav_obstacle`). Guide: `docs/navigation.md`.
 - **Tests**: the stress test checks A* against Dijkstra (raw path length = flow distance) on a random 100 x 100 m maze and that every raw move and smoothed segment is walkable; Release budgets: A* under 0.5 µs per expanded cell, a whole-level flow field under 50 ms.
 - NOTE(limitation): convex colliders add their mesh's triangles (the hull only for convex meshes); the build is single-threaded (fast enough at scene scale: the master scene's 240 x 240 grid adds about 10 ms to a Debug run).
 
@@ -459,7 +461,7 @@ willpower_engine/
 ├── samples/            # Small demo programs (e.g. spinning_cubes) with --frames/--screenshot for automated checks
 ├── tests/              # Test suites
 ├── tools/              # Command-line tools (wpe_pak: .pak archives; wpe_export: game export)
-├── docs/               # Guides and specifications (scripting, assets and .pak, scenes, runtime and export, networking)
+├── docs/               # Guides and specifications (scripting, assets and .pak, scenes, runtime and export, networking, navigation)
 ├── assets/             # The sample game project: project.json, scenes/ (2D title menu, demo and master test
 │                       # scene), scripts/, meshes/ (glTF and .prim), sounds/, music/, fonts/, ui/ (images)
 ├── CMakeLists.txt
@@ -484,7 +486,7 @@ willpower_engine/
   - `navigation` depends on `ecs`, `scene`, `assets` and `physics` (for the collider component types only).
   - `audio` depends on `ecs`, `scene` and `assets`, and uses miniaudio privately.
   - `input` depends on `core` and `platform`, and uses SDL3 privately.
-  - `script` depends on `graphics`, `assets`, `physics`, `audio`, `input` and `platform`, and uses Luau privately.
+  - `script` depends on `graphics`, `assets`, `physics`, `navigation`, `audio`, `input` and `platform`, and uses Luau privately.
   - `engine` depends on all of the above.
   - The editor (`editor/`, an application, not an engine module) depends on `engine`, cimgui and SDL3.
 - Only `jobs`, `platform`, `input` and the editor may include SDL headers; the renderer stays pure CPU so it can be tested headless.

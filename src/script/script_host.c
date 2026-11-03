@@ -1082,6 +1082,8 @@ WPE_Result wpe_script_host_create(const WPE_ScriptHostDesc* desc, WPE_ScriptHost
     host->ecs = desc->ecs;
     host->assets = desc->assets;
     host->physics = desc->physics;
+    host->nav = desc->navigation;
+    host->nav_random = 0x2545F491u;
     host->audio = desc->audio;
     host->input = desc->input;
     host->draw2d = desc->draw2d;

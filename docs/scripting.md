@@ -32,6 +32,9 @@ end
 function Spinner:on_click()                 -- UI: this entity's button was clicked
 end
 
+function Spinner:on_nav_arrived()           -- navigation: this agent reached its destination (also on_nav_failed)
+end
+
 return Spinner
 ```
 
@@ -69,6 +72,7 @@ When a scene is saved, each property is written with its current value, so a scr
   - `on_fixed_update` only begins after `on_start` has run.
   - `on_destroy` runs only for instances that started.
   - Collision and trigger callbacks run after each physics step, for both entities involved (each gets the other as `other`). A trigger's own script and the visiting entity's script both get `on_trigger_enter`/`on_trigger_exit`.
+  - `on_nav_arrived` and `on_nav_failed` run on an agent's own script after the fixed step in which it got there (or got as near as it could).
   - `on_click` runs at the start of the frame, before the fixed steps and `on_update`, for each button clicked by that frame's input (on the button entity's own script).
 - **Changing the world:** scripts may spawn, modify and destroy entities freely during `on_start`, `on_update` and `on_fixed_update`. `wpe.destroy` is deferred: the entity and its children are destroyed at the end of the current update.
 - **Inside `on_destroy`:** you may read and modify components and call `wpe.destroy`. Spawning, attaching scripts, adding/removing lights or physics components and reparenting raise errors there. When the entity is being despawned, its physics body is already gone.
@@ -332,6 +336,46 @@ end
 ```
 
 `scripts/hero.luau` with `scenes/character.scene` is a complete example.
+
+### Navigation
+
+Agents walk to places by themselves, around walls and obstacles, along paths on the scene's navigation grid (built from its static colliders; [navigation.md](navigation.md) explains it all). An agent with a character controller walks through it, with gravity; one without moves its transform along the floor. Agents move in the fixed steps, before physics.
+
+| Function | Description |
+|---|---|
+| `wpe.add_nav_agent(entity, [{speed = 3.5, acceleration = 20, arrive_distance = 0.2, slow_distance = 1, turn_speed = 720, repath_interval = 0.5, avoid_others = true}])` | Make the entity an agent, or change an agent's settings (it keeps going where it was going). `turn_speed` (degrees per second, 0 for never) turns it to face the way it walks; `repath_interval` is how often a following agent plans again. |
+| `wpe.remove_nav_agent(entity)` | Stop being an agent. |
+| `wpe.nav_move_to(entity, point)` | Walk to a point. A point it can't reach is walked to as near as possible, then `on_nav_failed`. |
+| `wpe.nav_follow(entity, target)` | Walk after another entity, again and again as it moves (`on_nav_arrived` each time it catches up). |
+| `wpe.nav_stop(entity)` | Stop where it is. |
+| `wpe.nav_state(entity) -> state, remaining` | `"idle"`, `"moving"`, `"arrived"` or `"unreachable"`, and the walking distance left. |
+| `wpe.nav_path(entity) -> {points}` | The corners still ahead of it (empty when it isn't moving). |
+| `wpe.get_nav_agent(entity) -> {speed, acceleration, arrive_distance, slow_distance, turn_speed, repath_interval, avoid_others, state, remaining, velocity, destination?, following?}` | Its settings and state. |
+| `wpe.add_nav_obstacle(entity, [{size = (1, 1, 1), offset = (0, 0, 0), carve = true}])` | A box (in the entity's space, scaled with it) that paths go around, wherever it moves: a door, a cart. With `carve = false`, agents only sidestep it. |
+| `wpe.remove_nav_obstacle(entity)` | Remove the obstacle. |
+| `wpe.nav_find_path(from, to, [{partial = false, raw = false, radius = 1, obstacles = true}]) -> points, length, partial` | The way from one point to another as a list of corners, or nil when there is none. `partial` returns the way to the nearest reachable point instead of nil; `radius` is how far off the walkable area the points may be. |
+| `wpe.nav_nearest(point, [radius = 1]) -> point?` | The nearest point a character can stand on. |
+| `wpe.nav_can_walk(from, to) -> bool` | Whether a straight walk between two points is clear (no wall, drop or obstacle in between). |
+| `wpe.nav_reachable(from, to) -> bool` | Whether any path connects the two points. |
+| `wpe.nav_random_point([center, radius = 10]) -> point?` | A random walkable point (around `center`, and reachable from it, when given): patrols, wandering. The same sequence every run. |
+
+```lua
+local Guard = {}
+Guard.properties = { a = vector.create(-5, 0, 0), b = vector.create(5, 0, 0) }
+
+function Guard:on_start()
+	wpe.add_nav_agent(self.entity, { speed = 2 })
+	self.going_to_b = true
+	wpe.nav_move_to(self.entity, self.b)
+end
+
+function Guard:on_nav_arrived()
+	self.going_to_b = not self.going_to_b
+	wpe.nav_move_to(self.entity, if self.going_to_b then self.b else self.a)
+end
+
+return Guard
+```
 
 ### Audio
 

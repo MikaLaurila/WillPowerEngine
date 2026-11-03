@@ -318,7 +318,7 @@ static void test_nav_flow_field_leads_to_the_goal(void) {
     WPE_NavFlowField* field = NULL;
     WPE_TEST_ASSERT_OK(wpe_nav_flow_create(grid, &field));
     const WPE_Vec3 goal = wpe_vec3(3, 0, -3);
-    WPE_TEST_ASSERT_OK(wpe_nav_flow_build(field, &goal, 1, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_nav_flow_build(field, &goal, 1, 0.0f, NULL));
     const uint32_t goal_cell = wpe_nav_grid_find_cell(grid, goal, 0.1f);
     WPE_TEST_ASSERT_NEAR(0.0f, wpe_nav_flow_distance(field, goal_cell), 1e-6);
     WPE_TEST_ASSERT_EQ_UINT(goal_cell, wpe_nav_flow_next(field, goal_cell));
@@ -357,21 +357,21 @@ static void test_nav_flow_field_leads_to_the_goal(void) {
 
     /* Two goals: each cell goes to the nearer one. */
     const WPE_Vec3 goals[2] = {goal, wpe_vec3(-3, 0, 3)};
-    WPE_TEST_ASSERT_OK(wpe_nav_flow_build(field, goals, 2, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_nav_flow_build(field, goals, 2, 0.0f, NULL));
     WPE_TEST_ASSERT(wpe_nav_flow_distance(field, start_cell) < 6.5f);
     /* A limited distance leaves the far room unreached. */
-    WPE_TEST_ASSERT_OK(wpe_nav_flow_build(field, &goal, 1, 5.0f));
+    WPE_TEST_ASSERT_OK(wpe_nav_flow_build(field, &goal, 1, 5.0f, NULL));
     WPE_TEST_ASSERT(isinf(wpe_nav_flow_distance(field, start_cell)));
     WPE_TEST_ASSERT_EQ_UINT(WPE_NAV_CELL_NONE, wpe_nav_flow_next(field, start_cell));
     WPE_TEST_ASSERT(!wpe_nav_flow_direction(field, start, &dir, NULL));
 
     /* Failures. */
     const WPE_Vec3 nowhere = wpe_vec3(50, 0, 0), broken = wpe_vec3(INFINITY, 0, 0);
-    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_nav_flow_build(field, &nowhere, 1, 0.0f));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_nav_flow_build(field, &nowhere, 1, 0.0f, NULL));
     WPE_TEST_ASSERT(isinf(wpe_nav_flow_distance(field, goal_cell)));
-    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_nav_flow_build(field, &broken, 1, 0.0f));
-    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_nav_flow_build(field, &goal, 1, -1.0f));
-    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_nav_flow_build(field, NULL, 1, 0.0f));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_nav_flow_build(field, &broken, 1, 0.0f, NULL));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_nav_flow_build(field, &goal, 1, -1.0f, NULL));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_nav_flow_build(field, NULL, 1, 0.0f, NULL));
     WPE_TEST_ASSERT(isinf(wpe_nav_flow_distance(NULL, 0)));
     WPE_TEST_ASSERT(isinf(wpe_nav_flow_distance(field, 1u << 30)));
     WPE_TEST_ASSERT_EQ_UINT(WPE_NAV_CELL_NONE, wpe_nav_flow_next(NULL, 0));

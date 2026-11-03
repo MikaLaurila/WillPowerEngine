@@ -71,6 +71,7 @@ struct WPE_Engine {
     WPE_Ui* ui;
     WPE_ScriptHost* scripts;
     WPE_NavGrid* nav_grid; /* The scene's, once asked for (wpe_engine_nav_grid). */
+    WPE_NavSystem* nav;    /* Agents and obstacles (navigation/nav_agents.h), on nav_grid. */
     bool nav_tried;        /* A build ran since the last load or invalidation (NULL grid: it failed). */
 
     WPE_SceneEnvironment environment;
@@ -339,6 +340,14 @@ static WPE_Result wpe__load_font(WPE_Engine* engine) {
     return result;
 }
 
+static const WPE_NavGrid* wpe__nav_provider(void* user_data) {
+    return wpe_engine_nav_grid(user_data);
+}
+
+static bool wpe__nav_simulates(WPE_Entity entity, void* user_data) {
+    return wpe_engine_net_is_local(user_data, entity); /* A remote player's agent moves on their side. */
+}
+
 static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* desc) {
     const WPE_ProjectSettings* p = &engine->project;
     WPE_Result result = wpe_asset_manager_create(
@@ -357,6 +366,15 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                                        .assets = engine->assets,
                                                        .gravity = engine->environment.gravity},
                                     &engine->physics);
+    }
+    if (result == WPE_RESULT_OK) {
+        result = wpe_nav_system_create(&(WPE_NavSystemDesc){.ecs = engine->ecs,
+                                                            .physics = engine->physics,
+                                                            .grid = wpe__nav_provider,
+                                                            .grid_user_data = engine,
+                                                            .simulates = wpe__nav_simulates,
+                                                            .simulates_user_data = engine},
+                                       &engine->nav);
     }
     if (result == WPE_RESULT_OK) {
         result =
@@ -408,6 +426,7 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
             wpe_script_host_create(&(WPE_ScriptHostDesc){.ecs = engine->ecs,
                                                          .assets = engine->assets,
                                                          .physics = engine->physics,
+                                                         .navigation = engine->nav,
                                                          .audio = engine->audio,
                                                          .input = engine->input,
                                                          .draw2d = engine->draw2d,
@@ -487,6 +506,7 @@ void wpe_engine_destroy(WPE_Engine* engine) {
     wpe_free(engine->net_events);
     /* Users of the world and its assets first, then the world, then what they read from. */
     wpe_script_host_destroy(engine->scripts);
+    wpe_nav_system_destroy(engine->nav);
     wpe_nav_grid_destroy(engine->nav_grid);
     wpe_replication_destroy(engine->replication);
     wpe_audio_destroy(engine->audio);
@@ -633,6 +653,7 @@ const WPE_NavGrid* wpe_engine_nav_grid(WPE_Engine* engine) {
 
 void wpe_engine_invalidate_nav_grid(WPE_Engine* engine) {
     if (!engine) return;
+    wpe_nav_system_grid_changed(engine->nav); /* Before the grid it borrows goes. */
     wpe_nav_grid_destroy(engine->nav_grid);
     engine->nav_grid = NULL;
     engine->nav_tried = false;
@@ -1122,10 +1143,19 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
     engine->stats.physics_ms = 0.0;
     for (uint32_t s = 0; s < steps && result == WPE_RESULT_OK; ++s) {
         wpe_script_host_fixed_update(engine->scripts, (float)engine->clock.step);
+        /* Agents move (character agents through their controllers) before the step simulates them. */
+        result = wpe_nav_system_update(engine->nav, (float)engine->clock.step);
+        if (result != WPE_RESULT_OK) break;
         const double physics_start = wpe_platform_time_seconds();
         result = wpe_physics_step(engine->physics, (float)engine->clock.step);
         engine->stats.physics_ms += (wpe_platform_time_seconds() - physics_start) * 1000.0;
         wpe_script_host_dispatch_physics(engine->scripts);
+        uint32_t nav_events = 0;
+        const WPE_NavEvent* events = wpe_nav_system_events(engine->nav, &nav_events);
+        for (uint32_t i = 0; i < nav_events && result == WPE_RESULT_OK; ++i) {
+            const char* method = events[i].type == WPE_NAV_EVENT_ARRIVED ? "on_nav_arrived" : "on_nav_failed";
+            result = wpe_script_host_notify(engine->scripts, events[i].entity, method);
+        }
     }
     engine->stats.fixed_steps = steps;
     if (result == WPE_RESULT_OK) result = wpe_script_host_update(engine->scripts, (float)dt);
@@ -1233,7 +1263,10 @@ static WPE_Result wpe__draw_debug(WPE_Engine* engine, WPE_Entity camera) {
                            debug->grid_spacing > 0.0f ? debug->grid_spacing : 1.0f);
     }
     if (debug->physics) wpe_physics_debug_draw(engine->physics, wpe__physics_line, engine->debug_lines);
-    if (nav) wpe_nav_grid_debug_draw(nav, wpe__physics_line, engine->debug_lines); /* Same line format. */
+    if (nav) {
+        wpe_nav_grid_debug_draw(nav, wpe__physics_line, engine->debug_lines); /* Same line format. */
+        wpe_nav_system_debug_draw(engine->nav, wpe__physics_line, engine->debug_lines);
+    }
     return wpe_debug_lines_submit(engine->debug_lines, engine->renderer, true);
 }
 
@@ -1579,6 +1612,10 @@ WPE_AssetManager* wpe_engine_assets(const WPE_Engine* engine) {
 
 WPE_Input* wpe_engine_input(const WPE_Engine* engine) {
     return engine ? engine->input : NULL;
+}
+
+WPE_NavSystem* wpe_engine_navigation(const WPE_Engine* engine) {
+    return engine ? engine->nav : NULL;
 }
 
 WPE_Physics* wpe_engine_physics(const WPE_Engine* engine) {

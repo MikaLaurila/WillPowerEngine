@@ -12,7 +12,8 @@
  *  1. Input: OS events are pumped into the input module and actions evaluated. A multiplayer
  *     session (wpe_engine_net_start()) takes its events: a player follows the host's scene.
  *  2. Simulation: the UI's focus and clicks (scripts' on_click), fixed steps (scripts'
- *     on_fixed_update, physics, collision callbacks), then the scripts' on_update, animation,
+ *     on_fixed_update, navigation agents, physics, collision callbacks, scripts' on_nav_arrived and
+ *     on_nav_failed), then the scripts' on_update, animation,
  *     transforms and audio.
  *  3. Rendering from the scene camera (a scene without one is 2D: only the clear color), the
  *     scene's post-processing, then the UI and the scripts' 2D drawing on top (not
@@ -43,6 +44,7 @@
 #include "engine/replication.h"
 #include "engine/scene_file.h"
 #include "input/input.h"
+#include "navigation/nav_agents.h"
 #include "navigation/navigation.h"
 #include "network/network.h"
 #include "physics/physics.h"
@@ -179,6 +181,8 @@ WPE_Ecs* wpe_engine_ecs(const WPE_Engine* engine);
 WPE_AssetManager* wpe_engine_assets(const WPE_Engine* engine);
 WPE_Input* wpe_engine_input(const WPE_Engine* engine);
 WPE_Physics* wpe_engine_physics(const WPE_Engine* engine);
+/** Navigation agents and obstacles (navigation/nav_agents.h), run in every fixed step before physics. */
+WPE_NavSystem* wpe_engine_navigation(const WPE_Engine* engine);
 /** Parsed prefab files (for scene contexts that load or instantiate prefabs). */
 WPE_PrefabCache* wpe_engine_prefabs(const WPE_Engine* engine);
 WPE_Audio* wpe_engine_audio(const WPE_Engine* engine);
@@ -197,7 +201,9 @@ typedef struct WPE_EngineDebugDraw {
     bool grid;          /* A grid on the ground plane (y = 0) around the camera, X axis red, Z axis blue. */
     float grid_spacing; /* World units between grid lines (0 = 1); every 10th line is brighter. */
     bool network;       /* The multiplayer session in the top-left corner: players, pings, traffic. */
-    bool navigation; /* The walkable area of wpe_engine_nav_grid() (built when needed), colored by island. */
+    /* The walkable area of wpe_engine_nav_grid() (built when needed), colored by island, with the agents'
+     * ways ahead (yellow) and the cells obstacles close (red). */
+    bool navigation;
 } WPE_EngineDebugDraw;
 
 /** Sets the debug overlays (all off by default). @thread_safety Main thread only */

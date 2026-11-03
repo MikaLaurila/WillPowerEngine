@@ -67,6 +67,53 @@ bool wpe_nav_grid_reachable(const WPE_NavGrid* grid, uint32_t from_cell, uint32_
  */
 bool wpe_nav_grid_line_walkable(const WPE_NavGrid* grid, WPE_Vec3 from, WPE_Vec3 to);
 
+/* ---- Blocked cells ------------------------------------------------------------------------------- */
+
+/**
+ * Cells closed to paths and walkable lines on top of a grid: moving obstacles (a door, a cart) carved out
+ * without rebuilding the grid. Opaque; one byte per cell.
+ */
+typedef struct WPE_NavBlockers WPE_NavBlockers;
+
+/** @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_OUT_OF_MEMORY. @thread_safety Any
+ * thread */
+[[nodiscard]] WPE_Result wpe_nav_blockers_create(const WPE_NavGrid* grid, WPE_NavBlockers** out_blockers);
+
+/** Destroys a set; NULL is a no-op. @thread_safety Thread using it */
+void wpe_nav_blockers_destroy(WPE_NavBlockers* blockers);
+
+/** Opens every cell again. @thread_safety Thread using it */
+void wpe_nav_blockers_clear(WPE_NavBlockers* blockers);
+
+/**
+ * Blocks the cells under a box: `half_extents` around `center`, then `transform` (NULL: none). A cell is
+ * blocked when its center is within the grid's agent_radius of the box's footprint seen from above (so
+ * an agent's capsule clears the box) and its floor is between the box's bottom minus agent_height and its
+ * top (agents pass under a box high enough above them).
+ *
+ * NOTE(limitation): the footprint is the box's X and Z axes projected onto the ground, exact for boxes
+ * turned about Y only; a tilted box blocks a slightly different area.
+ *
+ * @return The number of cells newly blocked.
+ *
+ * @thread_safety Thread using it
+ */
+uint32_t wpe_nav_blockers_add_box(WPE_NavBlockers* blockers, const WPE_Mat4* transform, WPE_Vec3 center,
+                                  WPE_Vec3 half_extents);
+
+/** @return Whether a cell is blocked (false for NULL or cells out of range). @thread_safety Any thread (no
+ * change meanwhile) */
+bool wpe_nav_blockers_blocked(const WPE_NavBlockers* blockers, uint32_t cell);
+
+/** @return How many cells are blocked. @thread_safety Any thread (no change meanwhile) */
+uint32_t wpe_nav_blockers_count(const WPE_NavBlockers* blockers);
+
+/** wpe_nav_grid_line_walkable() through cells that `blockers` (may be NULL) leaves open. A line starting in a
+ * closed cell may cross closed cells while it leaves that closed area (an agent an obstacle landed on
+ * walks out), but never enters one. @thread_safety Any thread */
+bool wpe_nav_grid_line_clear(const WPE_NavGrid* grid, const WPE_NavBlockers* blockers, WPE_Vec3 from,
+                             WPE_Vec3 to);
+
 /* ---- Paths --------------------------------------------------------------------------------------- */
 
 /** Scratch memory for path searches on one grid. Opaque. */
@@ -83,6 +130,9 @@ typedef struct WPE_NavPathOptions {
     bool raw;
     /* Most cells the search may expand before it gives up (0 = no limit, the default). */
     uint32_t max_visited;
+    /* Cells the path must not enter (NULL: none; borrowed for the call). A path starting in a closed area
+     * leaves it the shortest way, as wpe_nav_grid_line_clear() does. */
+    const WPE_NavBlockers* blockers;
 } WPE_NavPathOptions;
 
 /** A found path. `points` belong to the query and stay valid until its next search or destruction. */
@@ -144,7 +194,9 @@ void wpe_nav_flow_destroy(WPE_NavFlowField* field);
 /**
  * Computes the walking distance from every cell to the nearest goal (Dijkstra over the same moves
  * paths use). Goals off the grid (beyond 1 unit sideways) are skipped. Cells further than
- * `max_distance` (0: no limit) are left unreached, which bounds the work around a goal.
+ * `max_distance` (0: no limit) are left unreached, which bounds the work around a goal. Cells
+ * `blockers` (may be NULL) closes are left unreached too, and the flow goes around them; the field
+ * keeps borrowing `blockers` for wpe_nav_flow_direction() until its next build.
  *
  * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_INVALID_ARG (a non-finite goal or a
  *         negative max_distance); WPE_RESULT_ERROR_NOT_FOUND (no goal is on the grid; every cell is then
@@ -153,7 +205,7 @@ void wpe_nav_flow_destroy(WPE_NavFlowField* field);
  * @thread_safety Thread using the field
  */
 WPE_Result wpe_nav_flow_build(WPE_NavFlowField* field, const WPE_Vec3* goals, uint32_t goal_count,
-                              float max_distance);
+                              float max_distance, const WPE_NavBlockers* blockers);
 
 /** @return A cell's walking distance to the nearest goal, or INFINITY when unreached. @thread_safety Any
  * thread (no build meanwhile) */

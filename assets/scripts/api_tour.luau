@@ -359,6 +359,39 @@ function Tour:on_start()
 	assert(not pcall(wpe.add_character, self.walker, { radius = -1 }))
 	assert(not pcall(wpe.move_character, self.ball, vector.create(0, 0, 0), 0.1)) -- not a character
 
+	-- Navigation (docs/navigation.md): the scene's guard patrols (scripts/nav_guard.luau) and its cart is an
+	-- obstacle; here, questions about the grid, a chaser following the guard, and an obstacle of our own.
+	self.guard = wpe.find("nav guard")
+	local guard = wpe.get_nav_agent(self.guard)
+	assert(near(guard.speed, 3) and near(guard.turn_speed, 540) and guard.avoid_others, "the scene's agent settings")
+	local from, to = vector.create(19, 0, -28), vector.create(19, 0, -22)
+	local path, length, partial = wpe.nav_find_path(from, to)
+	assert(path and #path == 2 and near(length, 6, 1e-3) and not partial, "a straight path on open ground")
+	assert(wpe.nav_can_walk(from, to) and wpe.nav_reachable(from, to))
+	assert(near(wpe.nav_nearest(vector.create(19, 0.4, -25)).y, 0, 0.11)) -- onto the ground
+	assert(wpe.nav_nearest(vector.create(19, 8, -25)) == nil) -- nothing to stand on near there
+	assert(wpe.nav_find_path(from, vector.create(200, 0, 0)) == nil) -- off the grid
+	local raw = wpe.nav_find_path(from, vector.create(21, 0, -22), { raw = true, partial = true, radius = 2, obstacles = false })
+	assert(#raw > 2, "raw paths list cell centers")
+	local spot = wpe.nav_random_point(vector.create(19, 0, -25), 3)
+	assert(spot and vector.magnitude(vector.create(spot.x - 19, 0, spot.z + 25)) <= 3.5, "a random point nearby")
+	assert(wpe.nav_random_point() ~= nil)
+	assert(not pcall(wpe.nav_random_point, from, -1))
+	assert(not pcall(wpe.nav_move_to, e, from)) -- the tour is not an agent
+	assert(not pcall(wpe.nav_find_path, vector.create(0 / 0, 0, 0), to))
+	self.cart = wpe.spawn("tour_cart") -- carved at the next fixed step, across the straight way
+	wpe.set_position(self.cart, vector.create(19, 0.5, -25))
+	wpe.add_nav_obstacle(self.cart, { size = vector.create(4, 1, 1), offset = vector.create(0, 0, 0), carve = true })
+	assert(not pcall(wpe.add_nav_obstacle, self.cart, { size = vector.create(0, 1, 1) }))
+	self.nav_from, self.nav_to = from, to
+	self.chaser = wpe.spawn("tour_chaser")
+	wpe.set_position(self.chaser, vector.create(18, 0, -18))
+	wpe.add_nav_agent(self.chaser, { speed = 5, acceleration = 30, arrive_distance = 0.5, slow_distance = 0.5, turn_speed = 0, repath_interval = 0.25, avoid_others = false })
+	assert(not pcall(wpe.add_nav_agent, self.chaser, { speed = -1 }))
+	wpe.nav_follow(self.chaser, self.guard)
+	assert(wpe.nav_state(self.chaser) == "moving" and wpe.get_nav_agent(self.chaser).following == self.guard)
+	assert(not pcall(wpe.nav_follow, self.chaser, self.chaser))
+
 	-- Audio.
 	local voice = wpe.play_sound("sounds/chime.wav", {
 		volume = 0.5,
@@ -560,7 +593,27 @@ function Tour:on_update(dt)
 		assert(self.timer_hits == 1, "a one-shot timer fires once")
 		assert(self.ticks >= 6, "a repeating timer keeps firing")
 		assert(wpe.cancel(self.ticker))
+	elseif self.updates == 70 then
+		-- The carts are carved now: the straight way is closed, and paths go around them.
+		assert(not wpe.nav_can_walk(self.nav_from, self.nav_to), "the tour's cart closes the straight way")
+		local around, length = wpe.nav_find_path(self.nav_from, self.nav_to)
+		assert(around and #around > 2 and length > 6.2, "paths go around obstacles")
+		assert(#wpe.nav_find_path(self.nav_from, self.nav_to, { obstacles = false }) == 2)
+		assert(#wpe.nav_path(self.chaser) >= 1 or wpe.nav_state(self.chaser) == "arrived")
+		-- The guard is sent somewhere it can't get to: it reports on_nav_failed and goes back to patrolling.
+		wpe.nav_move_to(self.guard, vector.create(500, 0, 0))
 	elseif self.updates == 140 then
+		local guard = wpe.get_script(self.guard)
+		assert(guard.arrivals >= 1, "the guard should have reached a patrol point")
+		assert(guard.failures == 1, "the guard should have failed once")
+		assert(wpe.nav_state(self.guard) == "moving" or wpe.nav_state(self.guard) == "arrived")
+		local gap = vector.magnitude(wpe.get_world_position(self.chaser) - wpe.get_world_position(self.guard))
+		assert(gap < 2.5, "the chaser should keep up with the guard: " .. gap)
+		wpe.nav_stop(self.chaser)
+		assert(wpe.nav_state(self.chaser) == "idle")
+		wpe.remove_nav_obstacle(self.cart)
+		wpe.remove_nav_agent(self.chaser)
+		assert(not pcall(wpe.get_nav_agent, self.chaser))
 		wpe.remove_character(self.walker)
 		assert(not pcall(wpe.get_character, self.walker))
 	elseif self.updates == 150 then
@@ -642,6 +695,8 @@ function Tour:on_destroy()
 	wpe.destroy(self.speaker)
 	wpe.destroy(self.marker)
 	wpe.destroy(self.puff)
+	wpe.destroy(self.cart)
+	wpe.destroy(self.chaser)
 end
 
 return Tour

@@ -3703,6 +3703,7 @@ void wpe__script_api_register(lua_State* L) {
     lua_newtable(L);
     luaL_register(L, NULL, wpe__api);
     wpe__script_net_register(L);
+    wpe__script_nav_register(L);
     lua_pushnumber(L, WPE_LIGHT_DIRECTIONAL);
     lua_setfield(L, -2, "LIGHT_DIRECTIONAL");
     lua_pushnumber(L, WPE_LIGHT_POINT);

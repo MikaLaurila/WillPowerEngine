@@ -150,8 +150,8 @@ static double wpe__cell_coordinate(float world, float origin, float cell_size) {
     return ((double)world - origin) / cell_size;
 }
 
-bool wpe__nav_line(const WPE_NavGrid* g, uint32_t from_cell, WPE_Vec3 from, WPE_Vec3 to, uint32_t to_cell,
-                   float max_vertical) {
+bool wpe__nav_line(const WPE_NavGrid* g, const WPE_NavBlockers* blockers, uint32_t from_cell, WPE_Vec3 from,
+                   WPE_Vec3 to, uint32_t to_cell, float max_vertical) {
     const float cs = g->settings.cell_size;
     const WPE_Vec3 start = wpe__clamp_to_cell(g, from_cell, from);
     const double u0 = wpe__cell_coordinate(start.x, g->origin.x, cs),
@@ -179,6 +179,7 @@ bool wpe__nav_line(const WPE_NavGrid* g, uint32_t from_cell, WPE_Vec3 from, WPE_
               dir_z = step_z > 0 ? WPE_NAV_POS_Z : WPE_NAV_NEG_Z;
     const double span = fmax(fabs(du), fabs(dv)); /* Cells per unit of t along the longer axis. */
     uint32_t cell = from_cell;
+    bool leaving = wpe__nav_blocked(blockers, from_cell); /* Still in the closed area it started in. */
     const int64_t steps = wpe__abs64(tx - ix) + wpe__abs64(tz - iz);
     for (int64_t s = 0; s <= steps && (ix != tx || iz != tz); ++s) {
         const uint32_t column = g->cell_columns[cell];
@@ -191,7 +192,9 @@ bool wpe__nav_line(const WPE_NavGrid* g, uint32_t from_cell, WPE_Vec3 from, WPE_
             /* Through a corner: both ways around it must be open and meet. */
             const uint32_t a = wpe__nav_neighbor(g, column, cell, dir_x);
             const uint32_t b = wpe__nav_neighbor(g, column, cell, dir_z);
-            if (a == WPE_NAV_CELL_NONE || b == WPE_NAV_CELL_NONE) return false;
+            if (a == WPE_NAV_CELL_NONE || b == WPE_NAV_CELL_NONE ||
+                (!leaving && (wpe__nav_blocked(blockers, a) || wpe__nav_blocked(blockers, b))))
+                return false;
             const uint32_t via_a = wpe__nav_neighbor(g, g->cell_columns[a], a, dir_z);
             const uint32_t via_b = wpe__nav_neighbor(g, g->cell_columns[b], b, dir_x);
             if (via_a == WPE_NAV_CELL_NONE || via_a != via_b) return false;
@@ -211,18 +214,121 @@ bool wpe__nav_line(const WPE_NavGrid* g, uint32_t from_cell, WPE_Vec3 from, WPE_
             next_z += delta_z;
         }
         if (cell == WPE_NAV_CELL_NONE) return false;
+        if (!wpe__nav_blocked(blockers, cell)) {
+            leaving = false;
+        } else if (!leaving) {
+            return false; /* Into a closed area. */
+        }
     }
     if (ix != tx || iz != tz) return false; /* Float trouble at the very end: say no. */
     if (to_cell != WPE_NAV_CELL_NONE) return cell == to_cell;
     return fabsf(wpe__nav_center(g, cell).y - to.y) <= max_vertical;
 }
 
-bool wpe_nav_grid_line_walkable(const WPE_NavGrid* grid, WPE_Vec3 from, WPE_Vec3 to) {
+bool wpe_nav_grid_line_clear(const WPE_NavGrid* grid, const WPE_NavBlockers* blockers, WPE_Vec3 from,
+                             WPE_Vec3 to) {
     if (!grid || !wpe__finite3(from) || !wpe__finite3(to)) return false;
+    if (blockers && blockers->grid != grid) return false;
     const uint32_t a = wpe_nav_grid_find_cell(grid, from, wpe__standing(grid));
     const uint32_t b = wpe_nav_grid_find_cell(grid, to, wpe__standing(grid));
     if (a == WPE_NAV_CELL_NONE || b == WPE_NAV_CELL_NONE) return false;
-    return wpe__nav_line(grid, a, from, to, b, 0.0f);
+    return wpe__nav_line(grid, blockers, a, from, to, b, 0.0f);
+}
+
+bool wpe_nav_grid_line_walkable(const WPE_NavGrid* grid, WPE_Vec3 from, WPE_Vec3 to) {
+    return wpe_nav_grid_line_clear(grid, NULL, from, to);
+}
+
+/* ---- Blocked cells ---------------------------------------------------------------------------------- */
+
+WPE_Result wpe_nav_blockers_create(const WPE_NavGrid* grid, WPE_NavBlockers** out_blockers) {
+    if (out_blockers) *out_blockers = NULL;
+    if (!grid || !out_blockers) return WPE_RESULT_ERROR_NULL_ARG;
+    WPE_NavBlockers* b = wpe_alloc_zeroed(1, sizeof *b);
+    if (b) b->blocked = wpe_alloc_zeroed(grid->cell_count ? grid->cell_count : 1u, 1);
+    if (!b || !b->blocked) {
+        wpe_nav_blockers_destroy(b);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    b->grid = grid;
+    *out_blockers = b;
+    return WPE_RESULT_OK;
+}
+
+void wpe_nav_blockers_destroy(WPE_NavBlockers* blockers) {
+    if (!blockers) return;
+    wpe_free(blockers->blocked);
+    wpe_free(blockers);
+}
+
+void wpe_nav_blockers_clear(WPE_NavBlockers* blockers) {
+    if (!blockers || blockers->count == 0) return;
+    memset(blockers->blocked, 0, blockers->grid->cell_count);
+    blockers->count = 0;
+}
+
+uint32_t wpe_nav_blockers_add_box(WPE_NavBlockers* blockers, const WPE_Mat4* transform, WPE_Vec3 center,
+                                  WPE_Vec3 half_extents) {
+    if (!blockers || !wpe__finite3(center) || !wpe__finite3(half_extents)) return 0;
+    const WPE_NavGrid* g = blockers->grid;
+    const WPE_Mat4 m = transform ? *transform : wpe_mat4_identity();
+    const WPE_Vec3 h = wpe_vec3(fabsf(half_extents.x), fabsf(half_extents.y), fabsf(half_extents.z));
+    /* The footprint: the center and the box's X and Z half axes, projected onto the ground. */
+    const WPE_Vec3 c = wpe_mat4_transform_point(&m, center);
+    const WPE_Vec3 ax = wpe_mat4_transform_dir(&m, wpe_vec3(h.x, 0, 0));
+    const WPE_Vec3 az = wpe_mat4_transform_dir(&m, wpe_vec3(0, 0, h.z));
+    float bottom = INFINITY, top = -INFINITY, reach_x = 0.0f, reach_z = 0.0f;
+    for (uint32_t i = 0; i < 8; ++i) {
+        const WPE_Vec3 corner = wpe_mat4_transform_point(&m, wpe_vec3(center.x + ((i & 1u) ? h.x : -h.x),
+                                                                      center.y + ((i & 2u) ? h.y : -h.y),
+                                                                      center.z + ((i & 4u) ? h.z : -h.z)));
+        bottom = fminf(bottom, corner.y);
+        top = fmaxf(top, corner.y);
+        reach_x = fmaxf(reach_x, fabsf(corner.x - c.x));
+        reach_z = fmaxf(reach_z, fabsf(corner.z - c.z));
+    }
+    if (!isfinite(bottom) || !isfinite(top)) return 0;
+    const float radius = g->settings.agent_radius, cs = g->settings.cell_size;
+    /* Solve p - c = s * u + t * w for the footprint's own coordinates (u, w: the projected half axes). */
+    const float ux = ax.x, uz = ax.z, wx = az.x, wz = az.z;
+    const float det = ux * wz - uz * wx;
+    const int64_t x0 = (int64_t)floorf((c.x - reach_x - radius - g->origin.x) / cs);
+    const int64_t x1 = (int64_t)floorf((c.x + reach_x + radius - g->origin.x) / cs);
+    const int64_t z0 = (int64_t)floorf((c.z - reach_z - radius - g->origin.z) / cs);
+    const int64_t z1 = (int64_t)floorf((c.z + reach_z + radius - g->origin.z) / cs);
+    uint32_t added = 0;
+    for (int64_t z = z0 < 0 ? 0 : z0; z <= z1 && z < (int64_t)g->depth; ++z) {
+        for (int64_t x = x0 < 0 ? 0 : x0; x <= x1 && x < (int64_t)g->width; ++x) {
+            const uint32_t column = (uint32_t)x + (uint32_t)z * g->width;
+            for (uint32_t cell = g->columns[column]; cell < g->columns[column + 1]; ++cell) {
+                if (blockers->blocked[cell]) continue;
+                const WPE_Vec3 p = wpe__nav_center(g, cell);
+                if (p.y < bottom - g->settings.agent_height || p.y > top) continue;
+                const float dx = p.x - c.x, dz = p.z - c.z;
+                float s = 0.0f, t = 0.0f;
+                if (fabsf(det) > 1e-12f) {
+                    s = (dx * wz - dz * wx) / det;
+                    t = (ux * dz - uz * dx) / det;
+                }
+                s = wpe__clampf(s, -1.0f, 1.0f);
+                t = wpe__clampf(t, -1.0f, 1.0f);
+                const float qx = c.x + s * ux + t * wx - p.x, qz = c.z + s * uz + t * wz - p.z;
+                if (qx * qx + qz * qz > radius * radius) continue;
+                blockers->blocked[cell] = 1;
+                ++added;
+            }
+        }
+    }
+    blockers->count += added;
+    return added;
+}
+
+bool wpe_nav_blockers_blocked(const WPE_NavBlockers* blockers, uint32_t cell) {
+    return blockers && cell < blockers->grid->cell_count && blockers->blocked[cell];
+}
+
+uint32_t wpe_nav_blockers_count(const WPE_NavBlockers* blockers) {
+    return blockers ? blockers->count : 0;
 }
 
 /* ---- Paths ----------------------------------------------------------------------------------------- */
@@ -299,8 +405,8 @@ static bool wpe__add_point(WPE_NavQuery* q, uint32_t* count, WPE_Vec3 p) {
 
 /* A* from `start` to `goal`. @return The cell it ended at: the goal, or (when it can't be reached) the one
  * nearest to it by the heuristic; the chain is in q->chain[0 .. *out_length - 1]. */
-static uint32_t wpe__search(WPE_NavQuery* q, uint32_t start, uint32_t goal, uint32_t max_visited,
-                            uint32_t* out_length, uint32_t* out_visited) {
+static uint32_t wpe__search(WPE_NavQuery* q, const WPE_NavBlockers* blockers, uint32_t start, uint32_t goal,
+                            uint32_t max_visited, uint32_t* out_length, uint32_t* out_visited) {
     const WPE_NavGrid* g = q->grid;
     wpe__NavNode* nodes = q->nodes;
     if (++q->search == 0) { /* Wrapped: every stamp is stale again. */
@@ -334,7 +440,10 @@ static uint32_t wpe__search(WPE_NavQuery* q, uint32_t start, uint32_t goal, uint
         }
         if (max_visited && visited >= max_visited) break;
         uint32_t moves[8], straight = 0;
-        const uint32_t n = wpe__nav_moves(g, cell, moves, &straight);
+        /* From a closed cell (the start's closed area: open cells never lead into one) any cell may follow:
+         * a path may leave the area it starts in, but never enters one. */
+        const uint8_t* closed = blockers && !blockers->blocked[cell] ? blockers->blocked : NULL;
+        const uint32_t n = wpe__nav_moves(g, closed, cell, moves, &straight);
         for (uint32_t m = 0; m < n; ++m) {
             const uint32_t next = moves[m];
             wpe__NavNode* other = &nodes[next];
@@ -350,7 +459,8 @@ static uint32_t wpe__search(WPE_NavQuery* q, uint32_t start, uint32_t goal, uint
             other->parent = cell;
             wpe__nav_heap_push(&heap, next);
         }
-    } /* Walk back from where it ended, then reverse. */
+    }
+    /* Walk back from where it ended, then reverse. */
     uint32_t length = 0;
     for (uint32_t c = best; c != WPE_NAV_CELL_NONE; c = nodes[c].parent)
         q->chain[length++] = c;
@@ -374,15 +484,16 @@ static WPE_Vec3 wpe__chain_point(const WPE_NavQuery* q, uint32_t i, uint32_t len
 
 /* Pulls the chain straight: from each corner, goes on to the farthest chain point in straight walkable
  * sight. */
-static bool wpe__smooth(WPE_NavQuery* q, uint32_t length, WPE_Vec3 start, WPE_Vec3 end, uint32_t* count) {
+static bool wpe__smooth(WPE_NavQuery* q, const WPE_NavBlockers* blockers, uint32_t length, WPE_Vec3 start,
+                        WPE_Vec3 end, uint32_t* count) {
     uint32_t anchor = 0;
     if (!wpe__add_point(q, count, start)) return false;
     while (anchor + 1u < length) {
         const WPE_Vec3 from = wpe__chain_point(q, anchor, length, start, end);
         uint32_t reach = anchor + 1u; /* A neighbor is always in sight. */
         for (uint32_t j = anchor + 2u; j < length; ++j) {
-            if (!wpe__nav_line(q->grid, q->chain[anchor], from, wpe__chain_point(q, j, length, start, end),
-                               q->chain[j], 0.0f))
+            if (!wpe__nav_line(q->grid, blockers, q->chain[anchor], from,
+                               wpe__chain_point(q, j, length, start, end), q->chain[j], 0.0f))
                 break;
             reach = j;
         }
@@ -401,6 +512,7 @@ WPE_Result wpe_nav_find_path(WPE_NavQuery* query, WPE_Vec3 start, WPE_Vec3 goal,
         !isfinite(o.search_radius))
         return WPE_RESULT_ERROR_INVALID_ARG;
     const WPE_NavGrid* g = query->grid;
+    if (o.blockers && o.blockers->grid != g) return WPE_RESULT_ERROR_INVALID_ARG; /* Another grid's cells. */
     WPE_Vec3 start_point, goal_point;
     const uint32_t start_cell =
         wpe_nav_grid_nearest(g, start, o.search_radius, wpe__standing(g), &start_point);
@@ -410,7 +522,8 @@ WPE_Result wpe_nav_find_path(WPE_NavQuery* query, WPE_Vec3 start, WPE_Vec3 goal,
     if (!same_island && !o.allow_partial) return WPE_RESULT_ERROR_NOT_FOUND; /* No search needed. */
 
     uint32_t length = 0, visited = 0;
-    const uint32_t end_cell = wpe__search(query, start_cell, goal_cell, o.max_visited, &length, &visited);
+    const uint32_t end_cell =
+        wpe__search(query, o.blockers, start_cell, goal_cell, o.max_visited, &length, &visited);
     const bool partial = end_cell != goal_cell;
     if (partial && !o.allow_partial) return WPE_RESULT_ERROR_NOT_FOUND;
     /* A partial path ends at the point of its last cell nearest to the goal. */
@@ -426,7 +539,7 @@ WPE_Result wpe_nav_find_path(WPE_NavQuery* query, WPE_Vec3 start, WPE_Vec3 goal,
         for (uint32_t i = 0; i < length && ok; ++i)
             ok = wpe__add_point(query, &count, wpe__chain_point(query, i, length, start_point, end_point));
     } else {
-        ok = wpe__smooth(query, length, start_point, end_point, &count);
+        ok = wpe__smooth(query, o.blockers, length, start_point, end_point, &count);
     }
     if (!ok) {
         wpe_log_error("out of memory storing a path of %u cells", length);

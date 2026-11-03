@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "math/wpe_math.h"
+#include "navigation/nav_path.h"
 #include "navigation/navigation.h"
 
 #define WPE__NAV_NO_LINK 0xFFu        /* wpe__NavCell.links: no neighbor that way. */
@@ -102,15 +103,18 @@ static inline float wpe__nav_move_cost(const WPE_NavGrid* g, uint32_t a, uint32_
 }
 
 /* The moves out of a cell: its linked neighbors, then the diagonal cells reached both ways around the
- * corner (the same cell either way, so a move never cuts a wall's corner). @return Their count (<= 8); the
- * first *out_straight are the straight ones. */
-static inline uint32_t wpe__nav_moves(const WPE_NavGrid* g, uint32_t cell, uint32_t out[8],
-                                      uint32_t* out_straight) {
+ * corner (the same cell either way, so a move never cuts a wall's corner). Cells closed in `blocked` (one
+ * byte per cell; may be NULL) are no moves, nor are diagonals past one (an obstacle's corner is a wall's).
+ * @return Their count (<= 8); the first *out_straight are the straight ones. */
+static inline uint32_t wpe__nav_moves(const WPE_NavGrid* g, const uint8_t* blocked, uint32_t cell,
+                                      uint32_t out[8], uint32_t* out_straight) {
     const uint32_t column = g->cell_columns[cell];
     uint32_t straight[4];
     uint32_t n = 0;
     for (int dir = 0; dir < 4; ++dir) {
         straight[dir] = wpe__nav_neighbor(g, column, cell, dir);
+        if (straight[dir] != WPE_NAV_CELL_NONE && blocked && blocked[straight[dir]])
+            straight[dir] = WPE_NAV_CELL_NONE;
         if (straight[dir] != WPE_NAV_CELL_NONE) out[n++] = straight[dir];
     }
     *out_straight = n;
@@ -119,7 +123,7 @@ static inline uint32_t wpe__nav_moves(const WPE_NavGrid* g, uint32_t cell, uint3
         if (straight[dir] == WPE_NAV_CELL_NONE || straight[turn] == WPE_NAV_CELL_NONE) continue;
         const uint32_t a = wpe__nav_neighbor(g, g->cell_columns[straight[dir]], straight[dir], turn);
         const uint32_t b = wpe__nav_neighbor(g, g->cell_columns[straight[turn]], straight[turn], dir);
-        if (a != WPE_NAV_CELL_NONE && a == b) out[n++] = a;
+        if (a != WPE_NAV_CELL_NONE && a == b && !(blocked && blocked[a])) out[n++] = a;
     }
     return n;
 }
@@ -147,10 +151,22 @@ void wpe__nav_heap_push(wpe__NavHeap* heap, uint32_t cell);
 /* Removes and returns the smallest cell (the heap must not be empty). */
 uint32_t wpe__nav_heap_pop(wpe__NavHeap* heap);
 
+struct WPE_NavBlockers {
+    const WPE_NavGrid* grid;
+    uint8_t* blocked; /* Per cell: 1 when closed. */
+    uint32_t count;
+};
+
+/* Whether `cell` is closed by `blockers` (which may be NULL). */
+static inline bool wpe__nav_blocked(const WPE_NavBlockers* blockers, uint32_t cell) {
+    return blockers && blockers->blocked[cell];
+}
+
 /* Walks the straight line (seen from above) from `from` (in `from_cell`'s square) to `to`, following
- * links. @return Whether it gets through to `to_cell`, or, when to_cell is WPE_NAV_CELL_NONE, to a cell in
- * `to`'s column whose floor is within max_vertical of to.y. */
-bool wpe__nav_line(const WPE_NavGrid* g, uint32_t from_cell, WPE_Vec3 from, WPE_Vec3 to, uint32_t to_cell,
-                   float max_vertical);
+ * links and staying out of cells `blockers` (may be NULL) closes, except the first. @return Whether it gets
+ * through to `to_cell`, or, when to_cell is WPE_NAV_CELL_NONE, to a cell in `to`'s column whose floor is
+ * within max_vertical of to.y. */
+bool wpe__nav_line(const WPE_NavGrid* g, const WPE_NavBlockers* blockers, uint32_t from_cell, WPE_Vec3 from,
+                   WPE_Vec3 to, uint32_t to_cell, float max_vertical);
 
 #endif /* WPE_NAVIGATION_NAV_INTERNAL_H */

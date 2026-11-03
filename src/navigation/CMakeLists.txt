@@ -1,4 +1,4 @@
-add_library(wpe_navigation STATIC nav_build.c nav_flow.c nav_geometry.c nav_grid.c nav_path.c)
+add_library(wpe_navigation STATIC nav_agents.c nav_build.c nav_flow.c nav_geometry.c nav_grid.c nav_path.c)
 add_library(wpe::navigation ALIAS wpe_navigation)
 
 target_link_libraries(wpe_navigation

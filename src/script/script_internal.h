@@ -109,6 +109,7 @@ struct WPE_ScriptHost {
     WPE_Ecs* ecs;
     WPE_AssetManager* assets;
     WPE_Physics* physics; /* Optional. */
+    WPE_NavSystem* nav;   /* Optional. */
     WPE_Audio* audio;     /* Optional. */
     WPE_Input* input;     /* Optional. */
     WPE_Draw2D* draw2d;   /* Optional. */
@@ -165,6 +166,7 @@ struct WPE_ScriptHost {
     double time; /* Accumulated game time (seconds) from updates. */
     uint64_t frame;
     uint8_t* net_scratch; /* wpe.net_send's encoding buffer (made on first use, freed with the host). */
+    uint32_t nav_random;  /* wpe.nav_random_point's generator state (the same points every run). */
 };
 
 /* Host services used by the bindings. */
@@ -200,5 +202,7 @@ int wpe__script_broadcast(lua_State* L);
 void wpe__script_api_register(lua_State* L);
 /* Adds the wpe.net_* functions to the table on top of the stack (script_net.c). */
 void wpe__script_net_register(lua_State* L);
+/* Adds the navigation functions to the table on top of the stack (script_nav.c). */
+void wpe__script_nav_register(lua_State* L);
 
 #endif /* WPE_SCRIPT_SCRIPT_INTERNAL_H */

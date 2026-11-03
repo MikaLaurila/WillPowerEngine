@@ -86,7 +86,7 @@ static void test_stress_nav_paths_are_optimal_and_walkable(void) {
     for (int goal_round = 0; goal_round < 8; ++goal_round) {
         const uint32_t goal_cell = random_cell(grid);
         const WPE_Vec3 goal = center_of(grid, goal_cell);
-        WPE_TEST_ASSERT_OK(wpe_nav_flow_build(field, &goal, 1, 0.0f));
+        WPE_TEST_ASSERT_OK(wpe_nav_flow_build(field, &goal, 1, 0.0f, NULL));
         for (int i = 0; i < 40; ++i) {
             const uint32_t start_cell = random_cell(grid);
             const WPE_Vec3 start = center_of(grid, start_cell);
@@ -155,7 +155,7 @@ static void test_stress_nav_performance(void) {
     WPE_NavFlowField* field = NULL;
     WPE_TEST_ASSERT_OK(wpe_nav_flow_create(grid, &field));
     start = now_ms();
-    WPE_TEST_ASSERT_OK(wpe_nav_flow_build(field, &to[0], 1, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_nav_flow_build(field, &to[0], 1, 0.0f, NULL));
     const double flow = now_ms() - start;
     start = now_ms();
     WPE_Vec3 dir;
