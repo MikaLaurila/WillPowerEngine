@@ -954,6 +954,96 @@ static void remove_new_project(const char* directory) {
 }
 
 /* A new project runs as it is: its scene loads, the cube's script spins it, and nothing is overwritten. */
+/* A controls screen in miniature: the script listens, the player presses K, jump moves to K and is saved; the
+ * next run of the game (wpe_engine_load_bindings) has it. */
+static void test_engine_player_bindings(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/keys/scenes"));
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/keys/scripts"));
+    (void)wpe_path_remove(ROOT "/keys_saves/" WPE_BINDINGS_FILE); /* Left by an earlier run. */
+    write_text(
+        ROOT "/keys/project.json",
+        "{\"format\": \"wpe.project\", \"version\": 1, \"name\": \"Keys\", \"start_scene\": "
+        "\"scenes/main.scene\", \"display\": {\"width\": 16, \"height\": 16},\n"
+        " \"input\": {\"actions\": {\"jump\": [{\"key\": \"space\"}, {\"pad_button\": \"south\"}],\n"
+        "                         \"move_x\": [{\"key\": \"d\"}, {\"key\": \"a\", \"scale\": -1}]}}}\n");
+    write_text(ROOT "/keys/scenes/main.scene",
+               "{\"format\": \"wpe.scene\", \"version\": 1, \"entities\": [\n"
+               " {\"id\": 1, \"name\": \"controls\", \"script\": {\"path\": \"scripts/rebind.luau\"}}]}\n");
+    write_text(ROOT "/keys/scripts/rebind.luau",
+               "local S = {}\n"
+               "function S:on_update(dt)\n"
+               "  if not self.started then self.started = true; wpe.listen_binding('keyboard'); return end\n"
+               "  assert(not wpe.key_pressed('k') and not wpe.action_pressed('jump'))\n"
+               "  local heard = wpe.heard_binding()\n"
+               "  if heard then\n"
+               "    local bindings = wpe.get_bindings('jump')\n"
+               "    bindings[1] = heard\n"
+               "    wpe.set_bindings('jump', bindings)\n"
+               "    wpe.set_name(self.entity, 'heard ' .. heard.key)\n"
+               "  end\n"
+               "end\n"
+               "return S\n");
+    const WPE_EngineDesc desc = {.project_dir = ROOT "/keys",
+                                 .save_dir = ROOT "/keys_saves",
+                                 .embedded = true,
+                                 .no_audio_device = true,
+                                 .workers = 2};
+    WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_engine_create(&desc, &engine));
+    WPE_TEST_ASSERT_OK(wpe_engine_load_bindings(engine)); /* No file yet: the project's. */
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 0.05));   /* Starts listening. */
+    SDL_Event key = make_event(SDL_EVENT_KEY_DOWN);
+    key.key.scancode = SDL_SCANCODE_K;
+    key.key.down = true;
+    send_event(engine, key);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 0.05));
+    key = make_event(SDL_EVENT_KEY_UP);
+    key.key.scancode = SDL_SCANCODE_K;
+    send_event(engine, key);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 0.05));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(wpe_engine_scripts(engine)).errors);
+    WPE_Ecs* ecs = wpe_engine_ecs(engine);
+    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_SCRIPT)});
+    WPE_TEST_ASSERT(wpe_ecs_iter_next(&it));
+    WPE_TEST_ASSERT_EQ_STR("heard k", wpe_scene_get_name(ecs, it.entity));
+    wpe_engine_destroy(engine);
+
+    /* Only the changed action is in the file. */
+    void* text = NULL;
+    size_t size = 0;
+    WPE_TEST_ASSERT_OK(wpe_file_read_all(ROOT "/keys_saves/" WPE_BINDINGS_FILE, &text, &size));
+    WPE_TEST_ASSERT(strstr(text, "\"jump\"") && strstr(text, "\"k\"") && !strstr(text, "move_x"));
+    wpe_free(text);
+
+    /* The next run: the project's bindings until the player's are loaded. */
+    WPE_TEST_ASSERT_OK(wpe_engine_create(&desc, &engine));
+    WPE_Input* input = wpe_engine_input(engine);
+    WPE_TEST_ASSERT_EQ_UINT(WPE_KEY_SPACE, wpe_input_action_desc(input, 0)->bindings[0].code);
+    WPE_TEST_ASSERT_OK(wpe_engine_load_bindings(engine));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_KEY_A + ('k' - 'a'), wpe_input_action_desc(input, 0)->bindings[0].code);
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_input_action_desc(input, 0)->binding_count);
+
+    /* An action the game no longer has is skipped; a damaged file leaves the project's bindings. */
+    quiet(true);
+    write_text(ROOT "/keys_saves/" WPE_BINDINGS_FILE,
+               "{\"format\": \"wpe.bindings\", \"version\": 1, \"actions\": {\"gone\": [{\"key\": \"x\"}],\n"
+               " \"jump\": [{\"key\": \"j\"}]}}\n");
+    WPE_TEST_ASSERT_OK(wpe_engine_load_bindings(engine));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_KEY_A + ('j' - 'a'), wpe_input_action_desc(input, 0)->bindings[0].code);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_input_action_desc(input, 0)->binding_count);
+    write_text(
+        ROOT "/keys_saves/" WPE_BINDINGS_FILE,
+        "{\"format\": \"wpe.bindings\", \"version\": 1, \"actions\": {\"move_x\": [{\"key\": \"q\"}],\n"
+        " \"jump\": [{\"key\": \"no such key\"}]}}\n");
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_PARSE, wpe_engine_load_bindings(engine));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_KEY_SPACE, wpe_input_action_desc(input, 0)->bindings[0].code);
+    WPE_TEST_ASSERT_EQ_UINT(WPE_KEY_A + ('d' - 'a'), wpe_input_action_desc(input, 1)->bindings[0].code);
+    write_text(ROOT "/keys_saves/" WPE_BINDINGS_FILE, "{\"format\": \"wpe.bindings\", \"version\": 9}");
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_UNSUPPORTED, wpe_engine_load_bindings(engine));
+    quiet(false);
+    wpe_engine_destroy(engine);
+}
+
 static void test_engine_creates_new_projects(void) {
     remove_new_project(ROOT "/new_game"); /* Left by an earlier run. */
     WPE_TEST_ASSERT_OK(wpe_project_create(ROOT "/new_game", "New Game", NULL));
@@ -1222,6 +1312,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_engine_scene_save_filter), WPE_TEST_CASE(test_engine_embedded_edit_mode),
     WPE_TEST_CASE(test_engine_captures_the_frame_before_post_effects),
     WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_navigation_grid),
-    WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts), WPE_TEST_CASE(test_engine_hit_stop_and_shake),
-    WPE_TEST_CASE(test_engine_scene_transition), WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
+    WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts), WPE_TEST_CASE(test_engine_player_bindings),
+    WPE_TEST_CASE(test_engine_hit_stop_and_shake), WPE_TEST_CASE(test_engine_scene_transition),
+    WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
     WPE_TEST_CASE(test_engine_creates_new_projects), WPE_TEST_CASE(test_engine_export_embeds_the_project))

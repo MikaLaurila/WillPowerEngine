@@ -506,6 +506,30 @@ WPE_Result wpe_platform_save_directory(const char* org, const char* app, char* o
     return result;
 }
 
+/* SDL_GetPrefPath's location (%APPDATA% on Windows; $XDG_DATA_HOME, else ~/.local/share elsewhere), checked
+ * before asking SDL, which would create it. */
+WPE_Result wpe_platform_find_save_directory(const char* org, const char* app, char* out_path,
+                                            size_t capacity) {
+    if (!org || !app || !out_path) return WPE_RESULT_ERROR_NULL_ARG;
+    char path[1024];
+    int written = -1;
+#if defined(_WIN32)
+    const char* base = SDL_getenv("APPDATA");
+    if (base && base[0]) written = snprintf(path, sizeof path, "%s\\%s\\%s", base, org, app);
+#else
+    const char* data = SDL_getenv("XDG_DATA_HOME");
+    const char* home = SDL_getenv("HOME");
+    if (data && data[0]) {
+        written = snprintf(path, sizeof path, "%s/%s/%s", data, org, app);
+    } else if (home && home[0]) {
+        written = snprintf(path, sizeof path, "%s/.local/share/%s/%s", home, org, app);
+    }
+#endif
+    if (written < 0 || (size_t)written >= sizeof path || !wpe_directory_exists(path))
+        return WPE_RESULT_ERROR_NOT_FOUND;
+    return wpe_platform_save_directory(org, app, out_path, capacity); /* Exists: SDL only names it. */
+}
+
 /* ---- Process ------------------------------------------------------------------------------------- */
 
 WPE_Result wpe_platform_executable_path(char* out_path, size_t capacity) {

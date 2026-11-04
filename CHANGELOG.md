@@ -4,6 +4,28 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (v1.0: input rebinding and device prompts)
+- Rebinding: `wpe.get_bindings(action, [defaults])`, `wpe.set_bindings(action, list)`,
+  `wpe.reset_bindings([action])`, `wpe.input_actions()`. Bindings are tables in the project file's schema.
+  Each change is saved for the player (`wpe.bindings.json` in the save directory, only the actions that
+  differ from the project's); the runtime applies the file at startup and the editor when play starts
+  (stopping puts the project's bindings back). Reading it never creates the save directory.
+- Listening for a binding: `wpe.listen_binding([device], [player])` catches the next key, mouse button, pad
+  button, trigger or stick direction (things held when it starts must be let go first), and
+  `wpe.heard_binding()` hands it over once. The input heard is swallowed: neither its press nor its release
+  reaches actions, the UI or the key functions. `wpe.stop_listening`, `wpe.is_listening`.
+- Device prompts: `wpe.input_device([player])` (keyboard or gamepad, used last, plus the pad's style: xbox,
+  playstation, nintendo, generic), `wpe.action_prompt(action, [player], [direction])` (the label and binding
+  to show: "Space", "A", "Cross", "L Stick"), `wpe.binding_label(binding, [style])`. Key labels follow the
+  player's keyboard layout.
+- C: `wpe_input_set_bindings`, `_reset_bindings`, `_action_default`, `_binding_equal`, `_listen`,
+  `_take_heard`, `_last_device`, `_gamepad_style`, `_action_prompt`, `_binding_label`;
+  `wpe_bindings_parse` / `wpe_bindings_write`; `wpe_engine_load_bindings`;
+  `wpe_platform_find_save_directory` (finds without creating).
+- `platformer` template: a pause menu (Esc / Start) with a controls screen (keyboard and gamepad columns,
+  swapping a key with the row that had it, reset to defaults), and HUD hints that show the keys or buttons
+  of the device last used.
+
 ### Added (v1.0: UI text fields)
 - Text fields: a `text_input` component (with a `button`) the player types in, with a cursor, selection
   (mouse drag, Shift), word moves (Ctrl), the clipboard (Ctrl+A/C/X/V), a placeholder, a password mode,

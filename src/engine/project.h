@@ -29,6 +29,8 @@
  *
  * Every key is optional except "format" and "version"; reading is strict (unknown keys are errors).
  *
+ * The player's changed bindings live beside their saved data (WPE_BINDINGS_FILE, wpe_bindings_parse).
+ *
  * - Dependencies: core (JSON), vfs, input, audio
  * - Thread affinity: any thread
  *
@@ -117,6 +119,42 @@ WPE_Result wpe_project_load(const WPE_Vfs* vfs, WPE_ProjectSettings* out);
  * @thread_safety Any thread
  */
 WPE_Result wpe_project_write(const WPE_ProjectSettings* settings, WPE_JsonWriter* writer);
+
+/* ---- The player's bindings ------------------------------------------------------------------------- */
+
+/** The file of the player's own bindings in the game's save directory (wpe.save_data names can't hold a dot,
+ * so no save collides with it). */
+#define WPE_BINDINGS_FILE "wpe.bindings.json"
+#define WPE_BINDINGS_FORMAT_VERSION 1u
+
+/**
+ * Applies a player's bindings document to the input's actions:
+ *
+ * @code
+ * {"format": "wpe.bindings", "version": 1, "actions": {"jump": [{"key": "k"}, {"pad_button": "south"}]}}
+ * @endcode
+ *
+ * Each action listed gets the bindings listed (the project file's binding schema). Actions the project no
+ * longer has are skipped with a warning. All or nothing: a malformed document changes no action.
+ *
+ * @param name Used in messages.
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_PARSE (logged with the line);
+ *         WPE_RESULT_ERROR_UNSUPPORTED (a newer version; logged); WPE_RESULT_ERROR_OUT_OF_MEMORY.
+ *
+ * @thread_safety Main thread only (the input's)
+ */
+WPE_Result wpe_bindings_parse(const char* text, size_t size, const char* name, WPE_Input* input);
+
+/**
+ * Writes the bindings document of every action whose bindings differ from its defaults (an empty "actions"
+ * object when none do).
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_INVALID_ARG (a binding without a name;
+ *         logged).
+ *
+ * @thread_safety Main thread only (the input's)
+ */
+WPE_Result wpe_bindings_write(const WPE_Input* input, WPE_JsonWriter* writer);
 
 /** The template new projects start from when none is named: a camera, a sun, a ground and a spinning cube. */
 #define WPE_PROJECT_DEFAULT_TEMPLATE "empty"

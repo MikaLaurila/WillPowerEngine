@@ -246,6 +246,67 @@ bool wpe_input_action_pressed(const WPE_Input* input, WPE_InputAction action, ui
 bool wpe_input_action_released(const WPE_Input* input, WPE_InputAction action, uint32_t player);
 float wpe_input_action_value(const WPE_Input* input, WPE_InputAction action, uint32_t player);
 
+/* ---- Rebinding ---------------------------------------------------------------------------------- */
+
+/**
+ * Replaces the bindings of one action (the player's choice on a controls screen). The action keeps its name,
+ * handle and state; the bindings it was given by wpe_input_set_actions() stay its defaults.
+ *
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_NOT_FOUND (invalid handle);
+ *         WPE_RESULT_ERROR_INVALID_ARG (more than WPE_INPUT_MAX_BINDINGS, or an invalid binding; logged).
+ *
+ * @thread_safety Main thread only
+ */
+WPE_Result wpe_input_set_bindings(WPE_Input* input, WPE_InputAction action, const WPE_InputBinding* bindings,
+                                  uint32_t count);
+
+/** Puts back the default bindings of `action` (WPE_INPUT_ACTION_NONE: of every action). @thread_safety Main
+ * thread only */
+void wpe_input_reset_bindings(WPE_Input* input, WPE_InputAction action);
+
+/** @return Action `index` (< count) as wpe_input_set_actions() gave it, its default bindings (borrowed until
+ * the list changes), or NULL. @thread_safety Main thread only */
+const WPE_InputActionDesc* wpe_input_action_default(const WPE_Input* input, uint32_t index);
+
+/** @return Whether two bindings are the same input read the same way (source, code, scale with 0 meaning 1,
+ * and range). @thread_safety Any thread */
+bool wpe_input_binding_equal(const WPE_InputBinding* a, const WPE_InputBinding* b);
+
+/* Devices a listen accepts (bit flags; 0 means both). */
+#define WPE_INPUT_LISTEN_KEYBOARD 0x1u /* Keys and mouse buttons (when the player owns them). */
+#define WPE_INPUT_LISTEN_GAMEPAD 0x2u  /* Pad buttons, triggers and stick directions. */
+
+/**
+ * Listens for the input to bind: the first key, mouse button, pad button, trigger or stick direction (pushed
+ * past halfway) pressed from the next wpe_input_update() on. Whatever is held when listening starts must be
+ * let go first. The input heard is swallowed: neither it nor its release reaches the key, mouse, pad and
+ * action queries, so the key a player picks doesn't also press a menu button (a stick or trigger stays silent
+ * until it is let go). Listening again replaces the previous listen.
+ *
+ * @param devices WPE_INPUT_LISTEN_* flags (0: both).
+ * @param player A slot (its pad, plus the keyboard and mouse if it owns them) or WPE_INPUT_ANY_PLAYER.
+ *
+ * @thread_safety Main thread only
+ */
+void wpe_input_listen(WPE_Input* input, uint32_t devices, uint32_t player);
+
+/** Stops listening (a heard input not yet taken is dropped). @thread_safety Main thread only */
+void wpe_input_stop_listening(WPE_Input* input);
+
+/** @return Whether a listen is still waiting for an input. @thread_safety Main thread only */
+bool wpe_input_listening(const WPE_Input* input);
+
+/**
+ * Takes the input a listen heard, once: a key, mouse or pad button binding; a trigger as a pad axis; a stick
+ * direction as a pad axis with WPE_AXIS_POSITIVE or WPE_AXIS_NEGATIVE range. Scales are 1.
+ *
+ * @return true (filling out_binding) the first time after an input was heard; false while waiting or not
+ *         listening.
+ *
+ * @thread_safety Main thread only
+ */
+bool wpe_input_take_heard(WPE_Input* input, WPE_InputBinding* out_binding);
+
 /* ---- Keyboard and mouse --------------------------------------------------------------------------- */
 
 bool wpe_input_key_down(const WPE_Input* input, WPE_Key key);
@@ -321,6 +382,67 @@ float wpe_input_gamepad_axis(const WPE_Input* input, uint32_t player, WPE_Gamepa
  * @thread_safety Main thread only
  */
 WPE_Result wpe_input_rumble(WPE_Input* input, uint32_t player, float low, float high, float seconds);
+
+/* ---- Devices and prompts -------------------------------------------------------------------------- */
+
+typedef enum WPE_InputDevice {
+    WPE_INPUT_DEVICE_KEYBOARD = 0, /* The keyboard and mouse. */
+    WPE_INPUT_DEVICE_GAMEPAD,
+} WPE_InputDevice;
+
+/** How a pad's buttons are labelled. */
+typedef enum WPE_GamepadStyle {
+    WPE_PAD_STYLE_GENERIC = 0, /* Unknown pads: Xbox-like letters, "Back" and "Start". */
+    WPE_PAD_STYLE_XBOX,
+    WPE_PAD_STYLE_PLAYSTATION,
+    WPE_PAD_STYLE_NINTENDO, /* Positions differ from the letters: SOUTH is B, EAST is A. */
+} WPE_GamepadStyle;
+#define WPE_PAD_STYLE_COUNT 4u
+
+/**
+ * The device `player` used last, for showing the right prompts: key presses, mouse buttons, the wheel and
+ * moving the mouse count for the keyboard (when the player owns it); button presses and sticks or triggers
+ * pushed past halfway for the player's pad. WPE_INPUT_ANY_PLAYER: whatever anyone used last. Until the player
+ * has used either (and after their last-used pad disconnects): the gamepad if they have one, else the
+ * keyboard.
+ *
+ * @thread_safety Main thread only
+ */
+WPE_InputDevice wpe_input_last_device(const WPE_Input* input, uint32_t player);
+
+/** @return The style of the pad in `player`'s slot (WPE_INPUT_ANY_PLAYER: of the pad used last, else of the
+ * first connected), WPE_PAD_STYLE_GENERIC without one. @thread_safety Main thread only */
+WPE_GamepadStyle wpe_input_gamepad_style(const WPE_Input* input, uint32_t player);
+
+/**
+ * The binding of `action` to show `player`: the first one on the device they used last (keys and mouse
+ * buttons for the keyboard, pad buttons and axes for a gamepad).
+ *
+ * @param direction 0: any binding. +1 / -1: one that pushes the action that way, by the sign of its scale (a
+ *        stick half reads 0..1 on its side, so {left_x, NEGATIVE, scale -1} pushes -1); a stick axis read
+ * whole counts for both.
+ * @return The binding (borrowed until the action's bindings change), or NULL when the action has none there.
+ *
+ * @thread_safety Main thread only
+ */
+const WPE_InputBinding* wpe_input_action_prompt(const WPE_Input* input, WPE_InputAction action,
+                                                uint32_t player, int direction);
+
+/**
+ * Writes the label of a binding for prompts, in ASCII: keys as the player's keyboard layout prints them ("W",
+ * "Space", "Left Shift"; keys whose label isn't ASCII use the US one), "Left Mouse", pad buttons as `style`
+ * labels them ("A" / "Cross" / "B" for SOUTH, "RB" / "R1" / "R"), "L Stick Up", "RT" / "R2" / "ZR".
+ *
+ * @return The label's length (it is cut to fit `capacity`, terminator included); 0 for an invalid binding.
+ *
+ * @thread_safety Main thread only (reads SDL's keymap)
+ */
+size_t wpe_input_binding_label(const WPE_InputBinding* binding, WPE_GamepadStyle style, char* out,
+                               size_t capacity);
+
+/** Style names: "generic", "xbox", "playstation", "nintendo". @thread_safety Any thread */
+const char* wpe_input_gamepad_style_name(WPE_GamepadStyle style);
+bool wpe_input_gamepad_style_from_name(const char* name, WPE_GamepadStyle* out_style);
 
 /* ---- Names (for files and scripts) -------------------------------------------------------------- */
 

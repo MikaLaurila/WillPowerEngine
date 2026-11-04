@@ -54,6 +54,43 @@
       "restart": [
         {"key": "r"},
         {"pad_button": "back"}
+      ],
+      "pause": [
+        {"key": "escape"},
+        {"pad_button": "start"}
+      ],
+      "menu_up": [
+        {"key": "up"},
+        {"key": "w"},
+        {"pad_button": "dpad_up"},
+        {"pad_axis": "left_y", "range": "negative"}
+      ],
+      "menu_down": [
+        {"key": "down"},
+        {"key": "s"},
+        {"pad_button": "dpad_down"},
+        {"pad_axis": "left_y", "range": "positive"}
+      ],
+      "menu_left": [
+        {"key": "left"},
+        {"key": "a"},
+        {"pad_button": "dpad_left"},
+        {"pad_axis": "left_x", "range": "negative"}
+      ],
+      "menu_right": [
+        {"key": "right"},
+        {"key": "d"},
+        {"pad_button": "dpad_right"},
+        {"pad_axis": "left_x", "range": "positive"}
+      ],
+      "menu_select": [
+        {"key": "return"},
+        {"key": "space"},
+        {"pad_button": "south"}
+      ],
+      "menu_back": [
+        {"key": "escape"},
+        {"pad_button": "east"}
       ]
     }
   }

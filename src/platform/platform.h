@@ -355,6 +355,18 @@ void wpe_process_destroy(WPE_Process* process);
 WPE_Result wpe_platform_save_directory(const char* org, const char* app, char* out_path, size_t capacity);
 
 /**
+ * Like wpe_platform_save_directory(), but only finds the directory: it is never created, so reading saved
+ * settings at startup leaves no trace for a game that never saved anything.
+ *
+ * @return WPE_RESULT_OK (the directory exists; the path ends with a separator), WPE_RESULT_ERROR_NOT_FOUND
+ *         (not made yet, or no user directory), WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_CAPACITY.
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_platform_find_save_directory(const char* org, const char* app, char* out_path,
+                                            size_t capacity);
+
+/**
  * Programs built as GUI applications (the game runtime on Windows) have no console; when started
  * from a terminal, this attaches stdout/stderr to it so logs stay visible. Does nothing elsewhere
  * or when output is already redirected.

@@ -142,6 +142,16 @@ Scripts should ask for actions ("jump", "move_x"), not keys or buttons. Each act
 
 Stick Y axes are positive downwards, as on the hardware; bind them with `"scale": -1` for "up is positive". Rumble is available with `wpe.rumble`.
 
+**The player's own bindings.** The project's bindings are the defaults. A controls screen changes them with `wpe.set_bindings` ([scripting.md](scripting.md#rebinding-and-prompts)), and each change is saved at once to `wpe.bindings.json` in the save directory, next to `wpe.save_data`'s files:
+
+```json
+{"format": "wpe.bindings", "version": 1, "actions": {"jump": [{"key": "k"}, {"pad_button": "south"}]}}
+```
+
+Only actions that differ from the project's are listed. The runtime reads the file at startup, and the editor each time play starts (stopping puts the project's bindings back). Reading never creates the save directory. An action the project no longer has is skipped with a warning; a damaged file is logged and the project's bindings apply. Delete the file to give a player the defaults again, or call `wpe.reset_bindings()`.
+
+**Prompts.** `wpe.action_prompt("jump")` gives the label to show for an action on the device the player used last ("Space" after typing, "A" or "Cross" after touching the pad), so hints follow the player when they switch.
+
 ## Exporting a game
 
 ```bash

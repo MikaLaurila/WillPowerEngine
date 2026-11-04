@@ -220,6 +220,8 @@ int main(int argc, char** argv) {
     WPE_Engine* engine = NULL;
     WPE_Result result = wpe_engine_create(&o.engine, &engine);
     if (result == WPE_RESULT_OK) {
+        (void)wpe_engine_load_bindings(
+            engine); /* The player's own keys (a damaged file is logged, not fatal). */
         if (o.mute) wpe_audio_set_volume(wpe_engine_audio(engine), WPE_AUDIO_BUS_MASTER, 0.0f);
         wpe_engine_set_net_defaults(engine, &o.net); /* Games the scripts start get the same settings. */
         WPE_EngineDebugDraw debug = wpe_engine_debug_draw(engine);

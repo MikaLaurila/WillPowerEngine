@@ -234,6 +234,7 @@
     {"id": 61, "name": "coin", "transform": {"position": [44, 3.3, 0]}, "prefab": {"path": "prefabs/coin.prefab"}},
     {"id": 62, "name": "coin", "transform": {"position": [50, 3.4, 0]}, "prefab": {"path": "prefabs/coin.prefab"}},
     {"id": 63, "name": "coin", "transform": {"position": [51, 3.4, 0]}, "prefab": {"path": "prefabs/coin.prefab"}},
-    {"id": 64, "name": "coin", "transform": {"position": [52, 3.4, 0]}, "prefab": {"path": "prefabs/coin.prefab"}}
+    {"id": 64, "name": "coin", "transform": {"position": [52, 3.4, 0]}, "prefab": {"path": "prefabs/coin.prefab"}},
+    {"id": 70, "name": "menu", "script": {"path": "scripts/controls.luau"}}
   ]
 }

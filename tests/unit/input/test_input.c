@@ -554,6 +554,432 @@ static void test_input_gamepad_buttons_axes_and_actions(void) {
     wpe_input_destroy(input);
 }
 
+/* ---- Rebinding, listening, devices and prompts ------------------------------------------------------- */
+
+static const WPE_Key KEY_K = WPE_KEY_A + ('k' - 'a');
+static const WPE_Key KEY_W = WPE_KEY_A + ('w' - 'a');
+
+static void test_input_rebinding(void) {
+    wpe_log_set_stderr_enabled(false);
+    WPE_Input* input = create_input(NULL);
+    WPE_InputActionDesc actions[2] = {make_action("jump"), make_action("fire")};
+    add_binding(&actions[0], WPE_INPUT_SOURCE_KEY, WPE_KEY_SPACE, 1.0f, WPE_AXIS_FULL);
+    add_binding(&actions[0], WPE_INPUT_SOURCE_PAD_BUTTON, WPE_PAD_SOUTH, 1.0f, WPE_AXIS_FULL);
+    add_binding(&actions[1], WPE_INPUT_SOURCE_MOUSE_BUTTON, WPE_MOUSE_LEFT, 1.0f, WPE_AXIS_FULL);
+    WPE_TEST_ASSERT_OK(wpe_input_set_actions(input, actions, 2));
+    const WPE_InputAction jump = wpe_input_find_action(input, "jump");
+    const WPE_InputAction fire = wpe_input_find_action(input, "fire");
+
+    /* Jump moves from Space to K: K jumps, Space no longer does; the defaults stay as they were. */
+    const WPE_InputBinding k[2] = {
+        {.source = WPE_INPUT_SOURCE_KEY, .code = KEY_K, .scale = 1.0f},
+        {.source = WPE_INPUT_SOURCE_PAD_BUTTON, .code = WPE_PAD_SOUTH, .scale = 1.0f}};
+    WPE_TEST_ASSERT_OK(wpe_input_set_bindings(input, jump, k, 2));
+    WPE_TEST_ASSERT_EQ_UINT(KEY_K, wpe_input_action_desc(input, 0)->bindings[0].code);
+    WPE_TEST_ASSERT_EQ_UINT(WPE_KEY_SPACE, wpe_input_action_default(input, 0)->bindings[0].code);
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_SPACE, true, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(!wpe_input_action_down(input, jump, WPE_INPUT_ANY_PLAYER));
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_SPACE, false, false);
+    push_key(SDL_SCANCODE_K, true, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_action_pressed(input, jump, WPE_INPUT_ANY_PLAYER));
+
+    /* Rebinding keeps the action's state: still held, no new edge. */
+    WPE_TEST_ASSERT_OK(wpe_input_set_bindings(input, jump, k, 1));
+    wpe_input_begin_frame(input);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_action_down(input, jump, WPE_INPUT_ANY_PLAYER));
+    WPE_TEST_ASSERT(!wpe_input_action_pressed(input, jump, WPE_INPUT_ANY_PLAYER));
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_K, false, false);
+    run_frame(input);
+
+    /* No bindings at all is allowed (an action the player cleared). */
+    WPE_TEST_ASSERT_OK(wpe_input_set_bindings(input, fire, NULL, 0));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_input_action_desc(input, 1)->binding_count);
+
+    /* Bad requests change nothing. */
+    const WPE_InputBinding bad = {.source = WPE_INPUT_SOURCE_KEY, .code = 0};
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_input_set_bindings(input, jump, &bad, 1));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_input_set_bindings(input, jump, k, WPE_INPUT_MAX_BINDINGS + 1));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_input_set_bindings(input, 9, k, 1));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_input_set_bindings(input, jump, NULL, 1));
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_input_action_desc(input, 0)->binding_count);
+
+    /* Reset one action, then all. */
+    wpe_input_reset_bindings(input, fire);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_input_action_desc(input, 1)->binding_count);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_input_action_desc(input, 0)->binding_count); /* Jump untouched. */
+    wpe_input_reset_bindings(input, WPE_INPUT_ACTION_NONE);
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_input_action_desc(input, 0)->binding_count);
+    WPE_TEST_ASSERT_EQ_UINT(WPE_KEY_SPACE, wpe_input_action_desc(input, 0)->bindings[0].code);
+
+    /* Equality: a zero scale is 1; the range matters for axes only. */
+    WPE_InputBinding a = {
+        .source = WPE_INPUT_SOURCE_KEY, .code = KEY_K, .scale = 0.0f, .range = WPE_AXIS_POSITIVE};
+    WPE_InputBinding b = {.source = WPE_INPUT_SOURCE_KEY, .code = KEY_K, .scale = 1.0f};
+    WPE_TEST_ASSERT(wpe_input_binding_equal(&a, &b));
+    b.scale = -1.0f;
+    WPE_TEST_ASSERT(!wpe_input_binding_equal(&a, &b));
+    a = (WPE_InputBinding){
+        .source = WPE_INPUT_SOURCE_PAD_AXIS, .code = WPE_PAD_LEFT_X, .range = WPE_AXIS_NEGATIVE};
+    b = (WPE_InputBinding){
+        .source = WPE_INPUT_SOURCE_PAD_AXIS, .code = WPE_PAD_LEFT_X, .range = WPE_AXIS_POSITIVE};
+    WPE_TEST_ASSERT(!wpe_input_binding_equal(&a, &b));
+    WPE_TEST_ASSERT(!wpe_input_binding_equal(&a, NULL));
+    wpe_input_destroy(input);
+    wpe_log_set_stderr_enabled(true);
+}
+
+static void test_input_listen_keyboard(void) {
+    WPE_Input* input = create_input(NULL);
+    WPE_InputActionDesc submit = make_action("submit");
+    add_binding(&submit, WPE_INPUT_SOURCE_KEY, WPE_KEY_RETURN, 1.0f, WPE_AXIS_FULL);
+    add_binding(&submit, WPE_INPUT_SOURCE_KEY, WPE_KEY_SPACE, 1.0f, WPE_AXIS_FULL);
+    WPE_TEST_ASSERT_OK(wpe_input_set_actions(input, &submit, 1));
+    const WPE_InputAction action = wpe_input_find_action(input, "submit");
+
+    /* Return (held) starts the listen, as a menu button would. */
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_RETURN, true, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(!wpe_input_listening(input));
+    wpe_input_listen(input, WPE_INPUT_LISTEN_KEYBOARD, WPE_INPUT_ANY_PLAYER);
+    WPE_TEST_ASSERT(wpe_input_listening(input));
+    WPE_InputBinding heard;
+    WPE_TEST_ASSERT(!wpe_input_take_heard(input, &heard));
+
+    /* Still holding Return: nothing heard. Releasing it neither. */
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_RETURN, true, true);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_listening(input));
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_RETURN, false, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_listening(input));
+
+    /* Space: heard and swallowed. Nothing sees the press, its repeats or its release. */
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_SPACE, true, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(!wpe_input_listening(input));
+    WPE_TEST_ASSERT(!wpe_input_key_pressed(input, WPE_KEY_SPACE) &&
+                    !wpe_input_key_down(input, WPE_KEY_SPACE));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_input_key_typed(input, WPE_KEY_SPACE));
+    WPE_TEST_ASSERT(!wpe_input_action_pressed(input, action, WPE_INPUT_ANY_PLAYER));
+    WPE_TEST_ASSERT(wpe_input_take_heard(input, &heard));
+    WPE_TEST_ASSERT(heard.source == WPE_INPUT_SOURCE_KEY && heard.code == WPE_KEY_SPACE &&
+                    heard.scale == 1.0f);
+    WPE_TEST_ASSERT(!wpe_input_take_heard(input, &heard)); /* Once. */
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_SPACE, true, true);
+    run_frame(input);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_input_key_typed(input, WPE_KEY_SPACE));
+    WPE_TEST_ASSERT(!wpe_input_action_down(input, action, WPE_INPUT_ANY_PLAYER));
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_SPACE, false, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(!wpe_input_key_released(input, WPE_KEY_SPACE));
+    WPE_TEST_ASSERT(!wpe_input_action_released(input, action, WPE_INPUT_ANY_PLAYER));
+    /* The next press is an ordinary one again. */
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_SPACE, true, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_action_pressed(input, action, WPE_INPUT_ANY_PLAYER));
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_SPACE, false, false);
+    run_frame(input);
+
+    /* Mouse buttons count as the keyboard's device; a tap within a frame is heard too. */
+    wpe_input_listen(input, 0, WPE_INPUT_ANY_PLAYER);
+    wpe_input_begin_frame(input);
+    push_mouse_button(SDL_BUTTON_RIGHT, true, 0, 0);
+    push_mouse_button(SDL_BUTTON_RIGHT, false, 0, 0);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_take_heard(input, &heard));
+    WPE_TEST_ASSERT(heard.source == WPE_INPUT_SOURCE_MOUSE_BUTTON && heard.code == WPE_MOUSE_RIGHT);
+    WPE_TEST_ASSERT(!wpe_input_mouse_pressed(input, WPE_MOUSE_RIGHT) &&
+                    !wpe_input_mouse_released(input, WPE_MOUSE_RIGHT));
+
+    /* A gamepad-only listen, or one for a player without the keyboard, ignores keys. */
+    wpe_input_listen(input, WPE_INPUT_LISTEN_GAMEPAD, WPE_INPUT_ANY_PLAYER);
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_K, true, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_listening(input) && wpe_input_key_pressed(input, KEY_K));
+    wpe_input_listen(input, WPE_INPUT_LISTEN_KEYBOARD, 2);
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_K, false, false);
+    push_key(SDL_SCANCODE_W, true, false);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_listening(input) && wpe_input_key_pressed(input, KEY_W));
+    wpe_input_stop_listening(input);
+    WPE_TEST_ASSERT(!wpe_input_listening(input));
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_W, false, false);
+    run_frame(input);
+    wpe_input_destroy(input);
+}
+
+static void push_motion(float dx, float dy) {
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = SDL_EVENT_MOUSE_MOTION;
+    e.motion.xrel = dx;
+    e.motion.yrel = dy;
+    WPE_TEST_ASSERT(SDL_PushEvent(&e));
+}
+
+static void attach_styled_pad(VirtualPad* pad, const char* name, Uint16 vendor, Uint16 product) {
+    *pad = (VirtualPad){0};
+    SDL_VirtualJoystickDesc desc;
+    SDL_INIT_INTERFACE(&desc);
+    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+    desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+    desc.vendor_id = vendor;
+    desc.product_id = product;
+    desc.name = name;
+    pad->id = SDL_AttachVirtualJoystick(&desc);
+    WPE_TEST_ASSERT_MSG(pad->id != 0, "virtual joystick: %s", SDL_GetError());
+    pad->joystick = SDL_OpenJoystick(pad->id);
+    WPE_TEST_ASSERT(pad->joystick != NULL);
+}
+
+static void test_input_listen_gamepad(void) {
+    WPE_Input* input = create_input(NULL);
+    WPE_InputActionDesc actions[2] = {make_action("confirm"), make_action("move_x")};
+    add_binding(&actions[0], WPE_INPUT_SOURCE_PAD_BUTTON, WPE_PAD_EAST, 1.0f, WPE_AXIS_FULL);
+    add_binding(&actions[1], WPE_INPUT_SOURCE_PAD_AXIS, WPE_PAD_LEFT_X, 1.0f, WPE_AXIS_FULL);
+    WPE_TEST_ASSERT_OK(wpe_input_set_actions(input, actions, 2));
+    const WPE_InputAction confirm = wpe_input_find_action(input, "confirm");
+    const WPE_InputAction move = wpe_input_find_action(input, "move_x");
+    VirtualPad pad;
+    attach_pad(&pad, "Pad");
+    wpe_input_begin_frame(input);
+    run_frame(input);
+
+    /* The trigger is held when listening starts: it must be let go before it counts. */
+    wpe_input_begin_frame(input);
+    set_pad_axis(&pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 1.0f);
+    run_frame(input);
+    wpe_input_listen(input, WPE_INPUT_LISTEN_GAMEPAD, 0);
+    wpe_input_begin_frame(input);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_listening(input));
+    wpe_input_begin_frame(input);
+    set_pad_axis(&pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0.0f);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_listening(input));
+
+    /* A stick pushed left: heard as the negative half of its axis; it reads 0 until let go. */
+    wpe_input_begin_frame(input);
+    set_pad_axis(&pad, SDL_GAMEPAD_AXIS_LEFTX, -0.9f);
+    run_frame(input);
+    WPE_InputBinding heard;
+    WPE_TEST_ASSERT(wpe_input_take_heard(input, &heard));
+    WPE_TEST_ASSERT(heard.source == WPE_INPUT_SOURCE_PAD_AXIS && heard.code == WPE_PAD_LEFT_X &&
+                    heard.range == WPE_AXIS_NEGATIVE);
+    WPE_TEST_ASSERT_NEAR(0.0, wpe_input_action_value(input, move, 0), 0.0);
+    WPE_TEST_ASSERT_NEAR(0.0, wpe_input_gamepad_axis(input, 0, WPE_PAD_LEFT_X), 0.0);
+    wpe_input_begin_frame(input);
+    set_pad_axis(&pad, SDL_GAMEPAD_AXIS_LEFTX, 0.0f);
+    run_frame(input);
+    wpe_input_begin_frame(input);
+    set_pad_axis(&pad, SDL_GAMEPAD_AXIS_LEFTX, -0.9f);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_action_value(input, move, 0) < -0.5f); /* Let go once: it works again. */
+    wpe_input_begin_frame(input);
+    set_pad_axis(&pad, SDL_GAMEPAD_AXIS_LEFTX, 0.0f);
+    run_frame(input);
+
+    /* A trigger is heard as its whole axis; a button is swallowed with its release. */
+    wpe_input_listen(input, 0, WPE_INPUT_ANY_PLAYER);
+    wpe_input_begin_frame(input);
+    set_pad_axis(&pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 0.8f);
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_take_heard(input, &heard));
+    WPE_TEST_ASSERT(heard.code == WPE_PAD_LEFT_TRIGGER && heard.range == WPE_AXIS_FULL);
+    wpe_input_begin_frame(input);
+    set_pad_axis(&pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 0.0f);
+    run_frame(input);
+    wpe_input_listen(input, 0, WPE_INPUT_ANY_PLAYER);
+    wpe_input_begin_frame(input);
+    WPE_TEST_ASSERT(SDL_SetJoystickVirtualButton(pad.joystick, SDL_GAMEPAD_BUTTON_EAST, true));
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_take_heard(input, &heard));
+    WPE_TEST_ASSERT(heard.source == WPE_INPUT_SOURCE_PAD_BUTTON && heard.code == WPE_PAD_EAST);
+    WPE_TEST_ASSERT(!wpe_input_gamepad_pressed(input, 0, WPE_PAD_EAST) &&
+                    !wpe_input_gamepad_down(input, 0, WPE_PAD_EAST));
+    WPE_TEST_ASSERT(!wpe_input_action_pressed(input, confirm, 0));
+    wpe_input_begin_frame(input);
+    WPE_TEST_ASSERT(SDL_SetJoystickVirtualButton(pad.joystick, SDL_GAMEPAD_BUTTON_EAST, false));
+    run_frame(input);
+    WPE_TEST_ASSERT(!wpe_input_gamepad_released(input, 0, WPE_PAD_EAST));
+    WPE_TEST_ASSERT(!wpe_input_action_released(input, confirm, 0));
+
+    /* Another player's pad isn't heard. */
+    wpe_input_listen(input, WPE_INPUT_LISTEN_GAMEPAD, 1);
+    wpe_input_begin_frame(input);
+    WPE_TEST_ASSERT(SDL_SetJoystickVirtualButton(pad.joystick, SDL_GAMEPAD_BUTTON_EAST, true));
+    run_frame(input);
+    WPE_TEST_ASSERT(wpe_input_listening(input) && wpe_input_action_pressed(input, confirm, 0));
+    wpe_input_stop_listening(input);
+    detach_pad(&pad);
+    wpe_input_begin_frame(input);
+    run_frame(input);
+    wpe_input_destroy(input);
+}
+
+static const char* label_of(WPE_InputSource source, uint32_t code, WPE_AxisRange range,
+                            WPE_GamepadStyle style) {
+    static char text[64];
+    const WPE_InputBinding binding = {.source = source, .code = code, .scale = 1.0f, .range = range};
+    wpe_input_binding_label(&binding, style, text, sizeof text);
+    return text;
+}
+
+static void test_input_devices_and_prompts(void) {
+    WPE_Input* input = create_input(NULL);
+    WPE_InputActionDesc actions[2] = {make_action("jump"), make_action("move_x")};
+    add_binding(&actions[0], WPE_INPUT_SOURCE_PAD_BUTTON, WPE_PAD_SOUTH, 1.0f, WPE_AXIS_FULL);
+    add_binding(&actions[0], WPE_INPUT_SOURCE_KEY, WPE_KEY_SPACE, 1.0f, WPE_AXIS_FULL);
+    add_binding(&actions[1], WPE_INPUT_SOURCE_KEY, WPE_KEY_A + ('d' - 'a'), 1.0f, WPE_AXIS_FULL);
+    add_binding(&actions[1], WPE_INPUT_SOURCE_KEY, WPE_KEY_A, -1.0f, WPE_AXIS_FULL);
+    add_binding(&actions[1], WPE_INPUT_SOURCE_PAD_BUTTON, WPE_PAD_DPAD_LEFT, -1.0f, WPE_AXIS_FULL);
+    add_binding(&actions[1], WPE_INPUT_SOURCE_PAD_AXIS, WPE_PAD_LEFT_X, 1.0f, WPE_AXIS_FULL);
+    WPE_TEST_ASSERT_OK(wpe_input_set_actions(input, actions, 2));
+    const WPE_InputAction jump = wpe_input_find_action(input, "jump");
+    const WPE_InputAction move = wpe_input_find_action(input, "move_x");
+
+    /* No pad: the keyboard. */
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_KEYBOARD, wpe_input_last_device(input, WPE_INPUT_ANY_PLAYER));
+    WPE_TEST_ASSERT_EQ_INT(WPE_PAD_STYLE_GENERIC, wpe_input_gamepad_style(input, WPE_INPUT_ANY_PLAYER));
+    const WPE_InputBinding* prompt = wpe_input_action_prompt(input, jump, WPE_INPUT_ANY_PLAYER, 0);
+    WPE_TEST_ASSERT(prompt && prompt->code == WPE_KEY_SPACE);
+    prompt = wpe_input_action_prompt(input, move, 0, -1);
+    WPE_TEST_ASSERT(prompt && prompt->code == WPE_KEY_A);
+    prompt = wpe_input_action_prompt(input, move, 0, 1);
+    WPE_TEST_ASSERT(prompt && prompt->code == WPE_KEY_A + ('d' - 'a'));
+
+    /* A PlayStation pad plugged in: before it's used, its player sees it. */
+    VirtualPad pad;
+    attach_styled_pad(&pad, "DualShock", 0x054c, 0x09cc);
+    wpe_input_begin_frame(input);
+    run_frame(input);
+    WPE_TEST_ASSERT_EQ_INT(WPE_PAD_STYLE_PLAYSTATION, wpe_input_gamepad_style(input, 0));
+    WPE_TEST_ASSERT_EQ_INT(WPE_PAD_STYLE_PLAYSTATION, wpe_input_gamepad_style(input, WPE_INPUT_ANY_PLAYER));
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_GAMEPAD, wpe_input_last_device(input, 0));
+    prompt = wpe_input_action_prompt(input, jump, 0, 0);
+    WPE_TEST_ASSERT(prompt && prompt->source == WPE_INPUT_SOURCE_PAD_BUTTON);
+    prompt =
+        wpe_input_action_prompt(input, move, 0, -1); /* The d-pad comes first; the stick goes both ways. */
+    WPE_TEST_ASSERT(prompt && prompt->code == WPE_PAD_DPAD_LEFT);
+    prompt = wpe_input_action_prompt(input, move, 0, 1);
+    WPE_TEST_ASSERT(prompt && prompt->source == WPE_INPUT_SOURCE_PAD_AXIS);
+    /* A stick half pushes its scale's way, whichever side of the stick it reads. */
+    WPE_InputBinding halves[2] = {{.source = WPE_INPUT_SOURCE_PAD_AXIS,
+                                   .code = WPE_PAD_RIGHT_X,
+                                   .scale = -1.0f,
+                                   .range = WPE_AXIS_NEGATIVE},
+                                  {.source = WPE_INPUT_SOURCE_PAD_AXIS,
+                                   .code = WPE_PAD_RIGHT_X,
+                                   .scale = 1.0f,
+                                   .range = WPE_AXIS_POSITIVE}};
+    WPE_TEST_ASSERT_OK(wpe_input_set_bindings(input, move, halves, 2));
+    prompt = wpe_input_action_prompt(input, move, 0, -1);
+    WPE_TEST_ASSERT(prompt && prompt->range == WPE_AXIS_NEGATIVE);
+    prompt = wpe_input_action_prompt(input, move, 0, 1);
+    WPE_TEST_ASSERT(prompt && prompt->range == WPE_AXIS_POSITIVE);
+    wpe_input_reset_bindings(input, move);
+
+    /* Typing switches to the keyboard; a small mouse nudge doesn't switch back... */
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_K, true, false);
+    run_frame(input);
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_KEYBOARD, wpe_input_last_device(input, 0));
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_KEYBOARD, wpe_input_last_device(input, WPE_INPUT_ANY_PLAYER));
+    wpe_input_begin_frame(input);
+    push_key(SDL_SCANCODE_K, false, false);
+    run_frame(input);
+    /* ...a stick barely moved doesn't count, pushed past halfway it does. */
+    wpe_input_begin_frame(input);
+    set_pad_axis(&pad, SDL_GAMEPAD_AXIS_LEFTY, 0.3f);
+    run_frame(input);
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_KEYBOARD, wpe_input_last_device(input, 0));
+    wpe_input_begin_frame(input);
+    set_pad_axis(&pad, SDL_GAMEPAD_AXIS_LEFTY, 0.7f);
+    run_frame(input);
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_GAMEPAD, wpe_input_last_device(input, 0));
+    wpe_input_begin_frame(input);
+    set_pad_axis(&pad, SDL_GAMEPAD_AXIS_LEFTY, 0.0f);
+    push_motion(1.0f, 0.5f);
+    run_frame(input);
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_GAMEPAD, wpe_input_last_device(input, 0));
+    wpe_input_begin_frame(input);
+    push_motion(4.0f, -2.0f);
+    run_frame(input);
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_KEYBOARD, wpe_input_last_device(input, 0));
+    wpe_input_begin_frame(input);
+    WPE_TEST_ASSERT(SDL_SetJoystickVirtualButton(pad.joystick, SDL_GAMEPAD_BUTTON_SOUTH, true));
+    run_frame(input);
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_GAMEPAD, wpe_input_last_device(input, WPE_INPUT_ANY_PLAYER));
+    /* Player 2 has neither device: the keyboard by default. */
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_KEYBOARD, wpe_input_last_device(input, 1));
+
+    /* The pad leaves: prompts go back to the keyboard. */
+    detach_pad(&pad);
+    wpe_input_begin_frame(input);
+    run_frame(input);
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_KEYBOARD, wpe_input_last_device(input, 0));
+    WPE_TEST_ASSERT_EQ_INT(WPE_INPUT_DEVICE_KEYBOARD, wpe_input_last_device(input, WPE_INPUT_ANY_PLAYER));
+    WPE_TEST_ASSERT_EQ_INT(WPE_PAD_STYLE_GENERIC, wpe_input_gamepad_style(input, WPE_INPUT_ANY_PLAYER));
+
+    /* Labels. Keys follow the layout, so only keys every layout agrees on are checked. */
+    WPE_TEST_ASSERT_EQ_STR("Space", label_of(WPE_INPUT_SOURCE_KEY, WPE_KEY_SPACE, 0, 0));
+    WPE_TEST_ASSERT_EQ_STR("Left Shift", label_of(WPE_INPUT_SOURCE_KEY, WPE_KEY_LSHIFT, 0, 0));
+    WPE_TEST_ASSERT_EQ_STR("Right Mouse", label_of(WPE_INPUT_SOURCE_MOUSE_BUTTON, WPE_MOUSE_RIGHT, 0, 0));
+    WPE_TEST_ASSERT_EQ_STR("A", label_of(WPE_INPUT_SOURCE_PAD_BUTTON, WPE_PAD_SOUTH, 0, WPE_PAD_STYLE_XBOX));
+    WPE_TEST_ASSERT_EQ_STR(
+        "Cross", label_of(WPE_INPUT_SOURCE_PAD_BUTTON, WPE_PAD_SOUTH, 0, WPE_PAD_STYLE_PLAYSTATION));
+    WPE_TEST_ASSERT_EQ_STR("B",
+                           label_of(WPE_INPUT_SOURCE_PAD_BUTTON, WPE_PAD_SOUTH, 0, WPE_PAD_STYLE_NINTENDO));
+    WPE_TEST_ASSERT_EQ_STR(
+        "R1", label_of(WPE_INPUT_SOURCE_PAD_BUTTON, WPE_PAD_RIGHT_SHOULDER, 0, WPE_PAD_STYLE_PLAYSTATION));
+    WPE_TEST_ASSERT_EQ_STR("Start",
+                           label_of(WPE_INPUT_SOURCE_PAD_BUTTON, WPE_PAD_START, 0, WPE_PAD_STYLE_GENERIC));
+    WPE_TEST_ASSERT_EQ_STR(
+        "ZR", label_of(WPE_INPUT_SOURCE_PAD_AXIS, WPE_PAD_RIGHT_TRIGGER, 0, WPE_PAD_STYLE_NINTENDO));
+    WPE_TEST_ASSERT_EQ_STR("LT",
+                           label_of(WPE_INPUT_SOURCE_PAD_AXIS, WPE_PAD_LEFT_TRIGGER, 0, WPE_PAD_STYLE_XBOX));
+    WPE_TEST_ASSERT_EQ_STR("L Stick Up",
+                           label_of(WPE_INPUT_SOURCE_PAD_AXIS, WPE_PAD_LEFT_Y, WPE_AXIS_NEGATIVE, 0));
+    WPE_TEST_ASSERT_EQ_STR("R Stick Right",
+                           label_of(WPE_INPUT_SOURCE_PAD_AXIS, WPE_PAD_RIGHT_X, WPE_AXIS_POSITIVE, 0));
+    WPE_TEST_ASSERT_EQ_STR("L Stick", label_of(WPE_INPUT_SOURCE_PAD_AXIS, WPE_PAD_LEFT_X, WPE_AXIS_FULL, 0));
+    char small[4];
+    const WPE_InputBinding cross = {.source = WPE_INPUT_SOURCE_PAD_BUTTON, .code = WPE_PAD_SOUTH};
+    WPE_TEST_ASSERT_EQ_UINT(3,
+                            wpe_input_binding_label(&cross, WPE_PAD_STYLE_PLAYSTATION, small, sizeof small));
+    WPE_TEST_ASSERT_EQ_STR("Cro", small);
+    const WPE_InputBinding invalid = {.source = WPE_INPUT_SOURCE_KEY, .code = 0};
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_input_binding_label(&invalid, WPE_PAD_STYLE_XBOX, small, sizeof small));
+    WPE_TEST_ASSERT_EQ_STR("", small);
+    for (uint32_t s = 0; s < WPE_PAD_STYLE_COUNT; ++s) {
+        WPE_GamepadStyle parsed;
+        WPE_TEST_ASSERT(
+            wpe_input_gamepad_style_from_name(wpe_input_gamepad_style_name((WPE_GamepadStyle)s), &parsed));
+        WPE_TEST_ASSERT_EQ_UINT(s, parsed);
+    }
+    WPE_TEST_ASSERT(!wpe_input_gamepad_style_from_name("sega", NULL));
+    wpe_input_destroy(input);
+}
+
 static void test_input_without_gamepads(void) {
     WPE_Input* input = NULL;
     WPE_TEST_ASSERT_OK(wpe_input_create(&(WPE_InputDesc){.no_gamepads = true}, &input));
@@ -570,5 +996,6 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_input_names_round_trip), WPE_TEST_CASE(test_inp
               WPE_TEST_CASE(test_input_mouse), WPE_TEST_CASE(test_input_keyboard_actions),
               WPE_TEST_CASE(test_input_typing), WPE_TEST_CASE(test_input_rejects_invalid_configuration),
               WPE_TEST_CASE(test_input_gamepad_slots_and_hot_plug),
-              WPE_TEST_CASE(test_input_gamepad_buttons_axes_and_actions),
-              WPE_TEST_CASE(test_input_without_gamepads))
+              WPE_TEST_CASE(test_input_gamepad_buttons_axes_and_actions), WPE_TEST_CASE(test_input_rebinding),
+              WPE_TEST_CASE(test_input_listen_keyboard), WPE_TEST_CASE(test_input_listen_gamepad),
+              WPE_TEST_CASE(test_input_devices_and_prompts), WPE_TEST_CASE(test_input_without_gamepads))

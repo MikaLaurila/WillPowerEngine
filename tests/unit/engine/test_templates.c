@@ -570,6 +570,54 @@ static void test_templates_platformer_plays(void) {
     check_lua(engine, "started over",
               "local s = wpe.get_script(wpe.find('player'))\n"
               "assert(not s.finished and s.coins == 0 and s.total_coins == 15)\n");
+
+    /* The menu pauses the game; on its controls screen Jump moves to K (alone: Space, W and Up go), then Move
+     * left takes K and Jump gets Move left's A in exchange. The choice is saved for the player. */
+    (void)wpe_path_remove(ROOT "/saves/" WPE_BINDINGS_FILE);
+    check_lua(engine, "keyboard prompts", "assert(wpe.action_prompt('jump') == 'Space')\n");
+    tap(engine, SDL_SCANCODE_ESCAPE);
+    check_lua(engine, "paused",
+              "assert(wpe.get_time_scale() == 0 and wpe.get_script(wpe.find('menu')).page == 'main')\n");
+    const float paused_at = position(ecs, find(ecs, "player")).x;
+    tap(engine, SDL_SCANCODE_DOWN);
+    tap(engine, SDL_SCANCODE_RETURN);
+    check_lua(engine, "controls", "assert(wpe.get_script(wpe.find('menu')).page == 'controls')\n");
+    tap(engine, SDL_SCANCODE_DOWN);
+    tap(engine, SDL_SCANCODE_DOWN);
+    tap(engine, SDL_SCANCODE_RETURN); /* Jump, keyboard: waits for a key. */
+    check_lua(engine, "waiting", "assert(wpe.is_listening())\n");
+    tap(engine, SDL_SCANCODE_K);
+    check_lua(engine, "jump on k",
+              "local keys = {}\n"
+              "for _, b in wpe.get_bindings('jump') do if b.key then table.insert(keys, b.key) end end\n"
+              "assert(#keys == 1 and keys[1] == 'k', table.concat(keys, ','))\n"
+              "assert(wpe.get_bindings('jump')[#wpe.get_bindings('jump')].pad_button == 'south')\n");
+    tap(engine, SDL_SCANCODE_UP);
+    tap(engine, SDL_SCANCODE_UP);
+    tap(engine, SDL_SCANCODE_RETURN); /* Move left, keyboard. */
+    tap(engine, SDL_SCANCODE_K);
+    check_lua(engine, "swapped",
+              "local move = wpe.get_bindings('move_x')\n"
+              "assert(move[2].key == 'k' and move[2].scale == -1)\n" /* In place of A. */
+              "assert(wpe.get_bindings('jump')[1].key == 'a')\n"
+              "assert(wpe.action_prompt('jump') == 'A' and wpe.action_prompt('move_x', nil, -1) == 'K')\n");
+    /* An Escape while waiting cancels: nothing changes. */
+    tap(engine, SDL_SCANCODE_RETURN);
+    tap(engine, SDL_SCANCODE_ESCAPE);
+    check_lua(engine, "cancelled",
+              "assert(not wpe.is_listening() and wpe.get_script(wpe.find('menu')).page == 'controls')\n"
+              "assert(wpe.get_bindings('move_x')[2].key == 'k')\n");
+    WPE_TEST_ASSERT_NEAR(paused_at, position(ecs, find(ecs, "player")).x, 0.0); /* Nothing moved meanwhile. */
+    tap(engine, SDL_SCANCODE_ESCAPE);
+    tap(engine, SDL_SCANCODE_ESCAPE);
+    check_lua(engine, "resumed", "assert(wpe.get_time_scale() == 1)\n");
+    void* saved = NULL;
+    size_t saved_size = 0;
+    WPE_TEST_ASSERT_OK(wpe_file_read_all(ROOT "/saves/" WPE_BINDINGS_FILE, &saved, &saved_size));
+    WPE_TEST_ASSERT(strstr(saved, "\"k\"") && strstr(saved, "\"jump\"") && strstr(saved, "\"move_x\""));
+    wpe_free(saved);
+    check_lua(engine, "defaults again",
+              "wpe.reset_bindings()\nassert(wpe.action_prompt('jump') == 'Space')\n");
     WPE_TEST_ASSERT_EQ_UINT(0, script_errors(engine));
     wpe_engine_destroy(engine);
     remove_project(dir);

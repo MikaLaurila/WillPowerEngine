@@ -1833,6 +1833,256 @@ static int wpe__api_rumble(lua_State* L) {
     return 1;
 }
 
+/* ---- Input: rebinding and prompts --------------------------------------------------------------------- */
+
+static const char* const wpe__binding_sources[] = {"key", "mouse_button", "pad_button", "pad_axis"};
+static const char* const wpe__binding_ranges[] = {"full", "positive", "negative"};
+
+/* Pushes a binding as the project file writes it: {key = "space"}, plus scale (when not 1) and range (axes,
+ * when not full). */
+static void wpe__push_binding(lua_State* L, const WPE_InputBinding* b) {
+    const char* name = NULL;
+    switch (b->source) {
+    case WPE_INPUT_SOURCE_KEY:
+        name = wpe_input_key_name(b->code);
+        break;
+    case WPE_INPUT_SOURCE_MOUSE_BUTTON:
+        name = wpe_input_mouse_button_name((WPE_MouseButton)b->code);
+        break;
+    case WPE_INPUT_SOURCE_PAD_BUTTON:
+        name = wpe_input_pad_button_name((WPE_GamepadButton)b->code);
+        break;
+    case WPE_INPUT_SOURCE_PAD_AXIS:
+        name = wpe_input_pad_axis_name((WPE_GamepadAxis)b->code);
+        break;
+    }
+    lua_createtable(L, 0, 3);
+    lua_pushstring(L, name ? name : "?");
+    lua_setfield(L, -2, wpe__binding_sources[b->source]);
+    const float scale = b->scale != 0.0f ? b->scale : 1.0f;
+    if (scale != 1.0f) {
+        lua_pushnumber(L, scale);
+        lua_setfield(L, -2, "scale");
+    }
+    if (b->source == WPE_INPUT_SOURCE_PAD_AXIS && b->range != WPE_AXIS_FULL) {
+        lua_pushstring(L, wpe__binding_ranges[b->range]);
+        lua_setfield(L, -2, "range");
+    }
+}
+
+/* Reads a binding table (the project file's schema); raises on anything else. */
+static WPE_InputBinding wpe__check_binding(lua_State* L, int index, const char* function) {
+    if (lua_type(L, index) != LUA_TTABLE)
+        luaL_errorL(L, "wpe.%s: a binding is a table such as {key = \"space\"} or {pad_button = \"south\"}",
+                    function);
+    index = lua_absindex(L, index);
+    WPE_InputBinding b = {.scale = 1.0f, .range = WPE_AXIS_FULL};
+    int sources = 0;
+    lua_pushnil(L);
+    while (lua_next(L, index)) {
+        const char* key = lua_type(L, -2) == LUA_TSTRING ? lua_tostring(L, -2) : NULL;
+        bool known = false;
+        for (uint32_t s = 0; key && s < 4; ++s) {
+            if (strcmp(key, wpe__binding_sources[s]) != 0) continue;
+            known = true;
+            ++sources;
+            b.source = (WPE_InputSource)s;
+            const char* name = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : NULL;
+            bool valid = false;
+            switch (b.source) {
+            case WPE_INPUT_SOURCE_KEY:
+                valid = wpe_input_key_from_name(name, &b.code);
+                break;
+            case WPE_INPUT_SOURCE_MOUSE_BUTTON: {
+                WPE_MouseButton button = WPE_MOUSE_LEFT;
+                valid = wpe_input_mouse_button_from_name(name, &button);
+                b.code = (uint32_t)button;
+                break;
+            }
+            case WPE_INPUT_SOURCE_PAD_BUTTON: {
+                WPE_GamepadButton button = WPE_PAD_SOUTH;
+                valid = wpe_input_pad_button_from_name(name, &button);
+                b.code = (uint32_t)button;
+                break;
+            }
+            case WPE_INPUT_SOURCE_PAD_AXIS: {
+                WPE_GamepadAxis axis = WPE_PAD_LEFT_X;
+                valid = wpe_input_pad_axis_from_name(name, &axis);
+                b.code = (uint32_t)axis;
+                break;
+            }
+            }
+            if (!valid)
+                luaL_errorL(L, "wpe.%s: unknown %s name '%s'", function, key,
+                            name ? name : luaL_typename(L, -1));
+        }
+        if (key && strcmp(key, "scale") == 0) {
+            known = true;
+            const double scale = lua_type(L, -1) == LUA_TNUMBER ? lua_tonumber(L, -1) : 0.0;
+            if (!(scale != 0.0 && isfinite(scale) && fabs(scale) <= 100.0))
+                luaL_errorL(L, "wpe.%s: a binding's scale is a number from -100 to 100, not 0", function);
+            b.scale = (float)scale;
+        } else if (key && strcmp(key, "range") == 0) {
+            known = true;
+            const char* range = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
+            uint32_t r = 0;
+            while (r < 3 && strcmp(range, wpe__binding_ranges[r]) != 0)
+                ++r;
+            if (r == 3) luaL_errorL(L, "wpe.%s: range is \"full\", \"positive\" or \"negative\"", function);
+            b.range = (WPE_AxisRange)r;
+        }
+        if (!known)
+            luaL_errorL(
+                L,
+                "wpe.%s: a binding has no field '%s' (key, mouse_button, pad_button, pad_axis, scale, range)",
+                function, key ? key : luaL_typename(L, -2));
+        lua_pop(L, 1);
+    }
+    if (sources != 1)
+        luaL_errorL(L, "wpe.%s: a binding names exactly one of key, mouse_button, pad_button and pad_axis",
+                    function);
+    if (b.range != WPE_AXIS_FULL && b.source != WPE_INPUT_SOURCE_PAD_AXIS)
+        luaL_errorL(L, "wpe.%s: range applies to pad axes only", function);
+    return b;
+}
+
+static int wpe__api_input_actions(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const uint32_t count = wpe_input_action_count(input);
+    lua_createtable(L, (int)count, 0);
+    for (uint32_t a = 0; a < count; ++a) {
+        lua_pushstring(L, wpe_input_action_desc(input, a)->name);
+        lua_rawseti(L, -2, (int)a + 1);
+    }
+    return 1;
+}
+
+static int wpe__api_get_bindings(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_InputAction action = wpe__check_action(L, input, 1);
+    const bool defaults = lua_isnoneornil(L, 2) ? false : luaL_checkboolean(L, 2);
+    const WPE_InputActionDesc* desc =
+        defaults ? wpe_input_action_default(input, action - 1) : wpe_input_action_desc(input, action - 1);
+    lua_createtable(L, (int)desc->binding_count, 0);
+    for (uint32_t b = 0; b < desc->binding_count; ++b) {
+        wpe__push_binding(L, &desc->bindings[b]);
+        lua_rawseti(L, -2, (int)b + 1);
+    }
+    return 1;
+}
+
+/* Keeps the player's bindings for the next run, when the application can. */
+static void wpe__save_bindings(lua_State* L) {
+    const WPE_ScriptHost* host = wpe__script_host_from(L);
+    if (host->app.save_bindings) (void)host->app.save_bindings(host->app.user_data); /* Logged. */
+}
+
+static int wpe__api_set_bindings(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_InputAction action = wpe__check_action(L, input, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    const int count = lua_objlen(L, 2);
+    if (count > (int)WPE_INPUT_MAX_BINDINGS)
+        luaL_errorL(L, "wpe.set_bindings: at most %u bindings", WPE_INPUT_MAX_BINDINGS);
+    WPE_InputBinding bindings[WPE_INPUT_MAX_BINDINGS];
+    for (int i = 0; i < count; ++i) {
+        lua_rawgeti(L, 2, i + 1);
+        bindings[i] = wpe__check_binding(L, -1, "set_bindings");
+        lua_pop(L, 1);
+    }
+    wpe__raise_result(L, "set_bindings", wpe_input_set_bindings(input, action, bindings, (uint32_t)count));
+    wpe__save_bindings(L);
+    return 0;
+}
+
+static int wpe__api_reset_bindings(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_InputAction action =
+        lua_isnoneornil(L, 1) ? WPE_INPUT_ACTION_NONE : wpe__check_action(L, input, 1);
+    wpe_input_reset_bindings(input, action);
+    wpe__save_bindings(L);
+    return 0;
+}
+
+static int wpe__api_listen_binding(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const char* device = luaL_optstring(L, 1, "any");
+    uint32_t devices = 0;
+    if (strcmp(device, "keyboard") == 0) {
+        devices = WPE_INPUT_LISTEN_KEYBOARD;
+    } else if (strcmp(device, "gamepad") == 0) {
+        devices = WPE_INPUT_LISTEN_GAMEPAD;
+    } else if (strcmp(device, "any") != 0) {
+        luaL_errorL(L, "wpe.listen_binding: device is \"keyboard\", \"gamepad\" or \"any\" (not '%s')",
+                    device);
+    }
+    wpe_input_listen(input, devices, wpe__opt_player(L, 2));
+    return 0;
+}
+
+static int wpe__api_heard_binding(lua_State* L) {
+    WPE_InputBinding binding;
+    if (wpe_input_take_heard(wpe__input(L), &binding)) {
+        wpe__push_binding(L, &binding);
+    } else {
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+static int wpe__api_stop_listening(lua_State* L) {
+    wpe_input_stop_listening(wpe__input(L));
+    return 0;
+}
+
+static int wpe__api_is_listening(lua_State* L) {
+    lua_pushboolean(L, wpe_input_listening(wpe__input(L)));
+    return 1;
+}
+
+static int wpe__api_input_device(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const uint32_t player = wpe__opt_player(L, 1);
+    if (wpe_input_last_device(input, player) == WPE_INPUT_DEVICE_KEYBOARD) {
+        lua_pushstring(L, "keyboard");
+        return 1;
+    }
+    lua_pushstring(L, "gamepad");
+    lua_pushstring(L, wpe_input_gamepad_style_name(wpe_input_gamepad_style(input, player)));
+    return 2;
+}
+
+static int wpe__api_action_prompt(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_InputAction action = wpe__check_action(L, input, 1);
+    const uint32_t player = wpe__opt_player(L, 2);
+    const double direction = luaL_optnumber(L, 3, 0.0);
+    if (!(direction == 0.0 || direction == 1.0 || direction == -1.0))
+        luaL_errorL(L, "wpe.action_prompt: direction is 1, -1 or nil");
+    const WPE_InputBinding* binding = wpe_input_action_prompt(input, action, player, (int)direction);
+    if (!binding) {
+        lua_pushnil(L);
+        return 1;
+    }
+    char label[64];
+    wpe_input_binding_label(binding, wpe_input_gamepad_style(input, player), label, sizeof label);
+    lua_pushstring(L, label);
+    wpe__push_binding(L, binding);
+    return 2;
+}
+
+static int wpe__api_binding_label(lua_State* L) {
+    WPE_Input* input = wpe__input(L);
+    const WPE_InputBinding binding = wpe__check_binding(L, 1, "binding_label");
+    WPE_GamepadStyle style = wpe_input_gamepad_style(input, WPE_INPUT_ANY_PLAYER);
+    if (!lua_isnoneornil(L, 2) && !wpe_input_gamepad_style_from_name(luaL_checkstring(L, 2), &style))
+        luaL_errorL(L, "wpe.binding_label: style is \"xbox\", \"playstation\", \"nintendo\" or \"generic\"");
+    char label[64];
+    wpe_input_binding_label(&binding, style, label, sizeof label);
+    lua_pushstring(L, label);
+    return 1;
+}
+
 /* ---- Application: scenes, camera, exit ------------------------------------------------------------- */
 
 static const WPE_ScriptApp* wpe__app(lua_State* L, bool available, const char* function) {
@@ -3669,6 +3919,17 @@ static const luaL_Reg wpe__api[] = {
     {"gamepad_released", wpe__api_gamepad_released},
     {"gamepad_axis", wpe__api_gamepad_axis},
     {"rumble", wpe__api_rumble},
+    {"input_actions", wpe__api_input_actions},
+    {"get_bindings", wpe__api_get_bindings},
+    {"set_bindings", wpe__api_set_bindings},
+    {"reset_bindings", wpe__api_reset_bindings},
+    {"listen_binding", wpe__api_listen_binding},
+    {"heard_binding", wpe__api_heard_binding},
+    {"stop_listening", wpe__api_stop_listening},
+    {"is_listening", wpe__api_is_listening},
+    {"input_device", wpe__api_input_device},
+    {"action_prompt", wpe__api_action_prompt},
+    {"binding_label", wpe__api_binding_label},
     {"load_scene", wpe__api_load_scene},
     {"quit", wpe__api_quit},
     {"set_camera", wpe__api_set_camera},

@@ -417,6 +417,55 @@ Prefer **actions** to raw devices. They are named in the project file and bound 
 
 Edges (`pressed`, `released`) belong to frames, so read them in `on_update`. A fixed step may run zero or several times per frame. To act on a press in `on_fixed_update`, remember it in `on_update` (see `scripts/player.luau`).
 
+#### Rebinding and prompts
+
+Players can choose their own keys and buttons, and the game can show the right one for the device in their hands. Bindings are tables in the project file's schema (see [runtime.md](runtime.md#input-actions)): `{key = "space"}`, `{pad_button = "south"}`, `{mouse_button = "left"}`, `{pad_axis = "left_x", range = "negative"}`, with an optional `scale` (−1 pushes the action the other way).
+
+| Function | Description |
+|---|---|
+| `wpe.input_actions() -> {string}` | The project's action names, in the project file's order. |
+| `wpe.get_bindings(action, [defaults = false]) -> {binding}` | The action's bindings now, or with `true` the project's. |
+| `wpe.set_bindings(action, {binding})` | Replaces the action's bindings (at most 8; none is allowed). The change is saved for the player at once, beside their saved data, and the runtime applies it at every start. |
+| `wpe.reset_bindings([action])` | Puts back the project's bindings of one action, or of all of them; saved too. |
+| `wpe.listen_binding([device = "any"], [player])` | Waits for the player to press what they want: the first key, mouse button, pad button, trigger or stick direction pushed past halfway, from the next frame on (anything already held must be let go first). `device` is `"keyboard"` (keys and mouse buttons), `"gamepad"` or `"any"`. The input heard is swallowed: neither its press nor its release reaches actions, the UI or the key functions, so picking Return doesn't also click the menu. Listening again replaces the previous listen; loading a scene ends it. |
+| `wpe.heard_binding() -> binding?` | What the listen heard, once (the listen is then over); nil while it is still waiting. A trigger is `{pad_axis = "right_trigger"}`, a stick direction `{pad_axis = "left_y", range = "negative"}`. |
+| `wpe.stop_listening()` / `wpe.is_listening() -> boolean` | Gives up listening; whether a listen is still waiting. |
+| `wpe.input_device([player]) -> "keyboard" or "gamepad", style?` | The device the player (nil: anyone) used last: key presses, the mouse and its buttons count for the keyboard; pad buttons and sticks or triggers pushed past halfway for the gamepad. Before either is used, the gamepad if one is connected. For a gamepad, its `style`: `"xbox"`, `"playstation"`, `"nintendo"` or `"generic"`. |
+| `wpe.action_prompt(action, [player], [direction]) -> label?, binding?` | What to show for an action: the label of its first binding on the device the player used last (`"Space"`, `"A"`, `"Cross"`, `"L Stick"`), and that binding. `direction` 1 or −1 picks a binding that pushes the action that way (`"A"` and `"D"` for the two sides of `move_x`; a stick read whole counts for both). Nil when the action has nothing on that device. |
+| `wpe.binding_label(binding, [style]) -> string` | A binding's label: keys as the player's keyboard layout prints them (`"W"`, `"Left Shift"`; labels that aren't ASCII fall back to the US one), `"Left Mouse"`, pad buttons as `style` labels them (the last-used pad's by default): `"A"`/`"Cross"`/`"B"` for south, `"RB"`/`"R1"`/`"R"`, `"RT"`/`"R2"`/`"ZR"`, `"L Stick Up"`. |
+
+A controls screen: show each action's binding, and on a click listen for a new one.
+
+```lua
+function Controls:rebind(action: string)
+	self.waiting = action
+	wpe.listen_binding("keyboard")
+end
+
+function Controls:on_update(dt)
+	local heard = wpe.heard_binding()
+	if heard and self.waiting then
+		if heard.key ~= "escape" then -- Escape cancels
+			local bindings = wpe.get_bindings(self.waiting)
+			-- ...replace the keyboard binding in `bindings` with `heard`...
+			wpe.set_bindings(self.waiting, bindings)
+		end
+		self.waiting = nil
+	end
+end
+```
+
+Prompts that follow the device, and a hint line with every action in braces replaced:
+
+```lua
+local hint = ("{jump} jump  {restart} restart"):gsub("{(%w+)}", function(action)
+	return wpe.action_prompt(action) or "?"
+end)
+wpe.draw_text(6, 228, hint)
+```
+
+The platformer template's pause menu (`scripts/controls.luau`) is a complete controls screen: a keyboard and a gamepad column, swapping with the action that had the key, and resetting to the defaults. Its hero (`scripts/player.luau`) draws its hints with `wpe.action_prompt`.
+
 ### Game: scenes, camera, screen
 
 Provided by the application running the scripts (the engine runtime). Elsewhere they raise errors.
@@ -600,7 +649,9 @@ function Name:on_submit(text: string)
 	wpe.save_data("player_name", text)
 end
 return Name
-``` `scripts/volume_slider.luau` and `scripts/sound_toggle.luau` (on the title screen) set the music volume and mute the sound, and remember the settings with saved data.
+```
+
+`scripts/volume_slider.luau` and `scripts/sound_toggle.luau` (on the title screen) set the music volume and mute the sound, and remember the settings with saved data.
 
 `assets/scripts/api_tour.luau` exercises every function above, as part of the master test scene that the scene test runs for 60 simulated seconds. `wpe.load_scene` and `wpe.quit` end a scene, so the engine tests cover those two instead.
 

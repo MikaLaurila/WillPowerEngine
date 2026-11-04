@@ -3,6 +3,7 @@
 
 #include <SDL3/SDL.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "core/alloc.h"
@@ -36,12 +37,23 @@ static_assert(WPE__SAME(WPE_PAD_LEFT_X, SDL_GAMEPAD_AXIS_LEFTX) &&
 #define WPE__SLOTS (WPE_INPUT_MAX_PLAYERS + 1u)
 #define WPE__ANY_SLOT WPE_INPUT_MAX_PLAYERS
 
+/* Listening and device use: a stick or trigger counts as pushed past this, and as let go below the second. */
+#define WPE__AXIS_PUSHED 0.5f
+#define WPE__AXIS_LET_GO 0.25f
+/* Mouse movement in a frame (|dx| + |dy| pixels) that counts as using the mouse. */
+#define WPE__MOUSE_USED_PIXELS 3.0f
+#define WPE__NO_PAD UINT32_MAX
+
 typedef struct wpe__Gamepad {
     SDL_Gamepad* pad; /* NULL: slot free. */
     SDL_JoystickID id;
+    WPE_GamepadStyle style;
     uint32_t down, pressed, released; /* Button bit masks. */
     float raw[WPE_PAD_AXIS_COUNT];    /* -1..1 sticks, 0..1 triggers, before dead zones. */
     float axis[WPE_PAD_AXIS_COUNT];   /* Dead-zoned. */
+    /* Axis directions (bit 2 * axis, +1 for the negative side): pushed when a listen started, so not heard
+     * until let go; and heard by a listen, so reading 0 until let go. */
+    uint16_t held_axes, muted_axes;
 } wpe__Gamepad;
 
 typedef struct wpe__ActionState {
@@ -66,8 +78,21 @@ struct WPE_Input {
     wpe__Gamepad pads[WPE_INPUT_MAX_PLAYERS];
 
     WPE_InputActionDesc actions[WPE_INPUT_MAX_ACTIONS];
+    WPE_InputActionDesc defaults[WPE_INPUT_MAX_ACTIONS]; /* As wpe_input_set_actions() gave them. */
     wpe__ActionState action_states[WPE_INPUT_MAX_ACTIONS];
     uint32_t action_count;
+
+    /* Listening for a binding (wpe_input_listen). */
+    bool listening;
+    bool heard_ready; /* `heard` waits to be taken. */
+    uint32_t listen_devices, listen_player;
+    WPE_InputBinding heard;
+    bool swallowed[WPE_KEY_COUNT]; /* Heard by a listen and still held: its key repeats type nothing. */
+
+    /* Device use, per slot plus "any": 0 = not yet, else 1 + WPE_InputDevice. */
+    uint8_t device[WPE__SLOTS];
+    uint32_t last_pad; /* The slot of the pad used last (WPE__NO_PAD: none). */
+    float motion;      /* Mouse movement this frame, |dx| + |dy|. */
 };
 
 /* ---- Names ------------------------------------------------------------------------------------- */
@@ -269,6 +294,25 @@ static wpe__Gamepad* wpe__pad_by_id(WPE_Input* input, SDL_JoystickID id) {
     return NULL;
 }
 
+static WPE_GamepadStyle wpe__style_of(SDL_Gamepad* pad) {
+    switch (SDL_GetGamepadType(pad)) {
+    case SDL_GAMEPAD_TYPE_XBOX360:
+    case SDL_GAMEPAD_TYPE_XBOXONE:
+        return WPE_PAD_STYLE_XBOX;
+    case SDL_GAMEPAD_TYPE_PS3:
+    case SDL_GAMEPAD_TYPE_PS4:
+    case SDL_GAMEPAD_TYPE_PS5:
+        return WPE_PAD_STYLE_PLAYSTATION;
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+        return WPE_PAD_STYLE_NINTENDO;
+    default:
+        return WPE_PAD_STYLE_GENERIC;
+    }
+}
+
 static void wpe__open_pad(WPE_Input* input, SDL_JoystickID id) {
     if (wpe__pad_by_id(input, id)) return; /* Already open (enumerated at creation, then announced). */
     uint32_t slot = 0;
@@ -283,7 +327,7 @@ static void wpe__open_pad(WPE_Input* input, SDL_JoystickID id) {
         wpe_log_warn("cannot open gamepad: %s", SDL_GetError());
         return;
     }
-    input->pads[slot] = (wpe__Gamepad){.pad = pad, .id = id};
+    input->pads[slot] = (wpe__Gamepad){.pad = pad, .id = id, .style = wpe__style_of(pad)};
     SDL_SetGamepadPlayerIndex(pad, (int)slot); /* Lights the player LED where the pad has one. */
     const char* name = SDL_GetGamepadName(pad);
     wpe_log_info("gamepad connected as player %u: %s", slot + 1, name ? name : "(unnamed)");
@@ -292,9 +336,32 @@ static void wpe__open_pad(WPE_Input* input, SDL_JoystickID id) {
 static void wpe__close_pad(WPE_Input* input, SDL_JoystickID id) {
     wpe__Gamepad* pad = wpe__pad_by_id(input, id);
     if (!pad) return;
-    wpe_log_info("gamepad of player %u disconnected", (uint32_t)(pad - input->pads) + 1);
+    const uint32_t slot = (uint32_t)(pad - input->pads);
+    wpe_log_info("gamepad of player %u disconnected", slot + 1);
     SDL_CloseGamepad(pad->pad);
     *pad = (wpe__Gamepad){0};
+    /* Prompts stop showing a pad that is gone. */
+    const uint8_t gamepad = (uint8_t)(1 + WPE_INPUT_DEVICE_GAMEPAD);
+    if (input->device[slot] == gamepad) input->device[slot] = 0;
+    if (input->last_pad == slot) {
+        input->last_pad = WPE__NO_PAD;
+        if (input->device[WPE__ANY_SLOT] == gamepad) input->device[WPE__ANY_SLOT] = 0;
+    }
+}
+
+/* Remembers which device a player (and anyone) used last. */
+static void wpe__used(WPE_Input* input, uint32_t slot, WPE_InputDevice device) {
+    input->device[slot] = (uint8_t)(1 + device);
+    input->device[WPE__ANY_SLOT] = (uint8_t)(1 + device);
+    if (device == WPE_INPUT_DEVICE_GAMEPAD) input->last_pad = slot;
+}
+
+static uint16_t wpe__axis_bit(uint32_t axis, bool negative) {
+    return (uint16_t)(1u << (axis * 2u + (negative ? 1u : 0u)));
+}
+
+static bool wpe__is_trigger(uint32_t axis) {
+    return axis == WPE_PAD_LEFT_TRIGGER || axis == WPE_PAD_RIGHT_TRIGGER;
 }
 
 /* Radial dead zone for a stick, rescaled so motion starts smoothly at the dead zone edge. */
@@ -323,6 +390,19 @@ static void wpe__apply_deadzones(const WPE_InputSettings* s, wpe__Gamepad* pad) 
                         &pad->axis[WPE_PAD_RIGHT_Y]);
     pad->axis[WPE_PAD_LEFT_TRIGGER] = wpe__trigger_deadzone(s, pad->raw[WPE_PAD_LEFT_TRIGGER]);
     pad->axis[WPE_PAD_RIGHT_TRIGGER] = wpe__trigger_deadzone(s, pad->raw[WPE_PAD_RIGHT_TRIGGER]);
+    /* A direction a listen heard reads 0 until it is let go. */
+    for (uint32_t a = 0; pad->muted_axes && a < WPE_PAD_AXIS_COUNT; ++a) {
+        for (int side = 0; side < 2; ++side) {
+            const uint16_t bit = wpe__axis_bit(a, side == 1);
+            if (!(pad->muted_axes & bit)) continue;
+            const float pushed = side == 1 ? -pad->raw[a] : pad->raw[a];
+            if (pushed < WPE__AXIS_LET_GO) {
+                pad->muted_axes &= (uint16_t)~bit;
+            } else if (side == 1 ? pad->axis[a] < 0.0f : pad->axis[a] > 0.0f) {
+                pad->axis[a] = 0.0f;
+            }
+        }
+    }
 }
 
 /* ---- Lifecycle and events -------------------------------------------------------------------------- */
@@ -339,6 +419,7 @@ WPE_Result wpe_input_create(const WPE_InputDesc* desc, WPE_Input** out_input) {
     if (!input) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     input->settings = settings;
     input->keyboard_actions = true;
+    input->last_pad = WPE__NO_PAD;
     if (!desc->no_gamepads) {
         /* Reference-counted by SDL; also initializes the event queue so headless programs get pad events. */
         if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
@@ -376,6 +457,7 @@ void wpe_input_begin_frame(WPE_Input* input) {
     for (uint32_t i = 0; i <= WPE_MOUSE_BUTTON_MAX; ++i)
         input->mouse_buttons[i] &= WPE__DOWN;
     input->mouse_dx = input->mouse_dy = input->wheel_x = input->wheel_y = 0.0f;
+    input->motion = 0.0f;
     for (uint32_t i = 0; i < WPE_INPUT_MAX_PLAYERS; ++i)
         input->pads[i].pressed = input->pads[i].released = 0;
 }
@@ -404,10 +486,14 @@ void wpe_input_handle_event(WPE_Input* input, const WPE_PlatformEvent* platform_
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
         if ((uint32_t)event->key.scancode >= WPE_KEY_COUNT) break;
+        if (event->key.repeat && input->swallowed[event->key.scancode]) break; /* A listen took this key. */
+        if (!event->key.repeat) input->swallowed[event->key.scancode] = false;
         if (event->key.down && input->typed[event->key.scancode] < UINT8_MAX)
             ++input->typed[event->key.scancode];
         if (!event->key.repeat) wpe__set_button(&input->keys[event->key.scancode], event->key.down);
         if (!event->key.down) input->muted[event->key.scancode] = false;
+        if (event->key.down && !event->key.repeat)
+            wpe__used(input, input->settings.keyboard_player, WPE_INPUT_DEVICE_KEYBOARD);
         break;
     case SDL_EVENT_TEXT_INPUT: {
         /* What the keyboard layout made of the keys, as UTF-8 (whole characters only: a frame's text is cut
@@ -427,17 +513,25 @@ void wpe_input_handle_event(WPE_Input* input, const WPE_PlatformEvent* platform_
             wpe__set_button(&input->mouse_buttons[event->button.button], event->button.down);
         input->mouse_x = event->button.x;
         input->mouse_y = event->button.y;
+        if (event->button.down) wpe__used(input, input->settings.keyboard_player, WPE_INPUT_DEVICE_KEYBOARD);
         break;
-    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_MOUSE_MOTION: {
         input->mouse_x = event->motion.x;
         input->mouse_y = event->motion.y;
         input->mouse_dx += event->motion.xrel;
         input->mouse_dy += event->motion.yrel;
+        /* A nudge of the desk doesn't take the prompts away from the pad. */
+        const bool was_moving = input->motion >= WPE__MOUSE_USED_PIXELS;
+        input->motion += fabsf(event->motion.xrel) + fabsf(event->motion.yrel);
+        if (!was_moving && input->motion >= WPE__MOUSE_USED_PIXELS)
+            wpe__used(input, input->settings.keyboard_player, WPE_INPUT_DEVICE_KEYBOARD);
         break;
+    }
     case SDL_EVENT_MOUSE_WHEEL: {
         const float sign = event->wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1.0f : 1.0f;
         input->wheel_x += event->wheel.x * sign;
         input->wheel_y += event->wheel.y * sign;
+        wpe__used(input, input->settings.keyboard_player, WPE_INPUT_DEVICE_KEYBOARD);
         break;
     }
     case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -457,6 +551,7 @@ void wpe_input_handle_event(WPE_Input* input, const WPE_PlatformEvent* platform_
         if (event->gbutton.down && !(pad->down & bit)) {
             pad->down |= bit;
             pad->pressed |= bit;
+            wpe__used(input, (uint32_t)(pad - input->pads), WPE_INPUT_DEVICE_GAMEPAD);
         } else if (!event->gbutton.down && (pad->down & bit)) {
             pad->down &= ~bit;
             pad->released |= bit;
@@ -468,6 +563,8 @@ void wpe_input_handle_event(WPE_Input* input, const WPE_PlatformEvent* platform_
         if (!pad || event->gaxis.axis >= WPE_PAD_AXIS_COUNT) break;
         float value = (float)event->gaxis.value / 32767.0f; /* -32768 maps just below -1: clamp. */
         if (value < -1.0f) value = -1.0f;
+        if (fabsf(value) >= WPE__AXIS_PUSHED && fabsf(pad->raw[event->gaxis.axis]) < WPE__AXIS_PUSHED)
+            wpe__used(input, (uint32_t)(pad - input->pads), WPE_INPUT_DEVICE_GAMEPAD);
         pad->raw[event->gaxis.axis] = value;
         break;
     }
@@ -494,6 +591,20 @@ static bool wpe__binding_valid(const WPE_InputBinding* b) {
     }
 }
 
+static bool wpe__bindings_valid(const char* action, const WPE_InputBinding* bindings, uint32_t count) {
+    if (count > WPE_INPUT_MAX_BINDINGS) {
+        wpe_log_error("input action '%s' has more than %u bindings", action, WPE_INPUT_MAX_BINDINGS);
+        return false;
+    }
+    for (uint32_t b = 0; b < count; ++b) {
+        if (!wpe__binding_valid(&bindings[b]) || !isfinite(bindings[b].scale)) {
+            wpe_log_error("input action '%s': binding %u is invalid", action, b);
+            return false;
+        }
+    }
+    return true;
+}
+
 WPE_Result wpe_input_set_actions(WPE_Input* input, const WPE_InputActionDesc* actions, uint32_t count) {
     if (!input || (!actions && count > 0)) return WPE_RESULT_ERROR_NULL_ARG;
     if (count > WPE_INPUT_MAX_ACTIONS) {
@@ -512,21 +623,46 @@ WPE_Result wpe_input_set_actions(WPE_Input* input, const WPE_InputActionDesc* ac
                 return WPE_RESULT_ERROR_INVALID_ARG;
             }
         }
-        if (a->binding_count > WPE_INPUT_MAX_BINDINGS) {
-            wpe_log_error("input action '%s' has more than %u bindings", a->name, WPE_INPUT_MAX_BINDINGS);
-            return WPE_RESULT_ERROR_INVALID_ARG;
-        }
-        for (uint32_t b = 0; b < a->binding_count; ++b) {
-            if (!wpe__binding_valid(&a->bindings[b]) || !isfinite(a->bindings[b].scale)) {
-                wpe_log_error("input action '%s': binding %u is invalid", a->name, b);
-                return WPE_RESULT_ERROR_INVALID_ARG;
-            }
-        }
+        if (!wpe__bindings_valid(a->name, a->bindings, a->binding_count)) return WPE_RESULT_ERROR_INVALID_ARG;
     }
-    if (count > 0) memcpy(input->actions, actions, (size_t)count * sizeof *actions);
+    if (count > 0) {
+        memcpy(input->actions, actions, (size_t)count * sizeof *actions);
+        memcpy(input->defaults, actions, (size_t)count * sizeof *actions);
+    }
     memset(input->action_states, 0, sizeof input->action_states);
     input->action_count = count;
     return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_input_set_bindings(WPE_Input* input, WPE_InputAction action, const WPE_InputBinding* bindings,
+                                  uint32_t count) {
+    if (!input || (!bindings && count > 0)) return WPE_RESULT_ERROR_NULL_ARG;
+    if (action == WPE_INPUT_ACTION_NONE || action > input->action_count) return WPE_RESULT_ERROR_NOT_FOUND;
+    WPE_InputActionDesc* desc = &input->actions[action - 1];
+    if (!wpe__bindings_valid(desc->name, bindings, count)) return WPE_RESULT_ERROR_INVALID_ARG;
+    if (count > 0) memmove(desc->bindings, bindings, (size_t)count * sizeof *bindings);
+    desc->binding_count = count;
+    return WPE_RESULT_OK;
+}
+
+void wpe_input_reset_bindings(WPE_Input* input, WPE_InputAction action) {
+    if (!wpe_check(input != NULL)) return;
+    for (uint32_t i = 0; i < input->action_count; ++i) {
+        if (action == WPE_INPUT_ACTION_NONE || action == i + 1) input->actions[i] = input->defaults[i];
+    }
+}
+
+const WPE_InputActionDesc* wpe_input_action_default(const WPE_Input* input, uint32_t index) {
+    return input && index < input->action_count ? &input->defaults[index] : NULL;
+}
+
+bool wpe_input_binding_equal(const WPE_InputBinding* a, const WPE_InputBinding* b) {
+    if (!a || !b) return false;
+    const float scale_a = a->scale != 0.0f ? a->scale : 1.0f;
+    const float scale_b = b->scale != 0.0f ? b->scale : 1.0f;
+    const bool axis = a->source == WPE_INPUT_SOURCE_PAD_AXIS;
+    return a->source == b->source && a->code == b->code && scale_a == scale_b &&
+           (!axis || a->range == b->range);
 }
 
 uint32_t wpe_input_action_count(const WPE_Input* input) {
@@ -606,8 +742,107 @@ bool wpe_input_keyboard_actions(const WPE_Input* input) {
     return input && input->keyboard_actions;
 }
 
+/* ---- Listening for a binding ----------------------------------------------------------------------- */
+
+void wpe_input_listen(WPE_Input* input, uint32_t devices, uint32_t player) {
+    if (!wpe_check(input != NULL)) return;
+    input->listening = true;
+    input->heard_ready = false;
+    input->listen_devices = devices ? devices : WPE_INPUT_LISTEN_KEYBOARD | WPE_INPUT_LISTEN_GAMEPAD;
+    input->listen_player = player;
+    /* Sticks and triggers already pushed have to be let go before they count (buttons and keys need a new
+     * press anyway). */
+    for (uint32_t p = 0; p < WPE_INPUT_MAX_PLAYERS; ++p) {
+        wpe__Gamepad* pad = &input->pads[p];
+        pad->held_axes = 0;
+        for (uint32_t a = 0; a < WPE_PAD_AXIS_COUNT; ++a) {
+            if (pad->raw[a] >= WPE__AXIS_PUSHED) pad->held_axes |= wpe__axis_bit(a, false);
+            if (pad->raw[a] <= -WPE__AXIS_PUSHED) pad->held_axes |= wpe__axis_bit(a, true);
+        }
+    }
+}
+
+void wpe_input_stop_listening(WPE_Input* input) {
+    if (!wpe_check(input != NULL)) return;
+    input->listening = false;
+    input->heard_ready = false;
+}
+
+bool wpe_input_listening(const WPE_Input* input) {
+    return input && input->listening;
+}
+
+bool wpe_input_take_heard(WPE_Input* input, WPE_InputBinding* out_binding) {
+    if (!input || !input->heard_ready) return false;
+    input->heard_ready = false;
+    if (out_binding) *out_binding = input->heard;
+    return true;
+}
+
+static void wpe__hear(WPE_Input* input, WPE_InputSource source, uint32_t code, WPE_AxisRange range) {
+    input->heard = (WPE_InputBinding){.source = source, .code = code, .scale = 1.0f, .range = range};
+    input->heard_ready = true;
+    input->listening = false;
+}
+
+/* The first new press on a device the listen accepts, swallowed so nothing else sees it. */
+static void wpe__listen_update(WPE_Input* input) {
+    const uint32_t player = input->listen_player;
+    const bool keyboard = (input->listen_devices & WPE_INPUT_LISTEN_KEYBOARD) &&
+                          (player == WPE_INPUT_ANY_PLAYER || player == input->settings.keyboard_player);
+    if (keyboard) {
+        for (uint32_t k = 1; k < WPE_KEY_COUNT; ++k) {
+            if (!(input->keys[k] & WPE__PRESSED)) continue;
+            input->swallowed[k] = (input->keys[k] & WPE__DOWN) != 0; /* Its key repeats type nothing. */
+            input->keys[k] = 0;
+            input->typed[k] = 0;
+            wpe__hear(input, WPE_INPUT_SOURCE_KEY, k, WPE_AXIS_FULL);
+            return;
+        }
+        for (uint32_t b = 1; b <= WPE_MOUSE_BUTTON_MAX; ++b) {
+            if (!(input->mouse_buttons[b] & WPE__PRESSED)) continue;
+            input->mouse_buttons[b] = 0; /* Its release then changes nothing. */
+            wpe__hear(input, WPE_INPUT_SOURCE_MOUSE_BUTTON, b, WPE_AXIS_FULL);
+            return;
+        }
+    }
+    if (!(input->listen_devices & WPE_INPUT_LISTEN_GAMEPAD)) return;
+    for (uint32_t p = 0; p < WPE_INPUT_MAX_PLAYERS; ++p) {
+        wpe__Gamepad* pad = &input->pads[p];
+        if (!pad->pad || (player != WPE_INPUT_ANY_PLAYER && player != p)) continue;
+        for (uint32_t b = 0; b < WPE_PAD_BUTTON_COUNT; ++b) {
+            const uint32_t bit = 1u << b;
+            if (!(pad->pressed & bit)) continue;
+            /* Gone from every mask: its release then changes nothing either. */
+            pad->down &= ~bit;
+            pad->pressed &= ~bit;
+            pad->released &= ~bit;
+            wpe__hear(input, WPE_INPUT_SOURCE_PAD_BUTTON, b, WPE_AXIS_FULL);
+            return;
+        }
+        for (uint32_t a = 0; a < WPE_PAD_AXIS_COUNT; ++a) {
+            for (int side = 0; side < (wpe__is_trigger(a) ? 1 : 2); ++side) {
+                const uint16_t bit = wpe__axis_bit(a, side == 1);
+                const float pushed = side == 1 ? -pad->raw[a] : pad->raw[a];
+                if (pad->held_axes & bit) {
+                    if (pushed < WPE__AXIS_LET_GO) pad->held_axes &= (uint16_t)~bit;
+                    continue;
+                }
+                if (pushed < WPE__AXIS_PUSHED) continue;
+                pad->muted_axes |= bit;
+                const WPE_AxisRange range = wpe__is_trigger(a) ? WPE_AXIS_FULL
+                                            : side == 1        ? WPE_AXIS_NEGATIVE
+                                                               : WPE_AXIS_POSITIVE;
+                wpe__hear(input, WPE_INPUT_SOURCE_PAD_AXIS, a, range);
+                return;
+            }
+        }
+    }
+}
+
 void wpe_input_update(WPE_Input* input) {
     if (!wpe_check(input != NULL)) return;
+    if (input->listening) wpe__listen_update(input);
     for (uint32_t p = 0; p < WPE_INPUT_MAX_PLAYERS; ++p) {
         if (input->pads[p].pad) wpe__apply_deadzones(&input->settings, &input->pads[p]);
     }
@@ -795,4 +1030,150 @@ WPE_Result wpe_input_rumble(WPE_Input* input, uint32_t player, float low, float 
                           (Uint32)(s * 1000.0f)))
         return WPE_RESULT_OK;
     return WPE_RESULT_ERROR_UNSUPPORTED;
+}
+
+/* ---- Devices and prompts ---------------------------------------------------------------------------- */
+
+WPE_InputDevice wpe_input_last_device(const WPE_Input* input, uint32_t player) {
+    if (!input) return WPE_INPUT_DEVICE_KEYBOARD;
+    const bool any = player == WPE_INPUT_ANY_PLAYER;
+    if (!any && player >= WPE_INPUT_MAX_PLAYERS) return WPE_INPUT_DEVICE_KEYBOARD;
+    const uint8_t used = input->device[any ? WPE__ANY_SLOT : player];
+    if (used) return (WPE_InputDevice)(used - 1);
+    const bool has_pad =
+        any ? wpe_input_gamepad_count(input) > 0 : wpe_input_gamepad_connected(input, player);
+    return has_pad ? WPE_INPUT_DEVICE_GAMEPAD : WPE_INPUT_DEVICE_KEYBOARD;
+}
+
+WPE_GamepadStyle wpe_input_gamepad_style(const WPE_Input* input, uint32_t player) {
+    if (!input) return WPE_PAD_STYLE_GENERIC;
+    if (player != WPE_INPUT_ANY_PLAYER)
+        return wpe_input_gamepad_connected(input, player) ? input->pads[player].style : WPE_PAD_STYLE_GENERIC;
+    if (input->last_pad != WPE__NO_PAD && input->pads[input->last_pad].pad)
+        return input->pads[input->last_pad].style;
+    for (uint32_t p = 0; p < WPE_INPUT_MAX_PLAYERS; ++p) {
+        if (input->pads[p].pad) return input->pads[p].style;
+    }
+    return WPE_PAD_STYLE_GENERIC;
+}
+
+/* Whether a binding pushes its action toward `direction` (+1 / -1): its scale's way (a stick half reads
+ * 0..1 whichever side it is); an axis read whole goes both ways. */
+static bool wpe__pushes(const WPE_InputBinding* b, int direction) {
+    if (b->source == WPE_INPUT_SOURCE_PAD_AXIS && b->range == WPE_AXIS_FULL && !wpe__is_trigger(b->code))
+        return true;
+    const int sign = (b->scale != 0.0f ? b->scale : 1.0f) > 0.0f ? 1 : -1;
+    return sign == (direction > 0 ? 1 : -1);
+}
+
+const WPE_InputBinding* wpe_input_action_prompt(const WPE_Input* input, WPE_InputAction action,
+                                                uint32_t player, int direction) {
+    if (!input || action == WPE_INPUT_ACTION_NONE || action > input->action_count) return NULL;
+    const bool keyboard = wpe_input_last_device(input, player) == WPE_INPUT_DEVICE_KEYBOARD;
+    const WPE_InputActionDesc* desc = &input->actions[action - 1];
+    for (uint32_t b = 0; b < desc->binding_count; ++b) {
+        const WPE_InputBinding* binding = &desc->bindings[b];
+        const bool key_or_mouse =
+            binding->source == WPE_INPUT_SOURCE_KEY || binding->source == WPE_INPUT_SOURCE_MOUSE_BUTTON;
+        if (key_or_mouse != keyboard) continue;
+        if (direction != 0 && !wpe__pushes(binding, direction)) continue;
+        return binding;
+    }
+    return NULL;
+}
+
+static const char* const wpe__style_names[WPE_PAD_STYLE_COUNT] = {"generic", "xbox", "playstation",
+                                                                  "nintendo"};
+
+const char* wpe_input_gamepad_style_name(WPE_GamepadStyle style) {
+    return (uint32_t)style < WPE_PAD_STYLE_COUNT ? wpe__style_names[style] : NULL;
+}
+
+bool wpe_input_gamepad_style_from_name(const char* name, WPE_GamepadStyle* out_style) {
+    for (uint32_t s = 0; name && s < WPE_PAD_STYLE_COUNT; ++s) {
+        if (strcmp(wpe__style_names[s], name) == 0) {
+            if (out_style) *out_style = (WPE_GamepadStyle)s;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Pad button labels per style, in WPE_GamepadButton order (paddles: Xbox Elite's P1..P4 numbering). */
+static const char* const wpe__pad_labels[WPE_PAD_STYLE_COUNT][WPE_PAD_BUTTON_COUNT] = {
+    {"A",           "B",     "X",  "Y",  "Back",     "Guide",      "Start",
+     "LS",          "RS",    "LB", "RB", "D-Pad Up", "D-Pad Down", "D-Pad Left",
+     "D-Pad Right", "Share", "P1", "P3", "P2",       "P4",         "Touchpad"},
+    {"A",           "B",     "X",  "Y",  "View",     "Xbox",       "Menu",
+     "LS",          "RS",    "LB", "RB", "D-Pad Up", "D-Pad Down", "D-Pad Left",
+     "D-Pad Right", "Share", "P1", "P3", "P2",       "P4",         "Touchpad"},
+    {"Cross",       "Circle", "Square",   "Triangle", "Share",      "PS",         "Options",
+     "L3",          "R3",     "L1",       "R1",       "D-Pad Up",   "D-Pad Down", "D-Pad Left",
+     "D-Pad Right", "Mic",    "R Paddle", "L Paddle", "R Paddle 2", "L Paddle 2", "Touchpad"},
+    {"B",           "A",       "Y",        "X",        "-",          "Home",       "+",
+     "LS",          "RS",      "L",        "R",        "D-Pad Up",   "D-Pad Down", "D-Pad Left",
+     "D-Pad Right", "Capture", "R Paddle", "L Paddle", "R Paddle 2", "L Paddle 2", "Touchpad"},
+};
+static const char* const wpe__trigger_labels[WPE_PAD_STYLE_COUNT][2] = {
+    {"LT", "RT"}, {"LT", "RT"}, {"L2", "R2"}, {"ZL", "ZR"}};
+static const char* const wpe__mouse_labels[WPE_MOUSE_BUTTON_MAX + 1] = {
+    NULL, "Left Mouse", "Middle Mouse", "Right Mouse", "Mouse 4", "Mouse 5"};
+
+static bool wpe__is_ascii_label(const char* text) {
+    if (!text || !text[0]) return false;
+    for (const char* c = text; *c; ++c) {
+        if ((unsigned char)*c < 0x20 || (unsigned char)*c > 0x7e) return false;
+    }
+    return true;
+}
+
+/* The key's label on the player's layout ("W" for HID W on QWERTY, "Z" on AZERTY), else SDL's US name, else
+ * the engine's. */
+static const char* wpe__key_label(WPE_Key key) {
+    const char* label = SDL_GetKeyName(SDL_GetKeyFromScancode((SDL_Scancode)key, SDL_KMOD_NONE, false));
+    if (wpe__is_ascii_label(label)) return label;
+    label = SDL_GetScancodeName((SDL_Scancode)key);
+    if (wpe__is_ascii_label(label)) return label;
+    return wpe_input_key_name(key);
+}
+
+size_t wpe_input_binding_label(const WPE_InputBinding* binding, WPE_GamepadStyle style, char* out,
+                               size_t capacity) {
+    if (out && capacity > 0) out[0] = '\0';
+    if (!binding || !out || capacity == 0 || !wpe__binding_valid(binding)) return 0;
+    if ((uint32_t)style >= WPE_PAD_STYLE_COUNT) style = WPE_PAD_STYLE_GENERIC;
+    char text[64] = "";
+    switch (binding->source) {
+    case WPE_INPUT_SOURCE_KEY: {
+        const char* label = wpe__key_label(binding->code);
+        snprintf(text, sizeof text, "%s", label ? label : "?");
+        break;
+    }
+    case WPE_INPUT_SOURCE_MOUSE_BUTTON:
+        snprintf(text, sizeof text, "%s", wpe__mouse_labels[binding->code]);
+        break;
+    case WPE_INPUT_SOURCE_PAD_BUTTON:
+        snprintf(text, sizeof text, "%s", wpe__pad_labels[style][binding->code]);
+        break;
+    case WPE_INPUT_SOURCE_PAD_AXIS: {
+        if (wpe__is_trigger(binding->code)) {
+            snprintf(text, sizeof text, "%s",
+                     wpe__trigger_labels[style][binding->code == WPE_PAD_RIGHT_TRIGGER ? 1 : 0]);
+            break;
+        }
+        const char* stick =
+            binding->code == WPE_PAD_LEFT_X || binding->code == WPE_PAD_LEFT_Y ? "L Stick" : "R Stick";
+        const bool horizontal = binding->code == WPE_PAD_LEFT_X || binding->code == WPE_PAD_RIGHT_X;
+        const char* way = binding->range == WPE_AXIS_POSITIVE   ? (horizontal ? " Right" : " Down")
+                          : binding->range == WPE_AXIS_NEGATIVE ? (horizontal ? " Left" : " Up")
+                                                                : "";
+        snprintf(text, sizeof text, "%s%s", stick, way);
+        break;
+    }
+    }
+    const size_t length = strlen(text);
+    const size_t kept = length < capacity ? length : capacity - 1;
+    memcpy(out, text, kept);
+    out[kept] = '\0';
+    return kept;
 }

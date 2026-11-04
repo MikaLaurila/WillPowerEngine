@@ -99,6 +99,19 @@ static bool wpe__parse_binding(wpe__JsonReader* r, const WPE_JsonValue* v, const
     return true;
 }
 
+/* An action's binding list (an array of at most WPE_INPUT_MAX_BINDINGS bindings) into `out`. */
+static bool wpe__parse_binding_list(wpe__JsonReader* r, const WPE_JsonValue* bindings, const char* action,
+                                    WPE_InputBinding* out, uint32_t* out_count) {
+    if (wpe_json_type(bindings) != WPE_JSON_ARRAY || wpe_json_count(bindings) > WPE_INPUT_MAX_BINDINGS)
+        return wpe__json_fail(r, bindings, WPE_RESULT_ERROR_PARSE,
+                              "action \"%s\" must list at most %u bindings", action, WPE_INPUT_MAX_BINDINGS);
+    for (uint32_t b = 0; b < wpe_json_count(bindings); ++b) {
+        if (!wpe__parse_binding(r, wpe_json_at(bindings, b), action, &out[b])) return false;
+    }
+    *out_count = wpe_json_count(bindings);
+    return true;
+}
+
 static bool wpe__parse_input(wpe__JsonReader* r, const WPE_JsonValue* v, WPE_ProjectSettings* out) {
     uint32_t keyboard_player = out->input.keyboard_player + 1;
     if (!WPE__JSON_CHECK_OBJECT(r, v, "input", "keyboard_player", "stick_deadzone", "stick_outer",
@@ -129,14 +142,8 @@ static bool wpe__parse_input(wpe__JsonReader* r, const WPE_JsonValue* v, WPE_Pro
             return wpe__json_fail(r, bindings, WPE_RESULT_ERROR_PARSE, "action names must be 1 to %zu bytes",
                                   sizeof action->name - 1);
         memcpy(action->name, name, strlen(name) + 1);
-        if (wpe_json_type(bindings) != WPE_JSON_ARRAY || wpe_json_count(bindings) > WPE_INPUT_MAX_BINDINGS)
-            return wpe__json_fail(r, bindings, WPE_RESULT_ERROR_PARSE,
-                                  "action \"%s\" must list at most %u bindings", name,
-                                  WPE_INPUT_MAX_BINDINGS);
-        for (uint32_t b = 0; b < wpe_json_count(bindings); ++b) {
-            if (!wpe__parse_binding(r, wpe_json_at(bindings, b), name, &action->bindings[b])) return false;
-        }
-        action->binding_count = wpe_json_count(bindings);
+        if (!wpe__parse_binding_list(r, bindings, name, action->bindings, &action->binding_count))
+            return false;
         ++out->action_count;
     }
     return true;
@@ -298,6 +305,52 @@ static void wpe__key_string(WPE_JsonWriter* w, const char* key, const char* valu
     wpe_json_write_string(w, value);
 }
 
+/* "name": [bindings...] in the project file's schema. */
+static WPE_Result wpe__write_action(WPE_JsonWriter* w, const WPE_InputActionDesc* action) {
+    WPE_Result result = WPE_RESULT_OK;
+    wpe_json_write_key(w, action->name);
+    wpe_json_write_array_begin(w, false);
+    for (uint32_t b = 0; b < action->binding_count && b < WPE_INPUT_MAX_BINDINGS; ++b) {
+        const WPE_InputBinding* binding = &action->bindings[b];
+        const char* source = NULL;
+        const char* name = NULL;
+        switch (binding->source) {
+        case WPE_INPUT_SOURCE_KEY:
+            source = "key";
+            name = wpe_input_key_name(binding->code);
+            break;
+        case WPE_INPUT_SOURCE_MOUSE_BUTTON:
+            source = "mouse_button";
+            name = wpe_input_mouse_button_name((WPE_MouseButton)binding->code);
+            break;
+        case WPE_INPUT_SOURCE_PAD_BUTTON:
+            source = "pad_button";
+            name = wpe_input_pad_button_name((WPE_GamepadButton)binding->code);
+            break;
+        case WPE_INPUT_SOURCE_PAD_AXIS:
+            source = "pad_axis";
+            name = wpe_input_pad_axis_name((WPE_GamepadAxis)binding->code);
+            break;
+        }
+        if (!source || !name) {
+            wpe_log_error("action '%s': binding %u has no name and cannot be saved", action->name, b);
+            result = WPE_RESULT_ERROR_INVALID_ARG;
+            name = "?";
+            source = "key";
+        }
+        wpe_json_write_object_begin(w);
+        wpe__key_string(w, source, name);
+        const float scale = binding->scale != 0.0f ? binding->scale : 1.0f;
+        if (scale != 1.0f) wpe__key_number(w, "scale", scale);
+        if (binding->source == WPE_INPUT_SOURCE_PAD_AXIS && binding->range != WPE_AXIS_FULL &&
+            binding->range <= WPE_AXIS_NEGATIVE)
+            wpe__key_string(w, "range", wpe__axis_ranges[binding->range]);
+        wpe_json_write_object_end(w);
+    }
+    wpe_json_write_array_end(w);
+    return result;
+}
+
 WPE_Result wpe_project_write(const WPE_ProjectSettings* s, WPE_JsonWriter* w) {
     if (!s || !w) return WPE_RESULT_ERROR_NULL_ARG;
     wpe_json_write_object_begin(w);
@@ -367,48 +420,103 @@ WPE_Result wpe_project_write(const WPE_ProjectSettings* s, WPE_JsonWriter* w) {
     wpe_json_write_object_begin(w);
     WPE_Result result = WPE_RESULT_OK;
     for (uint32_t a = 0; a < s->action_count && a < WPE_INPUT_MAX_ACTIONS; ++a) {
-        const WPE_InputActionDesc* action = &s->actions[a];
-        wpe_json_write_key(w, action->name);
-        wpe_json_write_array_begin(w, false);
-        for (uint32_t b = 0; b < action->binding_count && b < WPE_INPUT_MAX_BINDINGS; ++b) {
-            const WPE_InputBinding* binding = &action->bindings[b];
-            const char* source = NULL;
-            const char* name = NULL;
-            switch (binding->source) {
-            case WPE_INPUT_SOURCE_KEY:
-                source = "key";
-                name = wpe_input_key_name(binding->code);
-                break;
-            case WPE_INPUT_SOURCE_MOUSE_BUTTON:
-                source = "mouse_button";
-                name = wpe_input_mouse_button_name((WPE_MouseButton)binding->code);
-                break;
-            case WPE_INPUT_SOURCE_PAD_BUTTON:
-                source = "pad_button";
-                name = wpe_input_pad_button_name((WPE_GamepadButton)binding->code);
-                break;
-            case WPE_INPUT_SOURCE_PAD_AXIS:
-                source = "pad_axis";
-                name = wpe_input_pad_axis_name((WPE_GamepadAxis)binding->code);
-                break;
-            }
-            if (!source || !name) {
-                wpe_log_error("action '%s': binding %u has no name and cannot be saved", action->name, b);
-                result = WPE_RESULT_ERROR_INVALID_ARG;
-                name = "?";
-                source = "key";
-            }
-            wpe_json_write_object_begin(w);
-            wpe__key_string(w, source, name);
-            const float scale = binding->scale != 0.0f ? binding->scale : 1.0f;
-            if (scale != 1.0f) wpe__key_number(w, "scale", scale);
-            if (binding->range != WPE_AXIS_FULL && binding->range <= WPE_AXIS_NEGATIVE)
-                wpe__key_string(w, "range", wpe__axis_ranges[binding->range]);
-            wpe_json_write_object_end(w);
-        }
-        wpe_json_write_array_end(w);
+        const WPE_Result written = wpe__write_action(w, &s->actions[a]);
+        if (result == WPE_RESULT_OK) result = written;
     }
     wpe_json_write_object_end(w);
+    wpe_json_write_object_end(w);
+    wpe_json_write_object_end(w);
+    return result;
+}
+
+/* ---- The player's bindings ------------------------------------------------------------------------ */
+
+static bool wpe__parse_bindings(wpe__JsonReader* r, const WPE_JsonValue* root, WPE_Input* input,
+                                WPE_InputActionDesc* scratch) {
+    if (!WPE__JSON_CHECK_OBJECT(r, root, "bindings", "format", "version", "actions")) return false;
+    const char* format = wpe_json_string(wpe_json_get(root, "format"));
+    if (!format || strcmp(format, "wpe.bindings") != 0)
+        return wpe__json_fail(r, root, WPE_RESULT_ERROR_PARSE,
+                              "not a bindings file (\"format\" must be \"wpe.bindings\")");
+    uint32_t version = 0;
+    if (!wpe__json_read_uint(r, root, "version", 1, UINT32_MAX, &version)) return false;
+    if (version == 0) return wpe__json_fail(r, root, WPE_RESULT_ERROR_PARSE, "\"version\" is required");
+    if (version > WPE_BINDINGS_FORMAT_VERSION)
+        return wpe__json_fail(r, root, WPE_RESULT_ERROR_UNSUPPORTED,
+                              "format version %u is newer than this engine's (%u)", version,
+                              WPE_BINDINGS_FORMAT_VERSION);
+    const WPE_JsonValue* actions = wpe_json_get(root, "actions");
+    if (!actions) return true;
+    if (wpe_json_type(actions) != WPE_JSON_OBJECT)
+        return wpe__json_fail(r, actions, WPE_RESULT_ERROR_PARSE,
+                              "\"actions\" must map action names to binding lists");
+    /* Everything is read into the scratch copy of the actions first: a bad document changes nothing. */
+    const uint32_t count = wpe_input_action_count(input);
+    for (uint32_t a = 0; a < count; ++a)
+        scratch[a] = *wpe_input_action_desc(input, a);
+    for (uint32_t i = 0; i < wpe_json_count(actions); ++i) {
+        const char* name = NULL;
+        const WPE_JsonValue* bindings = wpe_json_member(actions, i, &name);
+        const WPE_InputAction action = wpe_input_find_action(input, name);
+        if (action == WPE_INPUT_ACTION_NONE) {
+            wpe_log_warn("bindings '%s': the game has no action \"%s\" any more; skipped", r->name, name);
+            continue;
+        }
+        WPE_InputActionDesc* desc = &scratch[action - 1];
+        if (!wpe__parse_binding_list(r, bindings, name, desc->bindings, &desc->binding_count)) return false;
+    }
+    for (uint32_t a = 0; a < count; ++a) {
+        if (wpe_input_set_bindings(input, a + 1, scratch[a].bindings, scratch[a].binding_count) !=
+            WPE_RESULT_OK)
+            return wpe__json_fail(r, actions, WPE_RESULT_ERROR_PARSE, "action \"%s\": invalid bindings",
+                                  scratch[a].name);
+    }
+    return true;
+}
+
+WPE_Result wpe_bindings_parse(const char* text, size_t size, const char* name, WPE_Input* input) {
+    if (!text || !input) return WPE_RESULT_ERROR_NULL_ARG;
+    wpe__JsonReader r = {.name = name ? name : WPE_BINDINGS_FILE, .kind = "bindings"};
+    WPE_JsonDocument* doc = NULL;
+    WPE_JsonError error;
+    WPE_Result result = wpe_json_parse(text, size, &doc, &error);
+    if (result == WPE_RESULT_ERROR_PARSE)
+        wpe_log_error("bindings '%s', line %u, column %u: %s", r.name, error.line, error.column,
+                      error.message);
+    if (result != WPE_RESULT_OK) return result;
+    WPE_InputActionDesc* scratch = wpe_alloc(WPE_INPUT_MAX_ACTIONS * sizeof *scratch);
+    if (!scratch) {
+        result = WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    } else if (!wpe__parse_bindings(&r, wpe_json_root(doc), input, scratch)) {
+        result = r.result;
+    }
+    wpe_free(scratch);
+    wpe_json_free(doc);
+    return result;
+}
+
+static bool wpe__bindings_changed(const WPE_InputActionDesc* now, const WPE_InputActionDesc* defaults) {
+    if (now->binding_count != defaults->binding_count) return true;
+    for (uint32_t b = 0; b < now->binding_count; ++b) {
+        if (!wpe_input_binding_equal(&now->bindings[b], &defaults->bindings[b])) return true;
+    }
+    return false;
+}
+
+WPE_Result wpe_bindings_write(const WPE_Input* input, WPE_JsonWriter* w) {
+    if (!input || !w) return WPE_RESULT_ERROR_NULL_ARG;
+    wpe_json_write_object_begin(w);
+    wpe__key_string(w, "format", "wpe.bindings");
+    wpe__key_integer(w, "version", WPE_BINDINGS_FORMAT_VERSION);
+    wpe_json_write_key(w, "actions");
+    wpe_json_write_object_begin(w);
+    WPE_Result result = WPE_RESULT_OK;
+    for (uint32_t a = 0; a < wpe_input_action_count(input); ++a) {
+        const WPE_InputActionDesc* now = wpe_input_action_desc(input, a);
+        if (!wpe__bindings_changed(now, wpe_input_action_default(input, a))) continue;
+        const WPE_Result written = wpe__write_action(w, now);
+        if (result == WPE_RESULT_OK) result = written;
+    }
     wpe_json_write_object_end(w);
     wpe_json_write_object_end(w);
     return result;

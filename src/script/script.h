@@ -176,6 +176,10 @@ typedef struct WPE_ScriptApp {
     /* Captures this frame (as the scene renders it, before post effects and 2D) into slot 1..8, and
      * returns the image asset path that shows it (valid until the host goes), or NULL (logged). */
     const char* (*capture_screen)(void* user_data, uint32_t slot);
+    /* Keeps the player's bindings (the input's actions as wpe.set_bindings/reset_bindings left them) for the
+     * next run; false when they can't be saved (logged). Without it (an exception to the rule above) bindings
+     * still change, for this run only. */
+    bool (*save_bindings)(void* user_data);
     WPE_ScriptNet net; /* Multiplayer (wpe.net_*). */
 } WPE_ScriptApp;
 

@@ -246,6 +246,8 @@ static WPE_Result wpe__editor_play_from(WPE_Editor* editor, const wpe__Snapshot*
     wpe_engine_set_camera(editor->engine, editor->scene_camera);
     /* Keys pressed while editing (the play shortcut's included) were never the game's. */
     wpe_input_release_all(wpe_engine_input(editor->engine));
+    (void)wpe_engine_load_bindings(
+        editor->engine); /* The game plays with the keys its player chose (logged). */
     editor->mode = WPE_EDITOR_PLAY;
     wpe_engine_set_simulating(editor->engine, true);
     wpe_log_info("play");
@@ -398,6 +400,9 @@ WPE_Result wpe__editor_stop(WPE_Editor* editor) {
     /* Keys held when play stops would never see their release (the game stops getting key events). */
     wpe_input_set_mouse_captured(wpe_engine_input(editor->engine), false);
     wpe_input_release_all(wpe_engine_input(editor->engine));
+    wpe_input_stop_listening(wpe_engine_input(editor->engine));
+    wpe_input_reset_bindings(wpe_engine_input(editor->engine),
+                             WPE_INPUT_ACTION_NONE); /* The project's again. */
     const WPE_Result result = wpe__editor_restore(editor, &editor->play, "play snapshot");
     wpe__snapshot_free(&editor->play);
     wpe_log_info("stopped");

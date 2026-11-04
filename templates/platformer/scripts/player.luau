@@ -1,7 +1,10 @@
 -- A 2.5D platformer hero on a character controller, moving along X only (the level's plane is Z = 0).
 --
 --   Move: A/D, arrows, left stick, d-pad     Jump: Space, W, Up, A (south); hold for higher jumps
---   Restart the level: R, Back
+--   Restart the level: R, Back               Menu (controls, quit): Esc, Start
+--
+-- Players can change those keys in the menu (scripts/controls.luau); the hints at the bottom show the keys
+-- or buttons of the device they last used (wpe.action_prompt).
 --
 -- Platformer feel: a jump pressed just before landing still happens (jump buffer), a jump just after
 -- running off a ledge still works (coyote time), and letting go of jump early cuts the jump short.
@@ -10,6 +13,7 @@
 -- Other scripts call into it: collect_coin() (coins), hurt() (hazards), set_checkpoint(position)
 -- (checkpoints) and finish() (the goal). Standing on something whose script has a `velocity` (the
 -- moving platform) carries the hero along.
+local Menu = require("scripts/menu_state")
 local Player = {}
 Player.properties = {
 	run_speed = 6, -- m/s
@@ -90,6 +94,11 @@ function Player:on_update(dt)
 	if self.total_coins == nil then
 		self.total_coins = wpe.broadcast("is_coin") -- every coin's script answers once it has started
 	end
+	if Menu.open then -- the game is paused: no input (the menu takes it)
+		self.jump_held = false
+		self:draw_hud()
+		return
+	end
 	if wpe.action_pressed("restart") or (self.finished and wpe.action_pressed("jump")) then
 		wpe.load_scene("scenes/main.scene")
 		return
@@ -121,6 +130,11 @@ function Player:on_update(dt)
 	self:draw_hud()
 end
 
+-- What to press for an action, on the device the player used last ("Space", "A", "Cross"...).
+local function prompt(action: string, direction: number?): string
+	return wpe.action_prompt(action, nil, direction) or "?"
+end
+
 function Player:draw_hud()
 	local width, height = wpe.screen_size()
 	if self.flash > 0 then
@@ -133,14 +147,19 @@ function Player:draw_hud()
 		local lines = {
 			"Level complete!",
 			string.format("Coins %d/%d   Time %s", self.coins, self.total_coins or 0, clock),
-			"Press Jump to play again",
+			string.format("Press %s to play again", prompt("jump")),
 		}
 		for i, line in lines do
 			local w = wpe.text_size(line, i == 1 and 2 or 1)
 			wpe.draw_text((width - w) // 2, height // 3 + (i - 1) * 22, line, wpe.color(1, 1, 1), i == 1 and 2 or 1)
 		end
-	else
-		wpe.draw_text(6, height - 12, "A/D move  Space jump (hold: higher)  R restart", wpe.color(1, 1, 1, 0.7))
+	elseif not Menu.open then
+		-- "A/D move" on the keyboard; on a pad the stick moves both ways, so it shows once.
+		local left, right = prompt("move_x", -1), prompt("move_x", 1)
+		local move = if left == right then left else left .. "/" .. right
+		local hint = string.format("%s move  %s jump  %s restart  %s menu", move, prompt("jump"), prompt("restart"),
+			prompt("pause"))
+		wpe.draw_text(6, height - 12, hint, wpe.color(1, 1, 1, 0.7))
 	end
 end
 

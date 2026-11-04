@@ -195,8 +195,20 @@ static void wpe__app_screen_size(void* user_data, uint32_t* out_width, uint32_t*
     *out_height = engine->project.height;
 }
 
+/* The folder name of the game's save directory: the letters, digits and spaces of the project name. */
+static void wpe__save_app_name(const WPE_Engine* engine, char* app, size_t capacity) {
+    size_t length = 0;
+    for (const char* c = engine->project.name; *c && length + 1 < capacity; ++c) {
+        const bool kept =
+            (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == ' ';
+        if (kept) app[length++] = *c;
+    }
+    app[length] = '\0';
+    if (length == 0) snprintf(app, capacity, "Game");
+}
+
 /* The save directory: the one the host gave, or the user's directory for this game, found and made on
- * first use. Only letters, digits and spaces of the project name make up the folder name. */
+ * first use. */
 static const char* wpe__app_save_directory(void* user_data) {
     WPE_Engine* engine = user_data;
     if (engine->save_dir[0] && !engine->save_dir_made) {
@@ -205,14 +217,7 @@ static const char* wpe__app_save_directory(void* user_data) {
     }
     if (engine->save_dir[0]) return engine->save_dir;
     char app[WPE_PROJECT_NAME_MAX];
-    size_t length = 0;
-    for (const char* c = engine->project.name; *c && length + 1 < sizeof app; ++c) {
-        const bool kept =
-            (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == ' ';
-        if (kept) app[length++] = *c;
-    }
-    app[length] = '\0';
-    if (length == 0) snprintf(app, sizeof app, "Game");
+    wpe__save_app_name(engine, app, sizeof app);
     if (wpe_platform_save_directory("WillPowerEngine", app, engine->save_dir, sizeof engine->save_dir) !=
         WPE_RESULT_OK) {
         engine->save_dir[0] = '\0';
@@ -220,6 +225,77 @@ static const char* wpe__app_save_directory(void* user_data) {
     }
     engine->save_dir_made = true; /* SDL makes it. */
     return engine->save_dir;
+}
+
+/* <directory>/<file name>; false if it doesn't fit. */
+static bool wpe__join_path(const char* directory, const char* file, char* out, size_t capacity) {
+    const size_t length = strlen(directory);
+    const bool separated = length > 0 && (directory[length - 1] == '/' || directory[length - 1] == '\\');
+    const int written = snprintf(out, capacity, "%s%s%s", directory, separated ? "" : "/", file);
+    return written >= 0 && (size_t)written < capacity;
+}
+
+/* The player's bindings, written beside the saves and renamed over the old file (never half-written). */
+static bool wpe__app_save_bindings(void* user_data) {
+    WPE_Engine* engine = user_data;
+    const char* directory = wpe__app_save_directory(engine);
+    char path[1024];
+    char temporary[sizeof path + 4];
+    if (!directory || !wpe__join_path(directory, WPE_BINDINGS_FILE, path, sizeof path)) {
+        wpe_log_error("the player's bindings can't be saved: no save directory");
+        return false;
+    }
+    snprintf(temporary, sizeof temporary, "%s.tmp", path);
+    WPE_JsonWriter* w = NULL;
+    WPE_Result result = wpe_json_writer_create(&w);
+    if (result == WPE_RESULT_OK) result = wpe_bindings_write(engine->input, w);
+    const char* text = NULL;
+    size_t size = 0;
+    if (result == WPE_RESULT_OK) result = wpe_json_writer_finish(w, &text, &size);
+    WPE_File* file = NULL;
+    if (result == WPE_RESULT_OK) result = wpe_file_open(temporary, true, &file);
+    if (result == WPE_RESULT_OK) {
+        result = wpe_file_write(file, text, size);
+        const WPE_Result closed = wpe_file_close(file);
+        if (result == WPE_RESULT_OK) result = closed;
+    }
+    if (result == WPE_RESULT_OK) result = wpe_path_rename(temporary, path);
+    wpe_json_writer_destroy(w);
+    if (result != WPE_RESULT_OK)
+        wpe_log_error("the player's bindings can't be saved to '%s': %s", path, wpe_result_to_string(result));
+    return result == WPE_RESULT_OK;
+}
+
+WPE_Result wpe_engine_load_bindings(WPE_Engine* engine) {
+    if (!engine) return WPE_RESULT_ERROR_NULL_ARG;
+    wpe_input_reset_bindings(engine->input, WPE_INPUT_ACTION_NONE);
+    /* Only found, never made: a game that never saved leaves no directory behind. */
+    char directory[1024];
+    if (engine->save_dir[0]) {
+        snprintf(directory, sizeof directory, "%s", engine->save_dir);
+    } else {
+        char app[WPE_PROJECT_NAME_MAX];
+        wpe__save_app_name(engine, app, sizeof app);
+        if (wpe_platform_find_save_directory("WillPowerEngine", app, directory, sizeof directory) !=
+            WPE_RESULT_OK)
+            return WPE_RESULT_OK;
+    }
+    char path[1024];
+    int64_t modified = 0;
+    if (!wpe__join_path(directory, WPE_BINDINGS_FILE, path, sizeof path) ||
+        wpe_file_modified_time(path, &modified) != WPE_RESULT_OK)
+        return WPE_RESULT_OK; /* The player never changed a binding. */
+    void* text = NULL;
+    size_t size = 0;
+    WPE_Result result = wpe_file_read_all(path, &text, &size);
+    if (result == WPE_RESULT_OK) result = wpe_bindings_parse(text, size, path, engine->input);
+    wpe_free(text);
+    if (result != WPE_RESULT_OK) {
+        wpe_log_warn("the player's bindings in '%s' can't be used (%s); the game's own apply", path,
+                     wpe_result_to_string(result));
+        wpe_input_reset_bindings(engine->input, WPE_INPUT_ACTION_NONE);
+    }
+    return result;
 }
 
 /* A capture slot's image asset, made the first time (showing the last finished frame until this frame's
@@ -420,7 +496,8 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                    .postfx = wpe__app_postfx,
                                    .render_settings = wpe__app_render_settings,
                                    .game_feel = wpe__app_game_feel,
-                                   .capture_screen = wpe__app_capture_screen};
+                                   .capture_screen = wpe__app_capture_screen,
+                                   .save_bindings = wpe__app_save_bindings};
         WPE_ScriptApp with_net = app;
         wpe__fill_net_services(&with_net.net);
         result =
@@ -555,8 +632,9 @@ static void wpe__apply_music(WPE_Engine* engine) {
 WPE_Result wpe_engine_load_scene_text(WPE_Engine* engine, const char* text, size_t size, const char* name) {
     if (!engine || !text) return WPE_RESULT_ERROR_NULL_ARG;
     if (!name) name = "scene";
-    engine->scene_path[0] = '\0';           /* wpe_engine_load_scene() sets it once a file has loaded. */
-    wpe_engine_invalidate_nav_grid(engine); /* The next scene has its own level. */
+    engine->scene_path[0] = '\0';            /* wpe_engine_load_scene() sets it once a file has loaded. */
+    wpe_engine_invalidate_nav_grid(engine);  /* The next scene has its own level. */
+    wpe_input_stop_listening(engine->input); /* Whoever listened for a binding is gone. */
     WPE_Result result = wpe_scene_clear(engine->ecs);
     engine->camera = WPE_ENTITY_NULL;
     engine->environment = wpe_scene_environment_default();

@@ -108,6 +108,19 @@ WPE_Result wpe_engine_load_scene_text(WPE_Engine* engine, const char* text, size
 const WPE_Vfs* wpe_engine_vfs(const WPE_Engine* engine);
 
 /**
+ * Puts the project's input bindings back, then applies the player's own (WPE_BINDINGS_FILE, written when a
+ * script calls wpe.set_bindings or wpe.reset_bindings) from the save directory, if the game ever made one;
+ * the directory is not created. The runtime calls it at startup and the editor when play starts; engines that
+ * never call it play with the project's bindings.
+ *
+ * @return WPE_RESULT_OK (also when the player has no bindings file), WPE_RESULT_ERROR_NULL_ARG, or the file's
+ * read or parse error (logged; the project's bindings apply).
+ *
+ * @thread_safety Main thread only
+ */
+WPE_Result wpe_engine_load_bindings(WPE_Engine* engine);
+
+/**
  * Runs one frame (see the file comment).
  *
  * @param dt Seconds since the previous frame (clamped to 0.25 to survive stalls).

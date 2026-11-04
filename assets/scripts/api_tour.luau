@@ -453,6 +453,44 @@ function Tour:on_start()
 	assert(type(wpe.rumble(0, 0, 0)) == "boolean") -- whether a pad accepted it
 	assert(not pcall(wpe.gamepad_axis, "left_z"))
 
+	-- Rebinding (saved for the player; the test's save directory) and prompts.
+	local names = wpe.input_actions()
+	assert(table.find(names, "jump") and table.find(names, "move_x"))
+	local jump = wpe.get_bindings("jump")
+	assert(jump[1].key == "space" and jump[2].pad_button == "south")
+	wpe.set_bindings("jump", { { key = "k" }, { pad_axis = "right_trigger" }, { pad_axis = "left_y", range = "negative", scale = -1 } })
+	local now = wpe.get_bindings("jump")
+	assert(now[1].key == "k" and now[2].pad_axis == "right_trigger" and now[3].range == "negative" and now[3].scale == -1)
+	assert(wpe.get_bindings("jump", true)[1].key == "space") -- the project's stay the defaults
+	assert(not pcall(wpe.set_bindings, "jump", { { key = "k", pad_button = "south" } })) -- one source only
+	assert(not pcall(wpe.set_bindings, "jump", { { button = "k" } }))
+	assert(not pcall(wpe.set_bindings, "jump", { { key = "k", range = "positive" } })) -- axes only
+	assert(wpe.get_bindings("jump")[1].key == "k") -- a failed call changes nothing
+	if wpe.input_device(4) == "keyboard" then -- player 4 has no pad (normally): keyboard prompts
+		local label, binding = wpe.action_prompt("jump", 4)
+		assert(label == "K" and binding.key == "k")
+	end
+	wpe.reset_bindings("jump")
+	assert(wpe.get_bindings("jump")[1].key == "space")
+	wpe.set_bindings("move_x", {})
+	assert(#wpe.get_bindings("move_x") == 0 and wpe.action_prompt("move_x") == nil)
+	wpe.reset_bindings()
+	assert(#wpe.get_bindings("move_x") > 0)
+	if wpe.input_device(4) == "keyboard" then
+		assert(wpe.action_prompt("move_x", 4, -1) == "A" and wpe.action_prompt("move_x", 4, 1) == "D")
+	end
+	local device, style = wpe.input_device()
+	assert((device == "keyboard" and style == nil) or (device == "gamepad" and type(style) == "string"))
+	assert(wpe.binding_label({ key = "space" }) == "Space")
+	assert(wpe.binding_label({ pad_button = "south" }, "playstation") == "Cross")
+	assert(wpe.binding_label({ pad_axis = "left_y", range = "negative" }) == "L Stick Up")
+	assert(not pcall(wpe.binding_label, { pad_button = "south" }, "sega"))
+	wpe.listen_binding("gamepad", 2)
+	assert(wpe.is_listening() and wpe.heard_binding() == nil)
+	wpe.stop_listening()
+	assert(not wpe.is_listening())
+	assert(not pcall(wpe.listen_binding, "joystick"))
+
 	-- Application services: canvas size and the camera rendered from.
 	local width, height = wpe.screen_size()
 	assert(width > 0 and height > 0)
