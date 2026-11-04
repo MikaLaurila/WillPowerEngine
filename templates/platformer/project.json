@@ -10,7 +10,8 @@
     "scale": 3,
     "vsync": true,
     "resizable": true,
-    "fullscreen": false
+    "fullscreen": false,
+    "scaling": "integer"
   },
   "simulation": {
     "fixed_rate": 60,

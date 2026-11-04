@@ -10,6 +10,14 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   `wpe_ui_fit_image_rect`. The element takes its image's (or `source` region's) size times the scale,
   centered where it was, with its anchors in one point (the size stays on any screen) and its corners on whole
   pixels (crisp).
+- `display.scaling` in project.json (`WPE_WindowDesc.scaling`, `WPE_WindowScaling`), how the game's image
+  fills the window or screen: `"integer"` (whole multiples only, with a border around the rest, so every game
+  pixel is the same size on screen; at fractional scales, such as a maximized window, nearest filtering made
+  some pixels wider and thin diagonals and text looked uneven), `"fit"` (the old behaviour: as large as fits,
+  keeping the aspect ratio) or `"stretch"` (fills it all, distorted). With `"integer"`, a window smaller than
+  the resolution still shrinks the image. The editor's viewport scales by whole multiples for `"integer"` and
+  places the image on whole pixels either way. **`"integer"` is the default**, for projects without the key
+  too. Fullscreen is documented as what it always was: borderless on the desktop's mode, never exclusive.
 
 ### Fixed
 - Hidden files and folders (names starting with a dot: `.git/`, `.claude/`, `.vscode/`, `.gitignore`) are no

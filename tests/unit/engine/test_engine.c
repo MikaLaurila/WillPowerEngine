@@ -34,6 +34,7 @@ static void test_engine_project_from_assets(void) {
     WPE_TEST_ASSERT_EQ_STR("scenes/title.scene", p.start_scene);
     WPE_TEST_ASSERT_EQ_STR("fonts/small.png", p.font);
     WPE_TEST_ASSERT(p.width == 320 && p.height == 240 && p.scale == 3 && p.vsync && !p.fullscreen);
+    WPE_TEST_ASSERT(p.scaling == WPE_WINDOW_SCALING_INTEGER);
     WPE_TEST_ASSERT_NEAR(60.0, p.fixed_rate, 0.0);
     WPE_TEST_ASSERT_NEAR(0.7, p.volumes[WPE_AUDIO_BUS_MUSIC], 1e-6);
     WPE_TEST_ASSERT_EQ_UINT(0, p.input.keyboard_player); /* "1" in the file: players are 1-based there. */
@@ -71,6 +72,8 @@ static void test_engine_project_rejects_mistakes(void) {
          WPE_RESULT_ERROR_PARSE},
         {"{\"format\": \"wpe.project\", \"version\": 1, \"display\": {\"width\": 320.5}}",
          WPE_RESULT_ERROR_PARSE},
+        {"{\"format\": \"wpe.project\", \"version\": 1, \"display\": {\"scaling\": \"zoom\"}}",
+         WPE_RESULT_ERROR_PARSE},
         {"{\"format\": \"wpe.project\", \"version\": 1, \"input\": {\"actions\": {\"a\": [{\"key\": "
          "\"space\", "
          "\"pad_button\": \"a\"}]}}}",
@@ -106,6 +109,12 @@ static void test_engine_project_rejects_mistakes(void) {
     const char* minimal = "{\"format\": \"wpe.project\", \"version\": 1}";
     WPE_TEST_ASSERT_OK(wpe_project_parse(minimal, strlen(minimal), NULL, &p));
     WPE_TEST_ASSERT_EQ_UINT(320, p.width);
+    WPE_TEST_ASSERT(p.scaling ==
+                    WPE_WINDOW_SCALING_INTEGER); /* Pixel-exact unless a project says otherwise. */
+    const char* stretching =
+        "{\"format\": \"wpe.project\", \"version\": 1, \"display\": {\"scaling\": \"stretch\"}}";
+    WPE_TEST_ASSERT_OK(wpe_project_parse(stretching, strlen(stretching), NULL, &p));
+    WPE_TEST_ASSERT(p.scaling == WPE_WINDOW_SCALING_STRETCH);
 }
 
 static char* write_project_text(const WPE_ProjectSettings* p, WPE_JsonWriter** out_writer) {

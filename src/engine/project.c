@@ -8,6 +8,9 @@
 #include "engine/json_read.h"
 
 static const char* const wpe__axis_ranges[] = {"full", "positive", "negative"};
+/* In WPE_WindowScaling order. */
+static const char* const wpe__scalings[] = {"fit", "integer", "stretch"};
+static_assert(WPE_WINDOW_SCALING_STRETCH == 2, "wpe__scalings follows WPE_WindowScaling");
 
 void wpe_project_settings_default(WPE_ProjectSettings* out) {
     if (!out) return;
@@ -18,6 +21,7 @@ void wpe_project_settings_default(WPE_ProjectSettings* out) {
     out->scale = 3;
     out->vsync = true;
     out->resizable = true;
+    out->scaling = WPE_WINDOW_SCALING_INTEGER;
     out->fixed_rate = 60.0;
     out->max_steps = 8;
     for (uint32_t i = 0; i < WPE_AUDIO_BUS_COUNT; ++i)
@@ -178,15 +182,18 @@ static bool wpe__parse_project(wpe__JsonReader* r, const WPE_JsonValue* root, WP
                               "\"font\" must be an asset path");
 
     const WPE_JsonValue* display = wpe_json_get(root, "display");
+    uint32_t scaling = (uint32_t)out->scaling;
     if (display && (!WPE__JSON_CHECK_OBJECT(r, display, "display", "width", "height", "scale", "vsync",
-                                            "resizable", "fullscreen") ||
+                                            "resizable", "fullscreen", "scaling") ||
                     !wpe__json_read_uint(r, display, "width", 16, 4096, &out->width) ||
                     !wpe__json_read_uint(r, display, "height", 16, 4096, &out->height) ||
                     !wpe__json_read_uint(r, display, "scale", 1, 16, &out->scale) ||
                     !wpe__json_read_bool(r, display, "vsync", &out->vsync) ||
                     !wpe__json_read_bool(r, display, "resizable", &out->resizable) ||
-                    !wpe__json_read_bool(r, display, "fullscreen", &out->fullscreen)))
+                    !wpe__json_read_bool(r, display, "fullscreen", &out->fullscreen) ||
+                    !wpe__json_read_enum(r, display, "scaling", wpe__scalings, 3, &scaling)))
         return false;
+    out->scaling = (WPE_WindowScaling)scaling;
     const WPE_JsonValue* simulation = wpe_json_get(root, "simulation");
     if (simulation && (!WPE__JSON_CHECK_OBJECT(r, simulation, "simulation", "fixed_rate", "max_steps") ||
                        !wpe__json_read_double(r, simulation, "fixed_rate", 1.0, 1000.0, &out->fixed_rate) ||
@@ -373,6 +380,7 @@ WPE_Result wpe_project_write(const WPE_ProjectSettings* s, WPE_JsonWriter* w) {
     wpe__key_bool(w, "vsync", s->vsync);
     wpe__key_bool(w, "resizable", s->resizable);
     wpe__key_bool(w, "fullscreen", s->fullscreen);
+    wpe__key_string(w, "scaling", wpe__scalings[s->scaling]);
     wpe_json_write_object_end(w);
     wpe_json_write_key(w, "simulation");
     wpe_json_write_object_begin(w);

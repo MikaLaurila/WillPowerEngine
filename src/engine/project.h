@@ -9,10 +9,12 @@
  * {
  *   "format": "wpe.project", "version": 1,
  *   "name": "My Game", "start_scene": "scenes/level1.scene", "font": "fonts/small.png",
- *   "display": {"width": 320, "height": 240, "scale": 3, "vsync": true, "resizable": true, "fullscreen":
- * false}, "simulation": {"fixed_rate": 60, "max_steps": 8}, "assets": {"max_texture_size": 256}, "audio":
- * {"master": 1, "effects": 1, "music": 0.8, "voice": 1, "duck_volume": 0.35, "duck_attack": 0.15,
- * "duck_release": 0.6}, "scripting": {"memory_limit_mb": 64, "time_limit_ms": 250},
+ *   "display": {"width": 320, "height": 240, "scale": 3, "vsync": true, "resizable": true,
+ *               "fullscreen": false, "scaling": "integer"},
+ *   "simulation": {"fixed_rate": 60, "max_steps": 8}, "assets": {"max_texture_size": 256},
+ *   "audio": {"master": 1, "effects": 1, "music": 0.8, "voice": 1, "duck_volume": 0.35,
+ *             "duck_attack": 0.15, "duck_release": 0.6},
+ *   "scripting": {"memory_limit_mb": 64, "time_limit_ms": 250},
  *   "prefabs": {"crate": "meshes/crate.prim", "figure": "meshes/RiggedFigure.glb"},
  *   "network": {"port": 47810, "discovery_port": 47809, "max_players": 4, "timeout_ms": 5000,
  *               "tick_rate": 30, "interpolation_ms": 100},
@@ -32,7 +34,7 @@
  *
  * The player's changed bindings live beside their saved data (WPE_BINDINGS_FILE, wpe_bindings_parse).
  *
- * - Dependencies: core (JSON), vfs, input, audio
+ * - Dependencies: core (JSON), vfs, input, audio, platform (WPE_WindowScaling)
  * - Thread affinity: any thread
  *
  * @author WillPowerEngine Team
@@ -47,6 +49,7 @@
 #include "core/result.h"
 #include "input/input.h"
 #include "network/network.h"
+#include "platform/platform.h"
 #include "vfs/vfs.h"
 
 #define WPE_PROJECT_FORMAT_VERSION 1u
@@ -78,6 +81,7 @@ typedef struct WPE_ProjectSettings {
     uint32_t width, height;             /* Framebuffer resolution (16..4096). */
     uint32_t scale;                     /* Initial window size multiplier (1..16). */
     bool vsync, resizable, fullscreen;
+    WPE_WindowScaling scaling;          /* "integer" (default), "fit" or "stretch" (WPE_WindowScaling). */
     double fixed_rate;                  /* Simulation steps per second (1..1000). */
     uint32_t max_steps;                 /* Fixed steps per frame before the clock drops time (1..64). */
     uint32_t max_texture_size;          /* Model texture cap (0 = original size). */

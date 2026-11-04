@@ -398,7 +398,8 @@ static WPE_Result wpe__create_graphics(WPE_Engine* engine, const WPE_EngineDesc*
                                                      .height = p->height * p->scale,
                                                      .resizable = p->resizable,
                                                      .vsync = p->vsync,
-                                                     .fullscreen = p->fullscreen},
+                                                     .fullscreen = p->fullscreen,
+                                                     .scaling = p->scaling},
                                    &engine->window);
         if (result == WPE_RESULT_OK) wpe_window_set_event_handler(engine->window, wpe__on_event, engine);
     }

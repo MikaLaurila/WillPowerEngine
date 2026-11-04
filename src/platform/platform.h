@@ -34,18 +34,30 @@ typedef struct WPE_PlatformRenderer WPE_PlatformRenderer;
 /** Receives each event read by the pump; `event` is valid only during the call. */
 typedef void (*WPE_PlatformEventFn)(const WPE_PlatformEvent* event, void* user_data);
 
+/** How a presented framebuffer fills the window (always nearest-filtered). */
+typedef enum WPE_WindowScaling {
+    /* As large as fits, keeping the aspect ratio; the rest is border. Fractional scales make some
+     * pixels a screen pixel wider than others. */
+    WPE_WINDOW_SCALING_FIT = 0,
+    /* Like FIT, but by whole multiples only (2x, 3x...), so every pixel is the same size; a window smaller
+     * than the framebuffer falls back to FIT. */
+    WPE_WINDOW_SCALING_INTEGER,
+    /* Fills the whole window, distorting the aspect ratio. */
+    WPE_WINDOW_SCALING_STRETCH,
+} WPE_WindowScaling;
+
 typedef struct WPE_WindowDesc {
     const char* title; /* Required; copied by SDL. */
     uint32_t width;    /* Initial client size in pixels. */
     uint32_t height;
     bool resizable;
     bool vsync;
-    bool fullscreen; /* Fullscreen on the current display (the framebuffer is letterboxed). */
+    bool fullscreen; /* Borderless fullscreen on the current display (the desktop's mode, never exclusive). */
+    WPE_WindowScaling scaling;
 } WPE_WindowDesc;
 
 /**
- * Opens a window that can present WPE_Framebuffers (scaled with nearest filtering and letterboxed
- * to preserve the framebuffer's aspect ratio).
+ * Opens a window that can present WPE_Framebuffers (scaled with nearest filtering as `scaling` says).
  *
  * @param out_window Receives the window; owned by the caller, release with wpe_window_destroy().
  * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_INVALID_ARG,

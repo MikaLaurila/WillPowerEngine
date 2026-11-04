@@ -25,6 +25,8 @@ struct WPE_Window {
     SDL_Texture* texture;
     uint32_t texture_width;
     uint32_t texture_height;
+    SDL_RendererLogicalPresentation presentation; /* In effect; DISABLED until the first present. */
+    WPE_WindowScaling scaling;
     bool quit_requested;
     WPE_PlatformEventFn event_fn;
     void* event_user_data;
@@ -54,6 +56,8 @@ WPE_Result wpe_window_create(const WPE_WindowDesc* desc, WPE_Window** out_window
         return WPE_RESULT_ERROR_OUT_OF_MEMORY;
     }
 
+    /* SDL_WINDOW_FULLSCREEN without SDL_SetWindowFullscreenMode is borderless on the desktop's mode, which
+     * we keep: no mode switch, and alt-tab stays instant. */
     const SDL_WindowFlags flags =
         (desc->resizable ? SDL_WINDOW_RESIZABLE : 0) | (desc->fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
     if (!SDL_CreateWindowAndRenderer(desc->title, (int)desc->width, (int)desc->height, flags, &window->window,
@@ -66,6 +70,7 @@ WPE_Result wpe_window_create(const WPE_WindowDesc* desc, WPE_Window** out_window
     if (desc->vsync && !SDL_SetRenderVSync(window->renderer, 1)) {
         wpe_log_warn("vsync unavailable: %s", SDL_GetError());
     }
+    window->scaling = desc->scaling;
 
     *out_window = window;
     return WPE_RESULT_OK;
@@ -180,10 +185,24 @@ WPE_Result wpe_window_present(WPE_Window* window, const WPE_Framebuffer* framebu
             return WPE_RESULT_ERROR;
         }
         SDL_SetTextureScaleMode(window->texture, SDL_SCALEMODE_NEAREST);
-        SDL_SetRenderLogicalPresentation(window->renderer, (int)framebuffer->width, (int)framebuffer->height,
-                                         SDL_LOGICAL_PRESENTATION_LETTERBOX);
         window->texture_width = framebuffer->width;
         window->texture_height = framebuffer->height;
+        window->presentation = SDL_LOGICAL_PRESENTATION_DISABLED;
+    }
+    /* Whole multiples only while at least 1x fits: SDL's integer mode would crop a smaller window. */
+    SDL_RendererLogicalPresentation presentation = window->scaling == WPE_WINDOW_SCALING_STRETCH
+                                                       ? SDL_LOGICAL_PRESENTATION_STRETCH
+                                                       : SDL_LOGICAL_PRESENTATION_LETTERBOX;
+    int output_w = 0, output_h = 0;
+    if (window->scaling == WPE_WINDOW_SCALING_INTEGER &&
+        SDL_GetCurrentRenderOutputSize(window->renderer, &output_w, &output_h) &&
+        output_w >= (int)framebuffer->width && output_h >= (int)framebuffer->height) {
+        presentation = SDL_LOGICAL_PRESENTATION_INTEGER_SCALE;
+    }
+    if (presentation != window->presentation) {
+        SDL_SetRenderLogicalPresentation(window->renderer, (int)framebuffer->width, (int)framebuffer->height,
+                                         presentation);
+        window->presentation = presentation;
     }
 
     if (!SDL_UpdateTexture(window->texture, NULL, framebuffer->color,

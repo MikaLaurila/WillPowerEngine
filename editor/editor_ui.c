@@ -2954,10 +2954,19 @@ static void wpe__ui_viewport(WPE_EditorUi* ui) {
         h = avail.y;
         w = h * aspect;
     }
+    /* Like the game's window: whole multiples when the project asks and at least 1x fits (a stretching
+     * project is shown fitted: distorting the editor's view would help no one). */
+    const float whole = ui->view_width > 0 ? floorf(w / (float)ui->view_width) : 0.0f;
+    if (wpe_engine_project(wpe_editor_engine(ui->editor))->scaling == WPE_WINDOW_SCALING_INTEGER &&
+        whole >= 1.0f) {
+        w = whole * (float)ui->view_width;
+        h = whole * (float)ui->view_height;
+    }
     w = w < 1 ? 1 : w;
     h = h < 1 ? 1 : h;
-    ui->image_x = origin.x + (avail.x - w) * 0.5f;
-    ui->image_y = origin.y + (avail.y - h) * 0.5f;
+    /* On whole pixels, so the nearest-filtered image doesn't shift by half a pixel. */
+    ui->image_x = floorf(origin.x + (avail.x - w) * 0.5f);
+    ui->image_y = floorf(origin.y + (avail.y - h) * 0.5f);
     ui->image_w = w;
     ui->image_h = h;
     igSetCursorScreenPos((ImVec2_c){ui->image_x, ui->image_y});

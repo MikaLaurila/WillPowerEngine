@@ -94,7 +94,7 @@ The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which t
   "name": "WillPowerEngine Demo",
   "start_scene": "scenes/title.scene",
   "font": "fonts/small.png",
-  "display": {"width": 320, "height": 240, "scale": 3, "vsync": true, "resizable": true, "fullscreen": false},
+  "display": {"width": 320, "height": 240, "scale": 3, "vsync": true, "resizable": true, "fullscreen": false, "scaling": "integer"},
   "simulation": {"fixed_rate": 60, "max_steps": 8},
   "assets": {"max_texture_size": 256},
   "audio": {"master": 1, "effects": 1, "music": 0.7},
@@ -110,7 +110,7 @@ The runtime is a thin shell around `WPE_Engine` (`src/engine/engine.h`), which t
 | `name` | Window title. |
 | `start_scene` | Scene loaded at startup (asset path; empty starts with an empty world). |
 | `font` | Bitmap font sheet for text: UI texts without a font of their own and `wpe.draw_text` (optional). Without it, or when the file is missing (a warning), the engine uses its built-in font, `assets/fonts/small.png` compiled in. |
-| `display` | `width` × `height`: the framebuffer resolution (16..4096). `scale`: the initial window size multiplier. Also `vsync`, `resizable`, `fullscreen`. The image is scaled with nearest filtering and letterboxed. |
+| `display` | `width` × `height`: the framebuffer resolution (16..4096). `scale`: the initial window size multiplier. Also `vsync`, `resizable`, and `fullscreen` (borderless, on the desktop's own mode: no mode switch, instant alt-tab). `scaling` says how the image (nearest-filtered) fills the window or screen: `"integer"` (the default) by whole multiples only (2×, 3×, …), keeping the aspect ratio, with a border around the rest, so every game pixel is the same size on screen; `"fit"` as large as fits, keeping the aspect ratio (on a wider screen it fills the height, with bars at the sides), but at a fractional scale (a maximized or dragged window) some pixels are a screen pixel wider than others, which shows on thin diagonals and text; `"stretch"` fills the whole window, distorting the image. With `"integer"`, a window smaller than the resolution shrinks the image like `"fit"`. The editor's viewport scales by whole multiples too for `"integer"`, and fits otherwise. |
 | `simulation` | `fixed_rate`: fixed steps per second. `max_steps`: fixed steps per frame before time is dropped, which avoids a spiral of death. |
 | `assets` | `max_texture_size` caps model textures (0 = original size). Larger ones are halved until they fit, averaging the texels, except pixel art: textures whose glTF sampler minifies with `NEAREST` (e.g. `NEAREST_MIPMAP_NEAREST`) take the texel in the middle of each block instead (for their mip levels too), so they keep their painted colors and hard edges. For textures that should be crisp up close but calm far away (water, grass), use `NEAREST` magnification with `LINEAR_MIPMAP_LINEAR` minification: their mips are averaged, so distant surfaces don't sparkle. |
 | `audio` | Bus volumes: `master`, `effects`, `music` and `voice` (dialogue). Ducking, how the music makes room for voice lines and other ducking sounds: `duck_volume` (its volume while ducked, 0..1, default 0.35), `duck_attack` (seconds to go down, 0.15) and `duck_release` (seconds to come back after the last one ends, 0.6). Scripts can change them (`wpe.set_ducking`). |
