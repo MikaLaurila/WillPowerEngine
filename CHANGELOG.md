@@ -4,6 +4,14 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-04
+
+The first release: a C23 software-rasterizer engine for Windows and Linux with scenes, glTF models and
+skinned animation, lighting and post-processing, Luau scripting, Box3D physics, audio, `.pak` archives,
+export to a standalone game, input with rebinding, an editor driven by people and agents alike, LAN
+multiplayer, navigation, a profiler, nine game templates, and a Claude skill that ships with every project.
+Everything below, down to the first milestone, is in it.
+
 ### Added (v1.0: the Claude skill in game projects)
 - New projects (`wpe_editor <dir> --init`, `wpe_project_create`) get the `willpowerengine` Claude skill in
   `.claude/skills/willpowerengine/`, with `references/` holding the docs it points to (scripting, scenes,

@@ -24,7 +24,7 @@ Development runs in milestones; the user reviews each one before the next starts
 11. Networking (done): 11.1 transport → 11.2 serialization → 11.3 session + LAN discovery → 11.4 replication → 11.5 Luau API → 11.6 runtime/editor → 11.7 `racing_online` template
 12. Navigation (done): 12.1 nav grid built from static colliders (our own 2.5D multi-layer grid, not Recast; done) → 12.2 pathfinding (A*, smoothing, flow fields; done) → 12.3 agents, obstacles, Luau API, `docs/navigation.md` (done) → 12.4 editor (done) → 12.5 stealth/arena enemy template + a `willpowerengine` skill (done)
 
-**Toward v1.0.0** (items the user has agreed to, in this order; v1.0.0 is released when the list is done):
+**v1.0.0** (released 2026-11-04, tag `v1.0.0`; `project(VERSION)` in CMakeLists.txt; the items that made it, all done). After it the user starts their own games (a 2.5D Metroid-style port from the platformer, an online arcade racer from racing_online) and engine work follows what they need; add new changes under `## [Unreleased]` in CHANGELOG.md:
 1. A UI text-input field (typing, cursor, selection, a submit event to scripts); `racing_online`'s menu uses it instead of scanning keys. (done)
 2. Runtime input rebinding (a script and a settings screen pick a new key/button for an action, saved with the player's data) and device prompts (show the right key or pad button for an action, following the device last used). (done: the platformer's pause menu has the controls screen)
 3. Music: position (read and seek a playing track) and ducking (music drops under chosen sounds, such as dialogue, and comes back). (done: plus a voice bus)
