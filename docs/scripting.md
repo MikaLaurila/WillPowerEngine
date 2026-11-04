@@ -32,6 +32,9 @@ end
 function Spinner:on_click()                 -- UI: this entity's button was clicked
 end
 
+function Spinner:on_focus()                 -- UI: this entity's button got the focus (also on_blur: lost it)
+end
+
 function Spinner:on_nav_arrived()           -- navigation: this agent reached its destination (also on_nav_failed)
 end
 
@@ -74,6 +77,7 @@ When a scene is saved, each property is written with its current value, so a scr
   - Collision and trigger callbacks run after each physics step, for both entities involved (each gets the other as `other`). A trigger's own script and the visiting entity's script both get `on_trigger_enter`/`on_trigger_exit`.
   - `on_nav_arrived` and `on_nav_failed` run on an agent's own script after the fixed step in which it got there (or got as near as it could).
   - `on_click` runs at the start of the frame, before the fixed steps and `on_update`, for each button clicked by that frame's input (on the button entity's own script).
+  - `on_blur` and `on_focus` run just before that, when the focus moved since the last frame: `on_blur` on the button that lost it, then `on_focus` on the one that has it now (a click on another button focuses it before clicking it). Whatever moved it counts: the mouse, navigation, `wpe.ui_focus` (reported at the start of the next frame) or the focused button being hidden, disabled or destroyed (only `on_blur` then). Use them for highlights, sounds or a description of the focused entry.
 - **Changing the world:** scripts may spawn, modify and destroy entities freely during `on_start`, `on_update` and `on_fixed_update`. `wpe.destroy` is deferred: the entity and its children are destroyed at the end of the current update.
 - **Inside `on_destroy`:** you may read and modify components and call `wpe.destroy`. Spawning, attaching scripts, adding/removing lights or physics components and reparenting raise errors there. When the entity is being despawned, its physics body is already gone.
 - **Errors:** an error in a callback is logged with a stack trace, and that instance is disabled until its script is reloaded. Other scripts keep running.

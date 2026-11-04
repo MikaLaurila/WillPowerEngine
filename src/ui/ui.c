@@ -51,10 +51,12 @@ struct WPE_Ui {
     wpe__Line* lines;     /* Scratch for text. */
     uint32_t line_capacity;
     WPE_Entity focus;
-    WPE_Entity mouse_target;  /* The button the left mouse button went down on. */
-    WPE_Entity submit_target; /* The button the submit input went down on. */
-    WPE_Entity pressed;       /* Drawn pressed. */
-    wpe__Direction held;      /* Navigation direction held, and time until it repeats. */
+    WPE_Entity reported_focus;           /* The focus as the last update reported it. */
+    WPE_Entity lost_focus, gained_focus; /* The last update's change (NULL, NULL: none). */
+    WPE_Entity mouse_target;             /* The button the left mouse button went down on. */
+    WPE_Entity submit_target;            /* The button the submit input went down on. */
+    WPE_Entity pressed;                  /* Drawn pressed. */
+    wpe__Direction held;                 /* Navigation direction held, and time until it repeats. */
     float repeat_timer;
 };
 
@@ -685,13 +687,33 @@ static WPE_Entity wpe__mouse_input(WPE_Ui* ui) {
     return hovered;
 }
 
+static void wpe__interact(WPE_Ui* ui, float dt);
+
 WPE_Result wpe_ui_update(WPE_Ui* ui, uint32_t width, uint32_t height, float dt) {
     if (!ui) return WPE_RESULT_ERROR_NULL_ARG;
     ui->click_count = 0;
     ui->change_count = 0;
     ui->submit_count = 0;
+    ui->lost_focus = ui->gained_focus = WPE_ENTITY_NULL;
     const WPE_Result result = wpe_ui_layout(ui, width, height);
     if (result != WPE_RESULT_OK) return result;
+    wpe__interact(ui, dt);
+    /* Whatever moved the focus since the last report (the player, wpe_ui_focus(), a button going away). */
+    if (ui->focus != ui->reported_focus) {
+        ui->lost_focus = ui->reported_focus;
+        ui->gained_focus = ui->focus;
+        ui->reported_focus = ui->focus;
+    }
+    return WPE_RESULT_OK;
+}
+
+bool wpe_ui_focus_change(const WPE_Ui* ui, WPE_Entity* out_lost, WPE_Entity* out_gained) {
+    if (out_lost) *out_lost = ui ? ui->lost_focus : WPE_ENTITY_NULL;
+    if (out_gained) *out_gained = ui ? ui->gained_focus : WPE_ENTITY_NULL;
+    return ui && ui->lost_focus != ui->gained_focus;
+}
+
+static void wpe__interact(WPE_Ui* ui, float dt) {
     /* A field that went away, hid or lost the focus stops editing. */
     if (ui->editing != WPE_ENTITY_NULL &&
         (!wpe__focusable(ui, ui->editing) || !wpe__field(ui, ui->editing) || ui->focus != ui->editing))
@@ -703,7 +725,7 @@ WPE_Result wpe_ui_update(WPE_Ui* ui, uint32_t width, uint32_t height, float dt) 
     if (ui->submit_target != WPE_ENTITY_NULL && !wpe__focusable(ui, ui->submit_target))
         ui->submit_target = WPE_ENTITY_NULL;
     ui->pressed = WPE_ENTITY_NULL;
-    if (!ui->input) return WPE_RESULT_OK;
+    if (!ui->input) return;
     const WPE_Entity hovered = wpe__mouse_input(ui);
     /* A slider pressed with the mouse follows it until the button is let go, even off the slider. */
     WPE_Slider* dragged = ui->mouse_target != WPE_ENTITY_NULL
@@ -732,7 +754,6 @@ WPE_Result wpe_ui_update(WPE_Ui* ui, uint32_t width, uint32_t height, float dt) 
                wpe_input_mouse_down(ui->input, WPE_MOUSE_LEFT)) {
         ui->pressed = ui->mouse_target;
     }
-    return WPE_RESULT_OK;
 }
 
 const WPE_Entity* wpe_ui_clicks(const WPE_Ui* ui, uint32_t* out_count) {

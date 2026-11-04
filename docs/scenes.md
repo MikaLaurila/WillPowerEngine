@@ -166,7 +166,7 @@ With both anchors at the same point the element keeps its size (`offset_max - of
 - **Keyboard and gamepad:** the arrow keys, the D-pad and the left stick move the focus to the nearest button in that direction (holding one repeats). Return, Space or the pad's south button (A / Cross) click the focused button. When nothing has the focus, the first of these inputs focuses the first button.
 - **Rebinding:** input actions named `ui_up`, `ui_down`, `ui_left`, `ui_right` or `ui_submit` in `project.json` replace that input's defaults.
 
-A click calls `on_click` on the button entity's script; scripts can also move the focus (`wpe.ui_focus`), see [scripting.md](scripting.md#ui). The UI reacts only while the game runs (not in the editor's edit mode).
+A click calls `on_click` on the button entity's script, and the focus moving calls `on_blur` on the button that lost it and `on_focus` on the one that got it (to show only the focused entry's background, set its sprite's alpha there with `wpe.set_sprite_color`: the button's tints would hide its label too). Scripts can also move the focus (`wpe.ui_focus`), see [scripting.md](scripting.md#ui). The UI reacts only while the game runs (not in the editor's edit mode).
 
 **Toggles and sliders.** Add a `toggle` or a `slider` to a button for an on/off switch or a value. Each change calls `on_change(value)` on the entity's script.
 

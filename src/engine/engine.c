@@ -1229,7 +1229,16 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
     /* The UI reacts to this frame's input first, so scripts see its clicks in this frame. */
     WPE_Result result =
         wpe_ui_update(engine->ui, engine->project.width, engine->project.height, (float)real_dt);
-    /* Changes first (a toggle's click flips it), each with the new value. */
+    /* The focus first (a click on another button moves it there before clicking): the old one hears it
+     * left, then the new one that it came. */
+    WPE_Entity lost_focus, gained_focus;
+    if (result == WPE_RESULT_OK && wpe_ui_focus_change(engine->ui, &lost_focus, &gained_focus)) {
+        if (lost_focus != WPE_ENTITY_NULL)
+            result = wpe_script_host_notify(engine->scripts, lost_focus, "on_blur");
+        if (result == WPE_RESULT_OK && gained_focus != WPE_ENTITY_NULL)
+            result = wpe_script_host_notify(engine->scripts, gained_focus, "on_focus");
+    }
+    /* Changes next (a toggle's click flips it), each with the new value. */
     uint32_t changes = 0;
     const WPE_Entity* changed = wpe_ui_changes(engine->ui, &changes);
     for (uint32_t i = 0; i < changes && result == WPE_RESULT_OK; ++i) {

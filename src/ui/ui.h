@@ -33,7 +33,8 @@
  * nothing has the focus, the first navigation input focuses the first button. Projects can rebind
  * navigation with input actions named "ui_up", "ui_down", "ui_left", "ui_right" and "ui_submit";
  * an action with one of those names replaces that input's defaults. Clicks are collected for the
- * application (wpe_ui_clicks()); the engine passes them to scripts as on_click.
+ * application (wpe_ui_clicks()); the engine passes them to scripts as on_click. Focus changes are
+ * reported too (wpe_ui_focus_change(); on_blur and on_focus).
  *
  * Text fields: clicking one, or submitting it (Return, Space, the pad's south button), starts editing it.
  * While it edits, the keyboard types: printable characters (filtered as the field says), Backspace and
@@ -241,6 +242,21 @@ const WPE_Entity* wpe_ui_clicks(const WPE_Ui* ui, uint32_t* out_count);
 /** @return The toggles and sliders whose value the player changed in the last wpe_ui_update(), each
  * once, in order (borrowed until the next update). @thread_safety Main thread */
 const WPE_Entity* wpe_ui_changes(const WPE_Ui* ui, uint32_t* out_count);
+
+/**
+ * How the focus moved since the update before the last wpe_ui_update(), whatever moved it: the player,
+ * wpe_ui_focus() (reported by the next update), or the focused button being removed, hidden or disabled.
+ * The engine passes it to scripts as on_blur on the button that lost it, then on_focus on the one that
+ * gained it.
+ *
+ * @param out_lost Receives the button that lost the focus (WPE_ENTITY_NULL: none, or no change); it may have
+ *        been despawned since.
+ * @param out_gained Receives the button that has it now (WPE_ENTITY_NULL: none, or no change).
+ * @return Whether the focus changed.
+ *
+ * @thread_safety Main thread
+ */
+bool wpe_ui_focus_change(const WPE_Ui* ui, WPE_Entity* out_lost, WPE_Entity* out_gained);
 
 /** @return The text fields submitted (Return) in the last wpe_ui_update(), in order (borrowed until the next
  * update). @thread_safety Main thread */

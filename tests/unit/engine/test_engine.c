@@ -855,17 +855,25 @@ static void write_menu_game(void) {
                "  {\"id\": 2, \"name\": \"label\", \"ui\": {\"anchor_min\": [0, 1], \"offset_min\": [0, "
                "-18], \"offset_max\": [0, -8]},\n"
                "   \"text\": {\"text\": \"none\"}}]}\n");
-    write_text(ROOT "/menu/scripts/start.luau",
-               "local S = {}\n"
-               "function S:on_start() self.clicks = 0; self.label = wpe.find('label') end\n"
-               "-- It's a toggle too: on_change comes first, with the new value.\n"
-               "function S:on_change(on) self.on = on; assert(wpe.ui_value(self.entity) == on) end\n"
-               "function S:on_click()\n"
-               "  self.clicks += 1\n"
-               "  assert(wpe.ui_focused() == self.entity)\n"
-               "  wpe.set_text(self.label, 'clicks ' .. self.clicks .. ' ' .. tostring(self.on))\n"
-               "end\n"
-               "return S\n");
+    write_text(
+        ROOT "/menu/scripts/start.luau",
+        "local S = {}\n"
+        "function S:on_start() self.clicks = 0; self.focus = ''; self.label = wpe.find('label') end\n"
+        "-- It's a toggle too: on_change comes first, with the new value.\n"
+        "function S:on_change(on) self.on = on; assert(wpe.ui_value(self.entity) == on) end\n"
+        "function S:show()\n"
+        "  wpe.set_text(self.label, 'clicks ' .. self.clicks .. ' ' .. tostring(self.on) .. ' ' .. "
+        "self.focus)\n"
+        "end\n"
+        "function S:on_click()\n"
+        "  self.clicks += 1\n"
+        "  assert(wpe.ui_focused() == self.entity)\n"
+        "  self:show()\n"
+        "end\n"
+        "-- Focus events: + gained, - lost.\n"
+        "function S:on_focus() assert(wpe.ui_focused() == self.entity); self.focus ..= '+'; self:show() end\n"
+        "function S:on_blur() self.focus ..= '-'; self:show() end\n"
+        "return S\n");
 }
 
 static void send_event(WPE_Engine* engine, SDL_Event e) {
@@ -914,7 +922,8 @@ static void test_engine_ui_clicks_reach_scripts(void) {
     button.button.down = false;
     send_event(engine, button);
     WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
-    WPE_TEST_ASSERT_EQ_STR("clicks 1 true",
+    /* The mouse moving onto the button focused it, once. */
+    WPE_TEST_ASSERT_EQ_STR("clicks 1 true +",
                            ((const WPE_Text*)wpe_ecs_get_component(ecs, label, WPE_COMP_TEXT))->text);
 
     /* Return clicks the focused button. */
@@ -926,15 +935,27 @@ static void test_engine_ui_clicks_reach_scripts(void) {
     key.key.down = false;
     send_event(engine, key);
     WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
-    WPE_TEST_ASSERT_EQ_STR("clicks 2 false",
+    WPE_TEST_ASSERT_EQ_STR("clicks 2 false +",
                            ((const WPE_Text*)wpe_ecs_get_component(ecs, label, WPE_COMP_TEXT))->text);
-    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(wpe_engine_scripts(engine)).errors);
+
+    /* A script moving the focus is reported by the next frame: away (on_blur), back (on_focus). */
+    WPE_ScriptHost* scripts = wpe_engine_scripts(engine);
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(scripts, "blur", "assert(wpe.ui_focus(nil))"));
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    WPE_TEST_ASSERT_EQ_STR("clicks 2 false +-",
+                           ((const WPE_Text*)wpe_ecs_get_component(ecs, label, WPE_COMP_TEXT))->text);
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0)); /* No change, no event. */
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(scripts, "focus", "assert(wpe.ui_focus(wpe.find('start')))"));
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
+    WPE_TEST_ASSERT_EQ_STR("clicks 2 false +-+",
+                           ((const WPE_Text*)wpe_ecs_get_component(ecs, label, WPE_COMP_TEXT))->text);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(scripts).errors);
 
     /* In edit mode the UI is drawn but does not react; the editor's 3D view hides it. */
     wpe_engine_set_simulating(engine, false);
     send_event(engine, key);
     WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 30.0));
-    WPE_TEST_ASSERT_EQ_STR("clicks 2 false",
+    WPE_TEST_ASSERT_EQ_STR("clicks 2 false +-+",
                            ((const WPE_Text*)wpe_ecs_get_component(ecs, label, WPE_COMP_TEXT))->text);
     WPE_TEST_ASSERT(wpe_engine_draws_ui(engine));
     wpe_engine_set_draw_ui(engine, false);

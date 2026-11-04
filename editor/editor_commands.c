@@ -356,7 +356,7 @@ static WPE_Result wpe__cmd_write_file(wpe__Call* call) {
 const wpe__ScriptTemplate wpe__editor_script_templates[WPE__EDITOR_SCRIPT_TEMPLATES] = {
     {"behavior", "An entity's behavior: properties, on_start and on_update"},
     {"physics", "Collision and trigger callbacks"},
-    {"ui", "A button's on_click and a toggle's or slider's on_change"},
+    {"ui", "A button's on_click, on_focus and on_blur, and a toggle's or slider's on_change"},
     {"module", "Shared functions for require()"},
 };
 
@@ -380,8 +380,8 @@ static const char* const wpe__template_texts[] = {
     "end\n"
     "\n"
     "-- More callbacks: on_fixed_update(dt), on_destroy(), on_reload(), on_collision_enter(other),\n"
-    "-- on_trigger_enter(other), on_click(), on_change(value), on_animation_state(state),\n"
-    "-- on_animation_event(name). See docs/scripting.md.\n"
+    "-- on_trigger_enter(other), on_click(), on_change(value), on_focus(), on_blur(),\n"
+    "-- on_animation_state(state), on_animation_event(name). See docs/scripting.md.\n"
     "\n"
     "return $Class\n",
     /* physics */
@@ -413,6 +413,13 @@ static const char* const wpe__template_texts[] = {
     "end\n"
     "\n"
     "function $Class:on_change(value)\n"
+    "end\n"
+    "\n"
+    "-- The button got the focus (the mouse, navigation or wpe.ui_focus), and lost it.\n"
+    "function $Class:on_focus()\n"
+    "end\n"
+    "\n"
+    "function $Class:on_blur()\n"
     "end\n"
     "\n"
     "return $Class\n",

@@ -5,6 +5,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- `on_focus` / `on_blur` script callbacks on UI buttons, whatever moved the focus (mouse, navigation,
+  `wpe.ui_focus`, the focused button hidden, disabled or destroyed): `on_blur` on the old one, then `on_focus`
+  on the new one, before `on_click`. In C, `wpe_ui_focus_change`. The editor's `ui` script template has them.
 - UI images at their own size: the inspector's **Image size** (and **2x**, **3x**) buttons on a sprite, the
   `fit_ui_image` editor command, `wpe.ui_fit_image(entity, [scale])`, and in C `wpe_ui_fit_image` /
   `wpe_ui_fit_image_rect`. The element takes its image's (or `source` region's) size times the scale,

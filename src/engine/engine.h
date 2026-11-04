@@ -11,7 +11,7 @@
  * Frame (wpe_engine_frame()):
  *  1. Input: OS events are pumped into the input module and actions evaluated. A multiplayer
  *     session (wpe_engine_net_start()) takes its events: a player follows the host's scene.
- *  2. Simulation: the UI's focus and clicks (scripts' on_click), fixed steps (scripts'
+ *  2. Simulation: the UI's focus and clicks (scripts' on_blur/on_focus, on_click), fixed steps (scripts'
  *     on_fixed_update, navigation agents, physics, collision callbacks, scripts' on_nav_arrived and
  *     on_nav_failed), then the scripts' on_update, animation,
  *     transforms and audio.

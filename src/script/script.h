@@ -15,6 +15,7 @@
  * function Spinner:on_collision_enter(other) end -- with physics (see below); also
  * function Spinner:on_collision_exit(other) end  -- on_trigger_enter(other) / on_trigger_exit(other)
  * function Spinner:on_click() end -- a UI button on this entity was clicked (see ui/ui.h)
+ * function Spinner:on_focus() end -- it got the UI focus (on_blur: lost it)
  * return Spinner
  * @endcode
  *
