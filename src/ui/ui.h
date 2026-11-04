@@ -204,6 +204,26 @@ void wpe_ui_destroy(WPE_Ui* ui);
 WPE_Result wpe_ui_layout(WPE_Ui* ui, uint32_t width, uint32_t height);
 
 /**
+ * Where a sprite element would sit at its image's own size: the image's (or the sprite's `source` region's)
+ * width and height times `scale`, centered where the element is now (laid out on a screen of the given size).
+ * Both anchors move to one point, the middle of the old ones, so the element keeps that size whatever the
+ * screen; corners land on whole pixels, so the image stays crisp. Nothing changes: see wpe_ui_fit_image().
+ *
+ * @param scale Pixels per texel (1 = the image's own size; 2, 3 for small pixel art); > 0.
+ * @param out_rect The element's rectangle with the new anchors and offsets (visible as it was).
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_INVALID_ARG (scale not > 0);
+ *         WPE_RESULT_ERROR_NOT_FOUND (not a UI element, no sprite, or a sprite without an image; logged);
+ *         WPE_RESULT_ERROR_OUT_OF_MEMORY (the layout).
+ *
+ * @thread_safety Main thread
+ */
+WPE_Result wpe_ui_fit_image_rect(WPE_Ui* ui, WPE_Entity entity, float scale, uint32_t width, uint32_t height,
+                                 WPE_UiRect* out_rect);
+
+/** wpe_ui_fit_image_rect(), applied to the element. @return The same results. @thread_safety Main thread */
+WPE_Result wpe_ui_fit_image(WPE_Ui* ui, WPE_Entity entity, float scale, uint32_t width, uint32_t height);
+
+/**
  * Lays out the UI and runs one frame of interaction from the input's current frame (after
  * wpe_input_update()): focus, navigation, button states and clicks.
  *

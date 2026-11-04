@@ -3844,6 +3844,23 @@ static int wpe__api_set_ui_offsets(lua_State* L) {
     return 0;
 }
 
+/* Sizes a sprite element to its image (times scale), centered where it is (wpe_ui_fit_image). */
+static int wpe__api_ui_fit_image(lua_State* L) {
+    WPE_Ui* ui = wpe__check_ui(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const double scale = luaL_optnumber(L, 2, 1.0);
+    if (!(scale > 0.0 && scale <= 64.0)) luaL_errorL(L, "wpe.ui_fit_image: scale is a number from 0 to 64");
+    wpe__check_ui_part(L, entity, WPE_COMP_UI, "UI rectangle");
+    const WPE_ScriptApp* app = wpe__app(L, wpe__script_host_from(L)->app.screen_size != NULL, "ui_fit_image");
+    uint32_t width = 0, height = 0;
+    app->screen_size(app->user_data, &width, &height);
+    const WPE_Result result = wpe_ui_fit_image(ui, entity, (float)scale, width, height);
+    if (result == WPE_RESULT_ERROR_NOT_FOUND)
+        luaL_errorL(L, "wpe.ui_fit_image: entity 0x%08x has no sprite image", entity);
+    wpe__raise_result(L, "ui_fit_image", result);
+    return 0;
+}
+
 /* The rectangle from the last layout (the frame before, during updates). */
 static int wpe__api_ui_rect(lua_State* L) {
     const WPE_Entity entity = wpe__check_entity(L, 1);
@@ -4130,6 +4147,7 @@ static const luaL_Reg wpe__api[] = {
     {"is_ui_visible", wpe__api_is_ui_visible},
     {"get_ui_offsets", wpe__api_get_ui_offsets},
     {"set_ui_offsets", wpe__api_set_ui_offsets},
+    {"ui_fit_image", wpe__api_ui_fit_image},
     {"ui_rect", wpe__api_ui_rect},
     {"set_interactable", wpe__api_set_interactable},
     {"ui_focus", wpe__api_ui_focus},

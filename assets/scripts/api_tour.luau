@@ -599,6 +599,12 @@ function Tour:on_start()
 	assert(not wpe.ui_focus(button))
 	wpe.set_interactable(button, true)
 	assert(wpe.ui_focus(nil) and wpe.ui_focused() == nil)
+	-- "Image size": the button takes its sprite's 12 x 12 source region, centered where it was.
+	wpe.ui_fit_image(button)
+	local _, _, bw, bh = wpe.ui_rect(button)
+	assert(bw == 12 and bh == 12)
+	assert(not pcall(wpe.ui_fit_image, hud_text)) -- a text: no sprite
+	assert(not pcall(wpe.ui_fit_image, button, 0))
 	self.hud = hud
 
 	self.updates = 0

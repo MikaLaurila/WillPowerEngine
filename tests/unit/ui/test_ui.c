@@ -889,6 +889,66 @@ static void test_ui_draws_text_fields(void) {
     wpe_renderer_destroy(renderer);
     destroy_fixture(&f);
 }
+/* "Image size": a sprite element takes its image's (or region's) size times a scale, centered where it was,
+ * its anchors met in one point (so the size stays on any screen), its corners on whole pixels. */
+static void test_ui_fit_image(void) {
+    Fixture f = make_fixture(false);
+    uint32_t texels[30 * 12];
+    for (size_t i = 0; i < sizeof texels / sizeof texels[0]; ++i)
+        texels[i] = 0xFFFFFFFFu;
+    WPE_Texture* texture = NULL;
+    WPE_TEST_ASSERT_OK(
+        wpe_texture_create(&(WPE_TextureDesc){.width = 30, .height = 12, .texels = texels}, &texture));
+    WPE_AssetHandle image = WPE_ASSET_NONE;
+    WPE_TEST_ASSERT_OK(wpe_asset_add(f.t.assets, WPE_ASSET_IMAGE, "test/logo", texture, &image));
+    WPE_Sprite sprite = wpe_sprite_default();
+    sprite.image = image;
+
+    /* A logo stretched across the screen's top half (anchors apart), centered at (100, 25). */
+    WPE_UiRect stretched = wpe_ui_rect_default();
+    stretched.anchor_max = (WPE_Vec2){.x = 1, .y = 0.5f};
+    const WPE_Entity logo = add_element(&f, WPE_ENTITY_NULL, stretched);
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, logo, WPE_COMP_SPRITE, &sprite, NULL));
+    WPE_UiRect fitted;
+    WPE_TEST_ASSERT_OK(wpe_ui_fit_image_rect(f.ui, logo, 1.0f, SCREEN_W, SCREEN_H, &fitted));
+    assert_rect((WPE_Rect){85, 19, 30, 12}, fitted.rect);
+    WPE_TEST_ASSERT_NEAR(0.5, fitted.anchor_min.x, 0.0); /* The middle of the old anchors... */
+    WPE_TEST_ASSERT_NEAR(0.25, fitted.anchor_min.y, 0.0);
+    WPE_TEST_ASSERT(fitted.anchor_max.x == fitted.anchor_min.x && fitted.anchor_max.y == fitted.anchor_min.y);
+    /* ...and nothing changed yet. */
+    WPE_TEST_ASSERT_NEAR(
+        1.0, ((const WPE_UiRect*)wpe_ecs_get_component(f.ecs, logo, WPE_COMP_UI))->anchor_max.x, 0.0);
+
+    /* Applied at 2x: twice as big, same center; a bigger screen keeps the size. */
+    WPE_TEST_ASSERT_OK(wpe_ui_fit_image(f.ui, logo, 2.0f, SCREEN_W, SCREEN_H));
+    assert_rect((WPE_Rect){70, 13, 60, 24}, rect_of(&f, logo));
+    WPE_TEST_ASSERT_OK(wpe_ui_layout(f.ui, 400, 300));
+    WPE_TEST_ASSERT_NEAR(60.0, rect_of(&f, logo).width, 0.0);
+    WPE_TEST_ASSERT_NEAR(24.0, rect_of(&f, logo).height, 0.0);
+
+    /* A source region counts instead of the whole image; an odd size still lands on whole pixels; a child is
+     * placed in its parent. */
+    const WPE_Entity panel = add_element(&f, WPE_ENTITY_NULL, fixed(10, 10, 100, 50));
+    const WPE_Entity icon = add_element(&f, panel, fixed(0, 0, 40, 40));
+    sprite.source = (WPE_Rect){0, 0, 7, 5};
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, icon, WPE_COMP_SPRITE, &sprite, NULL));
+    WPE_TEST_ASSERT_OK(wpe_ui_fit_image(f.ui, icon, 1.0f, SCREEN_W, SCREEN_H));
+    const WPE_Rect r = rect_of(&f, icon);
+    WPE_TEST_ASSERT(r.width == 7.0f && r.height == 5.0f && r.x == floorf(r.x) && r.y == floorf(r.y));
+    WPE_TEST_ASSERT(fabsf(r.x + 3.5f - 30.0f) <= 0.5f &&
+                    fabsf(r.y + 2.5f - 30.0f) <= 0.5f); /* Was centered at 30. */
+
+    /* Not a sprite with an image; a bad scale. */
+    wpe_log_set_stderr_enabled(false);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND,
+                           wpe_ui_fit_image(f.ui, panel, 1.0f, SCREEN_W, SCREEN_H));
+    wpe_log_set_stderr_enabled(true);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_ui_fit_image(f.ui, logo, 0.0f, SCREEN_W, SCREEN_H));
+    wpe_asset_release(f.t.assets, image);
+    destroy_fixture(&f);
+}
+
 static void test_ui_create_validates(void) {
     WPE_Ui* ui = NULL;
     WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_ui_create(NULL, &ui));
@@ -907,4 +967,5 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_ui_mouse_focus_and_clicks), WPE_TEST_CASE(test_ui_toggles_and_sliders),
     WPE_TEST_CASE(test_ui_draws_toggles_and_sliders), WPE_TEST_CASE(test_ui_navigation_uses_project_actions),
     WPE_TEST_CASE(test_ui_text_field_editing), WPE_TEST_CASE(test_ui_text_field_filters_and_limits),
-    WPE_TEST_CASE(test_ui_draws_text_fields), WPE_TEST_CASE(test_ui_create_validates))
+    WPE_TEST_CASE(test_ui_draws_text_fields), WPE_TEST_CASE(test_ui_fit_image),
+    WPE_TEST_CASE(test_ui_create_validates))

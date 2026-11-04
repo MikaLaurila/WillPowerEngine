@@ -41,8 +41,8 @@ bool wpe_vfs_path_is_valid(const char* path) {
         if (c == '/' || c == '\0') {
             const size_t segment = length - segment_start;
             if (segment == 0) return false; /* Leading '/', '//' or trailing '/'. */
-            if (segment == 1 && path[segment_start] == '.') return false;
-            if (segment == 2 && path[segment_start] == '.' && path[segment_start + 1] == '.') return false;
+            /* ".", "..", and hidden names (".git", ".claude", ".gitignore"): never part of a game. */
+            if (path[segment_start] == '.') return false;
             if (c == '\0') break;
             segment_start = length + 1;
         } else if (c < 0x20 || c == 0x7F || c == '\\' || c == ':') {

@@ -2298,6 +2298,7 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
     igText("Entity %u", entity);
     /* Prefab instances: where the entity comes from, and what to do with its changes. */
     const char* command = NULL; /* A prefab command for the whole instance, run after drawing. */
+    int fit_scale = 0;          /* "Image size" on a sprite: fit_ui_image at this scale, after drawing. */
     const char* prefab = wpe_prefab_path(wpe__ui_ecs(ui), entity);
     if (prefab) {
         igTextColored((ImVec4_c){0.47f, 0.7f, 1.0f, 1.0f}, "Prefab %s%s", prefab,
@@ -2368,6 +2369,18 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
                 }
                 if (script && wpe__ui_script_properties(ui, entity)) property_sent = true;
                 if (strcmp(key, "collider") == 0 && igSmallButton("Fit to meshes")) command = "fit_collider";
+                /* A sprite with an image: size the element to it (pixel art: 2x, 3x), centered where it is.
+                 */
+                if (strcmp(key, "sprite") == 0 && wpe_json_string(wpe_json_get(value, "image"))) {
+                    if (igSmallButton("Image size")) fit_scale = 1;
+                    if (igIsItemHovered(0))
+                        igSetTooltip("Size the element to its image's pixels, centered where it is, on whole "
+                                     "pixels (the anchors meet in one point so the size stays)");
+                    igSameLine(0.0f, -1.0f);
+                    if (igSmallButton("2x")) fit_scale = 2;
+                    igSameLine(0.0f, -1.0f);
+                    if (igSmallButton("3x")) fit_scale = 3;
+                }
                 if (strcmp(key, "collider") == 0 && igIsItemHovered(0))
                     igSetTooltip(
                         "Size and center the collider around the meshes of this entity and its children");
@@ -2381,6 +2394,15 @@ static void wpe__ui_inspector(WPE_EditorUi* ui) {
         /* One change per frame: the property was it. */
     } else if (command) {
         wpe__ui_entity_command(ui, command, entity);
+    } else if (fit_scale > 0) {
+        WPE_JsonWriter* w = wpe__ui_begin("fit_ui_image");
+        if (w) {
+            wpe_json_write_key(w, "id");
+            wpe_json_write_integer(w, entity);
+            wpe_json_write_key(w, "scale");
+            wpe_json_write_integer(w, fit_scale);
+            wpe__ui_send(ui, w);
+        }
     } else if (reverted_key) {
         WPE_JsonWriter* w = wpe__ui_begin("revert_prefab");
         if (w) {

@@ -4,6 +4,8 @@
 
 Every asset the engine reads (models, textures, fonts, scripts, sounds and music) is named by an **asset path**: a relative, `/`-separated UTF-8 path such as `meshes/helmet.glb`. Paths can't be absolute, and they can't contain empty, `.` or `..` segments, backslashes, colons or control characters. The limit is 255 bytes.
 
+**Hidden files are not the game's.** A file or folder whose name starts with a dot (`.git/`, `.claude/`, `.vscode/`, `.gitignore`) is never an asset: the editor doesn't list it, `wpe_pak` and `wpe_export` leave it out of archives (quietly), and nothing loads it, in development and in exported games alike. So a game folder can be a git repository and hold the Claude skill without either ending up in the shipped game. Keep working files that aren't part of the game (source art, Blockbench projects) in a dot-folder too, for example `.dev/`.
+
 A `WPE_Vfs` maps asset paths onto **mounts**:
 
 - **Directories** (`wpe_vfs_mount_directory`): the usual setup during development. Their files are read live, so hot reload sees changes.

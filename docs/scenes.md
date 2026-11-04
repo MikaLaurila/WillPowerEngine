@@ -156,6 +156,8 @@ With both anchors at the same point the element keeps its size (`offset_max - of
 | A bar across the bottom, 12 pixels tall | `{"anchor_min": [0, 1], "offset_min": [0, -12]}` |
 | Its parent, minus a 6-pixel margin | `{"offset_min": [6, 6], "offset_max": [-6, -6]}` |
 
+**An image at its own size** (a logo, an icon): an element is as big as its rectangle, so a sprite stretches to fit it. The editor's **Image size** button on a sprite (or **2x**, **3x** for small pixel art) sizes the element to its image (its `source` region, if it has one), centered where it is, with both anchors moved to one point (the middle of the old ones) so the size stays on any screen, and the corners on whole pixels so every texel covers whole pixels and the image stays crisp. Scripts: `wpe.ui_fit_image(entity, [scale])`; agents: the `fit_ui_image` command. A 283 × 48 logo near the top center comes out as `{"anchor_min": [0.5, 0], "anchor_max": [0.5, 0], "offset_min": [-141, 16], "offset_max": [142, 64]}`.
+
 **Drawing order.** Parents draw before their children, children in hierarchy order, and top-level elements in the order they were created, so later ones are on top. An element's `Transform` is ignored, and children are not clipped to their parent.
 
 **Buttons.** A `button` makes its element focusable and clickable. One button has the focus at a time, and its state tints the button and everything under it:

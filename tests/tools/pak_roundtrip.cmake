@@ -45,5 +45,22 @@ foreach(file IN LISTS sources)
     endif()
 endforeach()
 
+# Hidden files and folders (version control, the Claude skill, editor settings) never go into an archive,
+# and packing doesn't warn about them.
+file(WRITE "${WORK}/game/scenes/main.scene" "{}\n")
+file(WRITE "${WORK}/game/.git/config" "[core]\n")
+file(WRITE "${WORK}/game/.claude/skills/willpowerengine/SKILL.md" "skill\n")
+file(WRITE "${WORK}/game/scenes/.notes.txt" "mine\n")
+execute_process(COMMAND "${WPE_PAK}" create "${WORK}/game.pak" "${WORK}/game"
+                RESULT_VARIABLE code OUTPUT_VARIABLE out ERROR_VARIABLE err)
+if(NOT code EQUAL 0 OR err MATCHES "skipping")
+    message(FATAL_ERROR "packing a folder with hidden files failed or warned (${code}):\n${out}\n${err}")
+endif()
+run("${WPE_PAK}" extract "${WORK}/game.pak" "${WORK}/game_out")
+file(GLOB_RECURSE packed LIST_DIRECTORIES false RELATIVE "${WORK}/game_out" "${WORK}/game_out/*")
+if(NOT packed STREQUAL "scenes/main.scene")
+    message(FATAL_ERROR "only scenes/main.scene should be packed, not: ${packed}")
+endif()
+
 # Corruption detection is covered by the vfs unit tests.
 message(STATUS "pak round trip OK (${count} files)")

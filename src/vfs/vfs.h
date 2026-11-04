@@ -40,7 +40,9 @@ typedef bool (*WPE_VfsListFn)(const char* path, void* user_data);
 
 /**
  * Checks an asset path: non-empty, shorter than WPE_VFS_PATH_MAX, relative, '/'-separated, with no
- * empty, "." or ".." segments, backslashes, colons or control characters.
+ * empty, "." or ".." segments, backslashes, colons or control characters, and no hidden names (a segment
+ * starting with '.', like ".git" or ".claude": those files are never part of a game, so they are not listed,
+ * packed or loaded).
  *
  * @thread_safety Any thread
  */

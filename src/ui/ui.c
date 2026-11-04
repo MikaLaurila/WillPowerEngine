@@ -1,6 +1,7 @@
 #define WPE_LOG_MODULE "ui"
 #include "ui/ui.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -378,6 +379,58 @@ WPE_Result wpe_ui_layout(WPE_Ui* ui, uint32_t width, uint32_t height) {
         }
     }
     return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_ui_fit_image_rect(WPE_Ui* ui, WPE_Entity entity, float scale, uint32_t width, uint32_t height,
+                                 WPE_UiRect* out_rect) {
+    if (!ui || !out_rect) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!(scale > 0.0f) || !isfinite(scale)) return WPE_RESULT_ERROR_INVALID_ARG;
+    const WPE_UiRect* element = wpe__element(ui, entity);
+    const WPE_Sprite* sprite = wpe_ecs_get_component(ui->ecs, entity, WPE_COMP_SPRITE);
+    if (!element || !sprite || !sprite->texture) {
+        wpe_log_error("entity 0x%08x is not a UI element with a sprite image", entity);
+        return WPE_RESULT_ERROR_NOT_FOUND;
+    }
+    /* The image's size in texels: its source region, else all of it. */
+    const bool region = sprite->source.width > 0.0f && sprite->source.height > 0.0f;
+    const float texels_x = region ? sprite->source.width : (float)sprite->texture->levels[0].width;
+    const float texels_y = region ? sprite->source.height : (float)sprite->texture->levels[0].height;
+    const float w = roundf(texels_x * scale), h = roundf(texels_y * scale);
+
+    /* Where it is now, and its parent's rectangle (or the screen's). */
+    const WPE_Result result = wpe_ui_layout(ui, width, height);
+    if (result != WPE_RESULT_OK) return result;
+    element = wpe__element(ui, entity);
+    const WPE_Entity parent = wpe__ui_parent(ui, entity);
+    const WPE_UiRect* outer = parent != WPE_ENTITY_NULL ? wpe__element(ui, parent) : NULL;
+    const WPE_Rect p = outer ? outer->rect : (WPE_Rect){0.0f, 0.0f, (float)width, (float)height};
+
+    WPE_UiRect fitted = *element;
+    const WPE_Vec2 anchor = {.x = (element->anchor_min.x + element->anchor_max.x) * 0.5f,
+                             .y = (element->anchor_min.y + element->anchor_max.y) * 0.5f};
+    fitted.anchor_min = fitted.anchor_max = anchor;
+    const float center_x = element->rect.x + element->rect.width * 0.5f;
+    const float center_y = element->rect.y + element->rect.height * 0.5f;
+    /* The top-left corner on a whole pixel of the screen (so every texel covers whole pixels). */
+    const float left = roundf(center_x - w * 0.5f), top = roundf(center_y - h * 0.5f);
+    const float anchor_x = p.x + p.width * anchor.x, anchor_y = p.y + p.height * anchor.y;
+    fitted.offset_min = (WPE_Vec2){.x = left - anchor_x, .y = top - anchor_y};
+    fitted.offset_max = (WPE_Vec2){.x = left + w - anchor_x, .y = top + h - anchor_y};
+    fitted.rect = (WPE_Rect){left, top, w, h};
+    *out_rect = fitted;
+    return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_ui_fit_image(WPE_Ui* ui, WPE_Entity entity, float scale, uint32_t width, uint32_t height) {
+    WPE_UiRect fitted;
+    const WPE_Result result = wpe_ui_fit_image_rect(ui, entity, scale, width, height, &fitted);
+    if (result != WPE_RESULT_OK) return result;
+    WPE_UiRect* element = wpe__element(ui, entity);
+    element->anchor_min = fitted.anchor_min;
+    element->anchor_max = fitted.anchor_max;
+    element->offset_min = fitted.offset_min;
+    element->offset_max = fitted.offset_max;
+    return wpe_ui_layout(ui, width, height);
 }
 
 /* ---- Picking and focus ---------------------------------------------------------------------------- */

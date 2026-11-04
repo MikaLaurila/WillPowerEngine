@@ -4,6 +4,19 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added
+- UI images at their own size: the inspector's **Image size** (and **2x**, **3x**) buttons on a sprite, the
+  `fit_ui_image` editor command, `wpe.ui_fit_image(entity, [scale])`, and in C `wpe_ui_fit_image` /
+  `wpe_ui_fit_image_rect`. The element takes its image's (or `source` region's) size times the scale,
+  centered where it was, with its anchors in one point (the size stays on any screen) and its corners on whole
+  pixels (crisp).
+
+### Fixed
+- Hidden files and folders (names starting with a dot: `.git/`, `.claude/`, `.vscode/`, `.gitignore`) are no
+  longer game assets: the editor doesn't list them, `wpe_pak` / `wpe_export` leave them out of archives without
+  warnings, and they don't load. Before, a game folder's `.git` history (and, since 1.0.0, its Claude skill)
+  went into exported games. **BREAKING** for asset paths with a segment starting with a dot (rename them).
+
 ## [1.0.0] - 2026-11-04
 
 The first release: a C23 software-rasterizer engine for Windows and Linux with scenes, glTF models and

@@ -643,6 +643,7 @@ The scene's UI elements (`ui`, `sprite`, `text`, `button`, `toggle`, `slider` an
 | `wpe.set_text_color(entity, color)` / `wpe.set_sprite_color(entity, color)` | A text's or sprite's color (`wpe.color`). |
 | `wpe.set_ui_visible(entity, visible)` / `wpe.is_ui_visible(entity) -> boolean` | Hides or shows an element and everything under it. |
 | `wpe.get_ui_offsets(entity) -> min_x, min_y, max_x, max_y` / `wpe.set_ui_offsets(entity, min_x, min_y, max_x, max_y)` | The corner offsets in pixels (moving or resizing an element; anchors stay). |
+| `wpe.ui_fit_image(entity, [scale = 1])` | Sizes a sprite element to its image (or its `source` region) times `scale`, centered where it is, its anchors met in one point and its corners on whole pixels (the editor's Image size button; [scenes.md](scenes.md#ui)). Raises without a sprite image. |
 | `wpe.ui_rect(entity) -> x, y, width, height` | Where the element is on screen, from the last layout (this frame's, which runs before scripts; changes made since show next frame). |
 | `wpe.set_interactable(entity, interactable)` | Enables or disables a button. |
 | `wpe.ui_focus(entity or nil) -> boolean` / `wpe.ui_focused() -> entity?` | Moves the focus to a shown, interactable button (false if it can't take it), or clears it. |

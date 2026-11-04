@@ -618,8 +618,20 @@ typedef struct wpe__PathList {
     bool out_of_memory;
 } wpe__PathList;
 
+/* Whether a path is inside a hidden folder or names a hidden file (".git/...", ".claude/...", ".gitignore").
+ */
+static bool wpe__is_hidden(const char* path) {
+    for (const char* segment = path; segment; segment = strchr(segment, '/')) {
+        if (*segment == '/') ++segment;
+        if (*segment == '.') return true;
+    }
+    return false;
+}
+
 static bool wpe__collect_path(const char* path, void* user_data) {
     wpe__PathList* list = user_data;
+    if (wpe__is_hidden(path))
+        return true; /* Version control, tools' settings: not the game's (and quietly). */
     if (!wpe_vfs_path_is_valid(path)) {
         wpe_log_warn("skipping '%s': not a valid asset path", path);
         ++list->skipped;

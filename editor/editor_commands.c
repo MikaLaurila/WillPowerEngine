@@ -1820,6 +1820,68 @@ static WPE_Result wpe__cmd_fit_collider(wpe__Call* call) {
     return wpe_scene_save_entity(&context, e, call->w);
 }
 
+/* Sizes a sprite element to its image (times `scale`), centered where it is: {id = selection, scale = 1}. */
+static WPE_Result wpe__cmd_fit_ui_image(wpe__Call* call) {
+    WPE_Entity e = wpe_editor_selection(call->editor);
+    if (wpe_json_get(call->args, "id")) {
+        const WPE_Result result = wpe__entity_arg(call, "id", &e);
+        if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    }
+    if (e == WPE_ENTITY_NULL)
+        return wpe__null(call,
+                         wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "select an entity or give \"id\""));
+    const WPE_JsonValue* scale_value = wpe_json_get(call->args, "scale");
+    const double scale = scale_value ? wpe_json_number(scale_value, 0.0) : 1.0;
+    if (!(scale > 0.0 && scale <= 64.0))
+        return wpe__null(call,
+                         wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"scale\" is a number from 0 to 64"));
+    WPE_Engine* engine = wpe_editor_engine(call->editor);
+    const WPE_ProjectSettings* project = wpe_engine_project(engine);
+    WPE_UiRect fitted;
+    WPE_Result result = wpe_ui_fit_image_rect(wpe_engine_ui(engine), e, (float)scale, project->width,
+                                              project->height, &fitted);
+    if (result == WPE_RESULT_ERROR_NOT_FOUND)
+        return wpe__null(call,
+                         wpe__fail(call, result, "entity %u is not a UI element with a sprite image", e));
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+
+    /* As a "ui" component in the scene schema, applied like any edit (undoable). */
+    WPE_JsonWriter* w = NULL;
+    WPE_JsonDocument* value = NULL;
+    const char* text = NULL;
+    size_t size = 0;
+    result = wpe_json_writer_create(&w);
+    if (result == WPE_RESULT_OK) {
+        const struct {
+            const char* key;
+            WPE_Vec2 v;
+        } parts[] = {{"anchor_min", fitted.anchor_min},
+                     {"anchor_max", fitted.anchor_max},
+                     {"offset_min", fitted.offset_min},
+                     {"offset_max", fitted.offset_max}};
+        wpe_json_write_object_begin(w);
+        for (size_t p = 0; p < sizeof parts / sizeof parts[0]; ++p) {
+            wpe_json_write_key(w, parts[p].key);
+            wpe_json_write_array_begin(w, true);
+            wpe_json_write_number(w, parts[p].v.x);
+            wpe_json_write_number(w, parts[p].v.y);
+            wpe_json_write_array_end(w);
+        }
+        wpe_json_write_key(w, "visible");
+        wpe_json_write_bool(w, fitted.visible);
+        wpe_json_write_object_end(w);
+        result = wpe_json_writer_finish(w, &text, &size);
+    }
+    if (result == WPE_RESULT_OK) result = wpe_json_parse(text, size, &value, NULL);
+    if (result == WPE_RESULT_OK) result = wpe__editor_begin_change(call->editor);
+    const WPE_SceneContext context = wpe__editor_context(call->editor);
+    if (result == WPE_RESULT_OK) result = wpe_scene_set_component(&context, e, "ui", wpe_json_root(value));
+    wpe_json_free(value);
+    wpe_json_writer_destroy(w);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    return wpe_scene_save_entity(&context, e, call->w);
+}
+
 static WPE_Result wpe__cmd_focus(wpe__Call* call) {
     WPE_Editor* editor = call->editor;
     WPE_Ecs* ecs = wpe__ecs(call);
@@ -2143,6 +2205,9 @@ static const struct {
     {"nav_path", wpe__cmd_nav_path,
      "{from: [x,y,z], to: [x,y,z], partial = false, raw = false, radius = 1, obstacles = true, show = true} "
      "-> {points, length, partial, visited}: a path on the grid (shown in the viewport until {clear: true})"},
+    {"fit_ui_image", wpe__cmd_fit_ui_image,
+     "{id = selection, scale = 1}: size a sprite UI element to its image (or source region) times scale, "
+     "centered where it is, anchors at one point, on whole pixels -> the entity"},
     {"fit_collider", wpe__cmd_fit_collider,
      "{id = selection}: size the collider (a new box if none) to the meshes of the entity and its children "
      "-> "

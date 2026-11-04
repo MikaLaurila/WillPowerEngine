@@ -56,11 +56,13 @@ static void test_vfs_crc32_known_values(void) {
 }
 
 static void test_vfs_path_rules(void) {
-    const char* valid[] = {"a", "meshes/helmet.glb", "a/b/c.d", ".hidden", "x..y/z", "UPPER/ä.txt"};
+    const char* valid[] = {"a", "meshes/helmet.glb", "a/b/c.d", "x..y/z", "UPPER/ä.txt", "a/b."};
     for (size_t i = 0; i < sizeof valid / sizeof valid[0]; ++i)
         WPE_TEST_ASSERT_MSG(wpe_vfs_path_is_valid(valid[i]), "'%s' should be valid", valid[i]);
-    const char* invalid[] = {"",     "/abs", "a//b", "a/",   "./a",      "a/./b",
-                             "../a", "a/..", "a\\b", "c:/x", "tab\there"};
+    /* Hidden names (version control, tools' folders) are never assets: ".git", ".claude/skills/x.md". */
+    const char* invalid[] = {
+        "",     "/abs", "a//b", "a/",        "./a",     "a/./b",       "../a",
+        "a/..", "a\\b", "c:/x", "tab\there", ".hidden", ".git/config", "a/.claude/SKILL.md"};
     for (size_t i = 0; i < sizeof invalid / sizeof invalid[0]; ++i)
         WPE_TEST_ASSERT_MSG(!wpe_vfs_path_is_valid(invalid[i]), "'%s' should be invalid", invalid[i]);
     WPE_TEST_ASSERT(!wpe_vfs_path_is_valid(NULL));
@@ -79,13 +81,13 @@ static void test_vfs_path_rules(void) {
         {"a\\b\\c", "a/b/c"},
         {"a/b/../../c", "c"},
         {"x/y/", "x/y"},
-        {"a/..b", "a/..b"},
+        {"a/b..c", "a/b..c"},
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
         WPE_TEST_ASSERT_MSG(wpe_vfs_path_normalize(cases[i][0], out, sizeof out), "'%s'", cases[i][0]);
         WPE_TEST_ASSERT_EQ_STR(cases[i][1], out);
     }
-    const char* rejected[] = {"../a", "a/../..", "/abs", "", ".", "a/..", "c:/x"};
+    const char* rejected[] = {"../a", "a/../..", "/abs", "", ".", "a/..", "c:/x", "a/..b", ".git/config"};
     for (size_t i = 0; i < sizeof rejected / sizeof rejected[0]; ++i) {
         WPE_TEST_ASSERT_MSG(!wpe_vfs_path_normalize(rejected[i], out, sizeof out), "'%s'", rejected[i]);
         WPE_TEST_ASSERT_EQ_STR("", out);
