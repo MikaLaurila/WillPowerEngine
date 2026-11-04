@@ -40,6 +40,17 @@ function Tour:on_start()
 	assert(wpe.get_parent(self.child) == e)
 	assert(#wpe.children(e) == 1)
 	assert(wpe.get_world_position(self.child).y > 2)
+	-- Child order (the UI's draw order): the second child moves first, then past the end (last).
+	local second = wpe.spawn("tour_second_child")
+	wpe.set_parent(second, e, false)
+	assert(wpe.get_sibling_index(self.child) == 1 and wpe.get_sibling_index(second) == 2)
+	wpe.set_sibling_index(second, 1)
+	assert(wpe.children(e)[1] == second and wpe.get_sibling_index(self.child) == 2)
+	wpe.set_sibling_index(second, 99)
+	assert(wpe.children(e)[2] == second)
+	assert(not pcall(wpe.set_sibling_index, e, 1)) -- a root
+	assert(not pcall(wpe.set_sibling_index, second, 0))
+	wpe.destroy(second)
 	wpe.set_parent(self.child, nil) -- keeps its world placement by default
 	assert(wpe.get_parent(self.child) == nil)
 

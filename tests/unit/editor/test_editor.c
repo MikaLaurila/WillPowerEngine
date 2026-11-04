@@ -1303,9 +1303,80 @@ static void test_editor_prefab_commands(void) {
     wpe_editor_destroy(editor);
 }
 
+/* The places of `names` (children of one parent) among their siblings, as a string of digits. */
+static void sibling_places(WPE_Editor* editor, const char* const* names, uint32_t count, char* out) {
+    WPE_Ecs* ecs = wpe_engine_ecs(wpe_editor_engine(editor));
+    for (uint32_t i = 0; i < count; ++i)
+        out[i] = (char)('0' + wpe_scene_sibling_index(ecs, id_of(editor, names[i])));
+    out[count] = '\0';
+}
+
+static void test_editor_orders_siblings(void) {
+    WPE_Editor* editor = open_editor();
+    char command[256], places[8];
+    static const char* const names[] = {"order_a", "order_b", "order_c"};
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"order_menu\", \"ui\": {}}}");
+    const WPE_Entity menu = id_of(editor, "order_menu");
+    for (uint32_t i = 0; i < 3; ++i) {
+        snprintf(command, sizeof command,
+                 "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"%s\", \"parent\": %u, \"ui\": {}}}",
+                 names[i], menu);
+        run_ok(editor, command);
+    }
+    /* The last one first (drawn under the others), one undo step. */
+    const uint32_t undo_steps = wpe_editor_undo_count(editor);
+    snprintf(command, sizeof command, "{\"cmd\": \"set_sibling_index\", \"id\": %u, \"index\": 0}",
+             id_of(editor, "order_c"));
+    run_ok(editor, command);
+    sibling_places(editor, names, 3, places);
+    WPE_TEST_ASSERT_EQ_STR("120", places);
+    WPE_TEST_ASSERT_EQ_UINT(undo_steps + 1, wpe_editor_undo_count(editor));
+    run_ok(editor, command); /* Already there: no new step. */
+    WPE_TEST_ASSERT_EQ_UINT(undo_steps + 1, wpe_editor_undo_count(editor));
+
+    /* The order survives saving and loading (scenes write children in order). */
+    run_ok(editor, "{\"cmd\": \"save_scene\", \"path\": \"scenes/order.scene\"}");
+    run_ok(editor, "{\"cmd\": \"load_scene\", \"path\": \"scenes/order.scene\"}");
+    sibling_places(editor, names, 3, places);
+    WPE_TEST_ASSERT_EQ_STR("120", places);
+
+    /* set_parent with an index: out to a new parent and back in at a place, each in one step. */
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"order_other\", \"ui\": {}}}");
+    snprintf(command, sizeof command, "{\"cmd\": \"set_parent\", \"id\": %u, \"parent\": %u}",
+             id_of(editor, "order_a"), id_of(editor, "order_other"));
+    run_ok(editor, command);
+    snprintf(command, sizeof command, "{\"cmd\": \"set_parent\", \"id\": %u, \"parent\": %u, \"index\": 1}",
+             id_of(editor, "order_a"), id_of(editor, "order_menu"));
+    run_ok(editor, command);
+    sibling_places(editor, names, 3, places);
+    WPE_TEST_ASSERT_EQ_STR("120", places); /* c, a, b. */
+    run_ok(editor, "{\"cmd\": \"undo\"}");
+    WPE_TEST_ASSERT(wpe_scene_get_parent(wpe_engine_ecs(wpe_editor_engine(editor)),
+                                         id_of(editor, "order_a")) == id_of(editor, "order_other"));
+
+    /* Roots keep creation order; prefab members and bad indices are refused. */
+    wpe_log_set_stderr_enabled(false);
+    snprintf(command, sizeof command, "{\"cmd\": \"set_sibling_index\", \"id\": %u, \"index\": 0}",
+             id_of(editor, "order_menu"));
+    wpe_json_free(run(editor, command, false));
+    snprintf(command, sizeof command, "{\"cmd\": \"set_sibling_index\", \"id\": %u, \"index\": -1}",
+             id_of(editor, "order_b"));
+    wpe_json_free(run(editor, command, false));
+    snprintf(command, sizeof command, "{\"cmd\": \"set_sibling_index\", \"id\": %u}",
+             id_of(editor, "order_b"));
+    wpe_json_free(run(editor, command, false));
+    snprintf(command, sizeof command, "{\"cmd\": \"set_parent\", \"id\": %u, \"parent\": null, \"index\": 0}",
+             id_of(editor, "order_b"));
+    wpe_json_free(run(editor, command, false));
+    wpe_log_set_stderr_enabled(true);
+    sibling_places(editor, names + 1, 2, places);
+    WPE_TEST_ASSERT_EQ_STR("10", places); /* c, b: unchanged by the refusals. */
+    wpe_editor_destroy(editor);
+}
+
 WPE_TEST_MAIN(
     WPE_TEST_CASE(test_editor_coalesces_continuous_edits), WPE_TEST_CASE(test_editor_prefab_commands),
-    WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
+    WPE_TEST_CASE(test_editor_orders_siblings), WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
     WPE_TEST_CASE(test_editor_play_does_not_keep_keys_held),
     WPE_TEST_CASE(test_editor_takes_the_mouse_back_from_the_game),
     WPE_TEST_CASE(test_editor_fits_colliders_to_meshes), WPE_TEST_CASE(test_editor_guards_unsaved_changes),

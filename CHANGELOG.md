@@ -5,6 +5,11 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Child order (the UI's drawing order) can be changed: in the editor's Hierarchy, drag onto the top or bottom
+  edge of a child to place before or after it, or use Move up / down / to first / to last in the right-click
+  menu; the `set_sibling_index` command and an `index` for `set_parent`; scripts' `wpe.get_sibling_index` /
+  `wpe.set_sibling_index` (1-based); in C `wpe_scene_sibling_index` / `wpe_scene_set_sibling_index`. Roots
+  keep their creation order (put them under a common parent to order them).
 - `on_focus` / `on_blur` script callbacks on UI buttons, whatever moved the focus (mouse, navigation,
   `wpe.ui_focus`, the focused button hidden, disabled or destroyed): `on_blur` on the old one, then `on_focus`
   on the new one, before `on_click`. In C, `wpe_ui_focus_change`. The editor's `ui` script template has them.

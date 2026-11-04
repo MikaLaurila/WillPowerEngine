@@ -1168,6 +1168,29 @@ static WPE_Result wpe__cmd_set_script_property(wpe__Call* call) {
     return wpe_scene_save_entity(&context, e, call->w); /* The entity as it is now. */
 }
 
+/* A prefab instance's members keep the prefab's structure (its root may move). */
+static WPE_Result wpe__check_restructure(wpe__Call* call, WPE_Entity e) {
+    const WPE_Entity root = wpe_prefab_root(wpe__ecs(call), e);
+    if (root == WPE_ENTITY_NULL || root == e) return WPE_RESULT_OK;
+    return wpe__fail(call, WPE_RESULT_ERROR_INVALID_STATE,
+                     "entity %u is part of a '%s' instance, whose structure comes from the prefab: "
+                     "unpack_prefab it to restructure it",
+                     e, wpe_prefab_path(wpe__ecs(call), e));
+}
+
+/* "index": a place among siblings (0 = first; past the end = last). Optional unless `required`
+ * (absent: UINT32_MAX). */
+static WPE_Result wpe__sibling_index_arg(wpe__Call* call, bool required, uint32_t* out_index) {
+    const WPE_JsonValue* v = wpe_json_get(call->args, "index");
+    *out_index = UINT32_MAX;
+    if (!v && !required) return WPE_RESULT_OK;
+    const double number = wpe_json_number(v, -1.0);
+    if (wpe_json_type(v) != WPE_JSON_NUMBER || number < 0.0 || number != floor(number))
+        return wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"index\" must be a whole number >= 0");
+    *out_index = number >= (double)UINT32_MAX ? UINT32_MAX - 1u : (uint32_t)number;
+    return WPE_RESULT_OK;
+}
+
 static WPE_Result wpe__cmd_set_parent(wpe__Call* call) {
     WPE_Entity e = WPE_ENTITY_NULL, parent = WPE_ENTITY_NULL;
     WPE_Result result = wpe__entity_arg(call, "id", &e);
@@ -1175,18 +1198,38 @@ static WPE_Result wpe__cmd_set_parent(wpe__Call* call) {
     if (result == WPE_RESULT_OK && wpe_json_type(parent_value) != WPE_JSON_NULL && parent_value)
         result = wpe__entity_arg(call, "parent", &parent);
     const bool keep_world = wpe_json_bool(wpe_json_get(call->args, "keep_world"), true);
-    const WPE_Entity root = result == WPE_RESULT_OK ? wpe_prefab_root(wpe__ecs(call), e) : WPE_ENTITY_NULL;
-    if (root != WPE_ENTITY_NULL && root != e)
-        result = wpe__fail(call, WPE_RESULT_ERROR_INVALID_STATE,
-                           "entity %u is part of a '%s' instance, whose structure comes from the prefab: "
-                           "unpack_prefab it to restructure it",
-                           e, wpe_prefab_path(wpe__ecs(call), e));
+    uint32_t index = UINT32_MAX;
+    if (result == WPE_RESULT_OK) result = wpe__sibling_index_arg(call, false, &index);
+    if (result == WPE_RESULT_OK) result = wpe__check_restructure(call, e);
+    if (result == WPE_RESULT_OK && parent == WPE_ENTITY_NULL && index != UINT32_MAX)
+        result = wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG,
+                           "\"index\" needs a parent: roots keep the order they were created in");
     if (result == WPE_RESULT_OK) result = wpe__editor_begin_change(call->editor);
     if (result == WPE_RESULT_OK) {
         result = wpe_scene_set_parent(wpe__ecs(call), e, parent, keep_world);
         if (result == WPE_RESULT_ERROR_INVALID_ARG)
             wpe__fail(call, result, "that parent would make the hierarchy a cycle");
     }
+    if (result == WPE_RESULT_OK && index != UINT32_MAX)
+        result = wpe_scene_set_sibling_index(wpe__ecs(call), e, index);
+    return wpe__null(call, result);
+}
+
+static WPE_Result wpe__cmd_set_sibling_index(wpe__Call* call) {
+    WPE_Entity e = WPE_ENTITY_NULL;
+    uint32_t index = 0;
+    WPE_Result result = wpe__entity_arg(call, "id", &e);
+    if (result == WPE_RESULT_OK) result = wpe__sibling_index_arg(call, true, &index);
+    if (result == WPE_RESULT_OK) result = wpe__check_restructure(call, e);
+    if (result == WPE_RESULT_OK && wpe_scene_get_parent(wpe__ecs(call), e) == WPE_ENTITY_NULL)
+        result = wpe__fail(call, WPE_RESULT_ERROR_INVALID_STATE,
+                           "entity %u is a root: roots keep the order they were created in (put them under a "
+                           "common parent to order them)",
+                           e);
+    if (result == WPE_RESULT_OK && wpe_scene_sibling_index(wpe__ecs(call), e) == index)
+        return wpe__null(call, WPE_RESULT_OK); /* Already there: no undo step. */
+    if (result == WPE_RESULT_OK) result = wpe__editor_begin_change(call->editor);
+    if (result == WPE_RESULT_OK) result = wpe_scene_set_sibling_index(wpe__ecs(call), e, index);
     return wpe__null(call, result);
 }
 
@@ -2162,7 +2205,14 @@ static const struct {
     {"set_component", wpe__cmd_set_component,
      "{id, component, value} -> the entity (replaces the component)"},
     {"remove_component", wpe__cmd_remove_component, "{id, component}"},
-    {"set_parent", wpe__cmd_set_parent, "{id, parent: id|null, keep_world = true}"},
+    {"set_parent", wpe__cmd_set_parent,
+     "{id, parent: id|null, keep_world = true, index?}: index places it among the parent's children (0 = "
+     "first; "
+     "default last)"},
+    {"set_sibling_index", wpe__cmd_set_sibling_index,
+     "{id, index}: moves a child among its siblings (0 = first, past the end = last); child order is the "
+     "UI's "
+     "draw order (later on top). Roots can't move"},
     {"get_script_properties", wpe__cmd_get_script_properties,
      "{id} -> [{name, value, default?}]: the declared properties (with defaults), then the other set ones"},
     {"set_script_property", wpe__cmd_set_script_property,

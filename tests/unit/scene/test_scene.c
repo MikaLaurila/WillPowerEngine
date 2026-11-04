@@ -87,6 +87,56 @@ static void test_scene_set_parent_links_children_in_order(void) {
     wpe_ecs_destroy(ecs);
 }
 
+/* Every move of every child of four to every place (and past the end): the order follows a reference
+ * list, the back links agree, and the indices read back. */
+static void test_scene_sibling_index_moves_children(void) {
+    enum { N = 4 };
+    for (uint32_t from = 0; from < N; ++from) {
+        for (uint32_t to = 0; to <= N; ++to) {
+            WPE_Ecs* ecs = make_scene();
+            const WPE_Entity parent = wpe_ecs_spawn(ecs);
+            WPE_Entity kids[N];
+            for (uint32_t i = 0; i < N; ++i) {
+                kids[i] = wpe_ecs_spawn(ecs);
+                WPE_TEST_ASSERT_OK(wpe_scene_set_parent(ecs, kids[i], parent, false));
+                WPE_TEST_ASSERT_EQ_UINT(i, wpe_scene_sibling_index(ecs, kids[i]));
+            }
+            /* The reference: take `from` out, put it back at `to` among the rest (clamped). */
+            WPE_Entity expected[N];
+            uint32_t n = 0;
+            for (uint32_t i = 0; i < N; ++i)
+                if (i != from) expected[n++] = kids[i];
+            const uint32_t at = to < N - 1 ? to : N - 1;
+            for (uint32_t i = N - 1; i > at; --i)
+                expected[i] = expected[i - 1];
+            expected[at] = kids[from];
+
+            WPE_TEST_ASSERT_OK(wpe_scene_set_sibling_index(ecs, kids[from], to == N ? UINT32_MAX : to));
+            WPE_Entity listed[N + 1];
+            WPE_TEST_ASSERT_EQ_UINT(N, children_of(ecs, parent, listed, N + 1));
+            for (uint32_t i = 0; i < N; ++i) {
+                WPE_TEST_ASSERT_MSG(listed[i] == expected[i], "from %u to %u: place %u", from, to, i);
+                WPE_TEST_ASSERT_EQ_UINT(i, wpe_scene_sibling_index(ecs, listed[i]));
+                const WPE_Hierarchy* h = wpe_ecs_get_component(ecs, listed[i], WPE_COMP_HIERARCHY);
+                WPE_TEST_ASSERT(h->prev_sibling == (i ? listed[i - 1] : WPE_ENTITY_NULL));
+                WPE_TEST_ASSERT(h->parent == parent);
+            }
+            wpe_ecs_destroy(ecs);
+        }
+    }
+    /* Roots can't move; dead entities and NULL are refused. */
+    WPE_Ecs* ecs = make_scene();
+    const WPE_Entity root = wpe_ecs_spawn(ecs);
+    wpe_log_set_stderr_enabled(false);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_scene_set_sibling_index(ecs, root, 0));
+    wpe_log_set_stderr_enabled(true);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_scene_sibling_index(ecs, root));
+    WPE_TEST_ASSERT_OK(wpe_ecs_despawn(ecs, root));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_scene_set_sibling_index(ecs, root, 0));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_scene_set_sibling_index(NULL, root, 0));
+    wpe_ecs_destroy(ecs);
+}
+
 static void test_scene_set_parent_rejects_cycles_and_dead_entities(void) {
     WPE_Ecs* ecs = make_scene();
     const WPE_Entity a = wpe_ecs_spawn(ecs);
@@ -329,6 +379,7 @@ static void test_scene_deep_hierarchy_does_not_recurse(void) {
 
 WPE_TEST_MAIN(WPE_TEST_CASE(test_scene_register_twice_fails),
               WPE_TEST_CASE(test_scene_set_parent_links_children_in_order),
+              WPE_TEST_CASE(test_scene_sibling_index_moves_children),
               WPE_TEST_CASE(test_scene_set_parent_rejects_cycles_and_dead_entities),
               WPE_TEST_CASE(test_scene_update_transforms_propagates_through_hierarchy),
               WPE_TEST_CASE(test_scene_untransformed_nodes_are_transparent),

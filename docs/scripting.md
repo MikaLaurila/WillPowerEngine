@@ -122,6 +122,7 @@ Entity handles are numbers. Passing a handle that isn't alive raises an error. V
 | `wpe.find(name) -> entity?` | An entity with this name, or nil. It scans every name, so look entities up once (in `on_start`) and keep the handle. |
 | `wpe.get_parent(entity) -> entity?` | Parent, or nil. |
 | `wpe.set_parent(entity, parent?, keep_world = true)` | Reparent (nil detaches). With `keep_world`, the world placement is preserved. |
+| `wpe.get_sibling_index(entity) -> number` / `wpe.set_sibling_index(entity, index)` | A child's place among its parent's children (1 = first; past the end = last). Child order is the UI's draw order, later children on top, so moving a popup last brings it to the front. Roots raise: they keep creation order (put them under a common parent to order them). |
 | `wpe.children(entity) -> {entity}` | Direct children in order. |
 | `wpe.instantiate(prefab, [position]) -> entity` | Instantiate a prefab file (`.prefab`, see [scenes.md](scenes.md#prefabs)), a model asset path (glTF or `.prim`), or a name from the project's `prefabs` (or registered in C) that maps to either. Prefab files are parsed once and read again when they change; models are loaded once. Returns the root entity. An animated model starts playing its first animation. |
 | `wpe.attach_script(entity, path) -> bool` | Attach (or replace) a script. |

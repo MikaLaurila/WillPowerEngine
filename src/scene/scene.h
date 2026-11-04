@@ -86,6 +86,23 @@ WPE_Entity wpe_scene_get_parent(const WPE_Ecs* ecs, WPE_Entity entity);
 /** @return Whether `ancestor` is a strict ancestor of `entity`. @thread_safety See file comment */
 bool wpe_scene_is_ancestor(const WPE_Ecs* ecs, WPE_Entity ancestor, WPE_Entity entity);
 
+/** @return The entity's place among its parent's children (0 = first), or 0 for roots and dead entities.
+ * @thread_safety See file comment */
+uint32_t wpe_scene_sibling_index(const WPE_Ecs* ecs, WPE_Entity entity);
+
+/**
+ * Moves a child to another place among its parent's children, keeping its parent. Child order is the
+ * UI's draw order (later siblings on top) and the order scenes save children in.
+ * NOTE(limitation): roots have no list of their own (they follow creation order), so they can't move.
+ *
+ * @param index The new place, 0 = first; past the end (such as UINT32_MAX) means last.
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_NOT_FOUND for dead entities;
+ *         WPE_RESULT_ERROR_INVALID_ARG for roots (logged).
+ *
+ * @thread_safety Thread owning the world
+ */
+WPE_Result wpe_scene_set_sibling_index(WPE_Ecs* ecs, WPE_Entity entity, uint32_t index);
+
 /**
  * Despawns an entity and all of its descendants immediately. Not allowed during query iteration.
  *

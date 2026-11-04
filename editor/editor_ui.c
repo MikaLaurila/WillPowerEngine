@@ -1890,6 +1890,59 @@ static void wpe__ui_set_parent(WPE_EditorUi* ui, WPE_Entity child, WPE_Entity pa
     wpe__ui_send(ui, w);
 }
 
+/* `child` under `parent` at `index` among its children (set_parent's index), or moved there among its
+ * siblings. */
+static void wpe__ui_place(WPE_EditorUi* ui, WPE_Entity child, WPE_Entity parent, uint32_t index) {
+    WPE_JsonWriter* w = wpe__ui_begin("set_parent");
+    if (!w) return;
+    wpe_json_write_key(w, "id");
+    wpe_json_write_integer(w, child);
+    wpe_json_write_key(w, "parent");
+    wpe_json_write_integer(w, parent);
+    wpe_json_write_key(w, "index");
+    wpe_json_write_integer(w, index);
+    wpe__ui_send(ui, w);
+}
+
+/* Drops on a hierarchy row: the top or bottom quarter of a child's row places the dragged entity before or
+ * after it (its sibling: child order is the UI's draw order), the rest makes it a child. */
+static void wpe__hierarchy_drop(WPE_EditorUi* ui, WPE_Entity e) {
+    if (!igBeginDragDropTarget()) return;
+    const ImGuiPayload* payload =
+        igAcceptDragDropPayload(WPE__ENTITY_PAYLOAD, ImGuiDragDropFlags_AcceptBeforeDelivery |
+                                                         ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
+    if (payload && payload->DataSize == sizeof(WPE_Entity)) {
+        WPE_Ecs* ecs = wpe__ui_ecs(ui);
+        WPE_Entity child;
+        memcpy(&child, payload->Data, sizeof child);
+        const ImVec2_c min = igGetItemRectMin(), max = igGetItemRectMax();
+        const float y = igGetMousePos().y, edge = (max.y - min.y) * 0.25f;
+        const WPE_Entity parent = wpe_scene_get_parent(ecs, e);
+        int place = 0; /* -1 before, 0 inside, 1 after. */
+        if (parent != WPE_ENTITY_NULL && child != e) place = y < min.y + edge ? -1 : y > max.y - edge ? 1 : 0;
+        ImDrawList* draw = igGetWindowDrawList();
+        const ImU32 color = WPE__COL(120, 180, 255, 255);
+        if (place == 0) {
+            ImDrawList_AddRect(draw, min, max, color, 0.0f, 1.5f, 0);
+        } else {
+            const float line = place < 0 ? min.y : max.y;
+            ImDrawList_AddLine(draw, (ImVec2_c){min.x, line}, (ImVec2_c){max.x, line}, color, 2.0f);
+        }
+        if (ImGuiPayload_IsDelivery((ImGuiPayload*)payload)) {
+            if (place == 0) {
+                wpe__ui_set_parent(ui, child, e);
+            } else {
+                /* Its place among the siblings once the dragged one has left them. */
+                uint32_t index = wpe_scene_sibling_index(ecs, e);
+                if (wpe_scene_get_parent(ecs, child) == parent && wpe_scene_sibling_index(ecs, child) < index)
+                    --index;
+                wpe__ui_place(ui, child, parent, place > 0 ? index + 1 : index);
+            }
+        }
+    }
+    igEndDragDropTarget();
+}
+
 static void wpe__hierarchy_node(WPE_EditorUi* ui, WPE_Entity e) {
     WPE_Ecs* ecs = wpe__ui_ecs(ui);
     const WPE_Hierarchy* h = wpe_ecs_get_component(ecs, e, WPE_COMP_HIERARCHY);
@@ -1917,23 +1970,31 @@ static void wpe__hierarchy_node(WPE_EditorUi* ui, WPE_Entity e) {
         igText("%s", name ? name : "entity");
         igEndDragDropSource();
     }
-    if (igBeginDragDropTarget()) {
-        const ImGuiPayload* payload = igAcceptDragDropPayload(WPE__ENTITY_PAYLOAD, 0);
-        if (payload && payload->DataSize == sizeof(WPE_Entity)) {
-            WPE_Entity child;
-            memcpy(&child, payload->Data, sizeof child);
-            wpe__ui_set_parent(ui, child, e);
-        }
-        igEndDragDropTarget();
-    }
+    wpe__hierarchy_drop(ui, e);
     if (igBeginPopupContextItem(NULL, ImGuiPopupFlags_MouseButtonRight)) {
         if (igMenuItem_Bool("Duplicate", NULL, false, true))
             wpe__ui_entity_command(ui, "duplicate_entity", e);
         if (igMenuItem_Bool("Delete", NULL, false, true)) wpe__ui_entity_command(ui, "delete_entity", e);
-        if (igMenuItem_Bool("Detach from parent", NULL, false,
-                            wpe_scene_get_parent(ecs, e) != WPE_ENTITY_NULL &&
-                                (prefab_root == WPE_ENTITY_NULL || prefab_root == e)))
+        const WPE_Entity parent = wpe_scene_get_parent(ecs, e);
+        const bool movable =
+            parent != WPE_ENTITY_NULL && (prefab_root == WPE_ENTITY_NULL || prefab_root == e);
+        if (igMenuItem_Bool("Detach from parent", NULL, false, movable))
             wpe__ui_set_parent(ui, e, WPE_ENTITY_NULL);
+        /* Among its siblings: later ones are drawn on top in the UI. */
+        const uint32_t index = wpe_scene_sibling_index(ecs, e);
+        const WPE_Hierarchy* parent_node = wpe_ecs_get_component(ecs, parent, WPE_COMP_HIERARCHY);
+        const uint32_t last = parent_node && parent_node->child_count ? parent_node->child_count - 1 : 0;
+        if (igMenuItem_Bool("Move up", NULL, false, movable && index > 0))
+            wpe__ui_place(ui, e, parent, index - 1);
+        if (igMenuItem_Bool("Move down", NULL, false, movable && index < last))
+            wpe__ui_place(ui, e, parent, index + 1);
+        if (igMenuItem_Bool("Move to first (drawn below)", NULL, false, movable && index > 0))
+            wpe__ui_place(ui, e, parent, 0);
+        if (igMenuItem_Bool("Move to last (drawn on top)", NULL, false, movable && index < last))
+            wpe__ui_place(ui, e, parent, last);
+        if (parent == WPE_ENTITY_NULL && igIsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            igSetTooltip("Roots keep the order they were created in: put them under a common parent to order "
+                         "them");
         igSeparator();
         /* A plain tree or an instance root can be saved as a (new) prefab; members can't on their own. */
         if (igMenuItem_Bool("Save as prefab...", NULL, false,

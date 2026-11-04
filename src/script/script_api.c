@@ -180,6 +180,25 @@ static int wpe__api_set_parent(lua_State* L) {
     return 0;
 }
 
+/* Places among siblings are 1-based in Luau. */
+static int wpe__api_get_sibling_index(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    lua_pushnumber(L, (double)wpe_scene_sibling_index(wpe__script_host_from(L)->ecs, entity) + 1.0);
+    return 1;
+}
+
+static int wpe__api_set_sibling_index(lua_State* L) {
+    WPE_ScriptHost* host = wpe__check_unrestricted(L, "set_sibling_index");
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const double index = luaL_checknumber(L, 2);
+    luaL_argcheck(L, index >= 1.0 && index == floor(index), 2, "a whole number from 1");
+    if (wpe_scene_get_parent(host->ecs, entity) == WPE_ENTITY_NULL)
+        luaL_error(L, "set_sibling_index: the entity is a root (only children can change places)");
+    const uint32_t place = index > (double)UINT32_MAX ? UINT32_MAX : (uint32_t)(index - 1.0);
+    wpe__raise_result(L, "set_sibling_index", wpe_scene_set_sibling_index(host->ecs, entity, place));
+    return 0;
+}
+
 static int wpe__api_children(lua_State* L) {
     const WPE_Entity entity = wpe__check_entity(L, 1);
     const WPE_Ecs* ecs = wpe__script_host_from(L)->ecs;
@@ -3975,6 +3994,8 @@ static const luaL_Reg wpe__api[] = {
     {"find", wpe__api_find},
     {"get_parent", wpe__api_get_parent},
     {"set_parent", wpe__api_set_parent},
+    {"get_sibling_index", wpe__api_get_sibling_index},
+    {"set_sibling_index", wpe__api_set_sibling_index},
     {"children", wpe__api_children},
     {"instantiate", wpe__api_instantiate},
     {"attach_script", wpe__api_attach_script},

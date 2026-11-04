@@ -252,6 +252,47 @@ WPE_Result wpe_scene_set_parent(WPE_Ecs* ecs, WPE_Entity child, WPE_Entity paren
     return WPE_RESULT_OK;
 }
 
+uint32_t wpe_scene_sibling_index(const WPE_Ecs* ecs, WPE_Entity entity) {
+    const WPE_Hierarchy* node = ecs ? wpe__scene_hierarchy(ecs, entity) : NULL;
+    uint32_t index = 0;
+    while (node && node->prev_sibling != WPE_ENTITY_NULL) {
+        node = wpe__scene_hierarchy(ecs, node->prev_sibling);
+        ++index;
+    }
+    return index;
+}
+
+WPE_Result wpe_scene_set_sibling_index(WPE_Ecs* ecs, WPE_Entity entity, uint32_t index) {
+    if (!ecs) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!wpe_ecs_is_alive(ecs, entity)) return WPE_RESULT_ERROR_NOT_FOUND;
+    WPE_Hierarchy* node = wpe__scene_hierarchy(ecs, entity);
+    if (!node || node->parent == WPE_ENTITY_NULL) {
+        wpe_log_error("entity 0x%08x is a root: only children can change places", entity);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    const WPE_Entity parent = node->parent;
+    WPE_Hierarchy* parent_node = wpe__scene_hierarchy(ecs, parent);
+    wpe__scene_unlink_from_parent(ecs, entity, node);
+    /* Between `prev` (NULL: first) and the sibling after it. */
+    WPE_Entity prev = WPE_ENTITY_NULL;
+    WPE_Entity next = parent_node->first_child;
+    for (uint32_t i = 0; i < index && next != WPE_ENTITY_NULL; ++i) {
+        prev = next;
+        next = wpe__scene_hierarchy(ecs, next)->next_sibling;
+    }
+    node->parent = parent;
+    node->prev_sibling = prev;
+    node->next_sibling = next;
+    if (prev != WPE_ENTITY_NULL) {
+        wpe__scene_hierarchy(ecs, prev)->next_sibling = entity;
+    } else {
+        parent_node->first_child = entity;
+    }
+    if (next != WPE_ENTITY_NULL) wpe__scene_hierarchy(ecs, next)->prev_sibling = entity;
+    ++parent_node->child_count;
+    return WPE_RESULT_OK;
+}
+
 WPE_Result wpe_scene_destroy_recursive(WPE_Ecs* ecs, WPE_Entity entity) {
     if (!ecs) return WPE_RESULT_ERROR_NULL_ARG;
     if (!wpe_ecs_is_alive(ecs, entity)) return WPE_RESULT_ERROR_NOT_FOUND;
