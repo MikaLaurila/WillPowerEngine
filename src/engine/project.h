@@ -11,7 +11,8 @@
  *   "name": "My Game", "start_scene": "scenes/level1.scene", "font": "fonts/small.png",
  *   "display": {"width": 320, "height": 240, "scale": 3, "vsync": true, "resizable": true, "fullscreen":
  * false}, "simulation": {"fixed_rate": 60, "max_steps": 8}, "assets": {"max_texture_size": 256}, "audio":
- * {"master": 1, "effects": 1, "music": 0.8}, "scripting": {"memory_limit_mb": 64, "time_limit_ms": 250},
+ * {"master": 1, "effects": 1, "music": 0.8, "voice": 1, "duck_volume": 0.35, "duck_attack": 0.15,
+ * "duck_release": 0.6}, "scripting": {"memory_limit_mb": 64, "time_limit_ms": 250},
  *   "prefabs": {"crate": "meshes/crate.prim", "figure": "meshes/RiggedFigure.glb"},
  *   "network": {"port": 47810, "discovery_port": 47809, "max_players": 4, "timeout_ms": 5000,
  *               "tick_rate": 30, "interpolation_ms": 100},
@@ -80,7 +81,8 @@ typedef struct WPE_ProjectSettings {
     double fixed_rate;                  /* Simulation steps per second (1..1000). */
     uint32_t max_steps;                 /* Fixed steps per frame before the clock drops time (1..64). */
     uint32_t max_texture_size;          /* Model texture cap (0 = original size). */
-    float volumes[WPE_AUDIO_BUS_COUNT]; /* Bus gains (master, effects, music). */
+    float volumes[WPE_AUDIO_BUS_COUNT]; /* Bus gains (master, effects, music, voice). */
+    WPE_AudioDucking ducking;           /* "duck_volume", "duck_attack", "duck_release" in "audio". */
     uint32_t script_memory_mb;          /* Luau heap limit (1..4096). */
     double script_time_limit_ms;        /* Per-callback budget (1..60000). */
     WPE_InputSettings input;            /* keyboard_player is 0-based here, 1-based in the file. */

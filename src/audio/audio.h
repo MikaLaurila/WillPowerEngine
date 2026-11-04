@@ -21,6 +21,11 @@
  * Per-frame update: wpe_audio_update() after transforms are final (it reads world positions),
  * typically right before rendering.
  *
+ * Ducking: while a ducking voice plays (anything on the voice bus, and sounds played or sources made with
+ * `duck`), the music bus fades down to WPE_AudioDucking.volume over `attack` seconds, and back up over
+ * `release` once the last one has ended (noticed by wpe_audio_update()). It multiplies the bus volume and
+ * the tracks' own crossfades.
+ *
  * Without an audio device (wpe_audio_create() with no_device, or when no device can be opened) the
  * mixer runs only when wpe_audio_render() is called, which makes audio testable and recordable.
  *
@@ -43,11 +48,19 @@ typedef enum WPE_AudioBus {
     WPE_AUDIO_BUS_MASTER = 0, /* Everything. */
     WPE_AUDIO_BUS_EFFECTS,    /* Sound sources and one-shots (default). */
     WPE_AUDIO_BUS_MUSIC,      /* Music tracks. */
+    WPE_AUDIO_BUS_VOICE,      /* Dialogue and narration: ducks the music; keeps its speed in slow motion. */
 } WPE_AudioBus;
 
 /* A define rather than an enumerator: structs pairing a bus with a vector union would otherwise
  * trip clang-tidy's tagged-union heuristics. */
-#define WPE_AUDIO_BUS_COUNT 3u
+#define WPE_AUDIO_BUS_COUNT 4u
+
+/** How the music makes room for ducking sounds (wpe_audio_set_ducking). */
+typedef struct WPE_AudioDucking {
+    float volume;  /* The music's gain while ducked (0..1; default 0.35). */
+    float attack;  /* Seconds to fade down (0..10; default 0.15). */
+    float release; /* Seconds to come back once the last ducking sound has ended (0..10; default 0.6). */
+} WPE_AudioDucking;
 
 typedef struct WPE_Audio WPE_Audio;
 
@@ -64,10 +77,11 @@ typedef struct WPE_AudioSource {
     float pitch;           /* Playback rate, 1 = normal (> 0). */
     float min_distance;    /* Full volume up to this distance (spatial sources). */
     float max_distance;    /* No further attenuation beyond this distance. */
-    WPE_AudioBus bus;      /* EFFECTS or MUSIC. */
+    WPE_AudioBus bus;      /* EFFECTS, MUSIC or VOICE. */
     bool loop;
     bool spatial; /* Positioned at the entity; otherwise plays as-is (2D). */
     bool playing; /* Set to start/stop; cleared by the engine when a non-looping sound ends. */
+    bool duck;    /* Ducks the music while playing (always on the voice bus). Read when it starts. */
 
     /* Private (managed by the audio system). */
     WPE_Voice wpe__voice;
@@ -82,6 +96,7 @@ typedef struct WPE_AudioPlayDesc {
     WPE_Vec3 position;
     float min_distance; /* 0 = 1. */
     float max_distance; /* 0 = 50. */
+    bool duck;          /* Ducks the music while playing (always on the voice bus). */
 } WPE_AudioPlayDesc;
 
 typedef struct WPE_AudioDesc {
@@ -145,8 +160,8 @@ void wpe_audio_set_listener(WPE_Audio* audio, WPE_Entity entity);
 
 /**
  * Plays every effects-bus voice (one-shots and sources) at its pitch times `scale` (slow motion lowers and
- * slows them; 1 is normal). Below 0.01 they are held where they are and resume when it rises. The music bus
- * keeps its speed. Negative or non-finite scales are ignored.
+ * slows them; 1 is normal). Below 0.01 they are held where they are and resume when it rises. The music and
+ * voice buses keep their speed. Negative or non-finite scales are ignored.
  *
  * @thread_safety Owning thread
  */
@@ -194,6 +209,45 @@ void wpe_audio_stop_music(WPE_Audio* audio, float fade_seconds);
 /** @return Whether a music track is playing (excluding one that is fading out). @thread_safety Owning thread
  */
 bool wpe_audio_music_playing(const WPE_Audio* audio);
+
+/**
+ * Where the current music track is: seconds from its start (a looping track starts over at 0). A seek not yet
+ * carried out by the mixer already counts.
+ *
+ * @return The position, or a negative value without a current track.
+ *
+ * @thread_safety Owning thread
+ */
+double wpe_audio_music_position(const WPE_Audio* audio);
+
+/** @return The current track's length in seconds; 0 when it isn't known (some MP3s) or without a track.
+ * @thread_safety Owning thread */
+double wpe_audio_music_length(const WPE_Audio* audio);
+
+/**
+ * Moves the current music track to `seconds` from its start (clamped to its length when known). The mixer
+ * makes the jump at its next block.
+ *
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_INVALID_ARG (negative or not finite);
+ *         WPE_RESULT_ERROR_NOT_FOUND (no current track); WPE_RESULT_ERROR (the decoder can't seek; logged).
+ *
+ * @thread_safety Owning thread
+ */
+WPE_Result wpe_audio_seek_music(WPE_Audio* audio, double seconds);
+
+/** @return The default ducking: volume 0.35, attack 0.15 s, release 0.6 s. @thread_safety Any thread */
+WPE_AudioDucking wpe_audio_ducking_default(void);
+
+/** Sets how the music ducks. @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_INVALID_ARG
+ * (out of range; logged). @thread_safety Owning thread */
+WPE_Result wpe_audio_set_ducking(WPE_Audio* audio, const WPE_AudioDucking* ducking);
+
+/** @return The ducking settings. @thread_safety Owning thread */
+WPE_AudioDucking wpe_audio_ducking(const WPE_Audio* audio);
+
+/** @return Whether the music is ducked (or ducking) now: a ducking voice played at the last
+ * wpe_audio_update(), or has started since. @thread_safety Owning thread */
+bool wpe_audio_ducked(const WPE_Audio* audio);
 
 /** Sets a bus volume (linear gain >= 0). @thread_safety Owning thread */
 void wpe_audio_set_volume(WPE_Audio* audio, WPE_AudioBus bus, float volume);

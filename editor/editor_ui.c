@@ -464,7 +464,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
     static const char* const lights[] = {"directional", "point", "spot"};
     static const char* const bodies[] = {"static", "kinematic", "dynamic"};
     static const char* const shapes[] = {"box", "sphere", "capsule", "convex", "mesh"};
-    static const char* const buses[] = {"effects", "music"};
+    static const char* const buses[] = {"effects", "music", "voice"};
     static const char* const fogs[] = {"none", "linear", "exponential"};
     static const char* const effects[] = {
         "ssao",      "chromatic_aberration", "ps1",       "vignette", "color_adjust", "depth_of_field",
@@ -487,7 +487,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
         {"light", "type", lights, 3},
         {"rigidbody", "type", bodies, 3},
         {"collider", "shape", shapes, 5},
-        {"audio_source", "bus", buses, 2},
+        {"audio_source", "bus", buses, 3},
         {"fog", "mode", fogs, 3}, /* The environment's objects go by their own names (wpe__draw_value). */
         {"sky", "mode", skies, 3},
         {"environment", "effect", effects, (uint32_t)(sizeof effects / sizeof effects[0])},

@@ -358,7 +358,9 @@ Implemented in `src/audio/` (miniaudio, private).
 - Sounds (WAV/FLAC/MP3) are assets decoded once to float PCM and shared by voices; voices resample to the mixer rate on playback.
 - `WPE_AudioSource` components play at their entity's position, with inverse-distance attenuation and panning; the listener follows one entity (usually the camera).
 - One-shots use a pool of 64 voices (the oldest one-shot is stolen when full). Music streams from the VFS with crossfades.
-- There are master, effects and music buses.
+- There are master, effects, music and voice (dialogue) buses. Only effects follow the game's time scale.
+- Music position and seeking are in the track's own seconds (the decoder's frames); a pending seek already counts.
+- Ducking: while a ducking voice plays (the voice bus always, others with `duck`), the music group's fader goes to `WPE_AudioDucking.volume` over `attack`, and back over `release` once `wpe_audio_update` finds none playing. It multiplies the bus volume and the tracks' crossfades.
 - Without an output device, mixing runs on demand (`wpe_audio_render`), which is what tests and headless runs use.
 
 ### 4.6 Input

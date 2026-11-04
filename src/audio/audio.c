@@ -48,6 +48,7 @@ typedef struct wpe__Voice {
     bool held;    /* Stopped by a time scale of 0, resumed when it rises. */
     bool loop;
     bool stopping; /* Music fading out before it is recycled. */
+    bool ducks;    /* Ducks the music while it plays. */
 } wpe__Voice;
 
 /* miniaudio VFS over the engine VFS (miniaudio expects the callbacks first). */
@@ -62,6 +63,8 @@ struct WPE_Audio {
     ma_engine engine;
     ma_sound_group groups[WPE_AUDIO_BUS_COUNT]; /* [MASTER] unused: the engine volume is the master. */
     float volumes[WPE_AUDIO_BUS_COUNT];
+    WPE_AudioDucking ducking;
+    bool ducked; /* The music group's fader is heading for ducking.volume. */
     ma_allocation_callbacks allocation;
     wpe__MaVfs vfs;
     wpe__Voice voices[WPE_AUDIO_MAX_VOICES];
@@ -286,6 +289,7 @@ static void wpe__recycle(WPE_Audio* audio, wpe__Voice* voice) {
     voice->stopping = false;
     voice->held = false;
     voice->effects = false;
+    voice->ducks = false;
     voice->pitch = 1.0f;
     voice->generation = voice->generation >= WPE__VOICE_MAX_GENERATION ? 1u : voice->generation + 1u;
 }
@@ -305,15 +309,31 @@ static wpe__Voice* wpe__acquire_voice(WPE_Audio* audio) {
 }
 
 static ma_sound_group* wpe__group(WPE_Audio* audio, WPE_AudioBus bus) {
-    return &audio->groups[bus == WPE_AUDIO_BUS_MUSIC ? WPE_AUDIO_BUS_MUSIC : WPE_AUDIO_BUS_EFFECTS];
+    if (bus == WPE_AUDIO_BUS_MUSIC || bus == WPE_AUDIO_BUS_VOICE) return &audio->groups[bus];
+    return &audio->groups[WPE_AUDIO_BUS_EFFECTS];
 }
 
 typedef struct wpe__VoiceParams {
     float volume, pitch, min_distance, max_distance;
     WPE_AudioBus bus;
-    bool loop, spatial;
+    bool loop, spatial, duck;
     WPE_Vec3 position;
 } wpe__VoiceParams;
+
+static uint64_t wpe__fade_ms(float seconds) {
+    return seconds > 0.0f ? (uint64_t)(seconds * 1000.0f + 0.5f) : 0;
+}
+
+/* Fades the music group toward the ducked volume or back, from wherever it is now. */
+static void wpe__set_ducked(WPE_Audio* audio, bool ducked) {
+    if (audio->ducked == ducked) return;
+    audio->ducked = ducked;
+    const float seconds = ducked ? audio->ducking.attack : audio->ducking.release;
+    const uint64_t ms = wpe__fade_ms(seconds);
+    /* A fade of 0 frames would hold the start volume until the cursor moves: at least 1 ms. */
+    ma_sound_group_set_fade_in_milliseconds(&audio->groups[WPE_AUDIO_BUS_MUSIC], -1.0f,
+                                            ducked ? audio->ducking.volume : 1.0f, ms > 0 ? ms : 1);
+}
 
 static void wpe__apply_spatial(wpe__Voice* voice, const wpe__VoiceParams* p) {
     ma_sound_set_attenuation_model(&voice->sound, ma_attenuation_model_inverse);
@@ -367,12 +387,14 @@ static wpe__Voice* wpe__start_sound(WPE_Audio* audio, WPE_AssetHandle asset, wpe
     voice->loop = p->loop;
     voice->serial = ++audio->serial;
     voice->pitch = p->pitch;
-    voice->effects = p->bus != WPE_AUDIO_BUS_MUSIC;
+    voice->effects = p->bus != WPE_AUDIO_BUS_MUSIC && p->bus != WPE_AUDIO_BUS_VOICE;
+    voice->ducks = p->duck || p->bus == WPE_AUDIO_BUS_VOICE;
     ma_sound_set_volume(&voice->sound, p->volume);
     ma_sound_set_looping(&voice->sound, p->loop);
     if (p->spatial) wpe__apply_spatial(voice, p);
     ma_sound_start(&voice->sound);
     wpe__apply_pitch(audio, voice); /* After starting: a standstill holds it at its first frame. */
+    if (voice->ducks) wpe__set_ducked(audio, true); /* Now, not at the next update: the line's first word. */
     return voice;
 }
 
@@ -443,6 +465,7 @@ WPE_Result wpe_audio_create(const WPE_AudioDesc* desc, WPE_Audio** out_audio) {
     audio->assets = desc->assets;
     audio->allocation = wpe__ma_allocation;
     audio->time_scale = 1.0f;
+    audio->ducking = wpe_audio_ducking_default();
     for (uint32_t i = 0; i < WPE_AUDIO_BUS_COUNT; ++i)
         audio->volumes[i] = 1.0f;
     for (uint32_t i = 0; i < WPE_AUDIO_MAX_VOICES; ++i)
@@ -472,14 +495,15 @@ WPE_Result wpe_audio_create(const WPE_AudioDesc* desc, WPE_Audio** out_audio) {
         wpe_free(audio);
         return result;
     }
-    audio->groups_ready =
-        ma_sound_group_init(&audio->engine, 0, NULL, &audio->groups[WPE_AUDIO_BUS_EFFECTS]) == MA_SUCCESS;
-    if (audio->groups_ready &&
-        ma_sound_group_init(&audio->engine, 0, NULL, &audio->groups[WPE_AUDIO_BUS_MUSIC]) != MA_SUCCESS) {
-        ma_sound_group_uninit(&audio->groups[WPE_AUDIO_BUS_EFFECTS]);
-        audio->groups_ready = false;
-    }
+    /* A group per bus but the master (the engine's own volume). */
+    uint32_t made = WPE_AUDIO_BUS_EFFECTS;
+    while (made < WPE_AUDIO_BUS_COUNT &&
+           ma_sound_group_init(&audio->engine, 0, NULL, &audio->groups[made]) == MA_SUCCESS)
+        ++made;
+    audio->groups_ready = made == WPE_AUDIO_BUS_COUNT;
     if (!audio->groups_ready) {
+        while (made > WPE_AUDIO_BUS_EFFECTS)
+            ma_sound_group_uninit(&audio->groups[--made]);
         ma_engine_uninit(&audio->engine);
         wpe_free(audio);
         return WPE_RESULT_ERROR_OUT_OF_MEMORY;
@@ -499,8 +523,8 @@ WPE_Result wpe_audio_create(const WPE_AudioDesc* desc, WPE_Audio** out_audio) {
         if (result != WPE_RESULT_OK) wpe_asset_manager_unregister_type(audio->assets, WPE_ASSET_SOUND);
     }
     if (result != WPE_RESULT_OK) {
-        ma_sound_group_uninit(&audio->groups[WPE_AUDIO_BUS_MUSIC]);
-        ma_sound_group_uninit(&audio->groups[WPE_AUDIO_BUS_EFFECTS]);
+        for (uint32_t bus = WPE_AUDIO_BUS_EFFECTS; bus < WPE_AUDIO_BUS_COUNT; ++bus)
+            ma_sound_group_uninit(&audio->groups[bus]);
         ma_engine_uninit(&audio->engine);
         wpe_free(audio);
         return result;
@@ -522,8 +546,8 @@ void wpe_audio_destroy(WPE_Audio* audio) {
     if (wpe_asset_manager_unregister_type(audio->assets, WPE_ASSET_SOUND) != WPE_RESULT_OK)
         wpe_log_error(
             "sounds are still referenced at audio shutdown; release them before wpe_audio_destroy()");
-    ma_sound_group_uninit(&audio->groups[WPE_AUDIO_BUS_MUSIC]);
-    ma_sound_group_uninit(&audio->groups[WPE_AUDIO_BUS_EFFECTS]);
+    for (uint32_t bus = WPE_AUDIO_BUS_EFFECTS; bus < WPE_AUDIO_BUS_COUNT; ++bus)
+        ma_sound_group_uninit(&audio->groups[bus]);
     ma_engine_uninit(&audio->engine);
     wpe_free(audio);
 }
@@ -545,6 +569,7 @@ static wpe__VoiceParams wpe__source_params(const WPE_AudioSource* source, WPE_Ve
                               .bus = source->bus,
                               .loop = source->loop,
                               .spatial = source->spatial,
+                              .duck = source->duck,
                               .position = position};
 }
 
@@ -601,13 +626,16 @@ WPE_Result wpe_audio_update(WPE_Audio* audio) {
     }
 
     /* One-shots and music: recycle finished voices (this releases their sounds). */
+    bool ducking = false;
     for (uint32_t i = 0; i < WPE_AUDIO_MAX_VOICES; ++i) {
         wpe__Voice* voice = &audio->voices[i];
         if (voice->kind == WPE__VOICE_ONESHOT && ma_sound_at_end(&voice->sound)) wpe__recycle(audio, voice);
         if (voice->kind == WPE__VOICE_MUSIC &&
             (ma_sound_at_end(&voice->sound) || (voice->stopping && !ma_sound_is_playing(&voice->sound))))
             wpe__recycle(audio, voice);
+        if (voice->kind != WPE__VOICE_FREE && voice->ducks && !ma_sound_at_end(&voice->sound)) ducking = true;
     }
+    wpe__set_ducked(audio, ducking); /* The music comes back once the last ducking voice has ended. */
     return WPE_RESULT_OK;
 }
 
@@ -642,6 +670,7 @@ WPE_Voice wpe_audio_play(WPE_Audio* audio, WPE_AssetHandle sound, const WPE_Audi
                                      .bus = desc->bus,
                                      .loop = desc->loop,
                                      .spatial = desc->spatial,
+                                     .duck = desc->duck,
                                      .position = desc->position};
     const wpe__Voice* voice = wpe__start_sound(audio, sound, WPE__VOICE_ONESHOT, &params);
     return voice ? wpe__voice_id(audio, (uint32_t)(voice - audio->voices)) : WPE_VOICE_NONE;
@@ -664,10 +693,6 @@ void wpe_audio_set_voice_position(WPE_Audio* audio, WPE_Voice id, WPE_Vec3 posit
 }
 
 /* ---- Music --------------------------------------------------------------------------------------- */
-
-static uint64_t wpe__fade_ms(float seconds) {
-    return seconds > 0.0f ? (uint64_t)(seconds * 1000.0f + 0.5f) : 0;
-}
 
 WPE_Result wpe_audio_play_music(WPE_Audio* audio, const char* path, float fade_seconds, bool loop) {
     if (!audio || !path) return WPE_RESULT_ERROR_NULL_ARG;
@@ -726,6 +751,90 @@ void wpe_audio_stop_music(WPE_Audio* audio, float fade_seconds) {
 bool wpe_audio_music_playing(const WPE_Audio* audio) {
     const wpe__Voice* voice = wpe__voice(audio, audio ? audio->music : WPE_VOICE_NONE);
     return voice && !ma_sound_at_end(&voice->sound);
+}
+
+/* The track's own frames: the decoder's rate (the mixer resamples it). */
+static bool wpe__music_frames(const wpe__Voice* voice, ma_uint64* out_cursor, ma_uint64* out_length,
+                              ma_uint32* out_rate) {
+    ma_uint32 rate = 0;
+    if (ma_sound_get_data_format(&voice->sound, NULL, NULL, &rate, NULL, 0) != MA_SUCCESS || rate == 0)
+        return false;
+    *out_rate = rate;
+    if (out_cursor && ma_sound_get_cursor_in_pcm_frames(&voice->sound, out_cursor) != MA_SUCCESS)
+        return false;
+    if (out_length && ma_sound_get_length_in_pcm_frames(&voice->sound, out_length) != MA_SUCCESS)
+        *out_length = 0;
+    return true;
+}
+
+double wpe_audio_music_position(const WPE_Audio* audio) {
+    const wpe__Voice* voice = wpe__voice(audio, audio ? audio->music : WPE_VOICE_NONE);
+    ma_uint64 cursor = 0, length = 0;
+    ma_uint32 rate = 0;
+    if (!voice || !wpe__music_frames(voice, &cursor, &length, &rate)) return -1.0;
+    if (length > 0 && cursor > length) cursor = length;
+    return (double)cursor / (double)rate;
+}
+
+double wpe_audio_music_length(const WPE_Audio* audio) {
+    const wpe__Voice* voice = wpe__voice(audio, audio ? audio->music : WPE_VOICE_NONE);
+    ma_uint64 length = 0;
+    ma_uint32 rate = 0;
+    if (!voice || !wpe__music_frames(voice, NULL, &length, &rate)) return 0.0;
+    return (double)length / (double)rate;
+}
+
+WPE_Result wpe_audio_seek_music(WPE_Audio* audio, double seconds) {
+    if (!audio) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!(seconds >= 0.0) || !isfinite(seconds)) {
+        wpe_log_error("music can't seek to %g seconds", seconds);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    wpe__Voice* voice = wpe__voice(audio, audio->music);
+    if (!voice) return WPE_RESULT_ERROR_NOT_FOUND;
+    ma_uint64 length = 0;
+    ma_uint32 rate = 0;
+    if (!wpe__music_frames(voice, NULL, &length, &rate)) {
+        wpe_log_error("the music track can't seek");
+        return WPE_RESULT_ERROR;
+    }
+    ma_uint64 frame = (ma_uint64)(seconds * rate + 0.5);
+    if (length > 0 && frame > length) frame = length;
+    if (ma_sound_seek_to_pcm_frame(&voice->sound, frame) != MA_SUCCESS) {
+        wpe_log_error("the music track can't seek");
+        return WPE_RESULT_ERROR;
+    }
+    return WPE_RESULT_OK;
+}
+
+/* ---- Ducking ------------------------------------------------------------------------------------- */
+
+WPE_AudioDucking wpe_audio_ducking_default(void) {
+    return (WPE_AudioDucking){.volume = 0.35f, .attack = 0.15f, .release = 0.6f};
+}
+
+WPE_Result wpe_audio_set_ducking(WPE_Audio* audio, const WPE_AudioDucking* ducking) {
+    if (!audio || !ducking) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!(ducking->volume >= 0.0f && ducking->volume <= 1.0f) ||
+        !(ducking->attack >= 0.0f && ducking->attack <= 10.0f) ||
+        !(ducking->release >= 0.0f && ducking->release <= 10.0f)) {
+        wpe_log_error("ducking out of range (volume 0..1, attack and release 0..10 s)");
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    audio->ducking = *ducking;
+    if (audio->ducked) { /* Already ducked: go to the new level. */
+        audio->ducked = false;
+        wpe__set_ducked(audio, true);
+    }
+    return WPE_RESULT_OK;
+}
+
+WPE_AudioDucking wpe_audio_ducking(const WPE_Audio* audio) {
+    return audio ? audio->ducking : wpe_audio_ducking_default();
+}
+
+bool wpe_audio_ducked(const WPE_Audio* audio) {
+    return audio && audio->ducked;
 }
 
 /* ---- Mixing -------------------------------------------------------------------------------------- */

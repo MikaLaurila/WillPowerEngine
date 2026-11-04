@@ -1477,8 +1477,9 @@ static WPE_Audio* wpe__audio(lua_State* L) {
 }
 
 static WPE_AudioBus wpe__check_bus(lua_State* L, float value) {
-    if (!(value == WPE_AUDIO_BUS_MASTER || value == WPE_AUDIO_BUS_EFFECTS || value == WPE_AUDIO_BUS_MUSIC))
-        luaL_errorL(L, "bus must be wpe.BUS_MASTER, wpe.BUS_EFFECTS or wpe.BUS_MUSIC");
+    if (!(value == WPE_AUDIO_BUS_MASTER || value == WPE_AUDIO_BUS_EFFECTS || value == WPE_AUDIO_BUS_MUSIC ||
+          value == WPE_AUDIO_BUS_VOICE))
+        luaL_errorL(L, "bus must be wpe.BUS_MASTER, wpe.BUS_EFFECTS, wpe.BUS_MUSIC or wpe.BUS_VOICE");
     return (WPE_AudioBus)value;
 }
 
@@ -1501,6 +1502,7 @@ static int wpe__api_play_sound(lua_State* L) {
         desc.max_distance = wpe__field_number(L, 2, "max_distance", 0.0f);
         desc.bus = wpe__check_bus(L, wpe__field_number(L, 2, "bus", (float)desc.bus));
         desc.loop = wpe__field_bool(L, 2, "loop", false);
+        desc.duck = wpe__field_bool(L, 2, "duck", false);
         lua_getfield(L, 2, "position");
         if (!lua_isnil(L, -1)) {
             desc.position = wpe__check_vec3(L, -1);
@@ -1539,6 +1541,7 @@ static int wpe__api_add_audio_source(lua_State* L) {
     source.bus = wpe__check_bus(L, wpe__field_number(L, 2, "bus", (float)source.bus));
     source.loop = wpe__field_bool(L, 2, "loop", source.loop);
     source.spatial = wpe__field_bool(L, 2, "spatial", source.spatial);
+    source.duck = wpe__field_bool(L, 2, "duck", source.duck);
     source.playing = wpe__field_bool(L, 2, "play", true);
     if (!(source.volume >= 0.0f) || !(source.pitch > 0.0f) || !(source.min_distance > 0.0f) ||
         !(source.max_distance >= source.min_distance))
@@ -1596,6 +1599,65 @@ static int wpe__api_play_music(lua_State* L) {
 static int wpe__api_stop_music(lua_State* L) {
     wpe_audio_stop_music(wpe__audio(L), (float)luaL_optnumber(L, 1, 0.0));
     return 0;
+}
+
+static int wpe__api_music_position(lua_State* L) {
+    const double position = wpe_audio_music_position(wpe__audio(L));
+    if (position < 0.0) {
+        lua_pushnil(L);
+    } else {
+        lua_pushnumber(L, position);
+    }
+    return 1;
+}
+
+static int wpe__api_music_length(lua_State* L) {
+    WPE_Audio* audio = wpe__audio(L);
+    const double length = wpe_audio_music_length(audio);
+    if (wpe_audio_music_position(audio) < 0.0 || length <= 0.0) {
+        lua_pushnil(L);
+    } else {
+        lua_pushnumber(L, length);
+    }
+    return 1;
+}
+
+static int wpe__api_seek_music(lua_State* L) {
+    WPE_Audio* audio = wpe__audio(L);
+    const double seconds = luaL_checknumber(L, 1);
+    if (!(seconds >= 0.0) || !isfinite(seconds)) luaL_errorL(L, "wpe.seek_music: seconds must be >= 0");
+    lua_pushboolean(L, wpe_audio_seek_music(audio, seconds) == WPE_RESULT_OK); /* False: no music playing. */
+    return 1;
+}
+
+static int wpe__api_set_ducking(lua_State* L) {
+    WPE_Audio* audio = wpe__audio(L);
+    luaL_checktype(L, 1, LUA_TTABLE);
+    WPE_AudioDucking ducking = wpe_audio_ducking(audio);
+    ducking.volume = wpe__field_number(L, 1, "volume", ducking.volume);
+    ducking.attack = wpe__field_number(L, 1, "attack", ducking.attack);
+    ducking.release = wpe__field_number(L, 1, "release", ducking.release);
+    if (!(ducking.volume >= 0.0f && ducking.volume <= 1.0f) ||
+        !(ducking.attack >= 0.0f && ducking.attack <= 10.0f) ||
+        !(ducking.release >= 0.0f && ducking.release <= 10.0f))
+        luaL_errorL(L, "wpe.set_ducking: volume is 0..1, attack and release 0..10 seconds");
+    wpe__raise_result(L, "set_ducking", wpe_audio_set_ducking(audio, &ducking));
+    return 0;
+}
+
+static int wpe__api_get_ducking(lua_State* L) {
+    WPE_Audio* audio = wpe__audio(L);
+    const WPE_AudioDucking ducking = wpe_audio_ducking(audio);
+    lua_createtable(L, 0, 4);
+    lua_pushnumber(L, ducking.volume);
+    lua_setfield(L, -2, "volume");
+    lua_pushnumber(L, ducking.attack);
+    lua_setfield(L, -2, "attack");
+    lua_pushnumber(L, ducking.release);
+    lua_setfield(L, -2, "release");
+    lua_pushboolean(L, wpe_audio_ducked(audio));
+    lua_setfield(L, -2, "active");
+    return 1;
 }
 
 static int wpe__api_set_volume(lua_State* L) {
@@ -3894,6 +3956,11 @@ static const luaL_Reg wpe__api[] = {
     {"is_audio_playing", wpe__api_is_audio_playing},
     {"play_music", wpe__api_play_music},
     {"stop_music", wpe__api_stop_music},
+    {"music_position", wpe__api_music_position},
+    {"music_length", wpe__api_music_length},
+    {"seek_music", wpe__api_seek_music},
+    {"set_ducking", wpe__api_set_ducking},
+    {"get_ducking", wpe__api_get_ducking},
     {"set_volume", wpe__api_set_volume},
     {"get_volume", wpe__api_get_volume},
     {"action_down", wpe__api_action_down},
@@ -4013,7 +4080,7 @@ void wpe__script_api_register(lua_State* L) {
         {"COLLIDER_SPHERE", WPE_COLLIDER_SPHERE}, {"COLLIDER_CAPSULE", WPE_COLLIDER_CAPSULE},
         {"COLLIDER_CONVEX", WPE_COLLIDER_CONVEX}, {"COLLIDER_MESH", WPE_COLLIDER_MESH},
         {"BUS_MASTER", WPE_AUDIO_BUS_MASTER},     {"BUS_EFFECTS", WPE_AUDIO_BUS_EFFECTS},
-        {"BUS_MUSIC", WPE_AUDIO_BUS_MUSIC},
+        {"BUS_MUSIC", WPE_AUDIO_BUS_MUSIC},       {"BUS_VOICE", WPE_AUDIO_BUS_VOICE},
     };
     for (size_t i = 0; i < sizeof constants / sizeof constants[0]; ++i) {
         lua_pushnumber(L, constants[i].value);

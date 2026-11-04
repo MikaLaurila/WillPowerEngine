@@ -4,6 +4,18 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (v1.0: music position and ducking)
+- Music position: `wpe.music_position()`, `wpe.music_length()` and `wpe.seek_music(seconds)` (C:
+  `wpe_audio_music_position`, `_music_length`, `_seek_music`), in the track's own seconds; a seek counts at
+  once, past the end clamps to the end, a looping track starts over at 0.
+- Ducking: the music fades down while a ducking sound plays and comes back after the last one ends. Sounds on
+  the new voice bus always duck; others do with `duck = true` (`wpe.play_sound`, `wpe.add_audio_source`, the
+  scene key `duck`, `WPE_AudioPlayDesc.duck`, `WPE_AudioSource.duck`). `wpe.set_ducking({volume, attack,
+  release})` / `wpe.get_ducking()` (C: `wpe_audio_set_ducking`, `wpe_audio_ducked`); defaults 0.35, 0.15 s and
+  0.6 s, set per project with `duck_volume`, `duck_attack`, `duck_release` in `audio`.
+- A voice bus for dialogue (`WPE_AUDIO_BUS_VOICE`, `wpe.BUS_VOICE`, scene bus `"voice"`, project volume
+  `voice`): its own volume, ducks the music, and keeps its speed in slow motion.
+
 ### Added (v1.0: input rebinding and device prompts)
 - Rebinding: `wpe.get_bindings(action, [defaults])`, `wpe.set_bindings(action, list)`,
   `wpe.reset_bindings([action])`, `wpe.input_actions()`. Bindings are tables in the project file's schema.

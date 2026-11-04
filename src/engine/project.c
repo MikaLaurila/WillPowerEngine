@@ -22,6 +22,7 @@ void wpe_project_settings_default(WPE_ProjectSettings* out) {
     out->max_steps = 8;
     for (uint32_t i = 0; i < WPE_AUDIO_BUS_COUNT; ++i)
         out->volumes[i] = 1.0f;
+    out->ducking = wpe_audio_ducking_default();
     out->script_memory_mb = 64;
     out->script_time_limit_ms = 250.0;
     out->input = wpe_input_settings_default();
@@ -196,10 +197,15 @@ static bool wpe__parse_project(wpe__JsonReader* r, const WPE_JsonValue* root, WP
                    !wpe__json_read_uint(r, assets, "max_texture_size", 0, 16384, &out->max_texture_size)))
         return false;
     const WPE_JsonValue* audio = wpe_json_get(root, "audio");
-    if (audio && (!WPE__JSON_CHECK_OBJECT(r, audio, "audio", "master", "effects", "music") ||
+    if (audio && (!WPE__JSON_CHECK_OBJECT(r, audio, "audio", "master", "effects", "music", "voice",
+                                          "duck_volume", "duck_attack", "duck_release") ||
                   !wpe__json_read_float(r, audio, "master", 0, 4, &out->volumes[WPE_AUDIO_BUS_MASTER]) ||
                   !wpe__json_read_float(r, audio, "effects", 0, 4, &out->volumes[WPE_AUDIO_BUS_EFFECTS]) ||
-                  !wpe__json_read_float(r, audio, "music", 0, 4, &out->volumes[WPE_AUDIO_BUS_MUSIC])))
+                  !wpe__json_read_float(r, audio, "music", 0, 4, &out->volumes[WPE_AUDIO_BUS_MUSIC]) ||
+                  !wpe__json_read_float(r, audio, "voice", 0, 4, &out->volumes[WPE_AUDIO_BUS_VOICE]) ||
+                  !wpe__json_read_float(r, audio, "duck_volume", 0, 1, &out->ducking.volume) ||
+                  !wpe__json_read_float(r, audio, "duck_attack", 0, 10, &out->ducking.attack) ||
+                  !wpe__json_read_float(r, audio, "duck_release", 0, 10, &out->ducking.release)))
         return false;
     const WPE_JsonValue* scripting = wpe_json_get(root, "scripting");
     if (scripting &&
@@ -383,6 +389,10 @@ WPE_Result wpe_project_write(const WPE_ProjectSettings* s, WPE_JsonWriter* w) {
     wpe__key_number(w, "master", s->volumes[WPE_AUDIO_BUS_MASTER]);
     wpe__key_number(w, "effects", s->volumes[WPE_AUDIO_BUS_EFFECTS]);
     wpe__key_number(w, "music", s->volumes[WPE_AUDIO_BUS_MUSIC]);
+    wpe__key_number(w, "voice", s->volumes[WPE_AUDIO_BUS_VOICE]);
+    wpe__key_number(w, "duck_volume", s->ducking.volume);
+    wpe__key_number(w, "duck_attack", s->ducking.attack);
+    wpe__key_number(w, "duck_release", s->ducking.release);
     wpe_json_write_object_end(w);
     wpe_json_write_key(w, "scripting");
     wpe_json_write_object_begin(w);

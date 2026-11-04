@@ -383,14 +383,24 @@ Available when the host was created with audio (otherwise these raise errors). S
 
 | Function | Description |
 |---|---|
-| `wpe.play_sound(path, [{volume, pitch, position, min_distance, max_distance, bus, loop}]) -> voice` | Play a sound once (or looping). With `position` it is 3D: attenuated with distance (full volume within `min_distance`) and panned. Returns a voice id, or 0 if all 64 voices are busy (the oldest one-shot is reused first). |
+| `wpe.play_sound(path, [{volume, pitch, position, min_distance, max_distance, bus, loop, duck}]) -> voice` | Play a sound once (or looping). With `position` it is 3D: attenuated with distance (full volume within `min_distance`) and panned. `duck = true` lowers the music while it plays (sounds on `wpe.BUS_VOICE` always do). Returns a voice id, or 0 if all 64 voices are busy (the oldest one-shot is reused first). |
 | `wpe.stop_sound(voice)` | Stop a voice. Ids of finished voices are ignored. |
-| `wpe.add_audio_source(entity, {sound, volume, pitch, loop, spatial, min_distance, max_distance, bus, play = true})` | Give the entity a sound that plays at its position (`spatial`, the default) or unpositioned. Replaces an existing source. |
+| `wpe.add_audio_source(entity, {sound, volume, pitch, loop, spatial, min_distance, max_distance, bus, duck, play = true})` | Give the entity a sound that plays at its position (`spatial`, the default) or unpositioned. Replaces an existing source. |
 | `wpe.remove_audio_source(entity)` | Remove the entity's sound source. |
 | `wpe.set_audio_playing(entity, bool)` / `wpe.is_audio_playing(entity)` | Start or stop the source. A non-looping source reports false once its sound has ended. |
 | `wpe.play_music(path, [fade_seconds = 0], [loop = true])` | Stream a music track, crossfading from the current one. |
 | `wpe.stop_music([fade_seconds = 0])` | Fade out and stop the music. |
-| `wpe.set_volume(bus, volume)` / `wpe.get_volume(bus)` | Linear volume (1 = unchanged) of `wpe.BUS_MASTER`, `wpe.BUS_EFFECTS` (sounds and sources) or `wpe.BUS_MUSIC`. |
+| `wpe.music_position() -> seconds?` | Where the current track is, in seconds from its start (a looping track starts over at 0); nil without music. A seek counts at once. |
+| `wpe.music_length() -> seconds?` | The current track's length; nil without music or when the file doesn't say (some MP3s). |
+| `wpe.seek_music(seconds) -> boolean` | Jumps the current track to `seconds` (past the end: to the end). False without music. |
+| `wpe.set_ducking({volume, attack, release})` / `wpe.get_ducking() -> {volume, attack, release, active}` | How the music makes room for ducking sounds: its volume while ducked (0..1, 0.35), the seconds it takes to go down (0.15) and to come back after the last one ends (0.6). Fields left out keep their value; `active` tells whether it is ducked now. The project file sets the starting values. |
+| `wpe.set_volume(bus, volume)` / `wpe.get_volume(bus)` | Linear volume (1 = unchanged) of `wpe.BUS_MASTER`, `wpe.BUS_EFFECTS` (sounds and sources), `wpe.BUS_MUSIC` or `wpe.BUS_VOICE` (dialogue: it ducks the music, and keeps its speed in slow motion). |
+
+Music to the beat: `music_position` is the track's own time, so a beat at 120 BPM is `math.floor(wpe.music_position() * 2)`. A line of dialogue over the music:
+
+```lua
+wpe.play_sound("voices/guard_halt.wav", { bus = wpe.BUS_VOICE }) -- the music dips under it, then returns
+```
 
 ### Input
 

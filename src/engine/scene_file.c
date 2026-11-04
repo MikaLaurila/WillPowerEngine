@@ -36,7 +36,7 @@
 static const char* const wpe__light_types[] = {"directional", "point", "spot"};
 static const char* const wpe__body_types[] = {"static", "kinematic", "dynamic"};
 static const char* const wpe__collider_shapes[] = {"box", "sphere", "capsule", "convex", "mesh"};
-static const char* const wpe__buses[] = {"master", "effects", "music"};
+static const char* const wpe__buses[] = {"master", "effects", "music", "voice"};
 static const char* const wpe__fog_modes[] = {"none", "linear", "exponential"};
 static const char* const wpe__sky_modes[] = {"color", "gradient", "panorama"};
 static const char* const wpe__texture_filters[] = {"material", "nearest", "bilinear", "three_point"};
@@ -487,6 +487,7 @@ void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
         wpe__write_bool(w, "loop", source->loop);
         wpe__write_bool(w, "spatial", source->spatial);
         wpe__write_bool(w, "playing", source->playing);
+        wpe__write_bool(w, "duck", source->duck);
         wpe_json_write_object_end(w);
     }
     wpe__save_ui_components(s, e);
@@ -1331,7 +1332,7 @@ static bool wpe__load_nav_obstacle(wpe__Loader* l, WPE_Entity e, const WPE_JsonV
 
 static bool wpe__load_audio_source(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "audio_source", "sound", "volume", "pitch", "min_distance",
-                                "max_distance", "bus", "loop", "spatial", "playing"))
+                                "max_distance", "bus", "loop", "spatial", "playing", "duck"))
         return false;
     if (!wpe_ecs_is_registered(l->context->ecs, WPE_COMP_AUDIO_SOURCE))
         return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_UNSUPPORTED,
@@ -1345,11 +1346,12 @@ static bool wpe__load_audio_source(wpe__Loader* l, WPE_Entity e, const WPE_JsonV
         !wpe__json_read_enum(&l->r, v, "bus", wpe__buses, WPE__COUNT(wpe__buses), &bus) ||
         !wpe__json_read_bool(&l->r, v, "loop", &source.loop) ||
         !wpe__json_read_bool(&l->r, v, "spatial", &source.spatial) ||
-        !wpe__json_read_bool(&l->r, v, "playing", &source.playing))
+        !wpe__json_read_bool(&l->r, v, "playing", &source.playing) ||
+        !wpe__json_read_bool(&l->r, v, "duck", &source.duck))
         return false;
     if (bus == WPE_AUDIO_BUS_MASTER)
         return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE,
-                              "audio sources play on the \"effects\" or \"music\" bus");
+                              "audio sources play on the \"effects\", \"music\" or \"voice\" bus");
     if (source.max_distance < source.min_distance)
         return wpe__json_fail(&l->r, v, WPE_RESULT_ERROR_PARSE,
                               "\"max_distance\" must not be below \"min_distance\"");

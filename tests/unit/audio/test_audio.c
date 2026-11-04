@@ -396,6 +396,116 @@ static void test_audio_music_streams_and_crossfades(void) {
     free_fixture(&f);
 }
 
+/* Position and seeking, in the track's own time (44.1 kHz here, mixed at 48 kHz). */
+static void test_audio_music_position_and_seek(void) {
+    Fixture f = make_fixture();
+    wpe_test_write_wav(ROOT "/sounds/song.wav", 2, 44100, 44100 * 3, 262.0f); /* 3 s */
+    quiet(true);
+    WPE_TEST_ASSERT(wpe_audio_music_position(f.audio) < 0.0);
+    WPE_TEST_ASSERT_NEAR(0.0, wpe_audio_music_length(f.audio), 0.0);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_audio_seek_music(f.audio, 1.0));
+    quiet(false);
+
+    WPE_TEST_ASSERT_OK(wpe_audio_play_music(f.audio, "sounds/song.wav", 0.0f, false));
+    WPE_TEST_ASSERT_NEAR(0.0, wpe_audio_music_position(f.audio), 1e-6);
+    WPE_TEST_ASSERT_NEAR(3.0, wpe_audio_music_length(f.audio), 1e-3);
+    advance(&f, 0.5f);
+    WPE_TEST_ASSERT_NEAR(0.5, wpe_audio_music_position(f.audio), 0.02);
+
+    /* A seek counts at once, and playing goes on from there. */
+    WPE_TEST_ASSERT_OK(wpe_audio_seek_music(f.audio, 2.0));
+    WPE_TEST_ASSERT_NEAR(2.0, wpe_audio_music_position(f.audio), 1e-3);
+    advance(&f, 0.25f);
+    WPE_TEST_ASSERT_NEAR(2.25, wpe_audio_music_position(f.audio), 0.02);
+    WPE_TEST_ASSERT(render_rms(&f, 2400) > 0.2f);
+    /* Backwards too; past the end clamps to it (a non-looping track then ends). */
+    WPE_TEST_ASSERT_OK(wpe_audio_seek_music(f.audio, 0.1));
+    advance(&f, 0.1f);
+    WPE_TEST_ASSERT_NEAR(0.2, wpe_audio_music_position(f.audio), 0.02);
+    WPE_TEST_ASSERT_OK(wpe_audio_seek_music(f.audio, 99.0));
+    WPE_TEST_ASSERT_NEAR(3.0, wpe_audio_music_position(f.audio), 1e-3);
+    advance(&f, 0.1f);
+    WPE_TEST_ASSERT(!wpe_audio_music_playing(f.audio));
+
+    /* A looping track starts over at 0. */
+    WPE_TEST_ASSERT_OK(wpe_audio_play_music(f.audio, "sounds/song.wav", 0.0f, true));
+    WPE_TEST_ASSERT_OK(wpe_audio_seek_music(f.audio, 2.9));
+    advance(&f, 0.3f);
+    WPE_TEST_ASSERT_NEAR(0.2, wpe_audio_music_position(f.audio), 0.02);
+    WPE_TEST_ASSERT(wpe_audio_music_playing(f.audio));
+    quiet(true);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_audio_seek_music(f.audio, -1.0));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_audio_seek_music(f.audio, NAN));
+    quiet(false);
+    wpe_audio_stop_music(f.audio, 0.0f);
+    free_fixture(&f);
+}
+
+/* The music drops under a voice line (silent here, so only the music is measured) and comes back after it. */
+static void test_audio_music_ducks_under_voices(void) {
+    Fixture f = make_fixture();
+    wpe_test_write_wav(ROOT "/sounds/song.wav", 2, RATE, RATE * 3, 262.0f);
+    wpe_test_write_wav(ROOT "/sounds/line.wav", 1, RATE, RATE / 2, 0.0f); /* 0.5 s of silence */
+    const WPE_AssetHandle line = load_sound(&f, "sounds/line.wav");
+    WPE_TEST_ASSERT_OK(wpe_audio_play_music(f.audio, "sounds/song.wav", 0.0f, true));
+    advance(&f, 0.1f);
+    const float full = render_rms(&f, 2400);
+    WPE_TEST_ASSERT(full > 0.2f && !wpe_audio_ducked(f.audio));
+
+    /* A line on the voice bus: down to 35% within the attack (0.15 s). */
+    WPE_TEST_ASSERT(wpe_audio_play(f.audio, line, &(WPE_AudioPlayDesc){.bus = WPE_AUDIO_BUS_VOICE}) !=
+                    WPE_VOICE_NONE);
+    WPE_TEST_ASSERT(wpe_audio_ducked(f.audio));
+    advance(&f, 0.05f);
+    const float falling = render_rms(&f, 480);
+    WPE_TEST_ASSERT(falling < full * 0.95f && falling > full * 0.35f);
+    advance(&f, 0.15f);
+    WPE_TEST_ASSERT_NEAR(full * 0.35, render_rms(&f, 2400), full * 0.02);
+    /* The line ends (0.5 s); the music returns over the release (0.6 s). */
+    advance(&f, 0.3f);
+    WPE_TEST_ASSERT(!wpe_audio_ducked(f.audio));
+    advance(&f, 0.7f);
+    WPE_TEST_ASSERT_NEAR(full, render_rms(&f, 2400), full * 0.02);
+
+    /* Effects don't duck unless asked to. */
+    wpe_audio_play(f.audio, line, NULL);
+    WPE_TEST_ASSERT_OK(wpe_audio_update(f.audio));
+    WPE_TEST_ASSERT(!wpe_audio_ducked(f.audio));
+    wpe_audio_play(f.audio, line, &(WPE_AudioPlayDesc){.duck = true});
+    WPE_TEST_ASSERT(wpe_audio_ducked(f.audio));
+    advance(&f, 0.6f);
+    WPE_TEST_ASSERT(!wpe_audio_ducked(f.audio));
+
+    /* Settings: a deeper duck applies to a duck under way; out of range is refused. */
+    WPE_TEST_ASSERT_OK(
+        wpe_audio_set_ducking(f.audio, &(WPE_AudioDucking){.volume = 0.0f, .attack = 0.0f, .release = 0.0f}));
+    WPE_AudioSource source = wpe_audio_source_default(line);
+    source.bus = WPE_AUDIO_BUS_VOICE;
+    source.spatial = false;
+    source.playing = true;
+    const WPE_Entity speaker = wpe_ecs_spawn(f.ecs);
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, speaker, WPE_COMP_AUDIO_SOURCE, &source, NULL));
+    WPE_TEST_ASSERT_OK(wpe_audio_update(f.audio)); /* Starts the source. */
+    WPE_TEST_ASSERT(wpe_audio_ducked(f.audio));
+    advance(&f, 0.05f);
+    WPE_TEST_ASSERT_NEAR(0.0, render_rms(&f, 480), 1e-3);
+    quiet(true);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_audio_set_ducking(f.audio, &(WPE_AudioDucking){.volume = 1.5f}));
+    WPE_TEST_ASSERT_EQ_INT(
+        WPE_RESULT_ERROR_INVALID_ARG,
+        wpe_audio_set_ducking(f.audio, &(WPE_AudioDucking){.volume = 0.5f, .release = -1.0f}));
+    quiet(false);
+    WPE_TEST_ASSERT_NEAR(0.0, wpe_audio_ducking(f.audio).volume, 0.0);
+    /* The voice bus has its own volume. */
+    wpe_audio_set_volume(f.audio, WPE_AUDIO_BUS_VOICE, 0.5f);
+    WPE_TEST_ASSERT_NEAR(0.5, wpe_audio_volume(f.audio, WPE_AUDIO_BUS_VOICE), 0.0);
+    wpe_audio_stop_music(f.audio, 0.0f);
+    wpe_ecs_despawn(f.ecs, speaker);
+    wpe_asset_release(f.assets.assets, line);
+    free_fixture(&f);
+}
+
 static void test_audio_create_validation(void) {
     WPE_TestAssets assets = wpe_test_assets_create(NULL, 0);
     WPE_Ecs* ecs = NULL;
@@ -432,4 +542,5 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_audio_sound_assets), WPE_TEST_CASE(test_audio_o
               WPE_TEST_CASE(test_audio_spatial_panning_and_attenuation),
               WPE_TEST_CASE(test_audio_source_components), WPE_TEST_CASE(test_audio_voice_stealing),
               WPE_TEST_CASE(test_audio_music_streams_and_crossfades),
-              WPE_TEST_CASE(test_audio_create_validation))
+              WPE_TEST_CASE(test_audio_music_position_and_seek),
+              WPE_TEST_CASE(test_audio_music_ducks_under_voices), WPE_TEST_CASE(test_audio_create_validation))

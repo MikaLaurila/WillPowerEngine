@@ -469,6 +469,7 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
     }
     for (uint32_t bus = 0; result == WPE_RESULT_OK && bus < WPE_AUDIO_BUS_COUNT; ++bus)
         wpe_audio_set_volume(engine->audio, (WPE_AudioBus)bus, p->volumes[bus]);
+    if (result == WPE_RESULT_OK) result = wpe_audio_set_ducking(engine->audio, &p->ducking);
     if (result == WPE_RESULT_OK) {
         const WPE_AudioStats stats = wpe_audio_stats(engine->audio);
         engine->audio_mix =

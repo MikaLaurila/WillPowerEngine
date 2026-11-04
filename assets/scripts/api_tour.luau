@@ -430,6 +430,9 @@ function Tour:on_start()
 	assert(wpe.is_audio_playing(self.speaker))
 	wpe.set_volume(wpe.BUS_EFFECTS, 0.8)
 	assert(near(wpe.get_volume(wpe.BUS_EFFECTS), 0.8))
+	wpe.set_volume(wpe.BUS_VOICE, 0.9)
+	assert(near(wpe.get_volume(wpe.BUS_VOICE), 0.9))
+	wpe.stop_sound(wpe.play_sound("sounds/chime.wav", { duck = true, volume = 0.1 }))
 
 	-- Input. The scene test runs headless (no keyboard or mouse); gamepads are optional, so their
 	-- results are only checked for type. Player 4 has neither the keyboard nor (normally) a pad.
@@ -615,6 +618,18 @@ function Tour:on_update(dt)
 		wpe.remove_audio_source(self.speaker)
 		wpe.stop_music(0.25)
 		wpe.play_music("music/ambient.wav", 0, true)
+		-- Music position and seeking (in the track's own seconds), and ducking under a voice line.
+		local length = wpe.music_length()
+		assert(length and length > 0 and near(wpe.music_position(), 0))
+		assert(wpe.seek_music(length / 2) and near(wpe.music_position(), length / 2))
+		assert(not pcall(wpe.seek_music, -1))
+		wpe.set_ducking({ volume = 0.4, attack = 0.1 })
+		local ducking = wpe.get_ducking()
+		assert(near(ducking.volume, 0.4) and near(ducking.attack, 0.1) and near(ducking.release, 0.6))
+		assert(not pcall(wpe.set_ducking, { volume = 2 }))
+		wpe.play_sound("sounds/chime.wav", { bus = wpe.BUS_VOICE, volume = 0.1 })
+		assert(wpe.get_ducking().active)
+		wpe.set_ducking({ volume = 0.35, attack = 0.15 })
 	elseif self.updates == 2 then
 		assert(select(2, wpe.ui_rect(self.hud)) == 18, "the moved HUD should be laid out again")
 	elseif self.updates == 3 then
