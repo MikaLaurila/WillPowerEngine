@@ -1,0 +1,219 @@
+{
+  "format": "wpe.scene",
+  "version": 1,
+  "environment": {
+    "clear_color": [0.66, 0.74, 0.84],
+    "ambient": [0.28, 0.28, 0.32],
+    "fog": {"mode": "linear", "color": [0.66, 0.74, 0.84], "start": 20, "end": 55},
+    "sky": {"mode": "gradient", "zenith": [0.26, 0.42, 0.72], "horizon": [0.7, 0.76, 0.84], "ground": [0.38, 0.38, 0.4],
+            "curve": 0.6, "sun_size": 2.5, "sun_color": [1, 0.93, 0.78], "sun_glow": 0.35},
+    "shadows": {"enabled": true, "map_size": 1024, "distance": 24},
+    "music": {"path": "music/village.wav", "fade": 1}
+  },
+  "camera": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "camera",
+      "transform": {"position": [0, 3, 14]},
+      "camera": {"fov": 65, "near": 0.1, "far": 80},
+      "script": {"path": "scripts/orbit_camera.luau"}
+    },
+    {
+      "id": 2,
+      "name": "player",
+      "transform": {"position": [0, 0, 8]},
+      "character": {"radius": 0.35, "height": 1.8, "offset": [0, 0.9, 0]},
+      "script": {"path": "scripts/player.luau"}
+    },
+    {
+      "id": 3,
+      "name": "figure",
+      "parent": 2,
+      "transform": {"euler": [0, 180, 0]},
+      "instance": {"model": "meshes/RiggedFigure.glb", "animation": 0}
+    },
+    {
+      "id": 4,
+      "name": "sun",
+      "transform": {"euler": [-50, 35, 0]},
+      "light": {"type": "directional", "color": [1, 0.95, 0.85], "intensity": 0.85, "cast_shadows": true}
+    },
+    {
+      "id": 5,
+      "name": "ground",
+      "mesh": {"model": "meshes/ground.prim"},
+      "collider": {"shape": "box", "size": [40, 1, 40], "offset": [0, -0.5, 0], "friction": 0.8}
+    },
+    {
+      "id": 6,
+      "name": "wall north",
+      "transform": {"position": [0, 1.5, -20.5], "scale": [42, 3, 1]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 7,
+      "name": "wall south",
+      "transform": {"position": [0, 1.5, 20.5], "scale": [42, 3, 1]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 8,
+      "name": "wall east",
+      "transform": {"position": [20.5, 1.5, 0], "scale": [1, 3, 40]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 9,
+      "name": "wall west",
+      "transform": {"position": [-20.5, 1.5, 0], "scale": [1, 3, 40]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 10,
+      "name": "fountain basin",
+      "transform": {"position": [0, 0.3, -4], "scale": [3.2, 0.6, 3.2]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 11,
+      "name": "fountain column",
+      "transform": {"position": [0, 1.2, -4], "scale": [0.6, 1.8, 0.6]},
+      "mesh": {"model": "meshes/accent.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 12,
+      "name": "house 1",
+      "transform": {"position": [-11, 2, -13], "scale": [6, 4, 5]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 13,
+      "name": "house 1 roof",
+      "transform": {"position": [-11, 4.3, -13], "scale": [6.6, 0.6, 5.6]},
+      "mesh": {"model": "meshes/accent.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 14,
+      "name": "house 2",
+      "transform": {"position": [2, 2, -14], "scale": [7, 4, 5]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 15,
+      "name": "house 2 roof",
+      "transform": {"position": [2, 4.3, -14], "scale": [7.6, 0.6, 5.6]},
+      "mesh": {"model": "meshes/accent.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 16,
+      "name": "house 3",
+      "transform": {"position": [13, 2, -9], "scale": [5, 4, 7]},
+      "mesh": {"model": "meshes/block.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 17,
+      "name": "house 3 roof",
+      "transform": {"position": [13, 4.3, -9], "scale": [5.6, 0.6, 7.6]},
+      "mesh": {"model": "meshes/accent.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 18,
+      "name": "stall counter",
+      "transform": {"position": [-8, 0.5, -4.6], "scale": [3, 1, 0.8]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 19,
+      "name": "stall awning",
+      "transform": {"position": [-8, 2.6, -5.4], "scale": [3.4, 0.15, 2.2]},
+      "mesh": {"model": "meshes/accent.prim"}
+    },
+    {
+      "id": 20,
+      "name": "stall post",
+      "transform": {"position": [-9.55, 1.3, -4.4], "scale": [0.15, 2.6, 0.15]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 21,
+      "name": "stall post",
+      "transform": {"position": [-6.45, 1.3, -4.4], "scale": [0.15, 2.6, 0.15]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 22,
+      "name": "crate",
+      "transform": {"position": [-10.2, 0.5, -6.2]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 23,
+      "name": "crate",
+      "transform": {"position": [-10.4, 1.5, -6.4], "euler": [0, 20, 0], "scale": [0.8, 1, 0.8]},
+      "mesh": {"model": "meshes/crate.prim"},
+      "collider": {"shape": "box"}
+    },
+    {
+      "id": 40,
+      "name": "Maren",
+      "transform": {"position": [2.2, 0, -1.8], "euler": [0, 150, 0]},
+      "character": {"radius": 0.35, "height": 1.8, "offset": [0, 0.9, 0]},
+      "script": {"path": "scripts/talker.luau", "properties": {"conversation": "dialogues/elder"}}
+    },
+    {
+      "id": 41,
+      "name": "figure",
+      "parent": 40,
+      "transform": {"euler": [0, 180, 0]},
+      "instance": {"model": "meshes/RiggedFigure.glb", "animation": 0}
+    },
+    {
+      "id": 50,
+      "name": "Tobin",
+      "transform": {"position": [-8, 0, -5.8], "euler": [0, 180, 0]},
+      "character": {"radius": 0.35, "height": 1.8, "offset": [0, 0.9, 0]},
+      "script": {"path": "scripts/talker.luau", "properties": {"conversation": "dialogues/merchant", "talk_radius": 3}}
+    },
+    {
+      "id": 51,
+      "name": "figure",
+      "parent": 50,
+      "transform": {"euler": [0, 180, 0]},
+      "instance": {"model": "meshes/RiggedFigure.glb", "animation": 0}
+    },
+    {
+      "id": 60,
+      "name": "Pip",
+      "transform": {"position": [7, 0, 3], "scale": [0.7, 0.7, 0.7]},
+      "character": {"radius": 0.3, "height": 1.3, "offset": [0, 0.65, 0]},
+      "nav_agent": {"speed": 1.5, "turn_speed": 360},
+      "script": {"path": "scripts/talker.luau", "properties": {"conversation": "dialogues/child", "wander": 4, "prompt_height": 1.6}}
+    },
+    {
+      "id": 61,
+      "name": "figure",
+      "parent": 60,
+      "transform": {"euler": [0, 180, 0]},
+      "instance": {"model": "meshes/RiggedFigure.glb", "animation": 0}
+    },
+    {"id": 70, "name": "dialogue box", "script": {"path": "scripts/dialogue_box.luau"}},
+    {"id": 71, "name": "quest", "script": {"path": "scripts/quest.luau"}}
+  ]
+}

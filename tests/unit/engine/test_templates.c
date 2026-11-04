@@ -623,6 +623,157 @@ static void test_templates_platformer_plays(void) {
     remove_project(dir);
 }
 
+/* ---- Dialogue -------------------------------------------------------------------------------------- */
+
+/* Walks the player up to a villager (a meter and a half in front of them) and lets them notice. */
+static void approach(WPE_Engine* engine, const char* villager, float dx, float dz) {
+    char code[256];
+    snprintf(code, sizeof code,
+             "local p = wpe.get_position(wpe.find('%s'))\n"
+             "wpe.set_position(wpe.find('player'), vector.create(p.x + %g, 0, p.z + %g))\n",
+             villager, (double)dx, (double)dz);
+    check_lua(engine, "approach", code);
+    frames(engine, 4);
+    snprintf(code, sizeof code, "assert(wpe.get_script(wpe.find('%s')).machine.state == 'noticed')\n",
+             villager);
+    check_lua(engine, "noticed", code);
+}
+
+/* Expects the dialogue box to show `speaker` with text containing `words`. */
+static void expect_line(WPE_Engine* engine, const char* speaker, const char* words) {
+    char code[512];
+    snprintf(code, sizeof code,
+             "local talk = wpe.get_script(wpe.find('dialogue box')).talk\n"
+             "assert(talk and not talk.done, 'no conversation')\n"
+             "assert(talk:speaker() == [[%s]], talk:speaker())\n"
+             "assert(string.find(talk:text(), [[%s]], 1, true), talk:text())\n",
+             speaker, words);
+    check_lua(engine, words, code);
+}
+
+static void expect_goal(WPE_Engine* engine, const char* goal) {
+    char code[256];
+    if (goal)
+        snprintf(code, sizeof code, "assert(wpe.get_script(wpe.find('quest')):goal() == [[%s]])\n", goal);
+    else
+        snprintf(code, sizeof code, "assert(wpe.get_script(wpe.find('quest')):goal() == nil)\n");
+    check_lua(engine, "goal", code);
+}
+
+/* The whole quest with the keys: Maren asks for her ring, Pip has it, Maren gets it back, and Tobin's
+ * lines follow along. Pages type out (Return shows one whole, Return again goes on), choices take
+ * Down/Return, the music ducks while someone talks, and the player stands still meanwhile. */
+static void test_templates_dialogue_plays(void) {
+    char dir[256];
+    create_project("dialogue", dir, sizeof dir);
+    WPE_Engine* engine = create_engine(dir);
+    WPE_Ecs* ecs = wpe_engine_ecs(engine);
+    frames(engine, 10);
+    expect_goal(engine, "Talk to the villagers");
+
+    /* The state machine module on its own: enter/exit order, events, shared states, push/pop, loops. */
+    check_lua(
+        engine, "states",
+        "local States = require('scripts/lib/states')\n"
+        "local log = {}\n"
+        "local owner = {}\n"
+        "local ground = { jump = function(self) return 'air' end }\n"
+        "local states = {\n"
+        "  idle = States.extend(ground, { enter = function(self, from, why) table.insert(log, 'enter idle '"
+        " .. tostring(why)) end, exit = function(self, to) table.insert(log, 'exit idle to ' .. to) end }),\n"
+        "  run = States.extend(ground, { update = function(self, dt) if dt > 1 then return 'idle' end end "
+        "}),\n"
+        "  air = { enter = function(self) table.insert(log, 'enter air') end, land = function(self) return "
+        "'idle' end },\n"
+        "  hurt = { enter = function(self) table.insert(log, 'hurt') end },\n"
+        "  ping = { enter = function(self) return 'pong' end }, pong = { enter = function(self) return "
+        "'ping' end },\n"
+        "}\n"
+        "local m = States.new(owner, states, 'idle', 'start')\n"
+        "assert(log[1] == 'enter idle start' and m.state == 'idle' and m.previous == nil)\n"
+        "assert(m:send('jump') and m.state == 'air' and m.previous == 'idle')\n" /* Inherited. */
+        "assert(log[2] == 'exit idle to air' and log[3] == 'enter air')\n"
+        "assert(not m:send('jump') and m.state == 'air')\n" /* Air has no jump: ignored. */
+        "m:send('land'); m:go('run'); m:update(0.5); assert(m:is('run') and m.time == 0.5)\n"
+        "m:update(2); assert(m:is('idle'))\n"
+        "m:push('hurt'); assert(m:is('hurt')); m:pop(); assert(m:is('idle'))\n"
+        "assert(not pcall(m.go, m, 'ping'))\n" /* A loop is stopped. */
+        "assert(not pcall(m.go, m, 'nowhere'))\n");
+
+    /* Maren: E starts the talk; it types with voice blips, which duck the music. */
+    approach(engine, "Maren", 0.0f, 1.5f);
+    tap(engine, SDL_SCANCODE_E);
+    frames(engine, 3);
+    expect_line(engine, "Maren", "new face in Ashford");
+    check_lua(engine, "ducked", "assert(wpe.get_ducking().active, 'the voice should duck the music')\n");
+    /* No walking while talking. */
+    const WPE_Vec3 before = position(ecs, find(ecs, "player"));
+    key(engine, SDL_SCANCODE_W, true);
+    frames(engine, 10);
+    key(engine, SDL_SCANCODE_W, false);
+    WPE_TEST_ASSERT_NEAR(before.z, position(ecs, find(ecs, "player")).z, 1e-3);
+    tap(engine, SDL_SCANCODE_RETURN); /* Shows page one whole... */
+    tap(engine, SDL_SCANCODE_RETURN); /* ...then page two, */
+    tap(engine, SDL_SCANCODE_RETURN); /* shown whole: its choices. */
+    expect_line(engine, "Maren", "lost something dear");
+    tap(engine, SDL_SCANCODE_RETURN); /* "What did you lose?" */
+    expect_line(engine, "Maren", "silver ring");
+    tap(engine, SDL_SCANCODE_RETURN);
+    tap(engine, SDL_SCANCODE_RETURN);
+    tap(engine, SDL_SCANCODE_RETURN);
+    tap(engine, SDL_SCANCODE_RETURN); /* "I'll find it." */
+    expect_line(engine, "Maren", "children play");
+    expect_goal(engine, "Find Maren's silver ring");
+    tap(engine, SDL_SCANCODE_RETURN);
+    tap(engine, SDL_SCANCODE_RETURN); /* The end. */
+    check_lua(engine, "ended", "assert(wpe.get_script(wpe.find('dialogue box')).talk == nil)\n");
+    frames(engine, 60);
+    check_lua(engine, "music back", "assert(not wpe.get_ducking().active)\n");
+
+    /* Tobin hints at Pip. */
+    approach(engine, "Tobin", 0.0f, 2.2f);
+    tap(engine, SDL_SCANCODE_E);
+    expect_line(engine, "Tobin", "Pip collects shiny things");
+    tap(engine, SDL_SCANCODE_RETURN);
+    tap(engine, SDL_SCANCODE_RETURN); /* "Thanks, Tobin." */
+    frames(engine, 30);
+
+    /* Pip (wandering) stops, and with the quest known gives up the ring. */
+    approach(engine, "Pip", 1.2f, 0.0f);
+    check_lua(engine, "Pip stopped", "assert(wpe.nav_state(wpe.find('Pip')) ~= 'moving')\n");
+    tap(engine, SDL_SCANCODE_E);
+    expect_line(engine, "Pip", "shiny rock");
+    tap(engine, SDL_SCANCODE_RETURN);
+    tap(engine, SDL_SCANCODE_RETURN); /* "That's Maren's ring." */
+    expect_line(engine, "Pip", "didn't know it was hers");
+    for (int i = 0; i < 4; ++i)
+        tap(engine, SDL_SCANCODE_RETURN);
+    expect_goal(engine, "Bring the ring back to Maren");
+    frames(engine, 30);
+
+    /* Back to Maren: Down to "Not just yet." and Up again to "Here you are.". */
+    approach(engine, "Maren", 0.0f, 1.5f);
+    tap(engine, SDL_SCANCODE_E);
+    expect_line(engine, "Maren", "You found it");
+    tap(engine, SDL_SCANCODE_RETURN);
+    tap(engine, SDL_SCANCODE_DOWN);
+    tap(engine, SDL_SCANCODE_UP);
+    tap(engine, SDL_SCANCODE_RETURN);
+    expect_line(engine, "Maren", "Pip had it");
+    expect_goal(engine, NULL);
+    for (int i = 0; i < 4; ++i)
+        tap(engine, SDL_SCANCODE_RETURN);
+    frames(engine, 30);
+
+    /* Tobin has heard. */
+    approach(engine, "Tobin", 0.0f, 2.2f);
+    tap(engine, SDL_SCANCODE_E);
+    expect_line(engine, "Tobin", "Ashford owes you one");
+    WPE_TEST_ASSERT_EQ_UINT(0, script_errors(engine));
+    wpe_engine_destroy(engine);
+    remove_project(dir);
+}
+
 /* ---- Racing ---------------------------------------------------------------------------------------- */
 
 /* Puts the car somewhere (stopped) and lets the physics and triggers see it. */
@@ -975,5 +1126,6 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_templates_create_projects_that_run),
               WPE_TEST_CASE(test_templates_first_person_plays),
               WPE_TEST_CASE(test_templates_third_person_plays), WPE_TEST_CASE(test_templates_stealth_plays),
               WPE_TEST_CASE(test_templates_shooter_plays), WPE_TEST_CASE(test_templates_platformer_plays),
-              WPE_TEST_CASE(test_templates_racing_plays), WPE_TEST_CASE(test_templates_racing_online_plays),
+              WPE_TEST_CASE(test_templates_dialogue_plays), WPE_TEST_CASE(test_templates_racing_plays),
+              WPE_TEST_CASE(test_templates_racing_online_plays),
               WPE_TEST_CASE(test_templates_racing_online_from_the_command_line))

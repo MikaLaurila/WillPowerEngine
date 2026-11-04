@@ -4,6 +4,20 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (v1.0: the dialogue template)
+- `dialogue` template: a village square on the third-person player and camera, with three villagers who
+  turn to you and show the interact prompt for the device last used, and a dialogue box that types their
+  lines with voice blips on the voice bus (the music ducks under them) and offers choices (keys, pad, mouse).
+- Conversations as data (`dialogues/*.luau`): nodes with pages of text, choices, `when`/`unless` conditions
+  on story flags, and `set`/`clear`/`event` effects, checked when a villager starts (mistakes name the node).
+  The runner (`scripts/lib/conversation.luau`) keeps no drawing state; story flags in
+  `scripts/lib/story.luau` (optionally saved). A small quest (Maren's ring) shows branching, flags and
+  events; `scripts/quest.luau` shows the goal.
+- `scripts/lib/states.luau`: a reusable state machine for characters (states as tables of
+  `enter`/`exit`/`update`/`fixed_update`/event functions, transitions by returning a state's name,
+  `States.extend` for shared behaviour, `push`/`pop` for interruptions, a loop guard). The villagers use it.
+- Generated sounds: a voice blip, a quest jingle and a village music loop.
+
 ### Added (v1.0: the profiler)
 - `wpe_runtime --profile` shows a profiler in the top-right corner: the engine's stages (input, network, ui,
   scripts (fixed), navigation, physics, scripts (update), animation, effects, transforms, audio, render, post
