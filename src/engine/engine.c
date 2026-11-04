@@ -9,6 +9,7 @@
 #include "core/debug.h"
 #include "core/fixed_step.h"
 #include "core/log.h"
+#include "engine/profiler.h"
 #include "engine/replication.h"
 #include "graphics/anim_states.h"
 #include "graphics/animation.h"
@@ -123,6 +124,7 @@ struct WPE_Engine {
     double audio_backlog; /* Device-less mixing: frames owed to the mixer (fractional). */
     float* audio_mix;
     WPE_EngineStats stats;
+    wpe__Profiler profiler; /* Stages are lapped every frame; averages and scripts only while on. */
 };
 
 /* ---- Script services ---------------------------------------------------------------------------- */
@@ -341,6 +343,14 @@ static WPE_GameFeel* wpe__app_game_feel(void* user_data) {
     WPE_Engine* engine = user_data;
     return &engine->feel;
 }
+static void wpe__app_show_profiler(void* user_data, bool shown) {
+    WPE_Engine* engine = user_data;
+    engine->debug_draw.profiler = shown;
+    if (shown) wpe__profiler_set_on(&engine->profiler, true, engine->scripts);
+}
+static uint32_t wpe__app_profile(void* user_data, const WPE_ProfileEntry** out_entries) {
+    return wpe_engine_profile(user_data, out_entries);
+}
 
 static WPE_SceneContext wpe__context(const WPE_Engine* engine) {
     return (WPE_SceneContext){
@@ -498,7 +508,9 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                    .render_settings = wpe__app_render_settings,
                                    .game_feel = wpe__app_game_feel,
                                    .capture_screen = wpe__app_capture_screen,
-                                   .save_bindings = wpe__app_save_bindings};
+                                   .save_bindings = wpe__app_save_bindings,
+                                   .show_profiler = wpe__app_show_profiler,
+                                   .profile = wpe__app_profile};
         WPE_ScriptApp with_net = app;
         wpe__fill_net_services(&with_net.net);
         result =
@@ -1209,8 +1221,10 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
     wpe_game_feel_restore_shakes(&engine->feel, engine->ecs);
     /* Game time (slow motion, hit-stops) drives the simulation; the UI keeps real time. */
     const double dt = wpe_game_feel_advance(&engine->feel, real_dt);
+    wpe__Profiler* profiler = &engine->profiler;
     /* Remote entities take their received poses before anything simulates (the network keeps real time). */
     wpe_replication_apply(engine->replication, engine->session, real_dt);
+    wpe__profiler_lap(profiler, WPE__STAGE_NETWORK);
     /* The UI reacts to this frame's input first, so scripts see its clicks in this frame. */
     WPE_Result result =
         wpe_ui_update(engine->ui, engine->project.width, engine->project.height, (float)real_dt);
@@ -1239,17 +1253,21 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
     const WPE_Entity* clicked = wpe_ui_clicks(engine->ui, &clicks);
     for (uint32_t i = 0; i < clicks && result == WPE_RESULT_OK; ++i)
         result = wpe_script_host_notify(engine->scripts, clicked[i], "on_click");
+    wpe__profiler_lap(profiler, WPE__STAGE_UI);
     if (result != WPE_RESULT_OK) return result;
     const uint32_t steps = wpe_fixed_step_advance(&engine->clock, dt);
     engine->stats.physics_ms = 0.0;
     for (uint32_t s = 0; s < steps && result == WPE_RESULT_OK; ++s) {
         wpe_script_host_fixed_update(engine->scripts, (float)engine->clock.step);
+        wpe__profiler_lap(profiler, WPE__STAGE_SCRIPTS_FIXED);
         /* Agents move (character agents through their controllers) before the step simulates them. */
         result = wpe_nav_system_update(engine->nav, (float)engine->clock.step);
+        wpe__profiler_lap(profiler, WPE__STAGE_NAVIGATION);
         if (result != WPE_RESULT_OK) break;
         const double physics_start = wpe_platform_time_seconds();
         result = wpe_physics_step(engine->physics, (float)engine->clock.step);
         engine->stats.physics_ms += (wpe_platform_time_seconds() - physics_start) * 1000.0;
+        wpe__profiler_lap(profiler, WPE__STAGE_PHYSICS);
         wpe_script_host_dispatch_physics(engine->scripts);
         uint32_t nav_events = 0;
         const WPE_NavEvent* events = wpe_nav_system_events(engine->nav, &nav_events);
@@ -1257,11 +1275,13 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
             const char* method = events[i].type == WPE_NAV_EVENT_ARRIVED ? "on_nav_arrived" : "on_nav_failed";
             result = wpe_script_host_notify(engine->scripts, events[i].entity, method);
         }
+        wpe__profiler_lap(profiler, WPE__STAGE_SCRIPTS_FIXED); /* The collision and arrival callbacks. */
     }
     engine->stats.fixed_steps = steps;
     if (result == WPE_RESULT_OK) result = wpe_script_host_update(engine->scripts, (float)dt);
     /* After on_update: scripts of a scene that just loaded have started and hear them too. */
     if (result == WPE_RESULT_OK) wpe__deliver_script_events(engine);
+    wpe__profiler_lap(profiler, WPE__STAGE_SCRIPTS_UPDATE);
     /* State machines pick clips from what the scripts set, the animators play them, then the events the clips
      * passed reach the scripts. */
     if (result == WPE_RESULT_OK) wpe_anim_states_update(engine->ecs, (float)dt);
@@ -1270,18 +1290,23 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
         wpe_anim_states_scan(engine->ecs);
         result = wpe_script_host_dispatch_animation(engine->scripts);
     }
+    wpe__profiler_lap(profiler, WPE__STAGE_ANIMATION);
     if (result == WPE_RESULT_OK) wpe_billboard_update(engine->ecs, (float)dt);
     if (result == WPE_RESULT_OK) wpe_surface_update(engine->ecs, (float)dt);
     /* Before transforms: a slash's head entity moves, and emitters on it emit from there this frame. */
     if (result == WPE_RESULT_OK) wpe_slash_update(engine->ecs, (float)dt);
     /* Shakes run on real time, so they go on through a hit-stop. */
     if (result == WPE_RESULT_OK) wpe_game_feel_apply_shakes(&engine->feel, engine->ecs, (float)real_dt);
+    wpe__profiler_lap(profiler, WPE__STAGE_EFFECTS);
     if (result == WPE_RESULT_OK) result = wpe_scene_update_transforms(engine->ecs);
+    wpe__profiler_lap(profiler, WPE__STAGE_TRANSFORMS);
     /* After transforms, so emitters spawn where they are this frame. */
     if (result == WPE_RESULT_OK) result = wpe_particles_update(engine->ecs, engine->jobs, (float)dt);
     if (result == WPE_RESULT_OK) wpe_trail_update(engine->ecs, (float)dt);
+    wpe__profiler_lap(profiler, WPE__STAGE_EFFECTS);
     /* This side's entities as they are after the frame's simulation. */
     if (result == WPE_RESULT_OK) wpe_replication_send(engine->replication, engine->session);
+    wpe__profiler_lap(profiler, WPE__STAGE_NETWORK);
     return result;
 }
 
@@ -1537,6 +1562,7 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
     engine->stats.scene = wpe_renderer_stats(engine->renderer); /* Before the overlay frame resets them. */
     wpe__fill_captures(engine);
     engine->stats.render_ms = wpe__ms_since(&mark);
+    wpe__profiler_lap(&engine->profiler, WPE__STAGE_RENDER);
 
     const WPE_Camera* cam = wpe_ecs_get_component(engine->ecs, camera, WPE_COMP_CAMERA);
     if (result == WPE_RESULT_OK && cam) {
@@ -1561,12 +1587,16 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
         if (count > 0) result = wpe_postfx_apply(engine->postfx, engine->renderer, effects, count, &post);
     }
     engine->stats.postfx_ms = wpe__ms_since(&mark);
+    wpe__profiler_lap(&engine->profiler, WPE__STAGE_POSTFX);
     /* Debug overlays, the UI and script 2D drawing go on top, untouched by post-processing. */
     if (result == WPE_RESULT_OK) result = wpe_renderer_begin_frame(engine->renderer, &(WPE_ClearDesc){0});
     if (result == WPE_RESULT_OK) {
         if (camera != WPE_ENTITY_NULL) result = wpe__draw_debug(engine, camera);
         if (result == WPE_RESULT_OK && engine->draw_ui) result = wpe_ui_draw(engine->ui, engine->renderer);
         wpe__draw_net_stats(engine);
+        if (engine->debug_draw.profiler) /* The last frame's numbers (this one is still running). */
+            wpe__profiler_draw(&engine->profiler, engine->draw2d,
+                               wpe_asset_font(engine->assets, engine->font), engine->project.width);
         if (result == WPE_RESULT_OK) result = wpe_draw2d_submit(engine->draw2d, engine->renderer);
         const WPE_Result end = wpe_renderer_end_frame(engine->renderer);
         if (result == WPE_RESULT_OK) result = end;
@@ -1576,8 +1606,10 @@ static WPE_Result wpe__render(WPE_Engine* engine, WPE_Entity camera) {
     if (result == WPE_RESULT_OK && coverage > 0.0f)
         wpe_transition_cover(wpe_renderer_framebuffer_for_write(engine->renderer), &engine->transition,
                              coverage, engine->transition_opening);
+    wpe__profiler_lap(&engine->profiler, WPE__STAGE_OVERLAY);
     if (result == WPE_RESULT_OK && engine->window)
         result = wpe_window_present(engine->window, wpe_renderer_framebuffer(engine->renderer));
+    wpe__profiler_lap(&engine->profiler, WPE__STAGE_PRESENT);
     engine->stats.overlay_ms = wpe__ms_since(&mark);
     return result;
 }
@@ -1587,6 +1619,8 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
     const double start = wpe_platform_time_seconds();
     if (!(dt >= 0.0)) dt = 0.0;
     if (dt > WPE__MAX_FRAME_SECONDS) dt = WPE__MAX_FRAME_SECONDS;
+    wpe__Profiler* profiler = &engine->profiler;
+    wpe__profiler_begin_frame(profiler, start);
 
     /* Embedded engines get their events from the host (wpe_engine_handle_event) before the frame;
      * their input frame started at the end of the previous one. */
@@ -1597,7 +1631,9 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
         if (!open) engine->quit = true;
     }
     wpe_input_update(engine->input);
+    wpe__profiler_lap(profiler, WPE__STAGE_INPUT);
     wpe__pump_session(engine); /* Also in edit mode: connections stay alive. */
+    wpe__profiler_lap(profiler, WPE__STAGE_NETWORK);
     const bool captured = wpe_input_mouse_captured(engine->input);
     if (engine->window && captured != engine->mouse_captured &&
         wpe_window_set_relative_mouse(engine->window, captured) == WPE_RESULT_OK)
@@ -1605,15 +1641,22 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
 
     wpe_draw2d_begin(engine->draw2d, engine->project.width, engine->project.height);
     double mark = wpe_platform_time_seconds();
-    WPE_Result result =
-        engine->simulating ? wpe__simulate(engine, dt) : wpe_scene_update_transforms(engine->ecs);
+    WPE_Result result = WPE_RESULT_OK;
+    if (engine->simulating) {
+        result = wpe__simulate(engine, dt);
+    } else {
+        result = wpe_scene_update_transforms(engine->ecs);
+        wpe__profiler_lap(profiler, WPE__STAGE_TRANSFORMS);
+    }
     engine->stats.simulate_ms = engine->simulating ? wpe__ms_since(&mark) : 0.0;
     if (!engine->simulating) engine->stats.physics_ms = 0.0;
     const WPE_Entity camera = wpe_engine_camera(engine);
     if (engine->simulating) wpe__advance_transition(engine, dt);
     if (result == WPE_RESULT_OK && engine->simulating) result = wpe__mix_audio(engine, camera, dt);
+    wpe__profiler_lap(profiler, WPE__STAGE_AUDIO);
     if (result == WPE_RESULT_OK) result = wpe__render(engine, engine->draw_scene ? camera : WPE_ENTITY_NULL);
     if (engine->embedded) wpe_input_begin_frame(engine->input); /* Events for the next frame follow. */
+    wpe__profiler_lap(profiler, WPE__STAGE_OTHER);
 
     /* Scene switches requested by scripts happen between frames. */
     if (result == WPE_RESULT_OK && engine->pending_scene[0]) {
@@ -1624,10 +1667,13 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
         engine->pending_from_host = false;
         engine->transition_loading = false;
     }
+    wpe__profiler_lap(profiler, WPE__STAGE_SCENE_LOAD);
     wpe_session_flush(engine->session);
+    wpe__profiler_lap(profiler, WPE__STAGE_NETWORK);
     ++engine->stats.frames;
     engine->stats.entities = wpe_ecs_entity_count(engine->ecs);
     engine->stats.frame_ms = (wpe_platform_time_seconds() - start) * 1000.0;
+    wpe__profiler_end_frame(profiler, engine->stats.frame_ms, dt, engine->scripts);
     return result;
 }
 
@@ -1776,7 +1822,23 @@ WPE_GameFeel* wpe_engine_game_feel(WPE_Engine* engine) {
 }
 
 void wpe_engine_set_debug_draw(WPE_Engine* engine, const WPE_EngineDebugDraw* debug_draw) {
-    if (wpe_check(engine != NULL && debug_draw != NULL)) engine->debug_draw = *debug_draw;
+    if (!wpe_check(engine != NULL && debug_draw != NULL)) return;
+    engine->debug_draw = *debug_draw;
+    if (debug_draw->profiler)
+        wpe__profiler_set_on(&engine->profiler, true, engine->scripts); /* Shows numbers. */
+}
+
+void wpe_engine_set_profiling(WPE_Engine* engine, bool profiling) {
+    if (wpe_check(engine != NULL)) wpe__profiler_set_on(&engine->profiler, profiling, engine->scripts);
+}
+
+bool wpe_engine_profiling(const WPE_Engine* engine) {
+    return engine && engine->profiler.on;
+}
+
+uint32_t wpe_engine_profile(const WPE_Engine* engine, const WPE_ProfileEntry** out_entries) {
+    if (out_entries) *out_entries = engine ? engine->profiler.entries : NULL;
+    return engine && engine->profiler.on ? engine->profiler.count : 0;
 }
 
 WPE_EngineDebugDraw wpe_engine_debug_draw(const WPE_Engine* engine) {

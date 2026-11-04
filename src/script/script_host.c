@@ -421,6 +421,9 @@ static int wpe__op_call(lua_State* L) {
     if (!lua_istable(L, -1)) return 0;
     lua_getfield(L, -1, op->method);
     if (!lua_isfunction(L, -1)) return 0;
+    WPE_ScriptHost* host = op->host;
+    if (host->profiling && host->profile_file < host->file_count)
+        ++host->files[host->profile_file].profile_calls;
     lua_insert(L, -2); /* [handler, fn, instance] */
     int args = 1;
     if (op->value) {
@@ -459,6 +462,96 @@ static void wpe__instance_failed(WPE_ScriptHost* host, WPE_Entity entity, int in
 
 static bool wpe__invoke(WPE_ScriptHost* host, WPE_Entity entity, uint32_t script, wpe__CallOp* op);
 
+/* ---- Profiling ------------------------------------------------------------------------------------- */
+
+uint32_t wpe__script_profile_switch(WPE_ScriptHost* host, uint32_t file) {
+    const uint32_t previous = host->profile_file;
+    if (!host->profiling) return previous;
+    const double now = lua_clock();
+    if (previous < host->file_count) host->files[previous].profile_seconds += now - host->profile_mark;
+    host->profile_file = file;
+    host->profile_mark = now;
+    return previous;
+}
+
+/* Starts a callback of `file` (counted as a call); switch back with wpe__script_profile_switch. */
+uint32_t wpe__script_profile_enter(WPE_ScriptHost* host, uint32_t file) {
+    if (host->profiling && file < host->file_count) ++host->files[file].profile_calls;
+    return wpe__script_profile_switch(host, file);
+}
+
+void wpe__script_profile_close_sections(WPE_ScriptHost* host, uint32_t depth) {
+    if (host->section_depth <= depth) return;
+    const double now = lua_clock();
+    while (host->section_depth > depth) {
+        --host->section_depth;
+        host->sections[host->section_stack[host->section_depth].section].seconds +=
+            now - host->section_stack[host->section_depth].start;
+    }
+}
+
+/* The script file a timer's or tween's owner runs (WPE__PROFILE_NONE when it has gone). */
+static uint32_t wpe__owner_file(const WPE_ScriptHost* host, WPE_Entity owner, int owner_instance) {
+    if (!host->profiling || owner_instance == LUA_NOREF) return WPE__PROFILE_NONE;
+    const WPE_Script* s = wpe_ecs_get_component(host->ecs, owner, WPE_COMP_SCRIPT);
+    return s && s->instance_ref == owner_instance ? s->script : WPE__PROFILE_NONE;
+}
+
+static void wpe__profile_reset(WPE_ScriptHost* host) {
+    for (uint32_t i = 0; i < host->file_count; ++i) {
+        host->files[i].profile_seconds = 0.0;
+        host->files[i].profile_calls = 0;
+    }
+    host->section_count = 0;
+    host->section_depth = 0;
+    host->profile_file = WPE__PROFILE_NONE;
+    host->profile_mark = lua_clock();
+}
+
+void wpe_script_host_set_profiling(WPE_ScriptHost* host, bool profiling) {
+    if (!wpe_check(host != NULL) || host->profiling == profiling) return;
+    wpe__profile_reset(host);
+    host->profiling = profiling;
+}
+
+bool wpe_script_host_profiling(const WPE_ScriptHost* host) {
+    return host && host->profiling;
+}
+
+uint32_t wpe_script_host_take_profile(WPE_ScriptHost* host, WPE_ScriptProfileEntry* out, uint32_t capacity) {
+    if (!host || !host->profiling) return 0;
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < host->file_count; ++i) {
+        wpe__ScriptFile* file = &host->files[i];
+        if (file->profile_calls == 0 && file->profile_seconds == 0.0) continue;
+        if (out && count < capacity)
+            out[count] = (WPE_ScriptProfileEntry){
+                .name = file->path, .ms = file->profile_seconds * 1000.0, .calls = file->profile_calls};
+        ++count;
+        file->profile_seconds = 0.0;
+        file->profile_calls = 0;
+    }
+    /* Open sections: the time so far goes to this take, the rest to the next. */
+    const double now = lua_clock();
+    for (uint32_t d = 0; d < host->section_depth; ++d) {
+        host->sections[host->section_stack[d].section].seconds += now - host->section_stack[d].start;
+        host->section_stack[d].start = now;
+    }
+    for (uint32_t i = 0; i < host->section_count; ++i) {
+        wpe__ProfileSection* section = &host->sections[i];
+        if (section->calls == 0 && section->seconds == 0.0) continue;
+        if (out && count < capacity)
+            out[count] = (WPE_ScriptProfileEntry){.name = section->name,
+                                                  .section = true,
+                                                  .ms = section->seconds * 1000.0,
+                                                  .calls = section->calls};
+        ++count;
+        section->seconds = 0.0;
+        section->calls = 0;
+    }
+    return count;
+}
+
 /* Calls a lifecycle method; on error logs, counts and marks the instance failed. Returns false on error. */
 static bool wpe__call_method(WPE_ScriptHost* host, WPE_Entity entity, int instance_ref, uint32_t script,
                              const char* method, bool has_arg, double arg) {
@@ -473,12 +566,17 @@ static bool wpe__invoke(WPE_ScriptHost* host, WPE_Entity entity, uint32_t script
     const WPE_Entity previous_entity = host->current_entity;
     host->current_instance = op->instance_ref;
     host->current_entity = entity;
+    const uint32_t previous_file =
+        wpe__script_profile_switch(host, script); /* wpe__op_call counts the call. */
+    const uint32_t sections = host->section_depth;
     if (lua_cpcall(host->L, wpe__op_call, op) != 0) {
         op->failed = true;
         snprintf(op->message, sizeof op->message, "%s",
                  lua_tostring(host->L, -1) ? lua_tostring(host->L, -1) : "VM error");
         lua_pop(host->L, 1);
     }
+    wpe__script_profile_close_sections(host, sections); /* A section ends with its callback at the latest. */
+    wpe__script_profile_switch(host, previous_file);
     host->current_instance = previous_instance;
     host->current_entity = previous_entity;
     /* No lua_settop here: this may run nested inside a binding whose stack frame must survive. */
@@ -631,12 +729,17 @@ static void wpe__fire_timers(WPE_ScriptHost* host) {
         const WPE_Entity previous_entity = host->current_entity;
         host->current_instance = timer.owner_instance;
         host->current_entity = timer.owner;
+        const uint32_t previous_file =
+            wpe__script_profile_enter(host, wpe__owner_file(host, timer.owner, timer.owner_instance));
+        const uint32_t sections = host->section_depth;
         if (lua_cpcall(host->L, wpe__op_call_timer, &op) != 0) {
             op.failed = true;
             snprintf(op.message, sizeof op.message, "%s",
                      lua_tostring(host->L, -1) ? lua_tostring(host->L, -1) : "VM error");
             lua_pop(host->L, 1);
         }
+        wpe__script_profile_close_sections(host, sections);
+        wpe__script_profile_switch(host, previous_file);
         host->current_instance = previous_instance;
         host->current_entity = previous_entity;
         if (timer.interval <= 0.0) lua_unref(host->L, timer.fn_ref);
@@ -765,12 +868,17 @@ static bool wpe__call_tween(WPE_ScriptHost* host, const wpe__Tween* tween, int f
     const WPE_Entity previous_entity = host->current_entity;
     host->current_instance = tween->owner_instance;
     host->current_entity = tween->owner;
+    const uint32_t previous_file =
+        wpe__script_profile_enter(host, wpe__owner_file(host, tween->owner, tween->owner_instance));
+    const uint32_t sections = host->section_depth;
     if (lua_cpcall(host->L, wpe__op_call_tween, &op) != 0) {
         op.failed = true;
         snprintf(op.message, sizeof op.message, "%s",
                  lua_tostring(host->L, -1) ? lua_tostring(host->L, -1) : "VM error");
         lua_pop(host->L, 1);
     }
+    wpe__script_profile_close_sections(host, sections);
+    wpe__script_profile_switch(host, previous_file);
     host->current_instance = previous_instance;
     host->current_entity = previous_entity;
     if (op.failed) {
@@ -1040,7 +1148,11 @@ int wpe__script_broadcast(lua_State* L) {
         const WPE_Entity previous_entity = host->current_entity;
         host->current_instance = instance_ref;
         host->current_entity = entity;
+        const uint32_t previous_file = wpe__script_profile_enter(host, script);
+        const uint32_t sections = host->section_depth;
         const int status = lua_pcall(L, arguments + 1, 0, handler);
+        wpe__script_profile_close_sections(host, sections);
+        wpe__script_profile_switch(host, previous_file);
         host->current_instance = previous_instance;
         host->current_entity = previous_entity;
         if (status != 0) {
@@ -1102,6 +1214,7 @@ WPE_Result wpe_script_host_create(const WPE_ScriptHostDesc* desc, WPE_ScriptHost
         host->font = desc->font;
     }
     host->memory_limit = desc->memory_limit ? desc->memory_limit : WPE__DEFAULT_MEMORY_LIMIT;
+    host->profile_file = WPE__PROFILE_NONE;
     host->time_limit_seconds =
         (desc->time_limit_ms > 0.0 ? desc->time_limit_ms : WPE__DEFAULT_TIME_LIMIT_MS) / 1000.0;
 

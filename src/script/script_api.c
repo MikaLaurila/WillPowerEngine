@@ -1189,7 +1189,10 @@ static int wpe__api_send(lua_State* L) {
     const WPE_Entity previous_entity = host->current_entity;
     host->current_instance = instance_ref;
     host->current_entity = entity;
+    /* Its time is the receiver's (after an error, the calling callback switches back). */
+    const uint32_t previous_file = wpe__script_profile_enter(host, s->script);
     lua_call(L, top - 1, LUA_MULTRET);
+    wpe__script_profile_switch(host, previous_file);
     host->current_instance = previous_instance;
     host->current_entity = previous_entity;
     return lua_gettop(L) - top;
@@ -2142,6 +2145,81 @@ static int wpe__api_binding_label(lua_State* L) {
     char label[64];
     wpe_input_binding_label(&binding, style, label, sizeof label);
     lua_pushstring(L, label);
+    return 1;
+}
+
+/* ---- Profiling --------------------------------------------------------------------------------------- */
+
+static const WPE_ScriptApp* wpe__app(lua_State* L, bool available, const char* function); /* Below. */
+
+static int wpe__api_profile_begin(lua_State* L) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    size_t length = 0;
+    const char* name = luaL_checklstring(L, 1, &length);
+    if (length == 0 || length >= WPE__PROFILE_NAME_MAX || strlen(name) != length)
+        luaL_errorL(L, "wpe.profile_begin: a section's name is 1 to %u characters",
+                    WPE__PROFILE_NAME_MAX - 1);
+    if (!host->profiling) return 0; /* Costs next to nothing when nobody looks. */
+    if (host->section_depth >= WPE__PROFILE_DEPTH)
+        luaL_errorL(L, "wpe.profile_begin: sections nest at most %u deep (a profile_end missing?)",
+                    WPE__PROFILE_DEPTH);
+    uint32_t index = 0;
+    while (index < host->section_count && strcmp(host->sections[index].name, name) != 0)
+        ++index;
+    if (index == host->section_count) {
+        if (host->section_count == WPE__PROFILE_SECTIONS)
+            luaL_errorL(L, "wpe.profile_begin: at most %u different sections", WPE__PROFILE_SECTIONS);
+        wpe__ProfileSection* section = &host->sections[host->section_count++];
+        *section = (wpe__ProfileSection){0};
+        memcpy(section->name, name, length + 1);
+    }
+    ++host->sections[index].calls;
+    host->section_stack[host->section_depth].section = index;
+    host->section_stack[host->section_depth].start = lua_clock();
+    ++host->section_depth;
+    return 0;
+}
+
+static int wpe__api_profile_end(lua_State* L) {
+    WPE_ScriptHost* host = wpe__script_host_from(L);
+    /* Nothing open is not an error: the profiler may have been turned on after the section began (that
+     * profile_begin was ignored), and showing the profiler must never break a game. */
+    if (host->profiling && host->section_depth > 0)
+        wpe__script_profile_close_sections(host, host->section_depth - 1);
+    return 0;
+}
+
+static int wpe__api_show_profiler(lua_State* L) {
+    const bool shown = luaL_checkboolean(L, 1);
+    const WPE_ScriptApp* app =
+        wpe__app(L, wpe__script_host_from(L)->app.show_profiler != NULL, "show_profiler");
+    app->show_profiler(app->user_data, shown);
+    return 0;
+}
+
+static int wpe__api_get_profile(lua_State* L) {
+    const WPE_ScriptApp* app = wpe__app(L, wpe__script_host_from(L)->app.profile != NULL, "get_profile");
+    const WPE_ProfileEntry* entries = NULL;
+    const uint32_t count = app->profile(app->user_data, &entries);
+    static const char* const kinds[] = {"system", "script", "section"};
+    lua_createtable(L, (int)count, 0);
+    for (uint32_t i = 0; i < count; ++i) {
+        const WPE_ProfileEntry* e = &entries[i];
+        lua_createtable(L, 0, 6);
+        lua_pushstring(L, e->name);
+        lua_setfield(L, -2, "name");
+        lua_pushstring(L, kinds[e->kind <= WPE_PROFILE_SECTION ? e->kind : 0]);
+        lua_setfield(L, -2, "kind");
+        lua_pushnumber(L, e->ms);
+        lua_setfield(L, -2, "ms");
+        lua_pushnumber(L, e->average_ms);
+        lua_setfield(L, -2, "average");
+        lua_pushnumber(L, e->peak_ms);
+        lua_setfield(L, -2, "peak");
+        lua_pushnumber(L, e->calls);
+        lua_setfield(L, -2, "calls");
+        lua_rawseti(L, -2, (int)i + 1);
+    }
     return 1;
 }
 
@@ -3986,6 +4064,10 @@ static const luaL_Reg wpe__api[] = {
     {"gamepad_released", wpe__api_gamepad_released},
     {"gamepad_axis", wpe__api_gamepad_axis},
     {"rumble", wpe__api_rumble},
+    {"profile_begin", wpe__api_profile_begin},
+    {"profile_end", wpe__api_profile_end},
+    {"show_profiler", wpe__api_show_profiler},
+    {"get_profile", wpe__api_get_profile},
     {"input_actions", wpe__api_input_actions},
     {"get_bindings", wpe__api_get_bindings},
     {"set_bindings", wpe__api_set_bindings},

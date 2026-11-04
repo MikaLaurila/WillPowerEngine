@@ -2827,6 +2827,40 @@ static void wpe__perf_row(const char* label, const char* format, double value) {
     igText(format, value);
 }
 
+/* The profiler's stages, scripts and sections (smoothed averages and recent peaks), as the game's overlay
+ * shows them. Profiling runs while the panel is shown. */
+static void wpe__ui_profile(WPE_Engine* engine) {
+    if (!wpe_engine_profiling(engine)) wpe_engine_set_profiling(engine, true);
+    const WPE_ProfileEntry* entries = NULL;
+    const uint32_t count = wpe_engine_profile(engine, &entries);
+    double scale = 1.0;
+    for (uint32_t i = 0; i < count; ++i)
+        scale = fmax(scale, entries[i].average_ms);
+    static const char* const kinds[] = {"stage", "script", "section"};
+    if (!igBeginTable("##profile", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp,
+                      (ImVec2_c){0, 0}, 0.0f))
+        return;
+    igTableSetupColumn("Where the time goes", 0, 2.0f, 0);
+    igTableSetupColumn("", 0, 2.0f, 0);
+    igTableSetupColumn("average", 0, 1.0f, 0);
+    igTableSetupColumn("peak", 0, 1.0f, 0);
+    igTableHeadersRow();
+    for (uint32_t i = 0; i < count; ++i) {
+        const WPE_ProfileEntry* e = &entries[i];
+        if (e->kind == WPE_PROFILE_SYSTEM && e->average_ms < 0.01 && e->peak_ms < 0.05) continue;
+        igTableNextRow(0, 0.0f);
+        igTableNextColumn();
+        igText("%s %s", e->name, e->kind == WPE_PROFILE_SYSTEM ? "" : kinds[e->kind]);
+        igTableNextColumn();
+        igProgressBar((float)fmin(e->average_ms / scale, 1.0), (ImVec2_c){-1.0f, 0.0f}, "");
+        igTableNextColumn();
+        igText("%.2f ms", e->average_ms);
+        igTableNextColumn();
+        igText("%.2f ms", e->peak_ms);
+    }
+    igEndTable();
+}
+
 static void wpe__ui_performance(WPE_EditorUi* ui) {
     if (!igBegin("Performance", NULL, 0)) {
         igEnd();
@@ -2850,6 +2884,7 @@ static void wpe__ui_performance(WPE_EditorUi* ui) {
     snprintf(overlay, sizeof overlay, "slowest %.2f ms", (double)highest);
     igPlotLines_FloatPtr("##frames", ui->frame_ms, (int)WPE__PERF_HISTORY, (int)ui->frame_ms_at, overlay,
                          0.0f, highest * 1.1f, (ImVec2_c){-1.0f, 60.0f}, (int)sizeof(float));
+    wpe__ui_profile(engine);
     if (igBeginTable("##perf", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp, (ImVec2_c){0, 0},
                      0.0f)) {
         wpe__perf_row("Simulation", "%.2f ms", s.simulate_ms);

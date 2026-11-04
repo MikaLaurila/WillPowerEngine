@@ -16,6 +16,7 @@ add_library(wpe_engine STATIC
     json_read.c
     new_project.c
     prefab.c
+    profiler.c
     project.c
     replication.c
     scene_file.c

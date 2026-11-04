@@ -20,6 +20,7 @@
 #include "core/fixed_step.h"
 #include "core/json.h"
 #include "core/log.h"
+#include "core/profile.h"
 #include "core/result.h"
 #include "core/version.h"
 

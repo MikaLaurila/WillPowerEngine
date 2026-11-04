@@ -701,6 +701,25 @@ function Tour:on_update(dt)
 		wpe.remove_anim_states(self.dancer)
 		assert(not pcall(wpe.anim_state, self.dancer))
 	end
+	-- The profiler: shown (profiling) for a few frames, with this script's own section among its entries.
+	wpe.profile_begin("tour update")
+	if self.updates == 40 then
+		wpe.show_profiler(true)
+	elseif self.updates == 44 then
+		local found = { input = false, render = false, section = false }
+		for _, entry in wpe.get_profile() do
+			if entry.kind == "system" and found[entry.name] ~= nil then
+				found[entry.name] = entry.average >= 0 and entry.peak >= entry.ms
+			end
+			if entry.kind == "section" and entry.name == "tour update" then
+				found.section = entry.calls == 1
+			end
+		end
+		assert(found.input and found.render and found.section, "the profiler should list the stages and the section")
+		wpe.show_profiler(false)
+		assert(not pcall(wpe.profile_begin, ""))
+	end
+	wpe.profile_end()
 	if self.cut then
 		self.cut_phases[self.cut.phase] = true
 		if not self.cut:update(dt) then

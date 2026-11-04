@@ -33,7 +33,21 @@ typedef struct wpe__ScriptFile {
     int meta_ref;   /* Registry ref: shared instance metatable {__index = class}. */
     int thread_ref; /* Registry ref: sandbox thread holding the file's global environment. */
     uint32_t instances;
+    double profile_seconds; /* Its callbacks' own time since the last take (while profiling). */
+    uint32_t profile_calls;
 } wpe__ScriptFile;
+
+/* Profiling (wpe_script_host_set_profiling): scripts' own sections (wpe.profile_begin/end). */
+#define WPE__PROFILE_SECTIONS 32u
+#define WPE__PROFILE_DEPTH 16u
+#define WPE__PROFILE_NAME_MAX 48u
+#define WPE__PROFILE_NONE UINT32_MAX /* No script file runs. */
+
+typedef struct wpe__ProfileSection {
+    char name[WPE__PROFILE_NAME_MAX];
+    double seconds;
+    uint32_t calls;
+} wpe__ProfileSection;
 
 typedef struct wpe__Prefab {
     char name[WPE__SCRIPT_PREFAB_NAME_MAX];
@@ -167,7 +181,28 @@ struct WPE_ScriptHost {
     uint64_t frame;
     uint8_t* net_scratch; /* wpe.net_send's encoding buffer (made on first use, freed with the host). */
     uint32_t nav_random;  /* wpe.nav_random_point's generator state (the same points every run). */
+
+    /* Profiling: the file whose code runs (its time accrues from profile_mark), and open sections. */
+    bool profiling;
+    uint32_t profile_file;
+    double profile_mark;
+    wpe__ProfileSection sections[WPE__PROFILE_SECTIONS];
+    uint32_t section_count;
+    struct {
+        uint32_t section;
+        double start;
+    } section_stack[WPE__PROFILE_DEPTH];
+    uint32_t section_depth;
 };
+
+/* Makes `file` (an index into files, or WPE__PROFILE_NONE) the one whose callbacks run, charging the time
+ * since the last switch to the previous one; returns the previous one. Does nothing but return it while not
+ * profiling. */
+uint32_t wpe__script_profile_switch(WPE_ScriptHost* host, uint32_t file);
+/* wpe__script_profile_switch for a callback starting: counts a call of `file`. */
+uint32_t wpe__script_profile_enter(WPE_ScriptHost* host, uint32_t file);
+/* Closes sections opened above `depth` (a callback that returned or failed without ending them). */
+void wpe__script_profile_close_sections(WPE_ScriptHost* host, uint32_t depth);
 
 /* Host services used by the bindings. */
 WPE_ScriptHost* wpe__script_host_from(lua_State* L);

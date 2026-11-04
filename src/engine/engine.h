@@ -36,6 +36,7 @@
 
 #include "assets/asset_manager.h"
 #include "audio/audio.h"
+#include "core/profile.h"
 #include "core/result.h"
 #include "ecs/ecs.h"
 #include "engine/export.h"
@@ -217,6 +218,9 @@ typedef struct WPE_EngineDebugDraw {
     bool grid;          /* A grid on the ground plane (y = 0) around the camera, X axis red, Z axis blue. */
     float grid_spacing; /* World units between grid lines (0 = 1); every 10th line is brighter. */
     bool network;       /* The multiplayer session in the top-left corner: players, pings, traffic. */
+    /* The profiler in the top-right corner: the engine's stages and the costliest scripts and sections as
+     * bars (smoothed averages, with a tick at the recent peak). Turning it on turns profiling on. */
+    bool profiler;
     /* The walkable area of wpe_engine_nav_grid() (built when needed), colored by island, with the agents'
      * ways ahead (yellow) and the cells obstacles close (red). */
     bool navigation;
@@ -345,5 +349,30 @@ typedef struct WPE_EngineStats {
 
 /** @return Statistics of the last frame. @thread_safety Main thread only */
 WPE_EngineStats wpe_engine_stats(const WPE_Engine* engine);
+
+/* ---- Profiler ------------------------------------------------------------------------------------- */
+
+/**
+ * Turns the profiler on or off (off by default). While on, every frame adds up the time of the engine's
+ * stages (input, network, ui, scripts (fixed), navigation, physics, scripts (update), animation, effects,
+ * transforms, audio, render, post effects, overlay, present, scene loads and other: the rest of the frame),
+ * each script file's own time and the scripts' sections (WPE_ProfileEntry). Stages include the scripts they
+ * call. Turning it on starts over.
+ *
+ * @thread_safety Main thread only
+ */
+void wpe_engine_set_profiling(WPE_Engine* engine, bool profiling);
+bool wpe_engine_profiling(const WPE_Engine* engine);
+
+/**
+ * The profiler's entries after the last frame: the stages always, in the order above, then the scripts and
+ * sections seen lately (an entry goes once its average has decayed to nothing). Empty while profiling is off.
+ *
+ * @param out_entries Receives the array (borrowed until the next frame).
+ * @return The entry count.
+ *
+ * @thread_safety Main thread only
+ */
+uint32_t wpe_engine_profile(const WPE_Engine* engine, const WPE_ProfileEntry** out_entries);
 
 #endif /* WPE_ENGINE_ENGINE_H */

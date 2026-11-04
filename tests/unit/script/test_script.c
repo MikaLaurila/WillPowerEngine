@@ -124,6 +124,76 @@ static void test_script_spawn_and_self_destroy(void) {
     free_fixture(&f);
 }
 
+/* ---- Profiling ---------------------------------------------------------------------------------------- */
+
+/* Times are wall clock, so the checks leave room for a busy machine: each script spins for a set time. */
+static void test_script_profiling(void) {
+    write_script(
+        "busy.luau",
+        "local S = {}\n"
+        "local function spin(seconds) local t = os.clock() while os.clock() - t < seconds do end end\n"
+        "function S:on_update(dt)\n"
+        "  spin(0.002)\n"
+        "  wpe.profile_begin('busy work')\n"
+        "  spin(0.003)\n"
+        "  wpe.profile_end()\n"
+        "  wpe.send(wpe.find('helper'), 'help')\n" /* Its time is the helper's. */
+        "  wpe.profile_begin('left open')\n"       /* Ends with the callback. */
+        "  spin(0.001)\n"
+        "end\n"
+        "return S\n");
+    write_script("helper.luau",
+                 "local S = {}\n"
+                 "function S:help() local t = os.clock() while os.clock() - t < 0.006 do end end\n"
+                 "return S\n");
+    Fixture f = make_fixture(0, 0);
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, spawn(&f, "busy"), "busy.luau"));
+    WPE_TEST_ASSERT_OK(wpe_script_attach(f.host, spawn(&f, "helper"), "helper.luau"));
+
+    /* Off: nothing is collected, and sections cost nothing. */
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.016f));
+    WPE_TEST_ASSERT(!wpe_script_host_profiling(f.host));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_take_profile(f.host, NULL, 0));
+
+    wpe_script_host_set_profiling(f.host, true);
+    WPE_TEST_ASSERT_OK(wpe_script_host_update(f.host, 0.016f));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(f.host).errors);
+    WPE_ScriptProfileEntry entries[8];
+    const uint32_t count = wpe_script_host_take_profile(f.host, entries, 8);
+    const WPE_ScriptProfileEntry *busy = NULL, *helper = NULL, *work = NULL, *open = NULL;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (strcmp(entries[i].name, "busy.luau") == 0) busy = &entries[i];
+        if (strcmp(entries[i].name, "helper.luau") == 0) helper = &entries[i];
+        if (strcmp(entries[i].name, "busy work") == 0) work = &entries[i];
+        if (strcmp(entries[i].name, "left open") == 0) open = &entries[i];
+    }
+    WPE_TEST_ASSERT_EQ_UINT(4, count);
+    WPE_TEST_ASSERT(busy && helper && work && open);
+    WPE_TEST_ASSERT(!busy->section && work->section && open->section);
+    WPE_TEST_ASSERT_EQ_UINT(1, busy->calls);
+    WPE_TEST_ASSERT_EQ_UINT(1, helper->calls);
+    /* busy spins 6 ms itself (2 + 3 + 1), helper 6 ms; nested time is the helper's, not busy's. */
+    WPE_TEST_ASSERT_MSG(helper->ms >= 5.9 && busy->ms >= 5.9 && busy->ms < helper->ms + 6.0,
+                        "busy %.2f ms, helper %.2f ms", busy->ms, helper->ms);
+    WPE_TEST_ASSERT_MSG(work->ms >= 2.9 && work->ms < busy->ms, "section %.2f ms", work->ms);
+    WPE_TEST_ASSERT(open->ms >= 0.9);
+    /* A take starts over. */
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_take_profile(f.host, entries, 8));
+
+    /* profile_end with nothing open does nothing (profiling may have started after its profile_begin); names
+     * are checked even while off. */
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(f.host, "unmatched end", "wpe.profile_end()"));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_take_profile(f.host, entries, 8));
+    quiet(true);
+    WPE_TEST_ASSERT(wpe_script_host_run(f.host, "long name", "wpe.profile_begin(string.rep('x', 60))") !=
+                    WPE_RESULT_OK);
+    quiet(false);
+    wpe_script_host_set_profiling(f.host, false);
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(f.host, "off", "wpe.profile_begin('x') wpe.profile_end()"));
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_script_host_stats(f.host).errors); /* The long name's run, nothing else. */
+    free_fixture(&f);
+}
+
 /* ---- Errors, budgets and sandboxing --------------------------------------------------------------- */
 
 static void test_script_runtime_error_is_isolated(void) {
@@ -1322,7 +1392,7 @@ static void test_script_ecs_unregister_component(void) {
 }
 
 WPE_TEST_MAIN(WPE_TEST_CASE(test_script_lifecycle_order), WPE_TEST_CASE(test_script_spawn_and_self_destroy),
-              WPE_TEST_CASE(test_script_runtime_error_is_isolated),
+              WPE_TEST_CASE(test_script_profiling), WPE_TEST_CASE(test_script_runtime_error_is_isolated),
               WPE_TEST_CASE(test_script_time_budget_interrupts_infinite_loop),
               WPE_TEST_CASE(test_script_memory_limit), WPE_TEST_CASE(test_script_sandbox),
               WPE_TEST_CASE(test_script_attach_validation),

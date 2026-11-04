@@ -220,6 +220,29 @@ static WPE_Result wpe__cmd_stats(wpe__Call* call) {
     wpe__write_number_field(w, "bodies", physics.bodies);
     wpe__write_number_field(w, "scripts", scripts.instances);
     wpe__write_number_field(w, "script_errors", (double)scripts.errors);
+    /* Where the time goes: profiling starts with the first stats (or the Performance panel), so the list
+     * fills from the frames after it. Stages that cost nothing are left out. */
+    if (!wpe_engine_profiling(engine)) wpe_engine_set_profiling(engine, true);
+    static const char* const kinds[] = {"system", "script", "section"};
+    const WPE_ProfileEntry* entries = NULL;
+    const uint32_t count = wpe_engine_profile(engine, &entries);
+    wpe_json_write_key(w, "profile");
+    wpe_json_write_array_begin(w, false);
+    for (uint32_t i = 0; i < count; ++i) {
+        const WPE_ProfileEntry* e = &entries[i];
+        if (e->kind == WPE_PROFILE_SYSTEM && e->average_ms < 0.01 && e->peak_ms < 0.05) continue;
+        wpe_json_write_object_begin(w);
+        wpe_json_write_key(w, "name");
+        wpe_json_write_string(w, e->name);
+        wpe_json_write_key(w, "kind");
+        wpe_json_write_string(w, kinds[e->kind <= WPE_PROFILE_SECTION ? e->kind : 0]);
+        wpe__write_number_field(w, "ms", e->ms);
+        wpe__write_number_field(w, "average_ms", e->average_ms);
+        wpe__write_number_field(w, "peak_ms", e->peak_ms);
+        wpe__write_number_field(w, "calls", e->calls);
+        wpe_json_write_object_end(w);
+    }
+    wpe_json_write_array_end(w);
     wpe_json_write_object_end(w);
     return WPE_RESULT_OK;
 }
@@ -2034,7 +2057,11 @@ static const struct {
 } wpe__commands[] = {
     {"help", wpe__cmd_help, "{} -> the command list"},
     {"status", wpe__cmd_status, "{} -> project, scene, mode, dirty, selection, counts"},
-    {"stats", wpe__cmd_stats, "{} -> the last frame's times (ms), draws, triangles, entities and memory"},
+    {"stats", wpe__cmd_stats,
+     "{} -> the last frame's times (ms), draws, triangles, entities, memory, and profile: [{name, kind, ms, "
+     "average_ms, peak_ms, calls}] (the engine's stages, scripts and sections; from the frames after the "
+     "first "
+     "stats)"},
     {"project", wpe__cmd_project, "{} -> project.json settings"},
     {"list_entities", wpe__cmd_list_entities, "{} -> [{id, name, parent, components}]"},
     {"get_entity", wpe__cmd_get_entity, "{id} -> the entity in the scene-file schema (ids are handles)"},

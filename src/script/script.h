@@ -68,6 +68,7 @@
 
 #include "assets/asset_manager.h"
 #include "audio/audio.h"
+#include "core/profile.h"
 #include "core/result.h"
 #include "ecs/ecs.h"
 #include "graphics/draw2d.h"
@@ -180,6 +181,10 @@ typedef struct WPE_ScriptApp {
      * next run; false when they can't be saved (logged). Without it (an exception to the rule above) bindings
      * still change, for this run only. */
     bool (*save_bindings)(void* user_data);
+    /* The profiler (wpe.show_profiler, wpe.get_profile): shows or hides its overlay (profiling while shown),
+     * and returns its entries (borrowed until the next frame) through out_entries. */
+    void (*show_profiler)(void* user_data, bool shown);
+    uint32_t (*profile)(void* user_data, const WPE_ProfileEntry** out_entries);
     WPE_ScriptNet net; /* Multiplayer (wpe.net_*). */
 } WPE_ScriptApp;
 
@@ -378,6 +383,36 @@ WPE_Result wpe_script_host_register_prefab(WPE_ScriptHost* host, const char* nam
 
 /** @return Current statistics. @thread_safety Main thread */
 WPE_ScriptStats wpe_script_host_stats(const WPE_ScriptHost* host);
+
+/**
+ * Turns timing of the scripts on or off (off by default; each callback then costs two clock reads). While on,
+ * the host adds up each script file's own time in its callbacks, timers and tweens (a call into another
+ * script counts for that one) and the scripts' sections (wpe.profile_begin/end; ignored while off). Turning
+ * it either way starts the counts over.
+ *
+ * @thread_safety Main thread
+ */
+void wpe_script_host_set_profiling(WPE_ScriptHost* host, bool profiling);
+bool wpe_script_host_profiling(const WPE_ScriptHost* host);
+
+/** One script file's or section's time since the last take. */
+typedef struct WPE_ScriptProfileEntry {
+    const char* name; /* The script's asset path, or the section's name (borrowed until the next call into the
+                         host). */
+    bool section;
+    double ms;
+    uint32_t calls;
+} WPE_ScriptProfileEntry;
+
+/**
+ * Takes the times collected since the last take and starts over: scripts that ran (by asset path), then
+ * sections that were used. Sections still open keep running into the next take.
+ *
+ * @return How many entries there were (more than `capacity` means some were left out).
+ *
+ * @thread_safety Main thread
+ */
+uint32_t wpe_script_host_take_profile(WPE_ScriptHost* host, WPE_ScriptProfileEntry* out, uint32_t capacity);
 
 /** @return The asset path of the entity's script (borrowed from the host), or NULL if it has none.
  * @thread_safety Main thread */

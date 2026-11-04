@@ -663,6 +663,26 @@ return Name
 
 `scripts/volume_slider.luau` and `scripts/sound_toggle.luau` (on the title screen) set the music volume and mute the sound, and remember the settings with saved data.
 
+### Profiling
+
+Where does a frame go? `wpe_runtime --profile` (or `wpe.show_profiler(true)`) shows a panel in the top-right corner: the engine's stages (input, physics, scripts, render, ...) and below them the costliest scripts and sections, as bars of their averages over the last half second with a tick at the recent peak. Stages include the scripts they call, so a slow `on_update` shows in "scripts (update)" and under its file's name. Each script's time is its own: when it calls another script (`wpe.send`, `wpe.broadcast`), that time is the other's. The editor's Performance panel shows the same numbers.
+
+| Function | Description |
+|---|---|
+| `wpe.profile_begin(name)` / `wpe.profile_end()` | Times a section of your own (1 to 47 characters) until `profile_end`; sections nest (up to 16 deep) and show in orange. A section still open when its callback returns ends there. Both cost next to nothing while the profiler is off; `profile_end` with nothing open does nothing. |
+| `wpe.show_profiler(shown)` | Shows or hides the panel (showing turns profiling on). |
+| `wpe.get_profile() -> {{name, kind, ms, average, peak, calls}}` | The profiler's numbers after the last frame (empty while it is off): `kind` is `"system"`, `"script"` (by asset path) or `"section"`; times in milliseconds (`ms` the last frame, `average` over about half a second, `peak` the slowest frame of the last second or two). For an in-game debug screen. |
+
+```lua
+function Crowd:on_update(dt)
+	wpe.profile_begin("crowd steering")
+	for _, member in self.members do
+		self:steer(member, dt)
+	end
+	wpe.profile_end()
+end
+```
+
 `assets/scripts/api_tour.luau` exercises every function above, as part of the master test scene that the scene test runs for 60 simulated seconds. `wpe.load_scene` and `wpe.quit` end a scene, so the engine tests cover those two instead.
 
 ## Hosting from C

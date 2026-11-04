@@ -412,6 +412,7 @@ Implemented in `src/engine/`. Docs: `docs/scenes.md` and `docs/runtime.md`.
   - Game components plug in through `WPE_ComponentSerializer`.
   - The `"instance"` shorthand places a whole model; saving writes it out expanded. TODO(agent): keep prefab instances as references once the editor needs it.
 - Script components save their path and properties: fields set through `wpe_script_set_property()`, saved with their current values.
+- **Profiler.** The frame laps its stages in order (input, network, ui, scripts (fixed), navigation, physics, scripts (update), animation, effects, transforms, audio, render, post effects, overlay, present, scene loads; "other" is the rest), always, at the cost of a clock read per lap. While profiling is on, the script host also times each script file exclusively (a call into another script counts for that one) and the scripts' sections (`wpe.profile_begin/end`), and the engine keeps smoothed averages and recent peaks (`wpe_engine_profile`, the `--profile` overlay, the editor's Performance panel, `wpe.get_profile`).
 - Export appends a `.pak` of the project to `wpe_runtime`, producing one self-contained executable. The runtime links its compiler runtimes statically and, on Windows, is a GUI program that attaches to a parent console.
 
 ### 4.8 Editor

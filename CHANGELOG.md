@@ -4,6 +4,18 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (v1.0: the profiler)
+- `wpe_runtime --profile` shows a profiler in the top-right corner: the engine's stages (input, network, ui,
+  scripts (fixed), navigation, physics, scripts (update), animation, effects, transforms, audio, render, post
+  effects, overlay, present, scene loads, other) and the costliest scripts and script sections, as bars of
+  their averages (about half a second) with a tick at the recent peak.
+- Scripts are timed per file: callbacks, `wpe.send` and `wpe.broadcast` receivers, timers and tweens; a call
+  into another script counts for that one. Their own sections: `wpe.profile_begin(name)` /
+  `wpe.profile_end()`. `wpe.show_profiler(shown)`, `wpe.get_profile()` (for in-game debug screens).
+- C: `wpe_engine_set_profiling`, `wpe_engine_profile` (`WPE_ProfileEntry` in `core/profile.h`),
+  `WPE_EngineDebugDraw.profiler`; `wpe_script_host_set_profiling`, `wpe_script_host_take_profile`.
+- The editor's Performance panel lists the same stages, scripts and sections with bars, averages and peaks.
+
 ### Added (v1.0: music position and ducking)
 - Music position: `wpe.music_position()`, `wpe.music_length()` and `wpe.seek_music(seconds)` (C:
   `wpe_audio_music_position`, `_music_length`, `_seek_music`), in the track's own seconds; a seek counts at

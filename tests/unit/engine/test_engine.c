@@ -1044,6 +1044,75 @@ static void test_engine_player_bindings(void) {
     wpe_engine_destroy(engine);
 }
 
+/* The profiler: stages every frame, scripts once on, numbers for scripts, and its overlay in the corner. */
+static void test_engine_profiler(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/profile/scenes"));
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/profile/scripts"));
+    write_text(ROOT "/profile/project.json",
+               "{\"format\": \"wpe.project\", \"version\": 1, \"name\": \"Profile\", \"start_scene\": "
+               "\"scenes/main.scene\", \"display\": {\"width\": 200, \"height\": 120}}\n");
+    write_text(ROOT "/profile/scenes/main.scene",
+               "{\"format\": \"wpe.scene\", \"version\": 1, \"environment\": {\"clear_color\": [1, 1, 1]},\n"
+               " \"entities\": [{\"id\": 1, \"name\": \"worker\", \"script\": {\"path\": "
+               "\"scripts/work.luau\"}}]}\n");
+    write_text(
+        ROOT "/profile/scripts/work.luau",
+        "local S = {}\n"
+        "function S:on_update(dt)\n"
+        "  wpe.profile_begin('think')\n"
+        "  local t = os.clock() while os.clock() - t < 0.001 do end\n"
+        "  wpe.profile_end()\n"
+        "  local profile = wpe.get_profile()\n"
+        "  self.entries = #profile\n"
+        "  if #profile > 0 then assert(profile[1].kind == 'system' and profile[1].name == 'input') end\n"
+        "end\n"
+        "return S\n");
+    WPE_Engine* engine = NULL;
+    WPE_TEST_ASSERT_OK(wpe_engine_create(
+        &(WPE_EngineDesc){
+            .project_dir = ROOT "/profile", .embedded = true, .no_audio_device = true, .workers = 2},
+        &engine));
+    const WPE_ProfileEntry* entries = NULL;
+    WPE_TEST_ASSERT(!wpe_engine_profiling(engine));
+    WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 60.0));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_engine_profile(engine, &entries)); /* Off: nothing to show. */
+
+    /* A script turns it on (with the overlay); from the next frame on there are numbers. */
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(wpe_engine_scripts(engine), "show", "wpe.show_profiler(true)"));
+    WPE_TEST_ASSERT(wpe_engine_profiling(engine) && wpe_engine_debug_draw(engine).profiler);
+    for (int i = 0; i < 5; ++i)
+        WPE_TEST_ASSERT_OK(wpe_engine_frame(engine, 1.0 / 60.0));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(wpe_engine_scripts(engine)).errors);
+    const uint32_t count = wpe_engine_profile(engine, &entries);
+    WPE_TEST_ASSERT(count >= 17 + 2);
+    WPE_TEST_ASSERT_EQ_STR("input", entries[0].name);
+    WPE_TEST_ASSERT_EQ_STR("other", entries[16].name);
+    const WPE_ProfileEntry *render = NULL, *script = NULL, *section = NULL;
+    double stages = 0.0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (entries[i].kind == WPE_PROFILE_SYSTEM) stages += entries[i].ms;
+        if (strcmp(entries[i].name, "render") == 0) render = &entries[i];
+        if (entries[i].kind == WPE_PROFILE_SCRIPT && strcmp(entries[i].name, "scripts/work.luau") == 0)
+            script = &entries[i];
+        if (entries[i].kind == WPE_PROFILE_SECTION && strcmp(entries[i].name, "think") == 0)
+            section = &entries[i];
+    }
+    WPE_TEST_ASSERT(render && render->ms > 0.0 && render->average_ms > 0.0 && render->peak_ms >= render->ms);
+    WPE_TEST_ASSERT(script && script->calls == 1 && script->ms >= 0.9);
+    WPE_TEST_ASSERT(section && section->calls == 1 && section->ms >= 0.9 && section->ms <= script->ms);
+    /* The stages add up to the frame (the rest is "other"). */
+    WPE_TEST_ASSERT_NEAR(wpe_engine_stats(engine).frame_ms, stages, 0.05);
+
+    /* The overlay darkens the top-right corner of the white screen, and nothing else. */
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(engine));
+    WPE_TEST_ASSERT((fb->color[5 * fb->width + fb->width - 10] & 0x00FFFFFFu) != 0x00FFFFFFu);
+    WPE_TEST_ASSERT_EQ_UINT(0x00FFFFFFu, fb->color[100 * fb->width + 5] & 0x00FFFFFFu);
+
+    wpe_engine_set_profiling(engine, false);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_engine_profile(engine, &entries));
+    wpe_engine_destroy(engine);
+}
+
 static void test_engine_creates_new_projects(void) {
     remove_new_project(ROOT "/new_game"); /* Left by an earlier run. */
     WPE_TEST_ASSERT_OK(wpe_project_create(ROOT "/new_game", "New Game", NULL));
@@ -1313,6 +1382,6 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_engine_captures_the_frame_before_post_effects),
     WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_navigation_grid),
     WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts), WPE_TEST_CASE(test_engine_player_bindings),
-    WPE_TEST_CASE(test_engine_hit_stop_and_shake), WPE_TEST_CASE(test_engine_scene_transition),
-    WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
+    WPE_TEST_CASE(test_engine_profiler), WPE_TEST_CASE(test_engine_hit_stop_and_shake),
+    WPE_TEST_CASE(test_engine_scene_transition), WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
     WPE_TEST_CASE(test_engine_creates_new_projects), WPE_TEST_CASE(test_engine_export_embeds_the_project))
