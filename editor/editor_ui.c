@@ -1569,8 +1569,12 @@ static bool wpe__ui_canvas(WPE_EditorUi* ui, ImDrawList* draw) {
     char coalesce[32];
     snprintf(coalesce, sizeof coalesce, "ui2d-%u", ui->canvas_drag);
     wpe__send_ui_rect(ui, ui->canvas_entity, &moved, coalesce);
+    /* The command replaced the component, whose laid-out rectangle starts empty until the next frame's
+     * layout: lay out now for the label (cheap, and the frame does it again anyway). */
+    const bool laid_out = wpe_ui_layout(wpe_engine_ui(wpe_editor_engine(ui->editor)), ui->view_width,
+                                        ui->view_height) == WPE_RESULT_OK;
     const WPE_UiRect* now = wpe_ecs_get_component(ecs, ui->canvas_entity, WPE_COMP_UI);
-    if (now) {
+    if (now && laid_out) {
         char label[48];
         snprintf(label, sizeof label, "%.0f, %.0f  %.0f x %.0f", (double)now->rect.x, (double)now->rect.y,
                  (double)now->rect.width, (double)now->rect.height);
