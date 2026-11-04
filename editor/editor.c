@@ -519,6 +519,16 @@ WPE_Result wpe_editor_create(const WPE_EditorDesc* desc, WPE_Editor** out_editor
         wpe_editor_destroy(editor);
         return result;
     }
+    /* The project's Claude skill should match this engine (its docs describe this engine's API). */
+    const WPE_SkillStatus skill = wpe_project_skill_status(editor->project_dir);
+    if (skill == WPE_SKILL_OUTDATED)
+        wpe_log_warn(
+            "the project's Claude skill (%s) is from another engine build: refresh it with the update_skill "
+            "command or `wpe_editor <project> --update-skill`",
+            WPE_PROJECT_SKILL_DIR);
+    else if (skill == WPE_SKILL_MISSING)
+        wpe_log_info(
+            "the project has no Claude skill; the update_skill command (or --update-skill) installs one");
     *out_editor = editor;
     return WPE_RESULT_OK;
 }

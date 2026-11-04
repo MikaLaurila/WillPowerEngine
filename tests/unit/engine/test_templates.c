@@ -134,6 +134,7 @@ typedef struct Comparison {
 /* Each created file (project.json aside, which gets the new name) equals the template's source file. */
 static bool compare_file(const char* relative_path, void* user_data) {
     Comparison* c = user_data;
+    if (strncmp(relative_path, ".claude/", 8) == 0) return true; /* The skill, not the template's. */
     ++c->files;
     if (strcmp(relative_path, "project.json") == 0) return true;
     char created_path[512];
@@ -179,6 +180,7 @@ static void test_templates_create_projects_that_run(void) {
         uint32_t source_files = 0;
         WPE_TEST_ASSERT_OK(wpe_directory_walk(source, count_file, &source_files));
         WPE_TEST_ASSERT_EQ_UINT(source_files, comparison.files);
+        WPE_TEST_ASSERT_EQ_INT(WPE_SKILL_CURRENT, wpe_project_skill_status(dir)); /* And the Claude skill. */
 
         WPE_Engine* engine = create_engine(dir);
         WPE_TEST_ASSERT_EQ_STR("Template Test", wpe_engine_project(engine)->name);

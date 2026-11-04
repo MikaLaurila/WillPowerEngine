@@ -189,6 +189,25 @@ static void wpe__write_number_field(WPE_JsonWriter* w, const char* key, double v
     wpe_json_write_double(w, value);
 }
 
+/* Installs or refreshes the project's Claude skill: {} -> {was: "missing"|"outdated"|"current", skill_id}. */
+static WPE_Result wpe__cmd_update_skill(wpe__Call* call) {
+    static const char* const states[] = {"missing", "current", "outdated"};
+    const char* project = wpe_editor_project_dir(call->editor);
+    const WPE_SkillStatus was = wpe_project_skill_status(project);
+    const WPE_Result result = wpe_project_install_skill(project);
+    if (result != WPE_RESULT_OK) return result; /* Logged. */
+    WPE_JsonWriter* w = call->w;
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "was");
+    wpe_json_write_string(w, states[was]);
+    wpe_json_write_key(w, "skill_id");
+    wpe_json_write_string(w, wpe_project_skill_id());
+    wpe_json_write_key(w, "path");
+    wpe_json_write_string(w, WPE_PROJECT_SKILL_DIR);
+    wpe_json_write_object_end(w);
+    return WPE_RESULT_OK;
+}
+
 /* The last frame's costs (as the Performance panel shows them) and memory use. */
 static WPE_Result wpe__cmd_stats(wpe__Call* call) {
     WPE_Engine* engine = wpe_editor_engine(call->editor);
@@ -2057,6 +2076,9 @@ static const struct {
 } wpe__commands[] = {
     {"help", wpe__cmd_help, "{} -> the command list"},
     {"status", wpe__cmd_status, "{} -> project, scene, mode, dirty, selection, counts"},
+    {"update_skill", wpe__cmd_update_skill,
+     "{} -> {was: \"missing\"|\"outdated\"|\"current\", skill_id, path}: install or refresh the project's "
+     "willpowerengine Claude skill (.claude/skills/willpowerengine, with its docs) to this engine's"},
     {"stats", wpe__cmd_stats,
      "{} -> the last frame's times (ms), draws, triangles, entities, memory, and profile: [{name, kind, ms, "
      "average_ms, peak_ms, calls}] (the engine's stages, scripts and sections; from the frames after the "

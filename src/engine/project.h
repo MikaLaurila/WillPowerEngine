@@ -171,7 +171,8 @@ const char* wpe_project_template_name(uint32_t index);
 
 /**
  * Creates a new project in an OS directory (made if missing) from a built-in template: the template's
- * files, with the project's name set in project.json.
+ * files, with the project's name set in project.json, and the `willpowerengine` Claude skill
+ * (wpe_project_install_skill()).
  *
  * @param template_name A template's name; NULL means WPE_PROJECT_DEFAULT_TEMPLATE.
  * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_INVALID_ARG (an empty or too long
@@ -182,5 +183,39 @@ const char* wpe_project_template_name(uint32_t index);
  * @thread_safety Any thread
  */
 WPE_Result wpe_project_create(const char* os_directory, const char* name, const char* template_name);
+
+/* ---- The Claude skill in a project ---------------------------------------------------------------- */
+
+/** Where a project keeps its copy of the `willpowerengine` skill, relative to the project's directory. */
+#define WPE_PROJECT_SKILL_DIR ".claude/skills/willpowerengine"
+
+typedef enum WPE_SkillStatus {
+    WPE_SKILL_MISSING = 0, /* The project has no copy (made before projects got one, or deleted). */
+    WPE_SKILL_CURRENT,     /* The copy this engine build installs. */
+    WPE_SKILL_OUTDATED,    /* Another engine build's copy (or edited by hand): --update-skill replaces it. */
+} WPE_SkillStatus;
+
+/**
+ * Installs (or replaces) the `willpowerengine` Claude skill in a project, so Claude can help with the game
+ * outside the engine's repository: WPE_PROJECT_SKILL_DIR/SKILL.md, and references/ with the docs it points to
+ * (scripting, scenes, runtime, editor, navigation, networking, assets), all as this engine build has them.
+ * The skill's front matter records the engine version and a `skill_id` of its content. Files of an older copy
+ * that this one doesn't have are removed; nothing else in the project is touched. wpe_project_create() calls
+ * it.
+ *
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_NOT_FOUND (no such directory);
+ *         WPE_RESULT_ERROR_INVALID_ARG (too long a path); WPE_RESULT_ERROR_IO. Errors are logged.
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_project_install_skill(const char* os_directory);
+
+/** @return Whether a project's skill is missing, this build's, or another's (by its `skill_id`).
+ * @thread_safety Any thread */
+WPE_SkillStatus wpe_project_skill_status(const char* os_directory);
+
+/** @return This build's skill id (16 hex digits): a hash of the engine version, the skill and its docs.
+ * @thread_safety Any thread */
+const char* wpe_project_skill_id(void);
 
 #endif /* WPE_ENGINE_PROJECT_H */

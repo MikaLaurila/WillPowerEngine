@@ -4,6 +4,20 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added (v1.0: the Claude skill in game projects)
+- New projects (`wpe_editor <dir> --init`, `wpe_project_create`) get the `willpowerengine` Claude skill in
+  `.claude/skills/willpowerengine/`, with `references/` holding the docs it points to (scripting, scenes,
+  runtime, editor, navigation, networking, assets), so Claude can help with a game outside the engine's
+  repository. The skill and docs are embedded at build time (`cmake/WpeEmbedSkill.cmake`); the copy's links
+  point at its references, and its front matter records `engine_version` and `skill_id` (a hash of the
+  content), so it always matches the engine that wrote it. Line endings are LF on every platform.
+- Refreshing after an engine update: `wpe_editor <project> --update-skill`, the `update_skill` command, or
+  File > Update Claude skill (replaces the skill's files, removes ones the new copy lacks). The editor warns
+  when a project's copy is from another build. C: `wpe_project_install_skill`, `wpe_project_skill_status`,
+  `wpe_project_skill_id`.
+- SKILL.md reads right in both places: template paths are explained for game projects (make a scratch copy
+  with `--init --template`), and a section says how the copy is kept current.
+
 ### Added (v1.0: the dialogue template)
 - `dialogue` template: a village square on the third-person player and camera, with three villagers who
   turn to you and show the interact prompt for the device last used, and a dialogue box that types their

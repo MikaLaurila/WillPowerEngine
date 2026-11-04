@@ -38,7 +38,8 @@ wpe_add_test(input_input SOURCES input/test_input.c LIBS wpe::input wpe_dep_sdl3
 wpe_add_test(ui_ui SOURCES ui/test_ui.c LIBS wpe::ui wpe_dep_sdl3 LABELS unit ui)
 target_compile_definitions(test_ui_ui PRIVATE WPE_TEST_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
 wpe_add_test(engine_engine SOURCES engine/test_engine.c LIBS wpe::engine wpe_dep_sdl3 LABELS unit engine)
-target_compile_definitions(test_engine_engine PRIVATE WPE_TEST_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
+target_compile_definitions(test_engine_engine PRIVATE WPE_TEST_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets"
+                                                      WPE_TEST_DOCS_DIR="${PROJECT_SOURCE_DIR}/docs")
 set_tests_properties(engine_engine PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 wpe_add_test(engine_templates SOURCES engine/test_templates.c LIBS wpe::engine wpe_dep_sdl3 LABELS unit engine)
 target_compile_definitions(test_engine_templates PRIVATE WPE_TEST_TEMPLATES_DIR="${PROJECT_SOURCE_DIR}/templates")

@@ -17,7 +17,11 @@
  *
  *   --init [--template <name>] [--name <title>] with a project directory creates a new project there first
  *       (the directory must be new or empty) from a built-in template (default: empty), then opens it as
- *       above. The name defaults to the directory's.
+ *       above. The name defaults to the directory's. The project gets the `willpowerengine` Claude skill.
+ *
+ *   wpe_editor <project-dir> --update-skill
+ *       Installs or refreshes the project's copy of the `willpowerengine` Claude skill (and the docs it
+ *       points to) to this engine build's, then exits (or runs the --run / --command commands given).
  */
 #define WPE_LOG_MODULE "editor"
 #include <stdio.h>
@@ -48,19 +52,22 @@ typedef struct Options {
     uint16_t port;
     bool server;
     bool init;
+    bool update_skill;
     const char* name;
     const char* template_name;
 } Options;
 
 static int usage(void) {
-    fprintf(stderr,
-            "usage:\n"
-            "  wpe_editor <project-dir> [--scene <path>] [--port <n> | --no-server]\n"
-            "  wpe_editor <new-project-dir> --init [--template <name>] [--name <title>] [any of the above]\n"
-            "  wpe_editor <project-dir> --run <commands-file> [--scene <path>]\n"
-            "  wpe_editor <project-dir> --command '<json>' [--command '<json>' ...]\n"
-            "  wpe_editor --send '<json>' [--send '<json>' ...] [--port <n>]\n"
-            "templates:");
+    fprintf(
+        stderr,
+        "usage:\n"
+        "  wpe_editor <project-dir> [--scene <path>] [--port <n> | --no-server]\n"
+        "  wpe_editor <new-project-dir> --init [--template <name>] [--name <title>] [any of the above]\n"
+        "  wpe_editor <project-dir> --update-skill   (refresh the project's Claude skill to this engine's)\n"
+        "  wpe_editor <project-dir> --run <commands-file> [--scene <path>]\n"
+        "  wpe_editor <project-dir> --command '<json>' [--command '<json>' ...]\n"
+        "  wpe_editor --send '<json>' [--send '<json>' ...] [--port <n>]\n"
+        "templates:");
     for (uint32_t i = 0; i < wpe_project_template_count(); ++i)
         fprintf(stderr, "%s %s", i ? "," : "", wpe_project_template_name(i));
     fputc('\n', stderr);
@@ -77,6 +84,8 @@ static bool parse_options(int argc, char** argv, Options* o) {
             o->server = false;
         } else if (strcmp(arg, "--init") == 0) {
             o->init = true;
+        } else if (strcmp(arg, "--update-skill") == 0) {
+            o->update_skill = true;
         } else if (value && strcmp(arg, "--name") == 0) {
             o->name = argv[++i];
         } else if (value && strcmp(arg, "--template") == 0) {
@@ -405,6 +414,16 @@ int main(int argc, char** argv) {
     if (!parse_options(argc, argv, &o)) return usage();
     if (o.send_count > 0) return run_client(&o);
     if (o.init && !init_project(&o)) return EXIT_FAILURE;
+    if (o.update_skill) {
+        const WPE_Result result = wpe_project_install_skill(o.project);
+        if (result != WPE_RESULT_OK) {
+            fprintf(stderr, "cannot update the skill: %s\n", wpe_result_to_string(result));
+            return EXIT_FAILURE;
+        }
+        printf("%s/%s is this engine's (skill %s)\n", o.project, WPE_PROJECT_SKILL_DIR,
+               wpe_project_skill_id());
+        if (!o.run && o.command_count == 0) return EXIT_SUCCESS;
+    }
     if (o.run || o.command_count > 0) return run_headless(&o);
     return run_window(&o);
 }

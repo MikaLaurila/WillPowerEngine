@@ -127,6 +127,8 @@ WPE_Result wpe_project_create(const char* os_directory, const char* name, const 
             result = wpe__write_project_file(os_directory, file->path, project, size);
     }
     wpe_json_writer_destroy(writer);
+    /* So Claude can help with the game from its own directory (docs included, matching this engine). */
+    if (result == WPE_RESULT_OK) result = wpe_project_install_skill(os_directory);
     if (result == WPE_RESULT_OK)
         wpe_log_info("created project '%s' in '%s' from the template '%s'", name, os_directory,
                      template_name);

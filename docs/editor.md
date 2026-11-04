@@ -6,6 +6,7 @@
 ./build/bin/wpe_editor assets                                   # the window (and the command server)
 ./build/bin/wpe_editor my_game --init                           # a new project (see runtime.md), then the window
 ./build/bin/wpe_editor my_fps --init --template first_person   # ... from a game template
+./build/bin/wpe_editor my_game --update-skill                   # refresh the project's Claude skill, then exit
 ./build/bin/wpe_editor assets --command '{"cmd": "list_entities"}'   # one-shot, headless
 ./build/bin/wpe_editor assets --run commands.jsonl              # a batch, headless
 ./build/bin/wpe_editor --send '{"cmd": "status"}'               # talk to a running editor
@@ -67,7 +68,7 @@ Entities and components use the **scene-file schema** ([scenes.md](scenes.md)), 
 |---|---|
 | `help` | → every command with its arguments |
 | `status` | → project, scene, mode (`edit`/`play`/`paused`), dirty, selection, entity count, undo/redo depth |
-| `stats` | → the last frame's `frame_ms`, `simulate_ms`, `physics_ms`, `render_ms`, `postfx_ms`, `overlay_ms`, `fixed_steps`, `entities`, `draws`, `triangles`, `triangles_rasterized`, `pixels_shaded`, and `memory_bytes`, `memory_peak_bytes`, `allocations`, `script_bytes`, `physics_bytes`, `bodies`, `scripts`, `script_errors` |
+| `stats` | → the last frame's `frame_ms`, `simulate_ms`, `physics_ms`, `render_ms`, `postfx_ms`, `overlay_ms`, `fixed_steps`, `entities`, `draws`, `triangles`, `triangles_rasterized`, `pixels_shaded`, and `memory_bytes`, `memory_peak_bytes`, `allocations`, `script_bytes`, `physics_bytes`, `bodies`, `scripts`, `script_errors`, and `profile`: `[{name, kind, ms, average_ms, peak_ms, calls}]`, the profiler's stages, scripts and sections (from the frames after the first `stats`) |
 | `project` | → the project settings (project.json) |
 | `list_entities` | → `[{id, name, parent, components, prefab?}]`. `prefab` is `{path, root}` for members of prefab instances. |
 | `get_entity` | `{id}` → the entity (`{"id", "name", "parent", "transform": {...}, "light": {...}, ...}`) |
@@ -113,6 +114,7 @@ Entities and components use the **scene-file schema** ([scenes.md](scenes.md)), 
 | `check_script` | `{text}` → `{ok, line?, message?}`: compiles Luau without running it |
 | `open_script` | `{path, line = 0, column = 0}`: shows a script in the Script panel, the cursor at the line and column (1-based; without a column, at the line's first non-blank character) |
 | `export` | `{output, runtime?}` → `{files, bytes}`: exports the game (runtime/export, [runtime.md](runtime.md)) |
+| `update_skill` | `{}` → `{was, skill_id, path}`: installs or refreshes the project's `willpowerengine` Claude skill (with its documentation) to this engine build's; `was` is `"missing"`, `"outdated"` or `"current"` ([runtime.md](runtime.md#claude-in-a-game-project)) |
 | `log` | `{count = 50}` → recent log lines |
 | `clear_log` | `{}`: hides the lines logged so far (the console runs it for `clear`, `cls` and `clr`) |
 | `quit` | `{discard?}`: closes the editor window (refused while the scene has unsaved changes, unless `"discard": true`) |

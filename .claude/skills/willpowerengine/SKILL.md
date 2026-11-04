@@ -9,7 +9,7 @@ description: >
   project.json ("format": "wpe.project"), scenes/*.scene, scripts/*.luau, or when the user mentions wpe_,
   wpe_editor, wpe_runtime, or a template by name.
 license: Apache-2.0
-compatibility: WillPowerEngine (this repository), Luau scripting; read docs/scripting.md for the exact API
+compatibility: WillPowerEngine game projects and the engine's repository, Luau scripting; read docs/scripting.md for the exact API
 metadata:
   engine: willpowerengine
   category: engines
@@ -30,7 +30,9 @@ an editor, multiplayer and navigation. Games are data plus Luau: you rarely touc
 
 ## The source of truth
 
-Read before writing code; these are complete and tested against the engine:
+Read before writing code; these are complete and tested against the engine. In a game project they sit
+next to this file (the engine copied them in with the skill, matching its own build); in the engine's
+repository they are its documentation folder.
 
 | Topic | Document |
 |---|---|
@@ -56,7 +58,11 @@ meshes/ (.glb, .prim)  sounds/  music/  fonts/  sprites/  ui/
 ```
 
 Start from a template, never from nothing: `wpe_editor my_game --init --template stealth`. Each template
-is a small complete game in `templates/<name>/`, written to be read.
+is a small complete game, written to be read. Paths below like `templates/stealth/scripts/guard.luau` mean
+that template's `scripts/guard.luau`: in the engine's repository it is right there; from a game project,
+make a copy to read with `wpe_editor <scratch-dir> --init --template stealth` (`wpe_editor` with no
+arguments lists the templates). Copying a template's script into the game (a state machine, a camera) is
+fine: they are meant to be reused.
 
 ## Scripts in one screen
 
@@ -119,6 +125,15 @@ return Enemy
 - **Errors are loud and precise.** Scene loads reject unknown keys with the line; script errors name the
   file and line in the log. Fix what the message says.
 - **Unsaved scenes are protected:** pass `"discard": true` to `load_scene` / `new_scene` on purpose.
+
+## This skill in a game project
+
+`wpe_editor <dir> --init` installs it into the new project (`.claude/skills/willpowerengine/`, with its
+references), stamped with the engine version and a `skill_id` in the front matter. After updating the engine,
+refresh it with `wpe_editor <project> --update-skill` (or the editor's File > Update Claude skill, or the
+`update_skill` command); the editor warns when a project's copy is from another engine build. Don't edit
+the installed files by hand: refreshing replaces them. If the engine and the game disagree, the engine you
+run is right: refresh the skill.
 
 ## Pitfalls
 

@@ -56,6 +56,22 @@ if(NOT output MATCHES "\"crate\"" OR NOT output MATCHES "\"sun\"")
     message(FATAL_ERROR "list_entities did not show the saved entities:\n${output}")
 endif()
 
+# The project (made by hand, so without the Claude skill) gets it from --update-skill, which then exits;
+# the update_skill command finds it current afterwards. --init installs it in a new project.
+run(TRUE "${WPE_EDITOR}" "${WORK}/project" --update-skill)
+if(NOT EXISTS "${WORK}/project/.claude/skills/willpowerengine/SKILL.md" OR
+   NOT EXISTS "${WORK}/project/.claude/skills/willpowerengine/references/scripting.md")
+    message(FATAL_ERROR "--update-skill did not install the skill:\n${output}")
+endif()
+run(TRUE "${WPE_EDITOR}" "${WORK}/project" --command "{\"cmd\": \"update_skill\"}")
+if(NOT output MATCHES "\"was\": \"current\"")
+    message(FATAL_ERROR "update_skill should have found the skill current:\n${output}")
+endif()
+run(TRUE "${WPE_EDITOR}" "${WORK}/new" --init --template empty --command "{\"cmd\": \"status\"}")
+if(NOT EXISTS "${WORK}/new/.claude/skills/willpowerengine/SKILL.md")
+    message(FATAL_ERROR "--init did not install the skill")
+endif()
+
 # Errors make the process fail.
 run(FALSE "${WPE_EDITOR}" "${WORK}/project" --command "{\"cmd\": \"get_entity\", \"id\": 999}")
 run(FALSE "${WPE_EDITOR}" "${WORK}/project" --command "{\"cmd\": \"no_such_command\"}")

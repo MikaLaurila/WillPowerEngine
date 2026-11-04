@@ -10,6 +10,21 @@ add_custom_command(
     COMMENT "Embedding the project templates"
     VERBATIM)
 
+# The `willpowerengine` Claude skill with the docs it points to, as new projects get it (project_skill.c).
+set(WPE_SKILL_DOCS assets.md editor.md navigation.md networking.md runtime.md scenes.md scripting.md)
+set(WPE_SKILL_SOURCE "${PROJECT_SOURCE_DIR}/.claude/skills/willpowerengine/SKILL.md")
+list(TRANSFORM WPE_SKILL_DOCS PREPEND "${PROJECT_SOURCE_DIR}/docs/" OUTPUT_VARIABLE WPE_SKILL_DOC_PATHS)
+set(WPE_SKILL_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/engine/skill_data.h")
+string(REPLACE ";" "," WPE_SKILL_DOC_LIST "${WPE_SKILL_DOCS}") # Commas: a ';' wouldn't survive the command line.
+add_custom_command(
+    OUTPUT "${WPE_SKILL_HEADER}"
+    COMMAND "${CMAKE_COMMAND}" "-DSKILL=${WPE_SKILL_SOURCE}" "-DDOCS_DIR=${PROJECT_SOURCE_DIR}/docs"
+            "-DDOCS=${WPE_SKILL_DOC_LIST}" "-DVERSION=${PROJECT_VERSION}" "-DOUTPUT=${WPE_SKILL_HEADER}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/WpeEmbedSkill.cmake"
+    DEPENDS "${WPE_SKILL_SOURCE}" ${WPE_SKILL_DOC_PATHS} "${PROJECT_SOURCE_DIR}/cmake/WpeEmbedSkill.cmake"
+    COMMENT "Embedding the willpowerengine skill"
+    VERBATIM)
+
 add_library(wpe_engine STATIC
     engine.c
     export.c
@@ -18,10 +33,12 @@ add_library(wpe_engine STATIC
     prefab.c
     profiler.c
     project.c
+    project_skill.c
     replication.c
     scene_file.c
     scene_file_ui.c
-    "${WPE_TEMPLATES_HEADER}")
+    "${WPE_TEMPLATES_HEADER}"
+    "${WPE_SKILL_HEADER}")
 add_library(wpe::engine ALIAS wpe_engine)
 
 target_link_libraries(wpe_engine

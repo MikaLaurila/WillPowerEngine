@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "core/version.h"
 #include "engine/engine.h"
 #include "graphics/graphics.h"
 #include "scene/scene.h"
@@ -944,7 +945,14 @@ static bool remove_file(const char* relative_path, void* user_data) {
 static void remove_new_project(const char* directory) {
     if (!wpe_directory_exists(directory)) return;
     WPE_TEST_ASSERT_OK(wpe_directory_walk(directory, remove_file, (void*)directory));
-    static const char* const subdirectories[] = {"scenes", "scripts", "meshes"};
+    /* Deepest first: the Claude skill's folders nest. */
+    static const char* const subdirectories[] = {".claude/skills/willpowerengine/references",
+                                                 ".claude/skills/willpowerengine",
+                                                 ".claude/skills",
+                                                 ".claude",
+                                                 "scenes",
+                                                 "scripts",
+                                                 "meshes"};
     for (size_t i = 0; i < sizeof subdirectories / sizeof subdirectories[0]; ++i) {
         char path[512];
         snprintf(path, sizeof path, "%s/%s", directory, subdirectories[i]);
@@ -1144,6 +1152,70 @@ static void test_engine_creates_new_projects(void) {
     const WPE_Framebuffer* fb = wpe_renderer_framebuffer(wpe_engine_renderer(engine));
     WPE_TEST_ASSERT(fb->color[(fb->height - 4) * fb->width + 4] != fb->color[4 * fb->width + 4]);
     wpe_engine_destroy(engine);
+}
+
+/* New projects get the willpowerengine skill with its docs (links pointing at its references, stamped with
+ * this build's id); a copy from another build reads as outdated, and refreshing replaces it, old files and
+ * all. */
+static void test_engine_projects_get_the_claude_skill(void) {
+    remove_new_project(ROOT "/skilled"); /* Left by an earlier run. */
+    WPE_TEST_ASSERT_OK(wpe_project_create(ROOT "/skilled", "Skilled", NULL));
+    WPE_TEST_ASSERT_EQ_INT(WPE_SKILL_CURRENT, wpe_project_skill_status(ROOT "/skilled"));
+    WPE_TEST_ASSERT_EQ_UINT(16, strlen(wpe_project_skill_id()));
+
+    void* text = NULL;
+    size_t size = 0;
+    WPE_TEST_ASSERT_OK(wpe_file_read_all(ROOT "/skilled/" WPE_PROJECT_SKILL_DIR "/SKILL.md", &text, &size));
+    WPE_TEST_ASSERT(strstr(text, "name: willpowerengine") && strstr(text, "references/scripting.md"));
+    WPE_TEST_ASSERT(!strstr(text, "docs/")); /* Every docs link points at the copies beside it. */
+    WPE_TEST_ASSERT(strstr(text, wpe_project_skill_id()) &&
+                    strstr(text, "engine_version: \"" WPE_VERSION_STRING "\""));
+    WPE_TEST_ASSERT(!memchr(text, '\r', size));
+    wpe_free(text);
+    static const char* const references[] = {"scripting",  "scenes",     "runtime", "editor",
+                                             "navigation", "networking", "assets"};
+    for (size_t i = 0; i < sizeof references / sizeof references[0]; ++i) {
+        char path[256];
+        snprintf(path, sizeof path, ROOT "/skilled/" WPE_PROJECT_SKILL_DIR "/references/%s.md",
+                 references[i]);
+        WPE_TEST_ASSERT_OK(wpe_file_read_all(path, &text, &size));
+        char source[256];
+        snprintf(source, sizeof source, WPE_TEST_DOCS_DIR "/%s.md", references[i]);
+        void* original = NULL;
+        size_t original_size = 0;
+        WPE_TEST_ASSERT_OK(wpe_file_read_all(source, &original, &original_size));
+        /* The same text (line endings aside: the copy is LF, a checkout may be CRLF). */
+        size_t kept = 0;
+        char* o = original;
+        for (size_t c = 0; c < original_size; ++c)
+            if (o[c] != '\r') o[kept++] = o[c];
+        WPE_TEST_ASSERT_MSG(kept == size && memcmp(text, original, size) == 0, "references/%s.md differs",
+                            references[i]);
+        wpe_free(original);
+        wpe_free(text);
+    }
+
+    /* Another build's copy (here: an edited stamp), with a file this build doesn't have: outdated, then
+     * replaced, the stray file gone. */
+    write_text(ROOT "/skilled/" WPE_PROJECT_SKILL_DIR "/SKILL.md",
+               "---\nmetadata:\n  skill_id: \"0000\"\n---\n");
+    write_text(ROOT "/skilled/" WPE_PROJECT_SKILL_DIR "/references/old.md", "gone\n");
+    WPE_TEST_ASSERT_EQ_INT(WPE_SKILL_OUTDATED, wpe_project_skill_status(ROOT "/skilled"));
+    WPE_TEST_ASSERT_OK(wpe_project_install_skill(ROOT "/skilled"));
+    WPE_TEST_ASSERT_EQ_INT(WPE_SKILL_CURRENT, wpe_project_skill_status(ROOT "/skilled"));
+    int64_t modified = 0;
+    WPE_TEST_ASSERT(wpe_file_modified_time(ROOT "/skilled/" WPE_PROJECT_SKILL_DIR "/references/old.md",
+                                           &modified) != WPE_RESULT_OK);
+    WPE_TEST_ASSERT_OK(
+        wpe_file_modified_time(ROOT "/skilled/project.json", &modified)); /* The game is untouched. */
+
+    /* A project without one (made before projects had it); a directory that isn't there. */
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/bare"));
+    WPE_TEST_ASSERT_EQ_INT(WPE_SKILL_MISSING, wpe_project_skill_status(ROOT "/bare"));
+    quiet(true);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_project_install_skill(ROOT "/no_such_dir"));
+    quiet(false);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_project_install_skill(NULL));
 }
 
 /* A project whose font file is missing starts with the built-in font, and its texts are drawn. */
@@ -1382,6 +1454,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_engine_captures_the_frame_before_post_effects),
     WPE_TEST_CASE(test_engine_runs_scenes_headless), WPE_TEST_CASE(test_engine_navigation_grid),
     WPE_TEST_CASE(test_engine_ui_clicks_reach_scripts), WPE_TEST_CASE(test_engine_player_bindings),
-    WPE_TEST_CASE(test_engine_profiler), WPE_TEST_CASE(test_engine_hit_stop_and_shake),
-    WPE_TEST_CASE(test_engine_scene_transition), WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
+    WPE_TEST_CASE(test_engine_profiler), WPE_TEST_CASE(test_engine_projects_get_the_claude_skill),
+    WPE_TEST_CASE(test_engine_hit_stop_and_shake), WPE_TEST_CASE(test_engine_scene_transition),
+    WPE_TEST_CASE(test_engine_falls_back_to_the_builtin_font),
     WPE_TEST_CASE(test_engine_creates_new_projects), WPE_TEST_CASE(test_engine_export_embeds_the_project))

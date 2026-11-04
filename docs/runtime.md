@@ -35,6 +35,18 @@ assets/
 
 Running `wpe_editor` without arguments lists the templates. They live in the engine's source tree under `templates/<name>/`, as ordinary projects (`wpe_runtime --project templates/first_person` plays one), and are compiled into the engine, so a new file there is in the next build. Text uses the engine's built-in font until the project names its own. `--init` works with the editor's other options, for example `--init --command '...'` for an agent setting up a project headless. From C: `wpe_project_create(dir, name, template)`.
 
+### Claude in a game project
+
+A new project also gets the `willpowerengine` Claude skill, in `.claude/skills/willpowerengine/`: the skill's guide (`SKILL.md`: how games are made with the engine, and how the generic game-development skills map onto its API) and, in `references/`, the documentation it points to (scripting, scenes, runtime, editor, navigation, networking, assets). So Claude can help with the game from the game's own folder, outside the engine's repository, and it works from the documentation of the engine the project was made with.
+
+The copy belongs to an engine build: its front matter records the engine version and a `skill_id`, a hash of the skill and its documents. After updating the engine, refresh it:
+
+```bash
+./build/bin/wpe_editor my_game --update-skill     # installs or replaces the project's copy, then exits
+```
+
+The editor's File > Update Claude skill and the `update_skill` command do the same, and the editor warns when it opens a project whose copy is from another build (and mentions it when a project has none, like one made before projects had it). Refreshing replaces the skill's files and removes ones the new copy no longer has; it touches nothing else, so don't keep your own notes in that folder. From C: `wpe_project_install_skill(dir)`, `wpe_project_skill_status(dir)`.
+
 ## Running a game
 
 ```bash

@@ -3093,6 +3093,8 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
         }
         if (igMenuItem_Bool("Save as...", NULL, false, mode == WPE_EDITOR_EDIT)) ui->save_as_popup = true;
         if (igMenuItem_Bool("Export game...", NULL, false, true)) ui->export_popup = true;
+        /* The project's copy of the willpowerengine skill, refreshed to this engine's (docs included). */
+        if (igMenuItem_Bool("Update Claude skill", NULL, false, true)) wpe__ui_simple(ui, "update_skill");
         igSeparator();
         if (igMenuItem_Bool("Quit", NULL, false, true)) wpe__ui_guard(ui, WPE__PENDING_QUIT, NULL);
         igEndMenu();
