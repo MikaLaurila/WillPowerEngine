@@ -208,10 +208,13 @@ void wpe__profiler_draw(const wpe__Profiler* p, WPE_Draw2D* draw2d, const WPE_Bi
     const float label_width = wpe__width(font, "scripts (update)") + 4.0f;
     const float bar_width = 48.0f, value_width = wpe__width(font, "00.00") + 2.0f;
     const float width = pad * 2.0f + label_width + bar_width + 4.0f + value_width;
-    const float gaps = (systems < count ? line * 0.5f : 0.0f) +
-                       (scripts_end < count && systems < scripts_end ? line * 0.5f : 0.0f);
+    /* Whole pixels everywhere: bitmap glyphs drawn at half a pixel come out cut. */
+    const float gap = floorf(line * 0.5f);
+    const bool gap_before_scripts = systems > 0 && systems < count;
+    const bool gap_before_sections = scripts_end > systems && scripts_end < count;
+    const float gaps = (gap_before_scripts ? gap : 0.0f) + (gap_before_sections ? gap : 0.0f);
     const float height = pad * 2.0f + line * (float)(count + 1) + gaps;
-    const float x0 = (float)canvas_width - width - 2.0f, y0 = 2.0f;
+    const float x0 = floorf((float)canvas_width - width - 2.0f), y0 = 2.0f;
     wpe_draw2d_rect(draw2d, (WPE_Rect){x0, y0, width, height}, wpe_color_rgba8(0, 0, 0, 170));
 
     char text[64];
@@ -220,7 +223,7 @@ void wpe__profiler_draw(const wpe__Profiler* p, WPE_Draw2D* draw2d, const WPE_Bi
     wpe_draw2d_text(draw2d, font, x0 + pad, y0 + pad, text, wpe_color_rgba8(255, 220, 120, 255), 1.0f);
     float y = y0 + pad + line;
     for (uint32_t r = 0; r < count; ++r) {
-        if ((r == systems && r > 0) || (r == scripts_end && r > systems)) y += line * 0.5f;
+        if ((r == systems && gap_before_scripts) || (r == scripts_end && gap_before_sections)) y += gap;
         const WPE_ProfileEntry* e = rows[r].entry;
         const WPE_Color color = e->kind == WPE_PROFILE_SYSTEM   ? wpe_color_rgba8(110, 170, 255, 255)
                                 : e->kind == WPE_PROFILE_SCRIPT ? wpe_color_rgba8(120, 220, 120, 255)
