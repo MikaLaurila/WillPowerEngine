@@ -28,6 +28,8 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   too. Fullscreen is documented as what it always was: borderless on the desktop's mode, never exclusive.
 
 ### Fixed
+- The editor's 2D view: the label beside the mouse while moving or resizing a UI element always read
+  "0, 0  0 x 0"; it shows the element's place and size again.
 - Hidden files and folders (names starting with a dot: `.git/`, `.claude/`, `.vscode/`, `.gitignore`) are no
   longer game assets: the editor doesn't list them, `wpe_pak` / `wpe_export` leave them out of archives without
   warnings, and they don't load. Before, a game folder's `.git` history (and, since 1.0.0, its Claude skill)
