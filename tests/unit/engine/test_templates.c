@@ -523,8 +523,13 @@ static void test_templates_platformer_plays(void) {
     /* Holding jump goes higher than tapping it. */
     check_lua(engine, "back to the start", "wpe.set_position(wpe.find('player'), vector.create(1, 0, 0))\n");
     frames(engine, 10);
+    check_lua(engine, "standing", "assert(wpe.get_script(wpe.find('player')).machine.state == 'idle')\n");
     tap(engine, SDL_SCANCODE_SPACE);
+    check_lua(engine, "jumping", "assert(wpe.get_script(wpe.find('player')).machine.state == 'jump')\n");
     const float tapped = highest(engine, player, 30);
+    check_lua(engine, "landed",
+              "local m = wpe.get_script(wpe.find('player')).machine\n"
+              "assert(m.state == 'idle' and m.previous == 'fall', m.state)\n");
     key(engine, SDL_SCANCODE_SPACE, true);
     const float held = highest(engine, player, 30);
     key(engine, SDL_SCANCODE_SPACE, false);
@@ -535,7 +540,15 @@ static void test_templates_platformer_plays(void) {
     /* Spikes: back to the start (the first checkpoint). */
     check_lua(engine, "onto the spikes",
               "wpe.set_position(wpe.find('player'), vector.create(20.7, 1.5, 0))\n");
-    frames(engine, 30);
+    for (int i = 0; i < 30; ++i) { /* Watched every frame: it falls onto them, then stands still a moment. */
+        frames(engine, 1);
+        check_lua(engine, "watch",
+                  "local s = wpe.get_script(wpe.find('player'))\n"
+                  "s.seen_respawn = s.seen_respawn or s.machine.state == 'respawn'\n");
+    }
+    check_lua(engine, "respawned",
+              "local s = wpe.get_script(wpe.find('player'))\n"
+              "assert(s.seen_respawn and s.machine.state ~= 'respawn', s.machine.state)\n");
     WPE_TEST_ASSERT_MSG(position(ecs, player).x < 1.5f, "the spikes left the player at x %g",
                         (double)position(ecs, player).x);
 
@@ -562,7 +575,9 @@ static void test_templates_platformer_plays(void) {
     /* The goal finishes the level; Jump starts it over with no coins. */
     check_lua(engine, "to the goal", "wpe.set_position(wpe.find('player'), vector.create(56, 2.5, 0))\n");
     frames(engine, 5);
-    check_lua(engine, "finished", "assert(wpe.get_script(wpe.find('player')).finished)\n");
+    check_lua(engine, "finished",
+              "local s = wpe.get_script(wpe.find('player'))\n"
+              "assert(s.finished and s.machine.state == 'finished')\n");
     tap(engine, SDL_SCANCODE_SPACE);
     frames(engine, 5);
     player = find(ecs, "player");

@@ -18,6 +18,12 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   `States.extend` for shared behaviour, `push`/`pop` for interruptions, a loop guard). The villagers use it.
 - Generated sounds: a voice blip, a quest jingle and a village music loop.
 
+### Changed
+- The `platformer` hero's movement runs on the same state machine (`scripts/lib/states.luau`): `idle`/`run`
+  extend a shared `grounded` state, `jump`/`fall` an `airborne` one, plus `respawn` (a short pause at the
+  checkpoint when hurt) and `finished`. Same feel (jump buffer, coyote time, jump cut, squash and stretch);
+  `show_state` in the inspector draws the state over the hero.
+
 ### Added (v1.0: the profiler)
 - `wpe_runtime --profile` shows a profiler in the top-right corner: the engine's stages (input, network, ui,
   scripts (fixed), navigation, physics, scripts (update), animation, effects, transforms, audio, render, post
