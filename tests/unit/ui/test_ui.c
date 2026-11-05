@@ -527,6 +527,29 @@ static void test_ui_navigation_uses_edges(void) {
     destroy_fixture(&f);
 }
 
+/* A menu shown by a script can take the focus at once, before the next layout marks it shown; a hidden one
+ * can't. */
+static void test_ui_focus_follows_visibility_now(void) {
+    Fixture f = make_fixture(false);
+    const WPE_Entity menu = add_element(&f, WPE_ENTITY_NULL, fixed(0, 0, 100, 100));
+    const WPE_Entity entry = add_button(&f, 10, 10);
+    WPE_TEST_ASSERT_OK(wpe_scene_set_parent(f.ecs, entry, menu, false));
+    ((WPE_UiRect*)wpe_ecs_get_component(f.ecs, menu, WPE_COMP_UI))->visible = false;
+    WPE_TEST_ASSERT_OK(wpe_ui_layout(f.ui, SCREEN_W, SCREEN_H));
+    WPE_TEST_ASSERT(!wpe_ui_focus(f.ui, entry));
+
+    ((WPE_UiRect*)wpe_ecs_get_component(f.ecs, menu, WPE_COMP_UI))->visible = true; /* No layout since. */
+    WPE_TEST_ASSERT(!shown(&f, entry));
+    WPE_TEST_ASSERT(wpe_ui_focus(f.ui, entry));
+    WPE_TEST_ASSERT_EQ_UINT(entry, wpe_ui_focused(f.ui));
+    WPE_TEST_ASSERT_OK(wpe_ui_update(f.ui, SCREEN_W, SCREEN_H, 0.016f)); /* Laid out: it keeps the focus. */
+    WPE_TEST_ASSERT_EQ_UINT(entry, wpe_ui_focused(f.ui));
+
+    ((WPE_UiRect*)wpe_ecs_get_component(f.ecs, menu, WPE_COMP_UI))->visible = false;
+    WPE_TEST_ASSERT(!wpe_ui_focus(f.ui, entry));
+    destroy_fixture(&f);
+}
+
 static void test_ui_keyboard_navigation_and_clicks(void) {
     Fixture f = make_fixture(true);
     const WPE_Entity top = add_button(&f, 10, 10);
@@ -1093,8 +1116,8 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_ui_draws_sprites_with_button_tints), WPE_TEST_CASE(test_ui_nine_slice_keeps_borders),
     WPE_TEST_CASE(test_ui_text_alignment_and_wrapping), WPE_TEST_CASE(test_ui_text_shadow_and_outline),
     WPE_TEST_CASE(test_ui_keyboard_navigation_and_clicks), WPE_TEST_CASE(test_ui_navigation_uses_edges),
-    WPE_TEST_CASE(test_ui_mouse_focus_and_clicks), WPE_TEST_CASE(test_ui_toggles_and_sliders),
-    WPE_TEST_CASE(test_ui_draws_toggles_and_sliders), WPE_TEST_CASE(test_ui_navigation_uses_project_actions),
-    WPE_TEST_CASE(test_ui_text_field_editing), WPE_TEST_CASE(test_ui_text_field_filters_and_limits),
-    WPE_TEST_CASE(test_ui_draws_text_fields), WPE_TEST_CASE(test_ui_fit_image),
-    WPE_TEST_CASE(test_ui_create_validates))
+    WPE_TEST_CASE(test_ui_focus_follows_visibility_now), WPE_TEST_CASE(test_ui_mouse_focus_and_clicks),
+    WPE_TEST_CASE(test_ui_toggles_and_sliders), WPE_TEST_CASE(test_ui_draws_toggles_and_sliders),
+    WPE_TEST_CASE(test_ui_navigation_uses_project_actions), WPE_TEST_CASE(test_ui_text_field_editing),
+    WPE_TEST_CASE(test_ui_text_field_filters_and_limits), WPE_TEST_CASE(test_ui_draws_text_fields),
+    WPE_TEST_CASE(test_ui_fit_image), WPE_TEST_CASE(test_ui_create_validates))

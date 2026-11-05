@@ -670,7 +670,7 @@ The scene's UI elements (`ui`, `sprite`, `text`, `button`, `toggle`, `slider` an
 | `wpe.ui_fit_image(entity, [scale = 1])` | Sizes a sprite element to its image (or its `source` region) times `scale`, centered where it is, its anchors met in one point and its corners on whole pixels (the editor's Image size button; [scenes.md](scenes.md#ui)). Raises without a sprite image. |
 | `wpe.ui_rect(entity) -> x, y, width, height` | Where the element is on screen, from the last layout (this frame's, which runs before scripts; changes made since show next frame). |
 | `wpe.set_interactable(entity, interactable)` | Enables or disables a button. |
-| `wpe.ui_focus(entity or nil) -> boolean` / `wpe.ui_focused() -> entity?` | Moves the focus to a shown, interactable button (false if it can't take it), or clears it. |
+| `wpe.ui_focus(entity or nil) -> boolean` / `wpe.ui_focused() -> entity?` | Moves the focus to an interactable button that is visible with all its parents (false if it can't take it), or clears it. A menu just shown with `wpe.set_ui_visible` can take it in the same frame: show the options panel, then focus its first entry. |
 | `wpe.ui_value(entity, [value]) -> value` | A toggle's state (boolean), a slider's value (number, clamped to its range and snapped to its step) or a text field's text (string, printable ASCII, cut at its `max_length`). Setting it from a script doesn't call `on_change`. |
 | `wpe.ui_edit(entity or nil) -> boolean` / `wpe.ui_editing() -> entity?` | Starts editing a text field (focusing it; false if it can't take the focus), or stops editing with nil; which field is being edited. |
 

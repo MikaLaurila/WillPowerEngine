@@ -481,9 +481,22 @@ static WPE_Entity wpe__owning_button(const WPE_Ui* ui, WPE_Entity entity) {
     return WPE_ENTITY_NULL;
 }
 
+/* Whether the element and all its UI ancestors are visible now (`shown` is the last layout's answer: a menu
+ * made visible this frame isn't shown until the next one, but it can take the focus already). */
+static bool wpe__visible_now(const WPE_Ui* ui, WPE_Entity entity) {
+    for (WPE_Entity e = entity; e != WPE_ENTITY_NULL; e = wpe__ui_parent(ui, e)) {
+        const WPE_UiRect* element = wpe__element(ui, e);
+        if (!element || !element->visible) return false;
+    }
+    return true;
+}
+
 bool wpe_ui_focus(WPE_Ui* ui, WPE_Entity button) {
     if (!ui) return false;
-    if (button != WPE_ENTITY_NULL && !wpe__focusable(ui, button)) return false;
+    if (button != WPE_ENTITY_NULL) {
+        const WPE_Button* b = wpe_ecs_get_component(ui->ecs, button, WPE_COMP_BUTTON);
+        if (!b || !b->interactable || !wpe__visible_now(ui, button)) return false;
+    }
     if (button != ui->editing) wpe__stop_editing(ui);
     ui->focus = button;
     return true;

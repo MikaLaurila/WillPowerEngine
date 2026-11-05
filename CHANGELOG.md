@@ -54,6 +54,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   longer game assets: the editor doesn't list them, `wpe_pak` / `wpe_export` leave them out of archives without
   warnings, and they don't load. Before, a game folder's `.git` history (and, since 1.0.0, its Claude skill)
   went into exported games. **BREAKING** for asset paths with a segment starting with a dot (rename them).
+- `wpe.ui_focus` (and `wpe_ui_focus`) on a button in a menu just shown with `wpe.set_ui_visible` failed until
+  the next frame's layout, so a script that showed a menu and focused its first entry left nothing focused. It
+  now checks the elements' visibility as it is.
 
 ## [1.0.0] - 2026-11-04
 
