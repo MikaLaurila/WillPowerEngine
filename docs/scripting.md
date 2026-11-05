@@ -493,6 +493,23 @@ Provided by the application running the scripts (the engine runtime). Elsewhere 
 | `wpe.screen_size() -> width, height` | The framebuffer (canvas) size in pixels. |
 | `wpe.world_to_screen(position) -> x, y, in_front` | Where a world point shows on screen, in pixels from the top-left, through the current camera (as it is now, even after a script moved it this frame). `in_front` is false for points behind the camera. |
 
+#### Display
+
+For an options screen: fullscreen, scaling, window size and vsync. Each change is applied at once and saved for the player in `wpe.display.json`, and the next run opens as they left it ([runtime.md](runtime.md#display-options)). Alt+Enter switches fullscreen too, and `get_display` follows it.
+
+| Function | Description |
+|---|---|
+| `wpe.get_display() -> {fullscreen, scaling, scale, vsync, max_scale, window}` | The settings in effect. `scaling` is `"integer"`, `"fit"` or `"stretch"`. `scale` is the window's size in framebuffer multiples while windowed. `max_scale` is the largest scale that fits the desktop (for a list of sizes). `window` is false where there is no game window to apply them to (the editor's play mode, headless runs). |
+| `wpe.set_display({fullscreen, scaling, scale, vsync})` | Changes the settings given (the others keep their values). `scale` is a whole number from 1 to 16. Raises on bad values before anything changes. |
+
+```lua
+-- An options row: Enter switches fullscreen.
+function Fullscreen:on_click()
+	local d = wpe.get_display()
+	wpe.set_display({ fullscreen = not d.fullscreen })
+end
+```
+
 ### Multiplayer
 
 Hosting, joining and talking to other players (the whole picture is in [networking.md](networking.md#scripting-multiplayer-games)). Players are numbered from 0, the host, as in scene files. Provided by the engine runtime; elsewhere they raise errors.

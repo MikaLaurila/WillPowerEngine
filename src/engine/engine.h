@@ -73,6 +73,9 @@ typedef struct WPE_EngineDesc {
      * wpe_platform_save_directory("WillPowerEngine", <project name>). Either is made, if missing, when a
      * script first saves or loads. */
     const char* save_dir;
+    /* Open the window with the player's display choices (WPE_DISPLAY_FILE, kept when scripts call
+     * wpe.set_display) instead of the project's, so a fullscreen player never sees a window first. */
+    bool player_display;
 } WPE_EngineDesc;
 
 /**
@@ -120,6 +123,36 @@ const WPE_Vfs* wpe_engine_vfs(const WPE_Engine* engine);
  * @thread_safety Main thread only
  */
 WPE_Result wpe_engine_load_bindings(WPE_Engine* engine);
+
+/** @return The display settings in effect: the project's, the player's (WPE_EngineDesc.player_display,
+ * wpe_engine_load_display()) or the last set. A window switched with Alt+Enter updates `fullscreen` (and the
+ * player's file). @thread_safety Main thread only */
+WPE_DisplaySettings wpe_engine_display(const WPE_Engine* engine);
+
+/**
+ * Applies display settings to the window: fullscreen or windowed, scaling, vsync, and, when the scale
+ * changes, the window's size (framebuffer size times the scale, centered; a fullscreen window gets it when it
+ * is windowed again). Engines without a window keep them (wpe_engine_display()) without applying them. It
+ * doesn't save them; scripts' wpe.set_display does.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_INVALID_ARG (scale outside 1..16, an
+ *         unknown scaling; nothing changes) or a window error (logged; the settings are kept).
+ *
+ * @thread_safety Main thread only
+ */
+WPE_Result wpe_engine_set_display(WPE_Engine* engine, const WPE_DisplaySettings* settings);
+
+/**
+ * Puts the project's display back, then applies the player's own (WPE_DISPLAY_FILE) from the save directory,
+ * if the game ever made one; the directory is not created. The editor calls it when play starts (without a
+ * window of its own, so scripts see the player's choices).
+ *
+ * @return WPE_RESULT_OK (also when the player has no display file), WPE_RESULT_ERROR_NULL_ARG, or the file's
+ *         read or parse error, or a window error (logged).
+ *
+ * @thread_safety Main thread only
+ */
+WPE_Result wpe_engine_load_display(WPE_Engine* engine);
 
 /**
  * Runs one frame (see the file comment).
@@ -203,6 +236,7 @@ WPE_Audio* wpe_engine_audio(const WPE_Engine* engine);
 WPE_Ui* wpe_engine_ui(const WPE_Engine* engine);
 WPE_ScriptHost* wpe_engine_scripts(const WPE_Engine* engine);
 WPE_Renderer* wpe_engine_renderer(const WPE_Engine* engine);
+WPE_Window* wpe_engine_window(const WPE_Engine* engine); /* NULL when headless or embedded. */
 const WPE_ProjectSettings* wpe_engine_project(const WPE_Engine* engine);
 /** The current scene's environment; changes apply from the next frame. */
 WPE_SceneEnvironment* wpe_engine_environment(WPE_Engine* engine);

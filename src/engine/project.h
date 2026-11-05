@@ -10,7 +10,7 @@
  *   "format": "wpe.project", "version": 1,
  *   "name": "My Game", "start_scene": "scenes/level1.scene", "font": "fonts/small.png",
  *   "display": {"width": 320, "height": 240, "scale": 3, "vsync": true, "resizable": true,
- *               "fullscreen": false, "scaling": "integer"},
+ *               "fullscreen": false, "scaling": "integer", "alt_enter": true},
  *   "simulation": {"fixed_rate": 60, "max_steps": 8}, "assets": {"max_texture_size": 256},
  *   "audio": {"master": 1, "effects": 1, "music": 0.8, "voice": 1, "duck_volume": 0.35,
  *             "duck_attack": 0.15, "duck_release": 0.6},
@@ -32,7 +32,8 @@
  *
  * Every key is optional except "format" and "version"; reading is strict (unknown keys are errors).
  *
- * The player's changed bindings live beside their saved data (WPE_BINDINGS_FILE, wpe_bindings_parse).
+ * The player's changed bindings live beside their saved data (WPE_BINDINGS_FILE, wpe_bindings_parse), and so
+ * do their display choices (WPE_DISPLAY_FILE, wpe_display_parse).
  *
  * - Dependencies: core (JSON), vfs, input, audio, platform (WPE_WindowScaling)
  * - Thread affinity: any thread
@@ -81,6 +82,7 @@ typedef struct WPE_ProjectSettings {
     uint32_t width, height;             /* Framebuffer resolution (16..4096). */
     uint32_t scale;                     /* Initial window size multiplier (1..16). */
     bool vsync, resizable, fullscreen;
+    bool alt_enter;                     /* Alt+Enter switches fullscreen (default true). */
     WPE_WindowScaling scaling;          /* "integer" (default), "fit" or "stretch" (WPE_WindowScaling). */
     double fixed_rate;                  /* Simulation steps per second (1..1000). */
     uint32_t max_steps;                 /* Fixed steps per frame before the clock drops time (1..64). */
@@ -161,6 +163,37 @@ WPE_Result wpe_bindings_parse(const char* text, size_t size, const char* name, W
  * @thread_safety Main thread only (the input's)
  */
 WPE_Result wpe_bindings_write(const WPE_Input* input, WPE_JsonWriter* writer);
+
+/* ---- The player's display choices ---------------------------------------------------------------- */
+
+/** The file of the player's display choices in the game's save directory (beside WPE_BINDINGS_FILE). */
+#define WPE_DISPLAY_FILE "wpe.display.json"
+#define WPE_DISPLAY_FORMAT_VERSION 1u
+
+/** @return The display the project starts with ("display" in project.json). @thread_safety Any thread */
+WPE_DisplaySettings wpe_project_display(const WPE_ProjectSettings* settings);
+
+/**
+ * Reads a player's display document over `io` (keys left out keep their values):
+ *
+ * @code
+ * {"format": "wpe.display", "version": 1, "fullscreen": true, "scaling": "integer", "scale": 3, "vsync":
+ * true}
+ * @endcode
+ *
+ * All or nothing: on failure `io` is unchanged.
+ *
+ * @param name Used in messages.
+ * @return WPE_RESULT_OK; WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_PARSE (logged with the line);
+ *         WPE_RESULT_ERROR_UNSUPPORTED (a newer version; logged); WPE_RESULT_ERROR_OUT_OF_MEMORY.
+ *
+ * @thread_safety Any thread
+ */
+WPE_Result wpe_display_parse(const char* text, size_t size, const char* name, WPE_DisplaySettings* io);
+
+/** Writes a display document (every key). @return WPE_RESULT_OK or WPE_RESULT_ERROR_NULL_ARG. @thread_safety
+ * Any thread */
+WPE_Result wpe_display_write(const WPE_DisplaySettings* settings, WPE_JsonWriter* writer);
 
 /** The template new projects start from when none is named: a camera, a sun, a ground and a spinning cube. */
 #define WPE_PROJECT_DEFAULT_TEMPLATE "empty"

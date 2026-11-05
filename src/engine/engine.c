@@ -90,7 +90,10 @@ struct WPE_Engine {
     bool transition_loading; /* The transition's own load is running (it doesn't cancel the transition). */
     char save_dir[1024];     /* "" until a script needs it (see wpe__app_save_directory). */
     bool save_dir_made;      /* save_dir exists (made on first use). */
-    WPE_AssetHandle sky;     /* The loaded sky image (wpe__resolve_sky). */
+    WPE_DisplaySettings display; /* The player's display choices (wpe_engine_set_display). */
+    bool window_fullscreen;      /* What the window was last seen as (wpe__follow_window). */
+    bool window_resize_pending;  /* The scale changed while fullscreen. */
+    WPE_AssetHandle sky;         /* The loaded sky image (wpe__resolve_sky). */
     /* Captured frames (wpe.capture_screen), image assets "capture/1".. that the engine owns. */
     WPE_AssetHandle captures[WPE__CAPTURE_SLOTS];
     WPE_Texture* capture_textures[WPE__CAPTURE_SLOTS];
@@ -237,20 +240,31 @@ static bool wpe__join_path(const char* directory, const char* file, char* out, s
     return written >= 0 && (size_t)written < capacity;
 }
 
-/* The player's bindings, written beside the saves and renamed over the old file (never half-written). */
-static bool wpe__app_save_bindings(void* user_data) {
-    WPE_Engine* engine = user_data;
+typedef WPE_Result (*wpe__PlayerFileWriter)(const WPE_Engine* engine, WPE_JsonWriter* w);
+
+static WPE_Result wpe__write_bindings(const WPE_Engine* engine, WPE_JsonWriter* w) {
+    return wpe_bindings_write(engine->input, w);
+}
+
+static WPE_Result wpe__write_display(const WPE_Engine* engine, WPE_JsonWriter* w) {
+    return wpe_display_write(&engine->display, w);
+}
+
+/* One of the player's files (`what` names it in messages), written beside the saves and renamed over the old
+ * file (never half-written). */
+static bool wpe__save_player_file(WPE_Engine* engine, const char* name, const char* what,
+                                  wpe__PlayerFileWriter write) {
     const char* directory = wpe__app_save_directory(engine);
     char path[1024];
     char temporary[sizeof path + 4];
-    if (!directory || !wpe__join_path(directory, WPE_BINDINGS_FILE, path, sizeof path)) {
-        wpe_log_error("the player's bindings can't be saved: no save directory");
+    if (!directory || !wpe__join_path(directory, name, path, sizeof path)) {
+        wpe_log_error("the player's %s can't be saved: no save directory", what);
         return false;
     }
     snprintf(temporary, sizeof temporary, "%s.tmp", path);
     WPE_JsonWriter* w = NULL;
     WPE_Result result = wpe_json_writer_create(&w);
-    if (result == WPE_RESULT_OK) result = wpe_bindings_write(engine->input, w);
+    if (result == WPE_RESULT_OK) result = write(engine, w);
     const char* text = NULL;
     size_t size = 0;
     if (result == WPE_RESULT_OK) result = wpe_json_writer_finish(w, &text, &size);
@@ -264,14 +278,17 @@ static bool wpe__app_save_bindings(void* user_data) {
     if (result == WPE_RESULT_OK) result = wpe_path_rename(temporary, path);
     wpe_json_writer_destroy(w);
     if (result != WPE_RESULT_OK)
-        wpe_log_error("the player's bindings can't be saved to '%s': %s", path, wpe_result_to_string(result));
+        wpe_log_error("the player's %s can't be saved to '%s': %s", what, path, wpe_result_to_string(result));
     return result == WPE_RESULT_OK;
 }
 
-WPE_Result wpe_engine_load_bindings(WPE_Engine* engine) {
-    if (!engine) return WPE_RESULT_ERROR_NULL_ARG;
-    wpe_input_reset_bindings(engine->input, WPE_INPUT_ACTION_NONE);
-    /* Only found, never made: a game that never saved leaves no directory behind. */
+static bool wpe__app_save_bindings(void* user_data) {
+    return wpe__save_player_file(user_data, WPE_BINDINGS_FILE, "bindings", wpe__write_bindings);
+}
+
+/* The path of one of the player's files into `path`; false when there is none. The save directory is only
+ * found, never made: a game that never saved leaves no directory behind. */
+static bool wpe__find_player_file(const WPE_Engine* engine, const char* file, char* path, size_t capacity) {
     char directory[1024];
     if (engine->save_dir[0]) {
         snprintf(directory, sizeof directory, "%s", engine->save_dir);
@@ -280,12 +297,120 @@ WPE_Result wpe_engine_load_bindings(WPE_Engine* engine) {
         wpe__save_app_name(engine, app, sizeof app);
         if (wpe_platform_find_save_directory("WillPowerEngine", app, directory, sizeof directory) !=
             WPE_RESULT_OK)
-            return WPE_RESULT_OK;
+            return false;
     }
-    char path[1024];
     int64_t modified = 0;
-    if (!wpe__join_path(directory, WPE_BINDINGS_FILE, path, sizeof path) ||
-        wpe_file_modified_time(path, &modified) != WPE_RESULT_OK)
+    return wpe__join_path(directory, file, path, capacity) &&
+           wpe_file_modified_time(path, &modified) == WPE_RESULT_OK;
+}
+
+/* engine->display: the project's, with the player's file over it (a damaged file is logged and skipped). */
+static WPE_Result wpe__read_display(WPE_Engine* engine) {
+    engine->display = wpe_project_display(&engine->project);
+    char path[1024];
+    if (!wpe__find_player_file(engine, WPE_DISPLAY_FILE, path, sizeof path))
+        return WPE_RESULT_OK; /* The player never changed the display. */
+    void* text = NULL;
+    size_t size = 0;
+    WPE_Result result = wpe_file_read_all(path, &text, &size);
+    if (result == WPE_RESULT_OK) result = wpe_display_parse(text, size, path, &engine->display);
+    wpe_free(text);
+    if (result != WPE_RESULT_OK)
+        wpe_log_warn("the player's display settings in '%s' can't be used (%s); the game's own apply", path,
+                     wpe_result_to_string(result));
+    return result;
+}
+
+WPE_DisplaySettings wpe_engine_display(const WPE_Engine* engine) {
+    return engine ? engine->display : wpe_project_display(NULL);
+}
+
+/* The largest window scale that fits the desktop (at least 1), or the current one without a window. */
+static uint32_t wpe__max_window_scale(WPE_Engine* engine) {
+    uint32_t width = 0, height = 0;
+    wpe_window_desktop_size(engine->window, &width, &height);
+    if (width == 0 || height == 0) return engine->display.scale;
+    const uint32_t sx = width / engine->project.width, sy = height / engine->project.height;
+    const uint32_t scale = sx < sy ? sx : sy;
+    return scale < 1 ? 1 : scale > 16 ? 16 : scale;
+}
+
+WPE_Result wpe_engine_set_display(WPE_Engine* engine, const WPE_DisplaySettings* settings) {
+    if (!engine || !settings) return WPE_RESULT_ERROR_NULL_ARG;
+    if (settings->scale < 1 || settings->scale > 16 || settings->scaling > WPE_WINDOW_SCALING_STRETCH) {
+        wpe_log_error("invalid display settings (scale %u, scaling %d)", settings->scale,
+                      (int)settings->scaling);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    const WPE_DisplaySettings old = engine->display;
+    engine->display = *settings;
+    WPE_Window* window = engine->window;
+    if (!window) return WPE_RESULT_OK; /* Kept (headless runs, the editor's play). */
+    WPE_Result result = WPE_RESULT_OK;
+    wpe_window_set_scaling(window, settings->scaling);
+    if (settings->vsync != old.vsync) (void)wpe_window_set_vsync(window, settings->vsync); /* Logged. */
+    if (settings->fullscreen != wpe_window_is_fullscreen(window))
+        result = wpe_window_set_fullscreen(window, settings->fullscreen);
+    if (settings->scale != old.scale) {
+        /* A fullscreen window gets its size when it is windowed again (wpe__follow_window). */
+        engine->window_resize_pending = settings->fullscreen;
+        if (!settings->fullscreen) {
+            const WPE_Result resized = wpe_window_set_size(window, engine->project.width * settings->scale,
+                                                           engine->project.height * settings->scale);
+            if (result == WPE_RESULT_OK) result = resized;
+        }
+    }
+    return result;
+}
+
+WPE_Result wpe_engine_load_display(WPE_Engine* engine) {
+    if (!engine) return WPE_RESULT_ERROR_NULL_ARG;
+    const WPE_DisplaySettings old = engine->display;
+    const WPE_Result read = wpe__read_display(engine);
+    const WPE_DisplaySettings now = engine->display;
+    engine->display = old; /* So that wpe_engine_set_display sees what changes. */
+    const WPE_Result applied = wpe_engine_set_display(engine, &now);
+    return read != WPE_RESULT_OK ? read : applied;
+}
+
+/* Alt+Enter, or the OS, switched the window: the player's choice follows it (and is kept). A window that
+ * becomes windowed takes the size its scale was given while fullscreen. */
+static void wpe__follow_window(WPE_Engine* engine) {
+    if (!engine->window) return;
+    const bool fullscreen = wpe_window_is_fullscreen(engine->window);
+    if (fullscreen == engine->window_fullscreen) return;
+    engine->window_fullscreen = fullscreen;
+    if (!fullscreen && engine->window_resize_pending) {
+        engine->window_resize_pending = false;
+        (void)wpe_window_set_size(engine->window, engine->project.width * engine->display.scale,
+                                  engine->project.height * engine->display.scale); /* Logged. */
+    }
+    if (fullscreen != engine->display.fullscreen) {
+        engine->display.fullscreen = fullscreen;
+        (void)wpe__save_player_file(engine, WPE_DISPLAY_FILE, "display settings", wpe__write_display);
+    }
+}
+
+static bool wpe__app_get_display(void* user_data, WPE_DisplaySettings* out, uint32_t* out_max_scale) {
+    WPE_Engine* engine = user_data;
+    *out = engine->display;
+    *out_max_scale = wpe__max_window_scale(engine);
+    return engine->window != NULL;
+}
+
+static WPE_Result wpe__app_set_display(void* user_data, const WPE_DisplaySettings* settings) {
+    WPE_Engine* engine = user_data;
+    const WPE_Result result = wpe_engine_set_display(engine, settings);
+    if (result != WPE_RESULT_ERROR_INVALID_ARG)
+        (void)wpe__save_player_file(engine, WPE_DISPLAY_FILE, "display settings", wpe__write_display);
+    return result;
+}
+
+WPE_Result wpe_engine_load_bindings(WPE_Engine* engine) {
+    if (!engine) return WPE_RESULT_ERROR_NULL_ARG;
+    wpe_input_reset_bindings(engine->input, WPE_INPUT_ACTION_NONE);
+    char path[1024];
+    if (!wpe__find_player_file(engine, WPE_BINDINGS_FILE, path, sizeof path))
         return WPE_RESULT_OK; /* The player never changed a binding. */
     void* text = NULL;
     size_t size = 0;
@@ -393,15 +518,20 @@ static WPE_Result wpe__create_graphics(WPE_Engine* engine, const WPE_EngineDesc*
             &engine->renderer);
     }
     if (result == WPE_RESULT_OK && !desc->headless && !desc->embedded) {
+        const WPE_DisplaySettings* d = &engine->display;
         result = wpe_window_create(&(WPE_WindowDesc){.title = p->name,
-                                                     .width = p->width * p->scale,
-                                                     .height = p->height * p->scale,
+                                                     .width = p->width * d->scale,
+                                                     .height = p->height * d->scale,
                                                      .resizable = p->resizable,
-                                                     .vsync = p->vsync,
-                                                     .fullscreen = p->fullscreen,
-                                                     .scaling = p->scaling},
+                                                     .vsync = d->vsync,
+                                                     .fullscreen = d->fullscreen,
+                                                     .scaling = d->scaling,
+                                                     .alt_enter = p->alt_enter},
                                    &engine->window);
-        if (result == WPE_RESULT_OK) wpe_window_set_event_handler(engine->window, wpe__on_event, engine);
+        if (result == WPE_RESULT_OK) {
+            wpe_window_set_event_handler(engine->window, wpe__on_event, engine);
+            engine->window_fullscreen = wpe_window_is_fullscreen(engine->window);
+        }
     }
     if (result == WPE_RESULT_OK) result = wpe_scene_renderer_create(&engine->scene_renderer);
     if (result == WPE_RESULT_OK) result = wpe_postfx_create(&engine->postfx);
@@ -510,6 +640,8 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                    .game_feel = wpe__app_game_feel,
                                    .capture_screen = wpe__app_capture_screen,
                                    .save_bindings = wpe__app_save_bindings,
+                                   .get_display = wpe__app_get_display,
+                                   .set_display = wpe__app_set_display,
                                    .show_profiler = wpe__app_show_profiler,
                                    .profile = wpe__app_profile};
         WPE_ScriptApp with_net = app;
@@ -572,6 +704,12 @@ WPE_Result wpe_engine_create(const WPE_EngineDesc* desc, WPE_Engine** out_engine
     if (desc->save_dir) snprintf(engine->save_dir, sizeof engine->save_dir, "%s", desc->save_dir);
 
     WPE_Result result = wpe__mount(engine, desc);
+    if (result == WPE_RESULT_OK) {
+        /* The window opens as the player left it (a damaged file is logged; the project's display applies).
+         */
+        engine->display = wpe_project_display(&engine->project);
+        if (desc->player_display) (void)wpe__read_display(engine);
+    }
     if (result == WPE_RESULT_OK) result = wpe__create_graphics(engine, desc);
     if (result == WPE_RESULT_OK) result = wpe__create_world(engine, desc);
     if (result == WPE_RESULT_OK) {
@@ -1639,6 +1777,7 @@ WPE_Result wpe_engine_frame(WPE_Engine* engine, double dt) {
         const bool open = engine->window ? wpe_window_poll_events(engine->window)
                                          : wpe_platform_poll_events(wpe__on_event, engine);
         if (!open) engine->quit = true;
+        wpe__follow_window(engine);
     }
     wpe_input_update(engine->input);
     wpe__profiler_lap(profiler, WPE__STAGE_INPUT);
@@ -1813,6 +1952,10 @@ bool wpe_engine_draws_scene(const WPE_Engine* engine) {
 
 WPE_ScriptHost* wpe_engine_scripts(const WPE_Engine* engine) {
     return engine ? engine->scripts : NULL;
+}
+
+WPE_Window* wpe_engine_window(const WPE_Engine* engine) {
+    return engine ? engine->window : NULL;
 }
 
 WPE_Renderer* wpe_engine_renderer(const WPE_Engine* engine) {

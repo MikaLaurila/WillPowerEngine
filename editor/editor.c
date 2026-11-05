@@ -248,6 +248,8 @@ static WPE_Result wpe__editor_play_from(WPE_Editor* editor, const wpe__Snapshot*
     wpe_input_release_all(wpe_engine_input(editor->engine));
     (void)wpe_engine_load_bindings(
         editor->engine); /* The game plays with the keys its player chose (logged). */
+    /* And sees their display choices (the editor has no game window to apply them to). */
+    (void)wpe_engine_load_display(editor->engine);
     editor->mode = WPE_EDITOR_PLAY;
     wpe_engine_set_simulating(editor->engine, true);
     wpe_log_info("play");

@@ -54,7 +54,18 @@ typedef struct WPE_WindowDesc {
     bool vsync;
     bool fullscreen; /* Borderless fullscreen on the current display (the desktop's mode, never exclusive). */
     WPE_WindowScaling scaling;
+    /* Alt+Enter switches between fullscreen and windowed in wpe_window_poll_events(), which then keeps the
+     * key press from the event handler (key repeats too). */
+    bool alt_enter;
 } WPE_WindowDesc;
+
+/** A player's display choices, as an options screen sets them (the engine keeps them for the next run). */
+typedef struct WPE_DisplaySettings {
+    bool fullscreen;           /* Borderless, on the desktop's own mode. */
+    WPE_WindowScaling scaling; /* How the image fills the window or screen. */
+    uint32_t scale;            /* The window's size in framebuffer multiples while windowed (1..16). */
+    bool vsync;
+} WPE_DisplaySettings;
 
 /**
  * Opens a window that can present WPE_Framebuffers (scaled with nearest filtering as `scaling` says).
@@ -115,6 +126,49 @@ WPE_Result wpe_window_set_relative_mouse(WPE_Window* window, bool enabled);
 
 /** Gets the window's client size in pixels (0 x 0 for NULL or on failure). @thread_safety Main thread only */
 void wpe_window_size(const WPE_Window* window, uint32_t* out_width, uint32_t* out_height);
+
+/**
+ * Switches the window between borderless fullscreen (the desktop's mode) and windowed. The switch may finish
+ * a little later on some systems; wpe_window_is_fullscreen() follows it.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR (SDL failure; logged).
+ *
+ * @thread_safety Main thread only
+ */
+WPE_Result wpe_window_set_fullscreen(WPE_Window* window, bool fullscreen);
+
+/** @return Whether the window is fullscreen now (also after Alt+Enter or the OS switched it; false for
+ * NULL). @thread_safety Main thread only */
+bool wpe_window_is_fullscreen(const WPE_Window* window);
+
+/**
+ * Resizes the window's client area and centers it on its display. Asked while fullscreen, the window gets
+ * the size when it is windowed again.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_INVALID_ARG (a zero or too large size)
+ *         or WPE_RESULT_ERROR (SDL failure; logged).
+ *
+ * @thread_safety Main thread only
+ */
+WPE_Result wpe_window_set_size(WPE_Window* window, uint32_t width, uint32_t height);
+
+/** Changes how presented frames fill the window, from the next present on. NULL is a no-op. @thread_safety
+ * Main thread only */
+void wpe_window_set_scaling(WPE_Window* window, WPE_WindowScaling scaling);
+
+/**
+ * Turns vertical sync on or off.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR (not supported here; logged as a
+ *         warning).
+ *
+ * @thread_safety Main thread only
+ */
+WPE_Result wpe_window_set_vsync(WPE_Window* window, bool vsync);
+
+/** Gets the largest client area a window can have on the display the window is on: the desktop without task
+ * bars, less the window's frame (0 x 0 for NULL or on failure). @thread_safety Main thread only */
+void wpe_window_desktop_size(WPE_Window* window, uint32_t* out_width, uint32_t* out_height);
 
 /**
  * Turns delivery of text input events (typed characters, with keyboard layout and IME applied) on or

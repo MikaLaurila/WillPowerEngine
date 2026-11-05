@@ -27,6 +27,8 @@ struct WPE_Window {
     uint32_t texture_height;
     SDL_RendererLogicalPresentation presentation; /* In effect; DISABLED until the first present. */
     WPE_WindowScaling scaling;
+    bool alt_enter;
+    int border_w, border_h; /* The frame around the client area, last seen while windowed. */
     bool quit_requested;
     WPE_PlatformEventFn event_fn;
     void* event_user_data;
@@ -71,6 +73,7 @@ WPE_Result wpe_window_create(const WPE_WindowDesc* desc, WPE_Window** out_window
         wpe_log_warn("vsync unavailable: %s", SDL_GetError());
     }
     window->scaling = desc->scaling;
+    window->alt_enter = desc->alt_enter;
 
     *out_window = window;
     return WPE_RESULT_OK;
@@ -91,6 +94,12 @@ bool wpe_window_poll_events(WPE_Window* window) {
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
             window->quit_requested = true;
+        }
+        if (window->alt_enter && event.type == SDL_EVENT_KEY_DOWN &&
+            (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) &&
+            (event.key.mod & SDL_KMOD_ALT)) {
+            if (!event.key.repeat) (void)wpe_window_set_fullscreen(window, !wpe_window_is_fullscreen(window));
+            continue; /* Not a press for the game (no menu button clicks with it). */
         }
         /* Mouse coordinates in framebuffer pixels (undoing the letterboxed scaling). */
         SDL_ConvertEventToRenderCoordinates(window->renderer, &event);
@@ -131,6 +140,60 @@ void wpe_window_size(const WPE_Window* window, uint32_t* out_width, uint32_t* ou
     if (window && !SDL_GetWindowSizeInPixels(window->window, &w, &h)) w = h = 0;
     if (out_width) *out_width = w > 0 ? (uint32_t)w : 0;
     if (out_height) *out_height = h > 0 ? (uint32_t)h : 0;
+}
+
+WPE_Result wpe_window_set_fullscreen(WPE_Window* window, bool fullscreen) {
+    if (!window) return WPE_RESULT_ERROR_NULL_ARG;
+    /* No fullscreen mode set: borderless on the desktop's own mode. */
+    if (SDL_SetWindowFullscreen(window->window, fullscreen)) return WPE_RESULT_OK;
+    wpe_log_error("cannot %s fullscreen: %s", fullscreen ? "enter" : "leave", SDL_GetError());
+    return WPE_RESULT_ERROR;
+}
+
+bool wpe_window_is_fullscreen(const WPE_Window* window) {
+    return window && (SDL_GetWindowFlags(window->window) & SDL_WINDOW_FULLSCREEN) != 0;
+}
+
+WPE_Result wpe_window_set_size(WPE_Window* window, uint32_t width, uint32_t height) {
+    if (!window) return WPE_RESULT_ERROR_NULL_ARG;
+    if (width == 0 || height == 0 || width > INT32_MAX || height > INT32_MAX)
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    if (!SDL_SetWindowSize(window->window, (int)width, (int)height) ||
+        !SDL_SetWindowPosition(window->window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED)) {
+        wpe_log_error("cannot resize the window: %s", SDL_GetError());
+        return WPE_RESULT_ERROR;
+    }
+    return WPE_RESULT_OK;
+}
+
+void wpe_window_set_scaling(WPE_Window* window, WPE_WindowScaling scaling) {
+    if (window) window->scaling = scaling; /* wpe_window_present() picks the presentation each frame. */
+}
+
+WPE_Result wpe_window_set_vsync(WPE_Window* window, bool vsync) {
+    if (!window) return WPE_RESULT_ERROR_NULL_ARG;
+    if (SDL_SetRenderVSync(window->renderer, vsync ? 1 : 0)) return WPE_RESULT_OK;
+    wpe_log_warn("cannot turn vsync %s: %s", vsync ? "on" : "off", SDL_GetError());
+    return WPE_RESULT_ERROR;
+}
+
+void wpe_window_desktop_size(WPE_Window* window, uint32_t* out_width, uint32_t* out_height) {
+    SDL_Rect bounds = {0};
+    const SDL_DisplayID display = window ? SDL_GetDisplayForWindow(window->window) : 0;
+    if (!display || !SDL_GetDisplayUsableBounds(display, &bounds)) bounds.w = bounds.h = 0;
+    if (window && !wpe_window_is_fullscreen(window)) {
+        /* The window's frame takes room too, so the client area must be smaller than the desktop. Kept for
+         * when the window is fullscreen (it has no frame then). */
+        int top = 0, left = 0, bottom = 0, right = 0;
+        if (SDL_GetWindowBordersSize(window->window, &top, &left, &bottom, &right)) {
+            window->border_w = left + right;
+            window->border_h = top + bottom;
+        }
+    }
+    bounds.w -= window ? window->border_w : 0;
+    bounds.h -= window ? window->border_h : 0;
+    if (out_width) *out_width = bounds.w > 0 ? (uint32_t)bounds.w : 0;
+    if (out_height) *out_height = bounds.h > 0 ? (uint32_t)bounds.h : 0;
 }
 
 WPE_Result wpe_window_set_text_input(WPE_Window* window, bool enabled) {

@@ -222,6 +222,7 @@ int main(int argc, char** argv) {
     }
 
     WPE_Engine* engine = NULL;
+    o.engine.player_display = true; /* The window opens as the player left it (fullscreen, its size). */
     WPE_Result result = wpe_engine_create(&o.engine, &engine);
     if (result == WPE_RESULT_OK) {
         /* The player's own keys (a damaged file is logged, not fatal). */

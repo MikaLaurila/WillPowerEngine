@@ -3861,6 +3861,55 @@ static int wpe__api_get_text_style(lua_State* L) {
     return 1;
 }
 
+/* ---- Display --------------------------------------------------------------------------------------- */
+
+static const char* const wpe__scalings[] = {"fit", "integer", "stretch"}; /* In WPE_WindowScaling order. */
+static_assert(sizeof wpe__scalings / sizeof wpe__scalings[0] == WPE_WINDOW_SCALING_STRETCH + 1,
+              "scaling names");
+
+static const WPE_ScriptApp* wpe__display_app(lua_State* L, const char* function) {
+    const WPE_ScriptApp* app = &wpe__script_host_from(L)->app;
+    if (!app->get_display || !app->set_display) luaL_errorL(L, "wpe.%s: this game has no display", function);
+    return app;
+}
+
+/* wpe.get_display() -> {fullscreen, scaling, scale, vsync, max_scale, window} */
+static int wpe__api_get_display(lua_State* L) {
+    const WPE_ScriptApp* app = wpe__display_app(L, "get_display");
+    WPE_DisplaySettings d = {0};
+    uint32_t max_scale = 1;
+    const bool window = app->get_display(app->user_data, &d, &max_scale);
+    lua_createtable(L, 0, 6);
+    lua_pushboolean(L, d.fullscreen);
+    lua_setfield(L, -2, "fullscreen");
+    lua_pushstring(L, wpe__scalings[d.scaling <= WPE_WINDOW_SCALING_STRETCH ? d.scaling : 0]);
+    lua_setfield(L, -2, "scaling");
+    lua_pushnumber(L, d.scale);
+    lua_setfield(L, -2, "scale");
+    lua_pushboolean(L, d.vsync);
+    lua_setfield(L, -2, "vsync");
+    lua_pushnumber(L, max_scale);
+    lua_setfield(L, -2, "max_scale");
+    lua_pushboolean(L, window);
+    lua_setfield(L, -2, "window");
+    return 1;
+}
+
+/* wpe.set_display({fullscreen, scaling, scale, vsync}): fields left out keep their values. */
+static int wpe__api_set_display(lua_State* L) {
+    const WPE_ScriptApp* app = wpe__display_app(L, "set_display");
+    luaL_checktype(L, 1, LUA_TTABLE);
+    WPE_DisplaySettings d = {0};
+    uint32_t max_scale = 1;
+    (void)app->get_display(app->user_data, &d, &max_scale);
+    d.fullscreen = wpe__field_bool(L, 1, "fullscreen", d.fullscreen);
+    d.scaling = (WPE_WindowScaling)wpe__field_choice(L, 1, "scaling", wpe__scalings, 3, (uint32_t)d.scaling);
+    d.scale = wpe__field_count(L, 1, "scale", 1, 16, d.scale);
+    d.vsync = wpe__field_bool(L, 1, "vsync", d.vsync);
+    (void)app->set_display(app->user_data, &d); /* Valid by now; window errors are logged. */
+    return 0;
+}
+
 static int wpe__api_set_sprite_color(lua_State* L) {
     const WPE_Entity entity = wpe__check_entity(L, 1);
     luaL_checkany(L, 2);
@@ -4210,6 +4259,8 @@ static const luaL_Reg wpe__api[] = {
     {"set_text_color", wpe__api_set_text_color},
     {"set_text_style", wpe__api_set_text_style},
     {"get_text_style", wpe__api_get_text_style},
+    {"get_display", wpe__api_get_display},
+    {"set_display", wpe__api_set_display},
     {"set_sprite_color", wpe__api_set_sprite_color},
     {"set_ui_visible", wpe__api_set_ui_visible},
     {"is_ui_visible", wpe__api_is_ui_visible},

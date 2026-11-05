@@ -366,6 +366,14 @@ function Tour:on_start()
 		string.format("world_to_screen: %s %s %s of %d x %d", tostring(sx), tostring(sy), tostring(in_front), width, height))
 	assert(select(3, wpe.world_to_screen(wpe.get_world_position(camera) - wpe.forward(camera) * 5)) == false)
 
+	-- Display options: headless, so they are kept (and saved) but there is no window to apply them to.
+	local display = wpe.get_display()
+	assert(not display.window and display.scaling == "integer" and display.scale >= 1 and display.max_scale >= 1)
+	wpe.set_display({ vsync = display.vsync, scale = display.scale })
+	assert(not pcall(wpe.set_display, { scaling = "crop" }))
+	assert(not pcall(wpe.set_display, { scale = 17 }))
+	assert(wpe.get_display().scale == display.scale)
+
 	-- A character controller, walked in a circle at the fixed rate.
 	self.walker = wpe.spawn("tour_walker")
 	wpe.set_position(self.walker, vector.create(-12, 0.5, 12))

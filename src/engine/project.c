@@ -21,6 +21,7 @@ void wpe_project_settings_default(WPE_ProjectSettings* out) {
     out->scale = 3;
     out->vsync = true;
     out->resizable = true;
+    out->alt_enter = true;
     out->scaling = WPE_WINDOW_SCALING_INTEGER;
     out->fixed_rate = 60.0;
     out->max_steps = 8;
@@ -184,13 +185,14 @@ static bool wpe__parse_project(wpe__JsonReader* r, const WPE_JsonValue* root, WP
     const WPE_JsonValue* display = wpe_json_get(root, "display");
     uint32_t scaling = (uint32_t)out->scaling;
     if (display && (!WPE__JSON_CHECK_OBJECT(r, display, "display", "width", "height", "scale", "vsync",
-                                            "resizable", "fullscreen", "scaling") ||
+                                            "resizable", "fullscreen", "scaling", "alt_enter") ||
                     !wpe__json_read_uint(r, display, "width", 16, 4096, &out->width) ||
                     !wpe__json_read_uint(r, display, "height", 16, 4096, &out->height) ||
                     !wpe__json_read_uint(r, display, "scale", 1, 16, &out->scale) ||
                     !wpe__json_read_bool(r, display, "vsync", &out->vsync) ||
                     !wpe__json_read_bool(r, display, "resizable", &out->resizable) ||
                     !wpe__json_read_bool(r, display, "fullscreen", &out->fullscreen) ||
+                    !wpe__json_read_bool(r, display, "alt_enter", &out->alt_enter) ||
                     !wpe__json_read_enum(r, display, "scaling", wpe__scalings, 3, &scaling)))
         return false;
     out->scaling = (WPE_WindowScaling)scaling;
@@ -381,6 +383,7 @@ WPE_Result wpe_project_write(const WPE_ProjectSettings* s, WPE_JsonWriter* w) {
     wpe__key_bool(w, "resizable", s->resizable);
     wpe__key_bool(w, "fullscreen", s->fullscreen);
     wpe__key_string(w, "scaling", wpe__scalings[s->scaling]);
+    wpe__key_bool(w, "alt_enter", s->alt_enter);
     wpe_json_write_object_end(w);
     wpe_json_write_key(w, "simulation");
     wpe_json_write_object_begin(w);
@@ -519,6 +522,72 @@ static bool wpe__bindings_changed(const WPE_InputActionDesc* now, const WPE_Inpu
         if (!wpe_input_binding_equal(&now->bindings[b], &defaults->bindings[b])) return true;
     }
     return false;
+}
+
+/* ---- The player's display choices ----------------------------------------------------------------- */
+
+WPE_DisplaySettings wpe_project_display(const WPE_ProjectSettings* s) {
+    if (!s) return (WPE_DisplaySettings){.scaling = WPE_WINDOW_SCALING_INTEGER, .scale = 3, .vsync = true};
+    return (WPE_DisplaySettings){
+        .fullscreen = s->fullscreen, .scaling = s->scaling, .scale = s->scale, .vsync = s->vsync};
+}
+
+static bool wpe__parse_display(wpe__JsonReader* r, const WPE_JsonValue* root, WPE_DisplaySettings* out) {
+    if (!WPE__JSON_CHECK_OBJECT(r, root, "display", "format", "version", "fullscreen", "scaling", "scale",
+                                "vsync"))
+        return false;
+    const char* format = wpe_json_string(wpe_json_get(root, "format"));
+    if (!format || strcmp(format, "wpe.display") != 0)
+        return wpe__json_fail(r, root, WPE_RESULT_ERROR_PARSE,
+                              "not a display file (\"format\" must be \"wpe.display\")");
+    uint32_t version = 0;
+    if (!wpe__json_read_uint(r, root, "version", 1, UINT32_MAX, &version)) return false;
+    if (version == 0) return wpe__json_fail(r, root, WPE_RESULT_ERROR_PARSE, "\"version\" is required");
+    if (version > WPE_DISPLAY_FORMAT_VERSION)
+        return wpe__json_fail(r, root, WPE_RESULT_ERROR_UNSUPPORTED,
+                              "format version %u is newer than this engine's (%u)", version,
+                              WPE_DISPLAY_FORMAT_VERSION);
+    uint32_t scaling = (uint32_t)out->scaling;
+    if (!wpe__json_read_bool(r, root, "fullscreen", &out->fullscreen) ||
+        !wpe__json_read_enum(r, root, "scaling", wpe__scalings, 3, &scaling) ||
+        !wpe__json_read_uint(r, root, "scale", 1, 16, &out->scale) ||
+        !wpe__json_read_bool(r, root, "vsync", &out->vsync))
+        return false;
+    out->scaling = (WPE_WindowScaling)scaling;
+    return true;
+}
+
+WPE_Result wpe_display_parse(const char* text, size_t size, const char* name, WPE_DisplaySettings* io) {
+    if (!text || !io) return WPE_RESULT_ERROR_NULL_ARG;
+    wpe__JsonReader r = {.name = name ? name : WPE_DISPLAY_FILE, .kind = "display"};
+    WPE_JsonDocument* doc = NULL;
+    WPE_JsonError error;
+    WPE_Result result = wpe_json_parse(text, size, &doc, &error);
+    if (result == WPE_RESULT_ERROR_PARSE)
+        wpe_log_error("display '%s', line %u, column %u: %s", r.name, error.line, error.column,
+                      error.message);
+    if (result != WPE_RESULT_OK) return result;
+    WPE_DisplaySettings scratch = *io; /* A bad document changes nothing. */
+    if (wpe__parse_display(&r, wpe_json_root(doc), &scratch)) {
+        *io = scratch;
+    } else {
+        result = r.result;
+    }
+    wpe_json_free(doc);
+    return result;
+}
+
+WPE_Result wpe_display_write(const WPE_DisplaySettings* s, WPE_JsonWriter* w) {
+    if (!s || !w) return WPE_RESULT_ERROR_NULL_ARG;
+    wpe_json_write_object_begin(w);
+    wpe__key_string(w, "format", "wpe.display");
+    wpe__key_integer(w, "version", WPE_DISPLAY_FORMAT_VERSION);
+    wpe__key_bool(w, "fullscreen", s->fullscreen);
+    wpe__key_string(w, "scaling", wpe__scalings[s->scaling <= WPE_WINDOW_SCALING_STRETCH ? s->scaling : 0]);
+    wpe__key_integer(w, "scale", s->scale);
+    wpe__key_bool(w, "vsync", s->vsync);
+    wpe_json_write_object_end(w);
+    return WPE_RESULT_OK;
 }
 
 WPE_Result wpe_bindings_write(const WPE_Input* input, WPE_JsonWriter* w) {

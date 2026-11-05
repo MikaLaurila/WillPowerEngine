@@ -5,6 +5,15 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Display options for settings screens: `wpe.set_display({fullscreen, scaling, scale, vsync})` applies them at
+  once and saves them for the player (`wpe.display.json` beside the bindings), and `wpe.get_display()` reads
+  them, with `max_scale` (the largest window size that fits the desktop) and `window` (false in the editor's
+  play mode and headless runs, where they are kept but not applied). The runtime opens the window as the player
+  left it, so a fullscreen player never sees a window first. Alt+Enter switches fullscreen (project
+  `display.alt_enter`, default true); the game never sees that key press, and the choice is saved. In C:
+  `wpe_engine_display` / `wpe_engine_set_display` / `wpe_engine_load_display`, `WPE_EngineDesc.player_display`,
+  `wpe_engine_window`, and the window's `wpe_window_set_fullscreen` / `_is_fullscreen` / `_set_size` /
+  `_set_scaling` / `_set_vsync` / `_desktop_size`.
 - Text shadows and outlines: a UI text's `shadow_color` + `shadow_offset` (a drop shadow, in font pixels
   times the text's scale) and `outline_color` + `outline_width` (0..4 font pixels). Alpha 0 turns each off,
   which is the default. Shown in the editor's inspector; scripts use `wpe.set_text_style(entity, {...})` /

@@ -182,6 +182,11 @@ typedef struct WPE_ScriptApp {
      * next run; false when they can't be saved (logged). Without it (an exception to the rule above) bindings
      * still change, for this run only. */
     bool (*save_bindings)(void* user_data);
+    /* The display (wpe.get_display): the settings in effect, the largest window scale that fits the desktop,
+     * and whether there is a window they apply to. */
+    bool (*get_display)(void* user_data, WPE_DisplaySettings* out, uint32_t* out_max_scale);
+    /* Applies display settings (wpe.set_display) and keeps them for the next run; errors are logged. */
+    WPE_Result (*set_display)(void* user_data, const WPE_DisplaySettings* settings);
     /* The profiler (wpe.show_profiler, wpe.get_profile): shows or hides its overlay (profiling while shown),
      * and returns its entries (borrowed until the next frame) through out_entries. */
     void (*show_profiler)(void* user_data, bool shown);
