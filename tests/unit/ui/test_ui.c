@@ -492,6 +492,41 @@ static void tap(Fixture* f, SDL_Scancode key) {
     frame(f, 0.016f);
 }
 
+/* An options list whose rows' buttons don't line up (sliders in the middle, toggles at the row's end, wide
+ * value texts): up and down go row by row, and left/right find nothing (nothing is wholly to either side). */
+static void test_ui_navigation_uses_edges(void) {
+    Fixture f = make_fixture(true);
+    const float row = 13.0f;
+    WPE_Entity buttons[6];
+    const float x0[] = {14, 14, 54, 54, 0, 0}, x1[] = {64, 64, 64, 64, 64, 64};
+    for (int i = 0; i < 6; ++i) {
+        buttons[i] = add_button(&f, 0, 0);
+        *(WPE_UiRect*)wpe_ecs_get_component(f.ecs, buttons[i], WPE_COMP_UI) =
+            fixed(x0[i] + 60, 10 + row * (float)i, x1[i] - x0[i], 10);
+    }
+    wpe_input_begin_frame(f.input);
+    frame(&f, 0.016f);
+    WPE_TEST_ASSERT(wpe_ui_focus(f.ui, buttons[4])); /* Scaling (wide) under Fullscreen (a toggle). */
+    tap(&f, SDL_SCANCODE_UP);
+    WPE_TEST_ASSERT_EQ_UINT(buttons[3], wpe_ui_focused(f.ui));
+    for (int i = 2; i >= 0; --i) {
+        tap(&f, SDL_SCANCODE_UP);
+        WPE_TEST_ASSERT_EQ_UINT(buttons[i], wpe_ui_focused(f.ui));
+    }
+    for (int i = 1; i < 6; ++i) {
+        tap(&f, SDL_SCANCODE_DOWN);
+        WPE_TEST_ASSERT_EQ_UINT(buttons[i], wpe_ui_focused(f.ui));
+    }
+    for (int i = 0; i < 6; ++i) {
+        WPE_TEST_ASSERT(wpe_ui_focus(f.ui, buttons[i]));
+        tap(&f, SDL_SCANCODE_LEFT);
+        WPE_TEST_ASSERT_EQ_UINT(buttons[i], wpe_ui_focused(f.ui));
+        tap(&f, SDL_SCANCODE_RIGHT);
+        WPE_TEST_ASSERT_EQ_UINT(buttons[i], wpe_ui_focused(f.ui));
+    }
+    destroy_fixture(&f);
+}
+
 static void test_ui_keyboard_navigation_and_clicks(void) {
     Fixture f = make_fixture(true);
     const WPE_Entity top = add_button(&f, 10, 10);
@@ -1057,8 +1092,9 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_ui_layout_anchors_and_visibility), WPE_TEST_CASE(test_ui_pick_follows_drawing_order),
     WPE_TEST_CASE(test_ui_draws_sprites_with_button_tints), WPE_TEST_CASE(test_ui_nine_slice_keeps_borders),
     WPE_TEST_CASE(test_ui_text_alignment_and_wrapping), WPE_TEST_CASE(test_ui_text_shadow_and_outline),
-    WPE_TEST_CASE(test_ui_keyboard_navigation_and_clicks), WPE_TEST_CASE(test_ui_mouse_focus_and_clicks),
-    WPE_TEST_CASE(test_ui_toggles_and_sliders), WPE_TEST_CASE(test_ui_draws_toggles_and_sliders),
-    WPE_TEST_CASE(test_ui_navigation_uses_project_actions), WPE_TEST_CASE(test_ui_text_field_editing),
-    WPE_TEST_CASE(test_ui_text_field_filters_and_limits), WPE_TEST_CASE(test_ui_draws_text_fields),
-    WPE_TEST_CASE(test_ui_fit_image), WPE_TEST_CASE(test_ui_create_validates))
+    WPE_TEST_CASE(test_ui_keyboard_navigation_and_clicks), WPE_TEST_CASE(test_ui_navigation_uses_edges),
+    WPE_TEST_CASE(test_ui_mouse_focus_and_clicks), WPE_TEST_CASE(test_ui_toggles_and_sliders),
+    WPE_TEST_CASE(test_ui_draws_toggles_and_sliders), WPE_TEST_CASE(test_ui_navigation_uses_project_actions),
+    WPE_TEST_CASE(test_ui_text_field_editing), WPE_TEST_CASE(test_ui_text_field_filters_and_limits),
+    WPE_TEST_CASE(test_ui_draws_text_fields), WPE_TEST_CASE(test_ui_fit_image),
+    WPE_TEST_CASE(test_ui_create_validates))

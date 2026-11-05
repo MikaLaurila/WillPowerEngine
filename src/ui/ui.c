@@ -500,26 +500,40 @@ static WPE_Entity wpe__first_focusable(const WPE_Ui* ui) {
     return WPE_ENTITY_NULL;
 }
 
-/* The focusable button nearest to the focused one in a direction: ahead of it, favoring buttons in
- * line with it (sideways distance counts double). */
+/* The gap between the intervals [a0, a1] and [b0, b1] (0 when they overlap). */
+static float wpe__gap(float a0, float a1, float b0, float b1) {
+    return b0 > a1 ? b0 - a1 : a0 > b1 ? a0 - b1 : 0.0f;
+}
+
+/* The focusable button nearest to the focused one in a direction. Only buttons wholly past its edge on that
+ * side count (a toggle at the end of the row above is not "left" of a slider), and those in line with it come
+ * first: the score is the gap ahead plus twice the sideways gap between the rectangles (0 when they overlap
+ * that way), then the distance between centers. */
 static WPE_Entity wpe__neighbor(const WPE_Ui* ui, WPE_Entity from, wpe__Direction direction) {
     const WPE_Rect r = wpe__element(ui, from)->rect;
-    const float cx = r.x + r.width * 0.5f, cy = r.y + r.height * 0.5f;
-    static const float dx[] = {0, 0, -1, 1}, dy[] = {-1, 1, 0, 0};
+    const bool vertical = direction == WPE__DIR_UP || direction == WPE__DIR_DOWN;
     WPE_Entity best = WPE_ENTITY_NULL;
-    float best_score = 0.0f;
+    float best_score = 0.0f, best_distance = 0.0f;
     for (uint32_t i = 0; i < ui->order_count; ++i) {
         const WPE_Entity e = ui->order[i];
         if (e == from || !wpe__focusable(ui, e)) continue;
         const WPE_Rect o = wpe__element(ui, e)->rect;
-        const float vx = o.x + o.width * 0.5f - cx, vy = o.y + o.height * 0.5f - cy;
-        const float ahead = vx * dx[direction] + vy * dy[direction];
-        const float side = fabsf(vx * dy[direction] - vy * dx[direction]);
-        if (ahead < 1.0f) continue;
-        const float score = ahead + 2.0f * side;
-        if (best == WPE_ENTITY_NULL || score < best_score) {
+        const float ahead = direction == WPE__DIR_UP     ? r.y - (o.y + o.height)
+                            : direction == WPE__DIR_DOWN ? o.y - (r.y + r.height)
+                            : direction == WPE__DIR_LEFT ? r.x - (o.x + o.width)
+                                                         : o.x - (r.x + r.width);
+        if (ahead < -0.5f) continue; /* Touching counts; overlapping doesn't. */
+        const float side = vertical ? wpe__gap(r.x, r.x + r.width, o.x, o.x + o.width)
+                                    : wpe__gap(r.y, r.y + r.height, o.y, o.y + o.height);
+        const float score = (ahead > 0.0f ? ahead : 0.0f) + 2.0f * side;
+        const float vx = o.x + o.width * 0.5f - (r.x + r.width * 0.5f);
+        const float vy = o.y + o.height * 0.5f - (r.y + r.height * 0.5f);
+        const float distance = vx * vx + vy * vy;
+        if (best == WPE_ENTITY_NULL || score < best_score ||
+            (score == best_score && distance < best_distance)) {
             best = e;
             best_score = score;
+            best_distance = distance;
         }
     }
     return best;

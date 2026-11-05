@@ -29,13 +29,13 @@
  *
  * Interaction (wpe_ui_update()): one button at a time has the focus. The mouse focuses the button
  * under it when it moves and clicks with the left button (press and release on the same button).
- * Arrow keys, the D-pad and the left stick move the focus to the nearest button in that direction
- * (holding repeats), and Return, Space or the pad's south button click the focused one. When
- * nothing has the focus, the first navigation input focuses the first button. Projects can rebind
- * navigation with input actions named "ui_up", "ui_down", "ui_left", "ui_right" and "ui_submit";
- * an action with one of those names replaces that input's defaults. Clicks are collected for the
- * application (wpe_ui_clicks()); the engine passes them to scripts as on_click. Focus changes are
- * reported too (wpe_ui_focus_change(); on_blur and on_focus).
+ * Arrow keys, the D-pad and the left stick move the focus to the nearest button wholly past the focused
+ * one's edge in that direction, those in line with it first (holding repeats); with none, it stays, and
+ * Return, Space or the pad's south button click the focused one. When nothing has the focus, the first
+ * navigation input focuses the first button. Projects can rebind navigation with input actions named "ui_up",
+ * "ui_down", "ui_left", "ui_right" and "ui_submit"; an action with one of those names replaces that input's
+ * defaults. Clicks are collected for the application (wpe_ui_clicks()); the engine passes them to scripts as
+ * on_click. Focus changes are reported too (wpe_ui_focus_change(); on_blur and on_focus).
  *
  * Text fields: clicking one, or submitting it (Return, Space, the pad's south button), starts editing it.
  * While it edits, the keyboard types: printable characters (filtered as the field says), Backspace and

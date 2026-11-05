@@ -4,6 +4,12 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Changed
+- UI focus navigation compares the buttons' edges, not their centers: only buttons wholly past the focused one's
+  edge in the pressed direction count, and those in line with it come first. In a list whose rows put their
+  buttons in different places (sliders in the middle, toggles at the end), up and down now go row by row,
+  where they could skip a row or jump to the wrong one, and left and right no longer jump to another row.
+
 ### Added
 - Display options for settings screens: `wpe.set_display({fullscreen, scaling, scale, vsync})` applies them at
   once and saves them for the player (`wpe.display.json` beside the bindings), and `wpe.get_display()` reads
