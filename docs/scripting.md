@@ -646,6 +646,8 @@ The scene's UI elements (`ui`, `sprite`, `text`, `button`, `toggle`, `slider` an
 |---|---|
 | `wpe.get_text(entity) -> string` / `wpe.set_text(entity, text)` | A text's string. |
 | `wpe.set_text_color(entity, color)` / `wpe.set_sprite_color(entity, color)` | A text's or sprite's color (`wpe.color`). |
+| `wpe.set_text_style(entity, {shadow_color, shadow_offset, outline_color, outline_width})` | A text's drop shadow and outline (fields left out keep their values). The colors are `wpe.color`s, and alpha 0 turns the effect off. `shadow_offset` is a `vector.create(x, y, 0)` in font pixels (times the text's scale, -64..64). `outline_width` is 0..4 font pixels. Example: `wpe.set_text_style(label, {outline_color = wpe.color(0, 0, 0), shadow_color = wpe.color(0, 0, 0), shadow_offset = vector.create(1, 1, 0)})`. |
+| `wpe.get_text_style(entity)` | The text's style as the table `set_text_style` takes. |
 | `wpe.set_ui_visible(entity, visible)` / `wpe.is_ui_visible(entity) -> boolean` | Hides or shows an element and everything under it. |
 | `wpe.get_ui_offsets(entity) -> min_x, min_y, max_x, max_y` / `wpe.set_ui_offsets(entity, min_x, min_y, max_x, max_y)` | The corner offsets in pixels (moving or resizing an element; anchors stay). |
 | `wpe.ui_fit_image(entity, [scale = 1])` | Sizes a sprite element to its image (or its `source` region) times `scale`, centered where it is, its anchors met in one point and its corners on whole pixels (the editor's Image size button; [scenes.md](scenes.md#ui)). Raises without a sprite image. |

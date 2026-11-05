@@ -5,6 +5,11 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Text shadows and outlines: a UI text's `shadow_color` + `shadow_offset` (a drop shadow, in font pixels
+  times the text's scale) and `outline_color` + `outline_width` (0..4 font pixels). Alpha 0 turns each off,
+  which is the default. Shown in the editor's inspector; scripts use `wpe.set_text_style(entity, {...})` /
+  `wpe.get_text_style(entity)`. The shadow is of the outlined text, and button tints apply to both effects.
+  Text fields draw their text without them.
 - Child order (the UI's drawing order) can be changed: in the editor's Hierarchy, drag onto the top or bottom
   edge of a child to place before or after it, or use Move up / down / to first / to last in the right-click
   menu; the `set_sibling_index` command and an `index` for `set_parent`; scripts' `wpe.get_sibling_index` /

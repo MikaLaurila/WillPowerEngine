@@ -82,6 +82,11 @@ void wpe__save_ui_components(wpe__Saver* s, WPE_Entity e) {
         wpe_json_write_string(w, wpe__align_y[text->align_y]);
         wpe_json_write_key(w, "wrap");
         wpe_json_write_bool(w, text->wrap);
+        wpe__write_floats(w, "shadow_color", text->shadow_color.v, 4);
+        wpe__write_floats(w, "shadow_offset", text->shadow_offset.v, 2);
+        wpe__write_floats(w, "outline_color", text->outline_color.v, 4);
+        wpe_json_write_key(w, "outline_width");
+        wpe_json_write_integer(w, text->outline_width);
         wpe_json_write_object_end(w);
     }
     const WPE_Button* button = wpe_ecs_get_component(ecs, e, WPE_COMP_BUTTON);
@@ -306,9 +311,13 @@ bool wpe__load_sprite(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
 bool wpe__load_text(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     WPE_Text text = wpe_text_default();
     uint32_t align_x = text.align_x, align_y = text.align_y;
-    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "text", "text", "font", "color", "scale", "align", "valign",
-                                "wrap") ||
+    if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "text", "text", "font", "color", "scale", "align", "valign", "wrap",
+                                "shadow_color", "shadow_offset", "outline_color", "outline_width") ||
         !wpe__read_ranged(l, v, "color", 4, 0.0, 1.0, text.color.v) ||
+        !wpe__read_ranged(l, v, "shadow_color", 4, 0.0, 1.0, text.shadow_color.v) ||
+        !wpe__read_ranged(l, v, "shadow_offset", 2, -64.0, 64.0, text.shadow_offset.v) ||
+        !wpe__read_ranged(l, v, "outline_color", 4, 0.0, 1.0, text.outline_color.v) ||
+        !wpe__json_read_uint(&l->r, v, "outline_width", 0, WPE_TEXT_MAX_OUTLINE, &text.outline_width) ||
         !wpe__json_read_float(&l->r, v, "scale", 0.1, 64.0, &text.scale) ||
         !wpe__json_read_enum(&l->r, v, "align", wpe__align_x, WPE__COUNT(wpe__align_x), &align_x) ||
         !wpe__json_read_enum(&l->r, v, "valign", wpe__align_y, WPE__COUNT(wpe__align_y), &align_y) ||

@@ -11,7 +11,8 @@
  *   parent. Elements whose parent is not a UI element are placed on the screen (the framebuffer).
  * - WPE_COMP_SPRITE (WPE_Sprite): fills the element's rectangle with an image (optionally a region
  *   of it, and nine-sliced so borders keep their size) or a plain color.
- * - WPE_COMP_TEXT (WPE_Text): bitmap-font text aligned in the rectangle, optionally word-wrapped.
+ * - WPE_COMP_TEXT (WPE_Text): bitmap-font text aligned in the rectangle, optionally word-wrapped, with
+ *   an optional drop shadow and outline (text fields draw their text without them).
  * - WPE_COMP_BUTTON (WPE_Button): makes the element focusable and clickable. The button's state
  *   tints everything it and its descendants draw.
  * - WPE_COMP_TOGGLE (WPE_Toggle) and WPE_COMP_SLIDER (WPE_Slider): with a button on the same entity,
@@ -104,7 +105,19 @@ typedef struct WPE_Text {
     float scale;                  /* Glyph magnification (1 = the font's pixels). */
     WPE_UiAlign align_x, align_y;
     bool wrap; /* Break lines at spaces so they fit the rectangle's width. */
+    /* A drop shadow: the text (with its outline) drawn again under it, moved by `shadow_offset` font
+     * pixels (times `scale`). Off while `shadow_color`'s alpha is 0 (the default). */
+    WPE_Vec4 shadow_color;
+    WPE_Vec2 shadow_offset;
+    /* An outline: the text drawn again under it at every offset up to `outline_width` font pixels
+     * (times `scale`) in each direction. Off while `outline_color`'s alpha is 0 (the default) or the
+     * width is 0. NOTE(limitation): the copies overlap, so translucent outlines and shadows of outlined
+     * text come out uneven; use opaque colors for them. */
+    WPE_Vec4 outline_color;
+    uint32_t outline_width; /* 0..WPE_TEXT_MAX_OUTLINE. */
 } WPE_Text;
+
+#define WPE_TEXT_MAX_OUTLINE 4u
 
 typedef struct WPE_Button {
     bool interactable; /* false: shown with disabled_tint, and never focused or clicked. */
@@ -170,7 +183,8 @@ typedef struct WPE_UiDesc {
 /* Defaults (also the scene-file defaults). @thread_safety Any thread */
 WPE_UiRect wpe_ui_rect_default(void); /* Fills its parent (anchors at its corners, no offsets), visible. */
 WPE_Sprite wpe_sprite_default(void);  /* White, no image. */
-WPE_Text wpe_text_default(void);      /* Empty, white, scale 1, top-left, no wrapping. */
+WPE_Text wpe_text_default(void);      /* Empty, white, scale 1, top-left, no wrapping; shadow and outline
+                                       * off (black, alpha 0), shadow offset (1, 1), outline width 1. */
 WPE_Button wpe_button_default(void);  /* Interactable; focus brightens, press darkens, disabled dims. */
 WPE_Toggle wpe_toggle_default(void);  /* Off; a white mark inset 3 pixels. */
 WPE_Slider wpe_slider_default(void);  /* 0..1 at 0, no step; gray track, white fill and handle (6 px). */

@@ -71,7 +71,12 @@ WPE_Sprite wpe_sprite_default(void) {
 }
 
 WPE_Text wpe_text_default(void) {
-    return (WPE_Text){.color = wpe_vec4(1, 1, 1, 1), .scale = 1.0f};
+    return (WPE_Text){.color = wpe_vec4(1, 1, 1, 1),
+                      .scale = 1.0f,
+                      .shadow_color = wpe_vec4(0, 0, 0, 0),
+                      .shadow_offset = {.x = 1.0f, .y = 1.0f},
+                      .outline_color = wpe_vec4(0, 0, 0, 0),
+                      .outline_width = 1};
 }
 
 WPE_Button wpe_button_default(void) {
@@ -1203,17 +1208,18 @@ static float wpe__aligned(WPE_UiAlign align, float start, float space, float siz
                                           : start + space - size;
 }
 
-static void wpe__draw_text(WPE_Ui* ui, const WPE_Text* text, WPE_Rect rect, WPE_Color color) {
-    const WPE_BitmapFont* font = text->glyphs ? text->glyphs : wpe_asset_font(ui->assets, ui->font);
-    if (!font || !text->text || !text->text[0] || !(text->scale > 0.0f)) return;
+/* Draws the `count` lines broken into ui->lines, moved by (dx, dy) pixels. Whole pixels keep the glyphs
+ * crisp. */
+static void wpe__draw_lines(WPE_Ui* ui, const WPE_BitmapFont* font, const WPE_Text* text, WPE_Rect rect,
+                            uint32_t count, float dx, float dy, WPE_Color color) {
     const float scale = text->scale;
-    const uint32_t count = wpe__break_lines(ui, font, text->text, text->wrap ? rect.width / scale : 0.0f);
     const float line_height = (float)font->line_height * scale;
-    /* Whole pixels keep the glyphs crisp. */
-    float y = floorf(wpe__aligned(text->align_y, rect.y, rect.height, line_height * (float)count) + 0.5f);
+    float y = floorf(wpe__aligned(text->align_y, rect.y, rect.height, line_height * (float)count) + 0.5f) +
+              floorf(dy + 0.5f);
     for (uint32_t i = 0; i < count; ++i, y += line_height) {
         const wpe__Line* line = &ui->lines[i];
-        float x = floorf(wpe__aligned(text->align_x, rect.x, rect.width, line->width * scale) + 0.5f);
+        float x = floorf(wpe__aligned(text->align_x, rect.x, rect.width, line->width * scale) + 0.5f) +
+                  floorf(dx + 0.5f);
         for (const char* p = line->start; p < line->end; ++p) {
             const WPE_FontGlyph* g = wpe_font_glyph(font, *p);
             const WPE_Rect source = {(float)g->x, (float)g->y, (float)g->width, (float)g->height};
@@ -1249,6 +1255,36 @@ static WPE_Vec4 wpe__tint(const WPE_Ui* ui, WPE_Entity entity) {
         tint = wpe__mul(tint, state);
     }
     return tint;
+}
+
+/* A text with its shadow and outline: the shadow first (the outlined shape, moved), then the outline (the
+ * text at every offset up to the width, in font pixels), then the text. */
+static void wpe__draw_text(WPE_Ui* ui, const WPE_Text* text, WPE_Rect rect, WPE_Vec4 tint) {
+    const WPE_BitmapFont* font = text->glyphs ? text->glyphs : wpe_asset_font(ui->assets, ui->font);
+    if (!font || !text->text || !text->text[0] || !(text->scale > 0.0f)) return;
+    const float scale = text->scale;
+    const uint32_t count = wpe__break_lines(ui, font, text->text, text->wrap ? rect.width / scale : 0.0f);
+    const WPE_Vec4 shadow = wpe__mul(text->shadow_color, tint);
+    const WPE_Vec4 outline = wpe__mul(text->outline_color, tint);
+    const int width =
+        outline.w > 0.0f
+            ? (int)(text->outline_width < WPE_TEXT_MAX_OUTLINE ? text->outline_width : WPE_TEXT_MAX_OUTLINE)
+            : 0;
+    for (int pass = 0; pass < 2; ++pass) {
+        const bool is_shadow = pass == 0;
+        if (is_shadow ? !(shadow.w > 0.0f) : width == 0) continue;
+        const WPE_Color color = wpe__color(is_shadow ? shadow : outline);
+        const float sx = is_shadow ? text->shadow_offset.x * scale : 0.0f;
+        const float sy = is_shadow ? text->shadow_offset.y * scale : 0.0f;
+        for (int j = -width; j <= width; ++j) {
+            for (int i = -width; i <= width; ++i) {
+                if (!is_shadow && i == 0 && j == 0) continue; /* The text itself goes there. */
+                wpe__draw_lines(ui, font, text, rect, count, sx + (float)i * scale, sy + (float)j * scale,
+                                color);
+            }
+        }
+    }
+    wpe__draw_lines(ui, font, text, rect, count, 0.0f, 0.0f, wpe__color(wpe__mul(text->color, tint)));
 }
 
 /* An image region stretched over `dest`, or nine-sliced: corners keep their size, edges stretch along
@@ -1387,7 +1423,7 @@ WPE_Result wpe_ui_draw(WPE_Ui* ui, WPE_Renderer* renderer) {
         if (field) {
             wpe__draw_field(ui, e, field, element->rect, tint); /* Its text component styles it. */
         } else if (text) {
-            wpe__draw_text(ui, text, element->rect, wpe__color(wpe__mul(text->color, tint)));
+            wpe__draw_text(ui, text, element->rect, tint);
         }
     }
     return wpe_draw2d_submit(ui->draw2d, renderer);

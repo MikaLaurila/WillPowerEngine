@@ -343,6 +343,99 @@ static void test_ui_text_alignment_and_wrapping(void) {
     destroy_fixture(&f);
 }
 
+/* Draws the UI and, with plain 2D drawing, `copies` of the text at (x + dx, y + dy) in their colors; the
+ * two frames must match pixel for pixel. */
+static void assert_copies(Fixture* f, WPE_Renderer* renderer, const WPE_BitmapFont* font, const char* string,
+                          float x, float y, float scale, const float (*offsets)[2], const WPE_Color* colors,
+                          int copies) {
+    static WPE_Color expected[128 * 64];
+    const WPE_Framebuffer* fb = draw(f, renderer);
+    memcpy(expected, fb->color, (size_t)fb->width * fb->height * sizeof *expected);
+    WPE_Draw2D* draw2d = NULL;
+    WPE_TEST_ASSERT_OK(wpe_draw2d_create(&draw2d));
+    WPE_TEST_ASSERT_OK(
+        wpe_renderer_begin_frame(renderer, &(WPE_ClearDesc){.clear_color = true, .color = 0xFF000000u}));
+    wpe_draw2d_begin(draw2d, fb->width, fb->height);
+    for (int i = 0; i < copies; ++i)
+        wpe_draw2d_text(draw2d, font, x + offsets[i][0], y + offsets[i][1], string, colors[i], scale);
+    WPE_TEST_ASSERT_OK(wpe_draw2d_submit(draw2d, renderer));
+    WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
+    uint32_t different = 0;
+    for (uint32_t i = 0; i < fb->width * fb->height; ++i)
+        different += fb->color[i] != expected[i];
+    WPE_TEST_ASSERT_EQ_UINT(0, different);
+    wpe_draw2d_destroy(draw2d);
+}
+
+static void test_ui_text_shadow_and_outline(void) {
+    Fixture f = make_fixture(false);
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 128, .height = 64}, &renderer));
+    const WPE_BitmapFont* font = wpe_asset_font(f.t.assets, f.font);
+    const WPE_Entity label = add_element(&f, WPE_ENTITY_NULL, fixed(10, 10, 100, 40));
+    WPE_Text text = wpe_text_default();
+    char string[] = "HI";
+    text.text = string;
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, label, WPE_COMP_TEXT, &text, NULL));
+    const WPE_Color white = 0xFFFFFFFFu, red = 0xFFFF0000u, blue = 0xFF0000FFu;
+
+    /* Off by default: the text alone. */
+    assert_copies(&f, renderer, font, "HI", 10, 10, 1.0f, (const float[][2]){{0, 0}}, &white, 1);
+
+    /* A shadow: one copy under the text, moved by the offset times the scale. */
+    WPE_Text* live = wpe_ecs_get_component(f.ecs, label, WPE_COMP_TEXT);
+    live->shadow_color = wpe_vec4(1, 0, 0, 1);
+    live->shadow_offset = (WPE_Vec2){.x = 1, .y = 2};
+    live->scale = 2.0f;
+    assert_copies(&f, renderer, font, "HI", 10, 10, 2.0f, (const float[][2]){{2, 4}, {0, 0}},
+                  (const WPE_Color[]){red, white}, 2);
+
+    /* An outline and a shadow at scale 1: the shadow of the outlined shape (9 copies), the 8 outline
+     * copies, then the text. */
+    live->scale = 1.0f;
+    live->outline_color = wpe_vec4(0, 0, 1, 1);
+    float offsets[18][2];
+    WPE_Color colors[18];
+    int n = 0;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int j = -1; j <= 1; ++j) {
+            for (int i = -1; i <= 1; ++i) {
+                if (pass == 1 && i == 0 && j == 0) continue;
+                offsets[n][0] = (float)i + (pass == 0 ? 1.0f : 0.0f);
+                offsets[n][1] = (float)j + (pass == 0 ? 2.0f : 0.0f);
+                colors[n++] = pass == 0 ? red : blue;
+            }
+        }
+    }
+    offsets[n][0] = offsets[n][1] = 0.0f;
+    colors[n++] = white;
+    assert_copies(&f, renderer, font, "HI", 10, 10, 1.0f, (const float (*)[2])offsets, colors, n);
+
+    /* Width 0 turns the outline off (the shadow is then one copy again); widths past the cap are capped. */
+    live->outline_width = 0;
+    assert_copies(&f, renderer, font, "HI", 10, 10, 1.0f, (const float[][2]){{1, 2}, {0, 0}},
+                  (const WPE_Color[]){red, white}, 2);
+    live->shadow_color.w = 0.0f;
+    live->outline_width = 99;
+    const WPE_Framebuffer* fb = draw(&f, renderer);
+    uint32_t outlined = count_color(fb, blue);
+    live->outline_width = WPE_TEXT_MAX_OUTLINE;
+    fb = draw(&f, renderer);
+    WPE_TEST_ASSERT(outlined > 0);
+    WPE_TEST_ASSERT_EQ_UINT(outlined, count_color(fb, blue));
+
+    /* Button tints apply to the shadow and outline too. */
+    live->outline_width = 1;
+    WPE_Button button = wpe_button_default();
+    button.interactable = false;
+    button.disabled_tint = wpe_vec4(1, 1, 1, 0);
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(f.ecs, label, WPE_COMP_BUTTON, &button, NULL));
+    fb = draw(&f, renderer);
+    WPE_TEST_ASSERT_EQ_UINT(128 * 64, count_color(fb, 0xFF000000u));
+    wpe_renderer_destroy(renderer);
+    destroy_fixture(&f);
+}
+
 /* ---- Interaction ----------------------------------------------------------------------------------- */
 
 static void on_event(const WPE_PlatformEvent* event, void* user_data) {
@@ -963,9 +1056,9 @@ static void test_ui_create_validates(void) {
 WPE_TEST_MAIN(
     WPE_TEST_CASE(test_ui_layout_anchors_and_visibility), WPE_TEST_CASE(test_ui_pick_follows_drawing_order),
     WPE_TEST_CASE(test_ui_draws_sprites_with_button_tints), WPE_TEST_CASE(test_ui_nine_slice_keeps_borders),
-    WPE_TEST_CASE(test_ui_text_alignment_and_wrapping), WPE_TEST_CASE(test_ui_keyboard_navigation_and_clicks),
-    WPE_TEST_CASE(test_ui_mouse_focus_and_clicks), WPE_TEST_CASE(test_ui_toggles_and_sliders),
-    WPE_TEST_CASE(test_ui_draws_toggles_and_sliders), WPE_TEST_CASE(test_ui_navigation_uses_project_actions),
-    WPE_TEST_CASE(test_ui_text_field_editing), WPE_TEST_CASE(test_ui_text_field_filters_and_limits),
-    WPE_TEST_CASE(test_ui_draws_text_fields), WPE_TEST_CASE(test_ui_fit_image),
-    WPE_TEST_CASE(test_ui_create_validates))
+    WPE_TEST_CASE(test_ui_text_alignment_and_wrapping), WPE_TEST_CASE(test_ui_text_shadow_and_outline),
+    WPE_TEST_CASE(test_ui_keyboard_navigation_and_clicks), WPE_TEST_CASE(test_ui_mouse_focus_and_clicks),
+    WPE_TEST_CASE(test_ui_toggles_and_sliders), WPE_TEST_CASE(test_ui_draws_toggles_and_sliders),
+    WPE_TEST_CASE(test_ui_navigation_uses_project_actions), WPE_TEST_CASE(test_ui_text_field_editing),
+    WPE_TEST_CASE(test_ui_text_field_filters_and_limits), WPE_TEST_CASE(test_ui_draws_text_fields),
+    WPE_TEST_CASE(test_ui_fit_image), WPE_TEST_CASE(test_ui_create_validates))

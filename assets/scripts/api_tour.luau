@@ -591,6 +591,13 @@ function Tour:on_start()
 	wpe.set_text(hud_text, "API tour")
 	assert(wpe.get_text(hud_text) == "API tour")
 	wpe.set_text_color(hud_text, wpe.color(1, 1, 0.6))
+	local style = wpe.get_text_style(hud_text)
+	assert(style.outline_width == 1 and style.shadow_offset.x == 1 and style.shadow_offset.y == 1)
+	wpe.set_text_style(hud_text, { outline_color = wpe.color(0, 0, 0), shadow_offset = vector.create(2, 1, 0) })
+	style = wpe.get_text_style(hud_text)
+	assert(style.outline_color == wpe.color(0, 0, 0) and style.shadow_offset.x == 2 and style.shadow_color == 0)
+	assert(not pcall(wpe.set_text_style, hud_text, { outline_width = 5 })) -- 0..4
+	assert(not pcall(wpe.set_text_style, hud, {})) -- the panel has no Text
 	wpe.set_sprite_color(hud, wpe.color(0.1, 0.2, 0.4, 0.9))
 	assert(not pcall(wpe.set_text, hud, "x")) -- the panel has no Text
 	assert(not pcall(wpe.set_sprite_color, hud_text, 0)) -- and the text no Sprite

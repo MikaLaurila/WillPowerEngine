@@ -3816,6 +3816,51 @@ static int wpe__api_set_text_color(lua_State* L) {
     return 0;
 }
 
+/* wpe.set_text_style(entity, {shadow_color, shadow_offset, outline_color, outline_width}): missing fields
+ * keep their values. */
+static int wpe__api_set_text_style(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    WPE_Text style = *(const WPE_Text*)wpe__check_ui_part(L, entity, WPE_COMP_TEXT, "Text");
+    lua_getfield(L, 2, "shadow_color");
+    if (!lua_isnil(L, -1)) style.shadow_color = wpe_color_to_vec4(wpe__opt_color(L, -1));
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "shadow_offset");
+    if (!lua_isnil(L, -1)) {
+        const WPE_Vec3 offset = wpe__check_vec3(L, -1);
+        if (!(fabsf(offset.x) <= 64.0f && fabsf(offset.y) <= 64.0f))
+            luaL_errorL(L, "wpe.set_text_style: shadow_offset must be within -64..64 font pixels");
+        style.shadow_offset = (WPE_Vec2){.x = offset.x, .y = offset.y};
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "outline_color");
+    if (!lua_isnil(L, -1)) style.outline_color = wpe_color_to_vec4(wpe__opt_color(L, -1));
+    lua_pop(L, 1);
+    style.outline_width =
+        wpe__field_count(L, 2, "outline_width", 0, WPE_TEXT_MAX_OUTLINE, style.outline_width);
+    WPE_Text* text = wpe__check_ui_part(L, entity, WPE_COMP_TEXT, "Text"); /* Re-fetch. */
+    text->shadow_color = style.shadow_color;
+    text->shadow_offset = style.shadow_offset;
+    text->outline_color = style.outline_color;
+    text->outline_width = style.outline_width;
+    return 0;
+}
+
+static int wpe__api_get_text_style(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_Text text = *(const WPE_Text*)wpe__check_ui_part(L, entity, WPE_COMP_TEXT, "Text");
+    lua_createtable(L, 0, 4);
+    lua_pushnumber(L, (double)wpe_color_from_vec4(text.shadow_color));
+    lua_setfield(L, -2, "shadow_color");
+    wpe__push_vec3(L, wpe_vec3(text.shadow_offset.x, text.shadow_offset.y, 0.0f));
+    lua_setfield(L, -2, "shadow_offset");
+    lua_pushnumber(L, (double)wpe_color_from_vec4(text.outline_color));
+    lua_setfield(L, -2, "outline_color");
+    lua_pushnumber(L, text.outline_width);
+    lua_setfield(L, -2, "outline_width");
+    return 1;
+}
+
 static int wpe__api_set_sprite_color(lua_State* L) {
     const WPE_Entity entity = wpe__check_entity(L, 1);
     luaL_checkany(L, 2);
@@ -4163,6 +4208,8 @@ static const luaL_Reg wpe__api[] = {
     {"get_text", wpe__api_get_text},
     {"set_text", wpe__api_set_text},
     {"set_text_color", wpe__api_set_text_color},
+    {"set_text_style", wpe__api_set_text_style},
+    {"get_text_style", wpe__api_get_text_style},
     {"set_sprite_color", wpe__api_set_sprite_color},
     {"set_ui_visible", wpe__api_set_ui_visible},
     {"is_ui_visible", wpe__api_is_ui_visible},
