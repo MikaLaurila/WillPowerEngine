@@ -5,7 +5,9 @@
  * Usage: model_viewer [model.glb] [--width N] [--height N] [--scale N] [--workers N] [--frames N]
  *                     [--screenshot file.png] [--max-texture N] [--yaw DEGREES] [--pitch DEGREES]
  *                     [--distance FACTOR] [--time SECONDS] [--dither] [--filter NAME] [--no-hud]
- *                     [--no-vsync] [--attach NODE=model.glb]...
+ *                     [--no-vsync] [--attach NODE=model.glb]... [--animation NAME]
+ *   --animation NAME  play this clip instead of the first: its name or number (1 = first). Without a match,
+ *                     the error lists the model's clips
  *   --attach NODE=F   show model F held by the node (a bone or socket) named NODE, the way a game parents
  *                     it there: its origin on the node, no offset. Give it once per model, up to 8 times.
  *                     Paths are like the main model's; the framing includes what is attached
@@ -44,6 +46,7 @@ typedef struct Options {
     uint32_t attachment_count;
     uint32_t width, height, scale, workers, frames, max_texture;
     const char* screenshot;
+    const char* animation;
     float yaw, pitch, distance, time;
     WPE_TextureFiltering filter;
     bool dither, hud, vsync;
@@ -135,6 +138,8 @@ static bool parse_options(int argc, char** argv, Options* o) {
             ok = parse_float(value, &o->time);
         } else if (strcmp(arg, "--attach") == 0) {
             ok = parse_attachment(value, o);
+        } else if (strcmp(arg, "--animation") == 0) {
+            o->animation = value;
         } else {
             ok = false;
         }
@@ -275,6 +280,20 @@ static WPE_Result attach_model(WPE_Ecs* ecs, WPE_AssetManager* assets, WPE_Vfs* 
     return result;
 }
 
+/*
+ * The clip chosen by --animation (a name first, so a clip may be called "2"; then a 1-based number), or
+ * the first one without the option. WPE_MODEL_NONE: the model has no clips, or `wanted` matches none.
+ */
+static uint32_t find_animation(const WPE_Model* model, const char* wanted) {
+    if (!wanted) return model->animation_count ? 0 : WPE_MODEL_NONE;
+    for (uint32_t i = 0; i < model->animation_count; ++i) {
+        if (strcmp(model->animations[i].name, wanted) == 0) return i;
+    }
+    uint32_t number = 0;
+    if (parse_u32(wanted, &number) && number >= 1 && number <= model->animation_count) return number - 1;
+    return WPE_MODEL_NONE;
+}
+
 /* Whether two of the given paths are different files with the same name (see attach_model). */
 static bool attachment_names_clash(const Options* o) {
     char dir[1024], other_dir[1024];
@@ -351,10 +370,19 @@ int main(int argc, char** argv) {
 
     WPE_Entity root = WPE_ENTITY_NULL, camera = WPE_ENTITY_NULL;
     if (result == WPE_RESULT_OK) {
-        const WPE_InstantiateOptions instantiate = {
-            .animation = wpe_asset_model(assets, model)->animation_count ? 0 : WPE_MODEL_NONE,
-            .play = !o.screenshot};
-        result = wpe_model_instantiate(ecs, assets, model, &instantiate, &root);
+        const WPE_Model* loaded = wpe_asset_model(assets, model);
+        const uint32_t animation = find_animation(loaded, o.animation);
+        if (o.animation && animation == WPE_MODEL_NONE) {
+            wpe_log_error("--animation: no clip \"%s\". The model has %u:", o.animation, loaded->animation_count);
+            for (uint32_t i = 0; i < loaded->animation_count; ++i) {
+                const WPE_Animation* clip = &loaded->animations[i];
+                fprintf(stderr, "  %u: %s (%.2f s)\n", i + 1, clip->name[0] ? clip->name : "(no name)", (double)clip->duration);
+            }
+            result = WPE_RESULT_ERROR_NOT_FOUND;
+        } else {
+            const WPE_InstantiateOptions instantiate = {.animation = animation, .play = !o.screenshot};
+            result = wpe_model_instantiate(ecs, assets, model, &instantiate, &root);
+        }
     }
     for (uint32_t i = 0; result == WPE_RESULT_OK && i < o.attachment_count; ++i) {
         result = attach_model(ecs, assets, vfs, root, &o.attachments[i]);
