@@ -50,6 +50,7 @@ cmake --build build --target lint                       # clang-tidy over src/ (
 WPE_UPDATE_GOLDEN=1 ctest --test-dir build -R golden    # regenerate golden PNGs; open and review them before committing
 ./build/samples/spinning_cubes --frames 30 --screenshot out.png   # render headless-ish and inspect the PNG
 ./build/samples/model_viewer assets/meshes/RiggedFigure.glb --frames 2 --yaw 30 --time 0.6 --screenshot out.png
+./build/samples/model_viewer hero.glb --attach right_hand=sword.glb --frames 2 --yaw 30 --screenshot out.png   # another model on a bone or socket
 ./build/samples/lighting_demo --frames 2 --time 3 --screenshot out.png --shadow-map shadow.png   # + --ssao --fog --ps1 ...
 ./build/samples/script_demo --watch                               # edit assets/scripts/*.luau while it runs
 ./build/samples/script_demo --frames 150 --debug-physics --screenshot out.png   # collider wireframes (headless: no audio device)

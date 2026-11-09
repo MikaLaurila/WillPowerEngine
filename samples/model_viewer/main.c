@@ -5,7 +5,10 @@
  * Usage: model_viewer [model.glb] [--width N] [--height N] [--scale N] [--workers N] [--frames N]
  *                     [--screenshot file.png] [--max-texture N] [--yaw DEGREES] [--pitch DEGREES]
  *                     [--distance FACTOR] [--time SECONDS] [--dither] [--filter NAME] [--no-hud]
- *                     [--no-vsync]
+ *                     [--no-vsync] [--attach NODE=model.glb]...
+ *   --attach NODE=F   show model F held by the node (a bone or socket) named NODE, the way a game parents
+ *                     it there: its origin on the node, no offset. Give it once per model, up to 8 times.
+ *                     Paths are like the main model's; the framing includes what is attached
  *   --filter NAME     filter every texture one way: material (as authored), nearest, bilinear or
  *                     three_point (Nintendo 64 style)
  *   --frames N       exit after N frames (0 = run until the window is closed)
@@ -26,9 +29,19 @@
 #include "graphics/scene_render.h"
 #include "jobs/jobs.h"
 #include "platform/platform.h"
+#include "scene/scene.h"
+
+#define MAX_ATTACHMENTS 8
+
+typedef struct Attachment {
+    char node[WPE_NAME_MAX];
+    const char* path;
+} Attachment;
 
 typedef struct Options {
     const char* model_path;
+    Attachment attachments[MAX_ATTACHMENTS];
+    uint32_t attachment_count;
     uint32_t width, height, scale, workers, frames, max_texture;
     const char* screenshot;
     float yaw, pitch, distance, time;
@@ -52,10 +65,29 @@ static bool parse_u32(const char* text, uint32_t* out) {
     return true;
 }
 
+/* "NODE=path/to/model.glb": the first '=' ends the node's name, so paths may contain one. */
+static bool parse_attachment(const char* text, Options* o) {
+    const char* equals = strchr(text, '=');
+    if (!equals || equals == text || !equals[1] || (size_t)(equals - text) >= WPE_NAME_MAX) return false;
+    if (o->attachment_count == MAX_ATTACHMENTS) return false;
+    Attachment* attachment = &o->attachments[o->attachment_count++];
+    memcpy(attachment->node, text, (size_t)(equals - text));
+    attachment->node[equals - text] = '\0';
+    attachment->path = equals + 1;
+    return true;
+}
+
 static bool parse_options(int argc, char** argv, Options* o) {
-    *o = (Options){.model_path = WPE_SAMPLE_ASSETS_DIR "/meshes/damaged_helmet.glb", .width = 320, .height = 240,
-                   .scale = 3, .workers = WPE_JOBS_AUTO_WORKERS, .max_texture = 512, .pitch = 15.0f,
-                   .distance = 1.0f, .hud = true, .vsync = true};
+    *o = (Options){.model_path = WPE_SAMPLE_ASSETS_DIR "/meshes/damaged_helmet.glb",
+                   .width = 320,
+                   .height = 240,
+                   .scale = 3,
+                   .workers = WPE_JOBS_AUTO_WORKERS,
+                   .max_texture = 512,
+                   .pitch = 15.0f,
+                   .distance = 1.0f,
+                   .hud = true,
+                   .vsync = true};
     for (int i = 1; i < argc; ++i) {
         const char* arg = argv[i];
         if (arg[0] != '-') {
@@ -101,6 +133,8 @@ static bool parse_options(int argc, char** argv, Options* o) {
             ok = parse_float(value, &o->distance) && o->distance > 0.0f;
         } else if (strcmp(arg, "--time") == 0) {
             ok = parse_float(value, &o->time);
+        } else if (strcmp(arg, "--attach") == 0) {
+            ok = parse_attachment(value, o);
         } else {
             ok = false;
         }
@@ -122,26 +156,32 @@ static void grow_bounds(WPE_Aabb* box, WPE_Vec3 p) {
  * vertices only reach world space through the skin, so bind-pose bounds can be in any frame.
  */
 static WPE_Aabb scene_bounds(WPE_Ecs* ecs) {
-    WPE_Aabb total = {.min = wpe_vec3(INFINITY, INFINITY, INFINITY), .max = wpe_vec3(-INFINITY, -INFINITY, -INFINITY)};
-    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
+    WPE_Aabb total = {.min = wpe_vec3(INFINITY, INFINITY, INFINITY),
+                      .max = wpe_vec3(-INFINITY, -INFINITY, -INFINITY)};
+    WPE_EcsIter it = wpe_ecs_query(
+        ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH) | WPE_ECS_MASK(WPE_COMP_TRANSFORM)});
     while (wpe_ecs_iter_next(&it)) {
         const WPE_MeshRenderer* mesh = wpe_ecs_iter_get(&it, WPE_COMP_MESH);
         const WPE_Transform* t = wpe_ecs_iter_get(&it, WPE_COMP_TRANSFORM);
         if (mesh->skin != WPE_MODEL_NONE && mesh->joints) {
             for (uint32_t j = 0; j < mesh->joint_count; ++j) {
                 const WPE_Transform* joint = wpe_ecs_get_component(ecs, mesh->joints[j], WPE_COMP_TRANSFORM);
-                if (joint) grow_bounds(&total, wpe_vec3(joint->world.m[3][0], joint->world.m[3][1], joint->world.m[3][2]));
+                if (joint)
+                    grow_bounds(&total,
+                                wpe_vec3(joint->world.m[3][0], joint->world.m[3][1], joint->world.m[3][2]));
             }
             continue;
         }
         const WPE_Aabb b = mesh->model->meshes[mesh->mesh].bounds;
         const WPE_Mat4 world = t->world;
         for (int c = 0; c < 8; ++c) {
-            const WPE_Vec3 corner = wpe_vec3(c & 1 ? b.max.x : b.min.x, c & 2 ? b.max.y : b.min.y, c & 4 ? b.max.z : b.min.z);
+            const WPE_Vec3 corner =
+                wpe_vec3(c & 1 ? b.max.x : b.min.x, c & 2 ? b.max.y : b.min.y, c & 4 ? b.max.z : b.min.z);
             grow_bounds(&total, wpe_mat4_transform_point(&world, corner));
         }
     }
-    if (!(total.min.x <= total.max.x)) return (WPE_Aabb){.min = wpe_vec3(-1, -1, -1), .max = wpe_vec3(1, 1, 1)};
+    if (!(total.min.x <= total.max.x))
+        return (WPE_Aabb){.min = wpe_vec3(-1, -1, -1), .max = wpe_vec3(1, 1, 1)};
     /* Joints sit inside the skin, so pad by a fraction of the extent to include the surface. */
     const WPE_Vec3 pad = wpe_vec3_scale(wpe_vec3_sub(total.max, total.min), 0.15f);
     total.min = wpe_vec3_sub(total.min, pad);
@@ -149,22 +189,114 @@ static WPE_Aabb scene_bounds(WPE_Ecs* ecs) {
     return total;
 }
 
-static void place_camera(WPE_Ecs* ecs, WPE_Entity camera, WPE_Vec3 target, float radius, float yaw_deg, float pitch_deg) {
+static void place_camera(WPE_Ecs* ecs, WPE_Entity camera, WPE_Vec3 target, float radius, float yaw_deg,
+                         float pitch_deg) {
     const float yaw = yaw_deg * WPE_PI / 180.0f, pitch = pitch_deg * WPE_PI / 180.0f;
-    const WPE_Vec3 offset = wpe_vec3(sinf(yaw) * cosf(pitch) * radius, sinf(pitch) * radius, cosf(yaw) * cosf(pitch) * radius);
+    const WPE_Vec3 offset =
+        wpe_vec3(sinf(yaw) * cosf(pitch) * radius, sinf(pitch) * radius, cosf(yaw) * cosf(pitch) * radius);
     WPE_Transform* t = wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM);
     t->position = wpe_vec3_add(target, offset);
     /* Camera looks down -Z: build the rotation from the inverse of a look-at view matrix. */
     const WPE_Mat4 view = wpe_mat4_look_at(t->position, target, wpe_vec3(0, 1, 0));
     WPE_Mat4 world;
     WPE_Vec3 position, scale;
-    if (wpe_mat4_inverse(&view, &world) && wpe_mat4_decompose(&world, &position, &t->rotation, &scale)) return;
+    if (wpe_mat4_inverse(&view, &world) && wpe_mat4_decompose(&world, &position, &t->rotation, &scale))
+        return;
     t->rotation = wpe_quat_identity();
+}
+
+/* Splits a path into its directory (written to `dir`, "." if it has none) and returns the file name. */
+static const char* split_path(const char* path, char* dir, size_t dir_size) {
+    snprintf(dir, dir_size, "%s", path);
+    char* separator = strrchr(dir, '/');
+    char* backslash = strrchr(dir, '\\');
+    if (backslash && (!separator || backslash > separator)) separator = backslash;
+    const char* file = separator ? path + (separator - dir) + 1 : path;
+    if (separator) {
+        *separator = '\0';
+    } else {
+        snprintf(dir, dir_size, ".");
+    }
+    return file;
+}
+
+/* The first entity called `name` at or under `entity`. */
+static WPE_Entity find_named(const WPE_Ecs* ecs, WPE_Entity entity, const char* name) {
+    const WPE_Name* own = wpe_ecs_get_component(ecs, entity, WPE_COMP_NAME);
+    if (own && strcmp(own->value, name) == 0) return entity;
+    const WPE_Hierarchy* hierarchy = wpe_ecs_get_component(ecs, entity, WPE_COMP_HIERARCHY);
+    if (!hierarchy) return WPE_ENTITY_NULL;
+    for (WPE_Entity child = hierarchy->first_child; child != WPE_ENTITY_NULL;) {
+        const WPE_Entity found = find_named(ecs, child, name);
+        if (found != WPE_ENTITY_NULL) return found;
+        const WPE_Hierarchy* link = wpe_ecs_get_component(ecs, child, WPE_COMP_HIERARCHY);
+        child = link ? link->next_sibling : WPE_ENTITY_NULL;
+    }
+    return WPE_ENTITY_NULL;
+}
+
+/* Lists the names at and under `entity`, so a mistyped node can be corrected from the error. */
+static void print_names(const WPE_Ecs* ecs, WPE_Entity entity) {
+    const WPE_Name* own = wpe_ecs_get_component(ecs, entity, WPE_COMP_NAME);
+    if (own) fprintf(stderr, "  %s\n", own->value);
+    const WPE_Hierarchy* hierarchy = wpe_ecs_get_component(ecs, entity, WPE_COMP_HIERARCHY);
+    if (!hierarchy) return;
+    for (WPE_Entity child = hierarchy->first_child; child != WPE_ENTITY_NULL;) {
+        print_names(ecs, child);
+        const WPE_Hierarchy* link = wpe_ecs_get_component(ecs, child, WPE_COMP_HIERARCHY);
+        child = link ? link->next_sibling : WPE_ENTITY_NULL;
+    }
+}
+
+/*
+ * Loads an attachment and parents it to its node with no offset. Assets are cached by file name, so two
+ * different files of one name can't both be shown: main() refuses that before getting here.
+ */
+static WPE_Result attach_model(WPE_Ecs* ecs, WPE_AssetManager* assets, WPE_Vfs* vfs, WPE_Entity root,
+                               const Attachment* attachment) {
+    const WPE_Entity node = find_named(ecs, root, attachment->node);
+    if (node == WPE_ENTITY_NULL) {
+        wpe_log_error("--attach: no node named \"%s\". The model has:", attachment->node);
+        print_names(ecs, root);
+        return WPE_RESULT_ERROR_NOT_FOUND;
+    }
+    char dir[1024];
+    const char* file = split_path(attachment->path, dir, sizeof dir);
+    WPE_Result result = wpe_vfs_mount_directory(vfs, dir);
+    if (result != WPE_RESULT_OK) return result;
+    WPE_AssetHandle handle = WPE_ASSET_NONE;
+    result = wpe_asset_load(assets, WPE_ASSET_MODEL, file, &handle);
+    if (result != WPE_RESULT_OK) return result;
+    WPE_Entity instance = WPE_ENTITY_NULL;
+    result = wpe_model_instantiate(ecs, assets, handle, NULL, &instance);
+    /* The mesh renderers hold their own references. */
+    wpe_asset_release(assets, handle);
+    if (result == WPE_RESULT_OK) result = wpe_scene_set_parent(ecs, instance, node, false);
+    return result;
+}
+
+/* Whether two of the given paths are different files with the same name (see attach_model). */
+static bool attachment_names_clash(const Options* o) {
+    char dir[1024], other_dir[1024];
+    for (uint32_t i = 0; i < o->attachment_count; ++i) {
+        const char* file = split_path(o->attachments[i].path, dir, sizeof dir);
+        const char* other = split_path(o->model_path, other_dir, sizeof other_dir);
+        if (strcmp(file, other) == 0 && strcmp(dir, other_dir) != 0) return true;
+        for (uint32_t j = 0; j < i; ++j) {
+            other = split_path(o->attachments[j].path, other_dir, sizeof other_dir);
+            if (strcmp(file, other) == 0 && strcmp(dir, other_dir) != 0) return true;
+        }
+    }
+    return false;
 }
 
 int main(int argc, char** argv) {
     Options o;
     if (!parse_options(argc, argv, &o)) return EXIT_FAILURE;
+    if (attachment_names_clash(&o)) {
+        fprintf(stderr, "--attach: different files can't share a file name\n");
+        return EXIT_FAILURE;
+    }
 
     WPE_JobSystem* jobs = NULL;
     WPE_Renderer* renderer = NULL;
@@ -180,36 +312,35 @@ int main(int argc, char** argv) {
     /* The model may live anywhere: mount its directory (over the sample assets, for the font) and
      * load it by file name. */
     char model_dir[1024];
-    snprintf(model_dir, sizeof model_dir, "%s", o.model_path);
-    char* separator = strrchr(model_dir, '/');
-    char* backslash = strrchr(model_dir, '\\');
-    if (backslash && (!separator || backslash > separator)) separator = backslash;
-    const char* model_file = separator ? o.model_path + (separator - model_dir) + 1 : o.model_path;
-    if (separator) {
-        *separator = '\0';
-    } else {
-        snprintf(model_dir, sizeof model_dir, ".");
-    }
+    const char* model_file = split_path(o.model_path, model_dir, sizeof model_dir);
 
     WPE_Result result = wpe_jobs_create(o.workers, &jobs);
     if (result == WPE_RESULT_OK) result = wpe_vfs_create(&vfs);
     if (result == WPE_RESULT_OK) result = wpe_vfs_mount_directory(vfs, WPE_SAMPLE_ASSETS_DIR);
     if (result == WPE_RESULT_OK) result = wpe_vfs_mount_directory(vfs, model_dir);
     if (result == WPE_RESULT_OK) {
-        result = wpe_asset_manager_create(&(WPE_AssetManagerDesc){.vfs = vfs, .jobs = jobs, .max_texture_size = o.max_texture},
-                                          &assets);
+        result = wpe_asset_manager_create(
+            &(WPE_AssetManagerDesc){.vfs = vfs, .jobs = jobs, .max_texture_size = o.max_texture}, &assets);
     }
     if (result == WPE_RESULT_OK) {
         const double start = wpe_platform_time_seconds();
         result = wpe_asset_load(assets, WPE_ASSET_MODEL, model_file, &model);
-        if (result == WPE_RESULT_OK) wpe_log_info("loaded %s in %.0f ms", o.model_path, (wpe_platform_time_seconds() - start) * 1000.0);
+        if (result == WPE_RESULT_OK)
+            wpe_log_info("loaded %s in %.0f ms", o.model_path,
+                         (wpe_platform_time_seconds() - start) * 1000.0);
     }
-    if (result == WPE_RESULT_OK) result = wpe_asset_load(assets, WPE_ASSET_FONT, "fonts/small.png", &font_asset);
+    if (result == WPE_RESULT_OK)
+        result = wpe_asset_load(assets, WPE_ASSET_FONT, "fonts/small.png", &font_asset);
     const WPE_BitmapFont* font = wpe_asset_font(assets, font_asset);
-    if (result == WPE_RESULT_OK) result = wpe_renderer_create(&(WPE_RendererDesc){.width = o.width, .height = o.height, .jobs = jobs}, &renderer);
+    if (result == WPE_RESULT_OK)
+        result = wpe_renderer_create(&(WPE_RendererDesc){.width = o.width, .height = o.height, .jobs = jobs},
+                                     &renderer);
     if (result == WPE_RESULT_OK) {
-        result = wpe_window_create(&(WPE_WindowDesc){.title = "WillPowerEngine - Model Viewer", .width = o.width * o.scale,
-                                                     .height = o.height * o.scale, .resizable = true, .vsync = o.vsync},
+        result = wpe_window_create(&(WPE_WindowDesc){.title = "WillPowerEngine - Model Viewer",
+                                                     .width = o.width * o.scale,
+                                                     .height = o.height * o.scale,
+                                                     .resizable = true,
+                                                     .vsync = o.vsync},
                                    &window);
     }
     if (result == WPE_RESULT_OK) result = wpe_scene_renderer_create(&scene_renderer);
@@ -221,8 +352,13 @@ int main(int argc, char** argv) {
     WPE_Entity root = WPE_ENTITY_NULL, camera = WPE_ENTITY_NULL;
     if (result == WPE_RESULT_OK) {
         const WPE_InstantiateOptions instantiate = {
-            .animation = wpe_asset_model(assets, model)->animation_count ? 0 : WPE_MODEL_NONE, .play = !o.screenshot};
+            .animation = wpe_asset_model(assets, model)->animation_count ? 0 : WPE_MODEL_NONE,
+            .play = !o.screenshot};
         result = wpe_model_instantiate(ecs, assets, model, &instantiate, &root);
+    }
+    for (uint32_t i = 0; result == WPE_RESULT_OK && i < o.attachment_count; ++i) {
+        result = attach_model(ecs, assets, vfs, root, &o.attachments[i]);
+        if (result != WPE_RESULT_OK) wpe_log_error("--attach: couldn't attach %s", o.attachments[i].path);
     }
     if (result == WPE_RESULT_OK) {
         camera = wpe_ecs_spawn(ecs);
@@ -273,10 +409,14 @@ int main(int argc, char** argv) {
         const double render_start = wpe_platform_time_seconds();
         WPE_SceneRenderStats scene_stats = {0};
         if (result == WPE_RESULT_OK) {
-            result = wpe_renderer_begin_frame(renderer, &(WPE_ClearDesc){.clear_color = true, .color = wpe_color_rgba8(36, 40, 54, 255),
-                                                                         .clear_depth = true, .depth = 1.0f});
+            result =
+                wpe_renderer_begin_frame(renderer, &(WPE_ClearDesc){.clear_color = true,
+                                                                    .color = wpe_color_rgba8(36, 40, 54, 255),
+                                                                    .clear_depth = true,
+                                                                    .depth = 1.0f});
         }
-        if (result == WPE_RESULT_OK) result = wpe_scene_render(scene_renderer, renderer, ecs, camera, &settings, &scene_stats);
+        if (result == WPE_RESULT_OK)
+            result = wpe_scene_render(scene_renderer, renderer, ecs, camera, &settings, &scene_stats);
         if (result == WPE_RESULT_OK && o.hud) {
             wpe_draw2d_begin(draw2d, o.width, o.height);
             wpe_draw2d_rect(draw2d, (WPE_Rect){0, 0, (float)o.width, 9}, wpe_color_rgba8(0, 0, 0, 140));
@@ -296,7 +436,8 @@ int main(int argc, char** argv) {
         if (frame == 0 || now - stats_start >= 0.5) {
             const WPE_RenderStats rs = wpe_renderer_stats(renderer);
             snprintf(hud, sizeof hud, "%.1f ms  %u tris  %u draws (%u culled)", render_ms / stats_frames,
-                     rs.triangles_rasterized, scene_stats.primitives_submitted, scene_stats.primitives_culled);
+                     rs.triangles_rasterized, scene_stats.primitives_submitted,
+                     scene_stats.primitives_culled);
             stats_start = now;
             render_ms = 0.0;
             stats_frames = 0;

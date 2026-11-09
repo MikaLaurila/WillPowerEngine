@@ -11,6 +11,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   where they could skip a row or jump to the wrong one, and left and right no longer jump to another row.
 
 ### Added
+- `model_viewer --attach NODE=model.glb` shows another model held by a bone or socket, the way a game parents it
+  there, so a sword's grip can be checked from any angle (`--yaw`, `--pitch`, `--time`) without running the game.
+  Up to 8 per run; a mistyped node lists the names the model has.
 - Display options for settings screens: `wpe.set_display({fullscreen, scaling, scale, vsync})` applies them at
   once and saves them for the player (`wpe.display.json` beside the bindings), and `wpe.get_display()` reads
   them, with `max_scale` (the largest window size that fits the desktop) and `window` (false in the editor's
