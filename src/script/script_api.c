@@ -474,6 +474,16 @@ static int wpe__api_set_visible(lua_State* L) {
     return 0;
 }
 
+static int wpe__api_set_unlit(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const bool unlit = luaL_checkboolean(L, 2);
+    WPE_MeshRenderer* meshes[WPE__TREE_MESHES];
+    const uint32_t count = wpe__tree_meshes(wpe__script_host_from(L)->ecs, entity, meshes);
+    for (uint32_t i = 0; i < count; ++i)
+        meshes[i]->unlit = unlit;
+    return 0;
+}
+
 /* wpe.set_uv_scroll / set_uv_offset: the entity's meshes and those below it; raises when there are none. */
 static int wpe__set_uv(lua_State* L, bool scroll) {
     const WPE_Entity entity = wpe__check_entity(L, 1);
@@ -4107,6 +4117,7 @@ static const luaL_Reg wpe__api[] = {
     {"get_light", wpe__api_get_light},
     {"remove_light", wpe__api_remove_light},
     {"set_visible", wpe__api_set_visible},
+    {"set_unlit", wpe__api_set_unlit},
     {"set_uv_scroll", wpe__api_set_uv_scroll},
     {"get_uv_scroll", wpe__api_get_uv_scroll},
     {"set_uv_offset", wpe__api_set_uv_offset},

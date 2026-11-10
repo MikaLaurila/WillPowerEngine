@@ -363,6 +363,24 @@ static void test_script_hot_reload_preserves_state(void) {
 
 /* ---- API ------------------------------------------------------------------------------------------- */
 
+/* The mesh renderers in the subtree of `root` whose unlit flag equals `unlit`. */
+static uint32_t count_meshes(WPE_Ecs* ecs, WPE_Entity root, bool unlit) {
+    uint32_t count = 0, top = 1;
+    WPE_Entity stack[16] = {root};
+    while (top > 0) {
+        const WPE_Entity at = stack[--top];
+        const WPE_MeshRenderer* mesh = wpe_ecs_get_component(ecs, at, WPE_COMP_MESH);
+        if (mesh && mesh->unlit == unlit) ++count;
+        const WPE_Hierarchy* node = wpe_ecs_get_component(ecs, at, WPE_COMP_HIERARCHY);
+        for (WPE_Entity c = node ? node->first_child : WPE_ENTITY_NULL; c != WPE_ENTITY_NULL && top < 16;) {
+            stack[top++] = c;
+            const WPE_Hierarchy* child = wpe_ecs_get_component(ecs, c, WPE_COMP_HIERARCHY);
+            c = child ? child->next_sibling : WPE_ENTITY_NULL;
+        }
+    }
+    return count;
+}
+
 static void test_script_api_transforms_lights_prefabs(void) {
     write_script(
         "api.luau",
@@ -408,6 +426,18 @@ static void test_script_api_transforms_lights_prefabs(void) {
     WPE_TEST_ASSERT_EQ_UINT(0, wpe_script_host_stats(f.host).errors);
     WPE_TEST_ASSERT_EQ_STR("ok", wpe_scene_get_name(f.ecs, e));
     WPE_TEST_ASSERT(wpe_ecs_has_component(f.ecs, e, WPE_COMP_LIGHT));
+
+    /* wpe.set_unlit reaches every mesh below the entity (models instantiated under it), and back. */
+    const char* unlit = "local root = wpe.find('ok')\n"
+                        "wpe.set_parent(wpe.instantiate('box'), root, false)\n"
+                        "wpe.set_parent(wpe.instantiate('box'), root, false)\n"
+                        "wpe.set_unlit(root, true)\n";
+    const uint32_t before = count_meshes(f.ecs, e, false) + count_meshes(f.ecs, e, true);
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(f.host, "unlit", unlit));
+    WPE_TEST_ASSERT_EQ_UINT(before + 2, count_meshes(f.ecs, e, true));
+    WPE_TEST_ASSERT_EQ_UINT(0, count_meshes(f.ecs, e, false));
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(f.host, "lit", "wpe.set_unlit(wpe.find('ok'), false)"));
+    WPE_TEST_ASSERT_EQ_UINT(before + 2, count_meshes(f.ecs, e, false));
     free_fixture(&f);
 }
 

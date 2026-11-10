@@ -11,6 +11,8 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   where they could skip a row or jump to the wrong one, and left and right no longer jump to another row.
 
 ### Added
+- `wpe.set_unlit(entity, bool)`: draws every mesh in the entity's subtree unlit (or lit again), the mesh's
+  `unlit` setting for models instantiated by scripts, such as a player with a hat on a socket.
 - `model_viewer --attach NODE=model.glb` shows another model held by a bone or socket, the way a game parents it
   there, so a sword's grip can be checked from any angle (`--yaw`, `--pitch`, `--time`) without running the game.
   Up to 8 per run; a mistyped node lists the names the model has.
