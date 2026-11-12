@@ -5,7 +5,9 @@
  * Usage: model_viewer [model.glb] [--width N] [--height N] [--scale N] [--workers N] [--frames N]
  *                     [--screenshot file.png] [--max-texture N] [--yaw DEGREES] [--pitch DEGREES]
  *                     [--distance FACTOR] [--time SECONDS] [--dither] [--filter NAME] [--no-hud]
- *                     [--no-vsync] [--attach NODE=model.glb]... [--animation NAME]
+ *                     [--no-vsync] [--attach NODE=model.glb]... [--animation NAME] [--unlit]
+ *   --unlit           draw every mesh with its own colors and no lighting, as a game's wpe.set_unlit does
+ *                     (attachments included)
  *   --animation NAME  play this clip instead of the first: its name or number (1 = first). Without a match,
  *                     the error lists the model's clips
  *   --attach NODE=F   show model F held by the node (a bone or socket) named NODE, the way a game parents
@@ -49,7 +51,7 @@ typedef struct Options {
     const char* animation;
     float yaw, pitch, distance, time;
     WPE_TextureFiltering filter;
-    bool dither, hud, vsync;
+    bool dither, hud, vsync, unlit;
 } Options;
 
 static bool parse_float(const char* text, float* out) {
@@ -107,6 +109,10 @@ static bool parse_options(int argc, char** argv, Options* o) {
         }
         if (strcmp(arg, "--no-vsync") == 0) {
             o->vsync = false;
+            continue;
+        }
+        if (strcmp(arg, "--unlit") == 0) {
+            o->unlit = true;
             continue;
         }
         const char* value = i + 1 < argc ? argv[++i] : NULL;
@@ -398,6 +404,13 @@ int main(int argc, char** argv) {
     if (result != WPE_RESULT_OK) {
         wpe_log_error("startup failed: %s", wpe_result_to_string(result));
         goto cleanup;
+    }
+    if (o.unlit) {
+        WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH)});
+        while (wpe_ecs_iter_next(&it)) {
+            WPE_MeshRenderer* mesh = wpe_ecs_iter_get(&it, WPE_COMP_MESH);
+            mesh->unlit = true;
+        }
     }
 
     /* Pose the animation at --time, then frame the model's bounds. */
