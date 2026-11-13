@@ -12,6 +12,9 @@
 #include "graphics/scene_render.h"
 #include "graphics/transition.h"
 
+#include <stdio.h>
+#include <string.h>
+
 #define ASSET(path) WPE_TEST_ASSETS_DIR "/" path
 
 static WPE_Ecs* make_world(WPE_AssetManager* assets) {
@@ -252,6 +255,99 @@ static void test_graphics_animation_crossfade_between_clips(void) {
     WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, length));
     WPE_TEST_ASSERT(!animator->playing);
     WPE_TEST_ASSERT_NEAR(length, animator->time, 0);
+
+    wpe_ecs_destroy(ecs);
+    wpe_asset_release(t.assets, handle);
+    wpe_test_assets_destroy(&t);
+}
+
+/* Two empty nodes, "a" at the origin and "b" at (0, 1, 0), and two clips: "move" holds b at x = 5, "still"
+ * keys only a (as exporters write clips: only the nodes they move). Written beside the test as a .gltf. */
+static WPE_Model* load_partial_clips_model(void) {
+    const float data[14] = {0, 1, /* times */ 5, 1, 0, 5, 1, 0, /* move: b */ 0, 0, 0, 0,
+                            0, 0 /* still: a */};
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const unsigned char* bytes = (const unsigned char*)data;
+    const size_t size = sizeof data;
+    char base64[80] = {0};
+    for (size_t i = 0, o = 0; i < size; i += 3) { /* 56 bytes: the last group has two. */
+        const uint32_t b1 = bytes[i + 1], b2 = i + 2 < size ? bytes[i + 2] : 0;
+        const uint32_t triple = ((uint32_t)bytes[i] << 16) | (b1 << 8) | b2;
+        base64[o++] = alphabet[(triple >> 18) & 63];
+        base64[o++] = alphabet[(triple >> 12) & 63];
+        base64[o++] = alphabet[(triple >> 6) & 63];
+        base64[o++] = i + 2 < size ? alphabet[triple & 63] : '=';
+    }
+    char json[2048];
+    snprintf(json, sizeof json,
+             "{\"asset\":{\"version\":\"2.0\"},"
+             "\"buffers\":[{\"byteLength\":56,\"uri\":\"data:application/octet-stream;base64,%s\"}],"
+             "\"bufferViews\":[{\"buffer\":0,\"byteLength\":56}],"
+             "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\","
+             "\"min\":[0],\"max\":[1]},"
+             "{\"bufferView\":0,\"byteOffset\":8,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"},"
+             "{\"bufferView\":0,\"byteOffset\":32,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}],"
+             "\"nodes\":[{\"name\":\"a\"},{\"name\":\"b\",\"translation\":[0,1,0]}],"
+             "\"scenes\":[{\"nodes\":[0,1]}],\"scene\":0,"
+             "\"animations\":["
+             "{\"name\":\"move\",\"samplers\":[{\"input\":0,\"output\":1}],"
+             "\"channels\":[{\"sampler\":0,\"target\":{\"node\":1,\"path\":\"translation\"}}]},"
+             "{\"name\":\"still\",\"samplers\":[{\"input\":0,\"output\":2}],"
+             "\"channels\":[{\"sampler\":0,\"target\":{\"node\":0,\"path\":\"translation\"}}]}]}",
+             base64);
+    FILE* f = fopen("partial_clips.gltf", "wb");
+    WPE_TEST_ASSERT(f != NULL);
+    WPE_TEST_ASSERT_EQ_UINT(strlen(json), fwrite(json, 1, strlen(json), f));
+    WPE_TEST_ASSERT(fclose(f) == 0);
+    WPE_Model* model = NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_load("partial_clips.gltf", NULL, &model));
+    remove("partial_clips.gltf");
+    return model;
+}
+
+static void test_graphics_animation_unkeyed_nodes_rest(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    const WPE_AssetHandle handle = wpe_test_add_model(t.assets, "partial_clips", load_partial_clips_model());
+    const WPE_Model* model = wpe_asset_model(t.assets, handle);
+    const uint32_t move = wpe_model_find_animation(model, "move");
+    const uint32_t still = wpe_model_find_animation(model, "still");
+    WPE_TEST_ASSERT(move != WPE_MODEL_NONE && still != WPE_MODEL_NONE);
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_Entity root = WPE_ENTITY_NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(
+        ecs, t.assets, handle, &(WPE_InstantiateOptions){.animation = move, .play = true}, &root));
+    WPE_Animator* animator = wpe_ecs_get_component(ecs, root, WPE_COMP_ANIMATOR);
+    const WPE_Transform* b = wpe_ecs_get_component(ecs, animator->node_entities[1], WPE_COMP_TRANSFORM);
+
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.1f));
+    WPE_TEST_ASSERT_NEAR(5.0, b->position.x, 1e-6);
+
+    /* A cut to a clip that doesn't key b: b is back at rest, not where "move" left it. */
+    WPE_TEST_ASSERT_OK(wpe_animator_play(animator, still, 0.0f, true));
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.1f));
+    WPE_TEST_ASSERT_NEAR(0.0, b->position.x, 1e-6);
+    WPE_TEST_ASSERT_NEAR(1.0, b->position.y, 1e-6);
+
+    /* Fading in a clip that keys b: halfway, half from rest. */
+    WPE_TEST_ASSERT_OK(wpe_animator_play(animator, move, 0.5f, true));
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.25f));
+    WPE_TEST_ASSERT_NEAR(2.5, b->position.x, 1e-5);
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.5f));
+    WPE_TEST_ASSERT_NEAR(5.0, b->position.x, 1e-6);
+
+    /* Fading out to one that doesn't: halfway back toward rest, then at rest once the fade ends. */
+    WPE_TEST_ASSERT_OK(wpe_animator_play(animator, still, 0.5f, true));
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.25f));
+    WPE_TEST_ASSERT_NEAR(2.5, b->position.x, 1e-5);
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.5f));
+    WPE_TEST_ASSERT_NEAR(0.0, b->position.x, 1e-6);
+
+    /* A fade cut short by another: what the dropped clip moved doesn't stay half-posed. */
+    WPE_TEST_ASSERT_OK(wpe_animator_play(animator, move, 0.5f, true));
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.25f));
+    WPE_TEST_ASSERT_OK(wpe_animator_play(animator, still, 0.0f, true));
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.1f));
+    WPE_TEST_ASSERT_NEAR(0.0, b->position.x, 1e-6);
 
     wpe_ecs_destroy(ecs);
     wpe_asset_release(t.assets, handle);
@@ -1808,6 +1904,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_sample_cubic_spline), WPE_TEST_CASE(test_graphics_instantiate_rigged_figure),
     WPE_TEST_CASE(test_graphics_animation_crossfade),
     WPE_TEST_CASE(test_graphics_animation_crossfade_between_clips),
+    WPE_TEST_CASE(test_graphics_animation_unkeyed_nodes_rest),
     WPE_TEST_CASE(test_graphics_sky_gradient_sun_and_occlusion), WPE_TEST_CASE(test_graphics_sky_panorama),
     WPE_TEST_CASE(test_graphics_instantiate_validates_and_cleans_up),
     WPE_TEST_CASE(test_graphics_material_vertex_shader_skinning),

@@ -89,35 +89,58 @@ void wpe_animation_sample_channel(const WPE_AnimationChannel* channel, float tim
         out_value[c] = a[c] + (b[c] - a[c]) * s;
 }
 
-/* Writes an animation's pose at `time` into the node transforms, blended over what they hold with
- * `weight` (1: replaces it). */
-static void wpe__apply_animation(WPE_Ecs* ecs, const WPE_Animator* animator, uint32_t index, float time,
-                                 float weight) {
-    const WPE_Model* model = animator->model;
+/* Whether animation `index` (WPE_MODEL_NONE: none) has a channel for this node and path. */
+static bool wpe__keys(const WPE_Model* model, uint32_t index, uint32_t node, WPE_AnimationPath path) {
+    if (index >= model->animation_count) return false;
     const WPE_Animation* animation = &model->animations[index];
     for (uint32_t c = 0; c < animation->channel_count; ++c) {
         const WPE_AnimationChannel* channel = &model->channels[animation->first_channel + c];
-        if (channel->node >= animator->node_count) continue;
-        WPE_Transform* t =
-            wpe_ecs_get_component(ecs, animator->node_entities[channel->node], WPE_COMP_TRANSFORM);
-        if (!t) continue; /* Node entity was despawned or lost its transform. */
+        if (channel->node == node && channel->path == path) return true;
+    }
+    return false;
+}
 
-        float value[4];
-        wpe_animation_sample_channel(channel, time, value);
-        const WPE_Vec3 v = wpe_vec3(value[0], value[1], value[2]);
-        switch (channel->path) {
-        case WPE_ANIM_TRANSLATION:
-            t->position = weight >= 1.0f ? v : wpe_vec3_lerp(t->position, v, weight);
-            break;
-        case WPE_ANIM_ROTATION: {
-            const WPE_Quat q = {.x = value[0], .y = value[1], .z = value[2], .w = value[3]};
-            t->rotation = weight >= 1.0f ? q : wpe_quat_slerp(t->rotation, q, weight);
-            break;
-        }
-        case WPE_ANIM_SCALE:
-            t->scale = weight >= 1.0f ? v : wpe_vec3_lerp(t->scale, v, weight);
-            break;
-        }
+/* A channel's node transform, or NULL (out of range, despawned, or without a transform). */
+static WPE_Transform* wpe__channel_transform(WPE_Ecs* ecs, const WPE_Animator* animator,
+                                             const WPE_AnimationChannel* channel) {
+    if (channel->node >= animator->node_count) return NULL;
+    return wpe_ecs_get_component(ecs, animator->node_entities[channel->node], WPE_COMP_TRANSFORM);
+}
+
+/* The node's rest value for the channel's path (the model's node transform), as sampled values. */
+static void wpe__rest_value(const WPE_Model* model, const WPE_AnimationChannel* channel, float out_value[4]) {
+    const WPE_ModelNode* node = &model->nodes[channel->node];
+    WPE_Vec3 v = node->scale;
+    if (channel->path == WPE_ANIM_TRANSLATION) v = node->translation;
+    if (channel->path == WPE_ANIM_ROTATION) {
+        out_value[0] = node->rotation.x;
+        out_value[1] = node->rotation.y;
+        out_value[2] = node->rotation.z;
+        out_value[3] = node->rotation.w;
+        return;
+    }
+    out_value[0] = v.x;
+    out_value[1] = v.y;
+    out_value[2] = v.z;
+    out_value[3] = 0.0f;
+}
+
+/* Writes `value` (sampled layout) into the channel's part of `t`, blended over what it holds with
+ * `weight` (1: replaces it). */
+static void wpe__write(WPE_Transform* t, WPE_AnimationPath path, const float value[4], float weight) {
+    const WPE_Vec3 v = wpe_vec3(value[0], value[1], value[2]);
+    switch (path) {
+    case WPE_ANIM_TRANSLATION:
+        t->position = weight >= 1.0f ? v : wpe_vec3_lerp(t->position, v, weight);
+        break;
+    case WPE_ANIM_ROTATION: {
+        const WPE_Quat q = {.x = value[0], .y = value[1], .z = value[2], .w = value[3]};
+        t->rotation = weight >= 1.0f ? q : wpe_quat_slerp(t->rotation, q, weight);
+        break;
+    }
+    case WPE_ANIM_SCALE:
+        t->scale = weight >= 1.0f ? v : wpe_vec3_lerp(t->scale, v, weight);
+        break;
     }
 }
 
@@ -125,17 +148,66 @@ static bool wpe__fading(const WPE_Animator* animator) {
     return animator->fade_duration > 0.0f && animator->from_animation < animator->model->animation_count;
 }
 
+/* Puts every node and path any of the model's animations keys, but neither playing animation does,
+ * back to its rest pose: glTF clips key only the nodes they move, and the rest stand still at rest. */
+static void wpe__repose(WPE_Ecs* ecs, const WPE_Animator* animator) {
+    const WPE_Model* model = animator->model;
+    const uint32_t from = wpe__fading(animator) ? animator->from_animation : WPE_MODEL_NONE;
+    for (uint32_t c = 0; c < model->channel_count; ++c) {
+        const WPE_AnimationChannel* channel = &model->channels[c];
+        WPE_Transform* t = wpe__channel_transform(ecs, animator, channel);
+        if (!t || wpe__keys(model, animator->animation, channel->node, channel->path) ||
+            wpe__keys(model, from, channel->node, channel->path))
+            continue;
+        float rest[4];
+        wpe__rest_value(model, channel, rest);
+        wpe__write(t, channel->path, rest, 1.0f);
+    }
+}
+
 void wpe_animation_apply(WPE_Ecs* ecs, const WPE_Animator* animator) {
     if (!ecs || !animator || !animator->model || animator->animation >= animator->model->animation_count)
         return;
+    const WPE_Model* model = animator->model;
+    const WPE_Animation* current = &model->animations[animator->animation];
+    float value[4];
     if (!wpe__fading(animator)) {
-        wpe__apply_animation(ecs, animator, animator->animation, animator->time, 1.0f);
+        for (uint32_t c = 0; c < current->channel_count; ++c) {
+            const WPE_AnimationChannel* channel = &model->channels[current->first_channel + c];
+            WPE_Transform* t = wpe__channel_transform(ecs, animator, channel);
+            if (!t) continue; /* Node entity was despawned or lost its transform. */
+            wpe_animation_sample_channel(channel, animator->time, value);
+            wpe__write(t, channel->path, value, 1.0f);
+        }
         return;
     }
-    /* The old animation in full, then the new one over it by its weight so far. */
-    const float weight = animator->fade / animator->fade_duration;
-    wpe__apply_animation(ecs, animator, animator->from_animation, animator->from_time, 1.0f);
-    wpe__apply_animation(ecs, animator, animator->animation, animator->time, weight < 1.0f ? weight : 1.0f);
+    /* The old animation in full, then the new one over it by its weight so far. A node only one of
+     * them keys is at rest in the other, so it blends between its rest pose and that animation. */
+    float weight = animator->fade / animator->fade_duration;
+    if (weight > 1.0f) weight = 1.0f;
+    const WPE_Animation* from = &model->animations[animator->from_animation];
+    for (uint32_t c = 0; c < from->channel_count; ++c) {
+        const WPE_AnimationChannel* channel = &model->channels[from->first_channel + c];
+        WPE_Transform* t = wpe__channel_transform(ecs, animator, channel);
+        if (!t) continue;
+        wpe_animation_sample_channel(channel, animator->from_time, value);
+        wpe__write(t, channel->path, value, 1.0f);
+        if (!wpe__keys(model, animator->animation, channel->node, channel->path)) {
+            wpe__rest_value(model, channel, value);
+            wpe__write(t, channel->path, value, weight);
+        }
+    }
+    for (uint32_t c = 0; c < current->channel_count; ++c) {
+        const WPE_AnimationChannel* channel = &model->channels[current->first_channel + c];
+        WPE_Transform* t = wpe__channel_transform(ecs, animator, channel);
+        if (!t) continue;
+        if (!wpe__keys(model, animator->from_animation, channel->node, channel->path)) {
+            wpe__rest_value(model, channel, value);
+            wpe__write(t, channel->path, value, 1.0f);
+        }
+        wpe_animation_sample_channel(channel, animator->time, value);
+        wpe__write(t, channel->path, value, weight);
+    }
 }
 
 /* Advances a playback time: looping wraps; otherwise it clamps at the end it runs toward, and
@@ -178,7 +250,14 @@ WPE_Result wpe_animation_update(WPE_Ecs* ecs, float dt) {
                 wpe__advance(animator->from_time, dt, animator->from_speed,
                              animations[animator->from_animation].duration, animator->from_loop, &from_ended);
             animator->fade += dt;
-            if (!(animator->fade < animator->fade_duration)) animator->fade_duration = 0.0f; /* Done. */
+            if (!(animator->fade < animator->fade_duration)) {
+                animator->fade_duration = 0.0f; /* Done: what only the old animation keyed goes to rest. */
+                animator->wpe__repose = true;
+            }
+        }
+        if (animator->wpe__repose) {
+            wpe__repose(ecs, animator);
+            animator->wpe__repose = false;
         }
         wpe_animation_apply(ecs, animator);
     }
@@ -205,6 +284,7 @@ WPE_Result wpe_animator_play(WPE_Animator* animator, uint32_t animation, float f
     animator->time = animator->speed < 0.0f ? animator->model->animations[animation].duration : 0.0f;
     animator->loop = loop;
     animator->playing = true;
+    animator->wpe__repose = true; /* Nodes neither animation keys (anything a dropped one moved) rest. */
     return WPE_RESULT_OK;
 }
 

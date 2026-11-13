@@ -18,6 +18,7 @@ target_compile_definitions(test_assets_manager PRIVATE WPE_TEST_ASSETS_DIR="${PR
 set_tests_properties(assets_manager PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 wpe_add_test(graphics_graphics SOURCES graphics/test_graphics.c LIBS wpe::graphics LABELS unit graphics)
 target_compile_definitions(test_graphics_graphics PRIVATE WPE_TEST_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
+set_tests_properties(graphics_graphics PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 wpe_add_test(graphics_lighting SOURCES graphics/test_lighting.c LIBS wpe::graphics LABELS unit graphics)
 target_compile_definitions(test_graphics_lighting PRIVATE WPE_TEST_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets")
 wpe_add_test(audio_audio SOURCES audio/test_audio.c LIBS wpe::audio LABELS unit audio)

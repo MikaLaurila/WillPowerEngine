@@ -109,6 +109,10 @@ typedef struct WPE_Animator {
     bool from_loop;
     float fade;          /* Seconds into the fade. */
     float fade_duration; /* 0: no crossfade. */
+
+    /* Private: set when the animations playing change (a play, a fade ending); the next update puts
+     * every node the model animates but neither of them keys back to its rest pose. */
+    bool wpe__repose;
 } WPE_Animator;
 
 /** How a billboard turns. */

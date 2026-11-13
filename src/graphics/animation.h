@@ -26,7 +26,9 @@ void wpe_animation_sample_channel(const WPE_AnimationChannel* channel, float tim
  * Advances every playing animator by `dt` seconds and writes the sampled poses into the local
  * transforms of the animated node entities. Call before wpe_scene_update_transforms().
  * Looping animators wrap; non-looping ones clamp at the end (or start, when playing backwards)
- * and stop playing.
+ * and stop playing. Nodes the playing animation doesn't key are at their rest pose (the model's
+ * node transform), as glTF clips key only what they move: after a play or a fade, the next update
+ * puts back whatever an earlier animation moved.
  *
  * @return WPE_RESULT_OK or WPE_RESULT_ERROR_NULL_ARG.
  *
@@ -45,7 +47,8 @@ void wpe_animation_apply(WPE_Ecs* ecs, const WPE_Animator* animator);
 /**
  * Starts an animation from its beginning. With `fade_seconds` > 0 it crossfades: the animation that
  * was playing carries on underneath (at its own time and speed) while the new one's weight rises
- * from 0 to 1 over that time. Nodes the new animation doesn't move keep the old one's pose. Starting
+ * from 0 to 1 over that time. A node only one of them keys blends between that animation and its rest
+ * pose. Starting
  * another fade during one fades from the newer animation (the older one is dropped).
  *
  * @param animation Index into the model's animations.
