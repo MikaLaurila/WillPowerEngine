@@ -84,7 +84,8 @@ typedef struct WPE_SceneRenderSettings {
     uint32_t subdivision_levels;   /* 0 disables adaptive subdivision. */
     float subdivision_edge_pixels; /* Split edges longer than this on screen. */
     float vertex_snap; /* PS1 vertex snapping of meshes and billboards (WPE_DrawDesc.vertex_snap; 0 = off). */
-    bool default_sun;  /* Use default_sun_* when the world has no lights at all. */
+    bool affine_textures; /* PS1 affine texture mapping of meshes (WPE_DrawDesc.affine_textures). */
+    bool default_sun;     /* Use default_sun_* when the world has no lights at all. */
     WPE_Vec3 default_sun_direction;
     WPE_Vec3 default_sun_color;
 } WPE_SceneRenderSettings;

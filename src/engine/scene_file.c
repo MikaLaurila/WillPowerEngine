@@ -252,6 +252,7 @@ static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment*
     wpe__write_number(w, "edge_pixels", r->subdivision_edge_pixels);
     wpe_json_write_object_end(w);
     if (all || r->vertex_snap > 0.0f) wpe__write_number(w, "vertex_snap", r->vertex_snap);
+    if (all || r->affine_textures) wpe__write_bool(w, "affine_textures", r->affine_textures);
     wpe_json_write_key(w, "default_sun");
     wpe_json_write_object_begin(w);
     wpe__write_bool(w, "enabled", r->default_sun);
@@ -960,7 +961,8 @@ static bool wpe__load_sky(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvir
 static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvironment* env) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "environment", "clear_color", "ambient", "fog", "sky", "shadows",
                                 "dither_transparency", "texture_filter", "frustum_culling", "subdivision",
-                                "vertex_snap", "default_sun", "gravity", "navigation", "music", "postfx"))
+                                "vertex_snap", "affine_textures", "default_sun", "gravity", "navigation",
+                                "music", "postfx"))
         return false;
     const WPE_JsonValue* nav = wpe_json_get(v, "navigation");
     if (nav) {
@@ -992,7 +994,8 @@ static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_Sc
         !wpe__json_read_vec3(&l->r, v, "gravity", &env->gravity) ||
         !wpe__json_read_bool(&l->r, v, "dither_transparency", &r->dither_transparency) ||
         !wpe__json_read_bool(&l->r, v, "frustum_culling", &r->frustum_culling) ||
-        !wpe__json_read_float(&l->r, v, "vertex_snap", 0, WPE_VERTEX_SNAP_MAX, &r->vertex_snap))
+        !wpe__json_read_float(&l->r, v, "vertex_snap", 0, WPE_VERTEX_SNAP_MAX, &r->vertex_snap) ||
+        !wpe__json_read_bool(&l->r, v, "affine_textures", &r->affine_textures))
         return false;
     const WPE_JsonValue* fog = wpe_json_get(v, "fog");
     if (fog) {

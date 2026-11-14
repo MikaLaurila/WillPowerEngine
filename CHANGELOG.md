@@ -10,6 +10,12 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   wobbles as it or the camera moves (1 is the PlayStation's whole pixels). Scripts switch it with
   `wpe.set_vertex_snap(pixels)`/`wpe.get_vertex_snap()`. Renderer: `WPE_DrawDesc.vertex_snap`;
   `WPE_SceneRenderSettings.vertex_snap`. Shadow maps, the sky, debug lines and 2D drawing are not snapped.
+- PS1-style affine texture mapping: the scene environment's `affine_textures` (default false, not written then)
+  interpolates mesh texture coordinates linearly in screen space, so textures bend and swim across large
+  triangles seen at an angle; lighting, fog and other varyings stay perspective-correct, and texture LOD uses
+  the affine UV's exact derivatives. Subdivision reduces the warping (levels 0 shows it fully). Scripts:
+  `wpe.set_affine_textures(on)`/`wpe.get_affine_textures()`. Renderer: `WPE_DrawDesc.affine_textures`
+  (the program's `uv_varying` pair, for programs with `uv_derivatives`).
 
 ### Changed
 - UI focus navigation compares the buttons' edges, not their centers: only buttons wholly past the focused one's

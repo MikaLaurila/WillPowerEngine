@@ -117,6 +117,8 @@ static void wpe__setup_triangle(WPE_Renderer* renderer, wpe__TriOutput* output, 
     const float height = (float)renderer->framebuffer.height;
     const uint32_t varying_count = desc->program->varying_count;
     const float snap = desc->vertex_snap;
+    const bool affine = desc->affine_textures && desc->program->uv_derivatives;
+    const uint32_t uv_k = desc->program->uv_varying;
 
     int32_t x[3], y[3];
     float z[3], inv_w[3];
@@ -207,6 +209,10 @@ static void wpe__setup_triangle(WPE_Renderer* renderer, wpe__TriOutput* output, 
         tri->inv_w[i] = inv_w[src];
         for (uint32_t k = 0; k < varying_count; ++k)
             tri->varyings[i][k] = varyings[src][k] * inv_w[src];
+        if (affine) { /* Kept as is: the rasterizer interpolates the UV linearly in screen space. */
+            tri->varyings[i][uv_k] = varyings[src][uv_k];
+            tri->varyings[i][uv_k + 1] = varyings[src][uv_k + 1];
+        }
     }
 }
 

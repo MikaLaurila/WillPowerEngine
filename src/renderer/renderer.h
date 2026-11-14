@@ -189,6 +189,13 @@ typedef struct WPE_DrawDesc {
      * PlayStation's whole pixels; more exaggerates it. Depth and varyings are not snapped.
      */
     float vertex_snap;
+    /*
+     * PS1-style affine texture mapping: the program's UV pair (WPE_ShaderProgram::uv_varying, used only when
+     * it sets uv_derivatives) is interpolated linearly in screen space instead of perspective-correct, so
+     * textures bend and swim across large triangles seen at an angle. Other varyings stay
+     * perspective-correct; uv_dx/uv_dy are exact for the affine UV.
+     */
+    bool affine_textures;
     /* Scissor test: when `scissor` is set, only pixels inside the rectangle (framebuffer pixels,
      * origin top-left, clamped to the framebuffer) are written. An empty rectangle draws nothing. */
     bool scissor;

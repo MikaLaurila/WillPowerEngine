@@ -135,13 +135,17 @@ static uint64_t wpe__raster_triangle(WPE_Renderer* renderer, const wpe__SetupTri
      */
     const bool derivatives = desc->program->uv_derivatives;
     const uint32_t uv_k = desc->program->uv_varying;
+    /* Affine textures: the UV pair was stored undivided, so uv = A directly and B's terms drop out. */
+    const bool affine = derivatives && desc->affine_textures;
     float dA_dx[2] = {0, 0}, dA_dy[2] = {0, 0}, dB_dx = 0.0f, dB_dy = 0.0f;
     if (derivatives) {
         for (int i = 0; i < 3; ++i) {
             const float dl_dx = (float)row_edges[i].step_x * inv_area;
             const float dl_dy = (float)row_edges[i].step_y * inv_area;
-            dB_dx += dl_dx * tri->inv_w[i];
-            dB_dy += dl_dy * tri->inv_w[i];
+            if (!affine) {
+                dB_dx += dl_dx * tri->inv_w[i];
+                dB_dy += dl_dy * tri->inv_w[i];
+            }
             for (int c = 0; c < 2; ++c) {
                 dA_dx[c] += dl_dx * tri->varyings[i][uv_k + (uint32_t)c];
                 dA_dy[c] += dl_dy * tri->varyings[i][uv_k + (uint32_t)c];
@@ -175,7 +179,15 @@ static uint64_t wpe__raster_triangle(WPE_Renderer* renderer, const wpe__SetupTri
                     (l0 * tri->varyings[0][k] + l1 * tri->varyings[1][k] + l2 * tri->varyings[2][k]) * w;
             }
 
-            if (derivatives) {
+            if (affine) {
+                for (uint32_t c = 0; c < 2; ++c) {
+                    const uint32_t k = uv_k + c;
+                    varyings[k] =
+                        l0 * tri->varyings[0][k] + l1 * tri->varyings[1][k] + l2 * tri->varyings[2][k];
+                }
+                input.uv_dx = (WPE_Vec2){.x = dA_dx[0], .y = dA_dx[1]};
+                input.uv_dy = (WPE_Vec2){.x = dA_dy[0], .y = dA_dy[1]};
+            } else if (derivatives) {
                 const float u = varyings[uv_k], v = varyings[uv_k + 1];
                 input.uv_dx = (WPE_Vec2){.x = (dA_dx[0] - u * dB_dx) * w, .y = (dA_dx[1] - v * dB_dx) * w};
                 input.uv_dy = (WPE_Vec2){.x = (dA_dy[0] - u * dB_dy) * w, .y = (dA_dy[1] - v * dB_dy) * w};

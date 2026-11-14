@@ -2533,6 +2533,18 @@ static int wpe__api_get_vertex_snap(lua_State* L) {
     return 1;
 }
 
+static int wpe__api_set_affine_textures(lua_State* L) {
+    WPE_SceneRenderSettings* settings = wpe__render_settings(L, "set_affine_textures");
+    luaL_checktype(L, 1, LUA_TBOOLEAN);
+    settings->affine_textures = lua_toboolean(L, 1);
+    return 0;
+}
+
+static int wpe__api_get_affine_textures(lua_State* L) {
+    lua_pushboolean(L, wpe__render_settings(L, "get_affine_textures")->affine_textures);
+    return 1;
+}
+
 /* ---- Game feel: time scale, slow motion, hit-stop, shakes ---------------------------------------------- */
 
 static WPE_GameFeel* wpe__game_feel(lua_State* L, const char* function) {
@@ -4259,6 +4271,8 @@ static const luaL_Reg wpe__api[] = {
     {"get_texture_filter", wpe__api_get_texture_filter},
     {"set_vertex_snap", wpe__api_set_vertex_snap},
     {"get_vertex_snap", wpe__api_get_vertex_snap},
+    {"set_affine_textures", wpe__api_set_affine_textures},
+    {"get_affine_textures", wpe__api_get_affine_textures},
     {"color", wpe__api_color},
     {"draw_text", wpe__api_draw_text},
     {"draw_rect", wpe__api_draw_rect},

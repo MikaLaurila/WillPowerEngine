@@ -290,6 +290,12 @@ function Tour:on_start()
 	assert(wpe.get_vertex_snap() == 1)
 	assert(not pcall(wpe.set_vertex_snap, -1) and not pcall(wpe.set_vertex_snap, 65) and not pcall(wpe.set_vertex_snap))
 	wpe.set_vertex_snap(snap)
+	-- PS1 texture swim: the scene has affine textures on; off and back.
+	assert(wpe.get_affine_textures() == true)
+	wpe.set_affine_textures(false)
+	assert(wpe.get_affine_textures() == false)
+	assert(not pcall(wpe.set_affine_textures, 1) and not pcall(wpe.set_affine_textures))
+	wpe.set_affine_textures(true)
 	-- Animated textures and retro water. An instantiated model is a tree: the UV functions reach its meshes.
 	local pool = wpe.instantiate("box")
 	assert(wpe.get_uv_scroll(pool) == 0 and wpe.get_uv_offset(pool) == 0)

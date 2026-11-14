@@ -446,6 +446,62 @@ static void test_renderer_vertex_snap_rounds_to_the_grid(void) {
     WPE_TEST_ASSERT_EQ_UINT(40, max[1]);
 }
 
+/* Captures the UV (varying 0) and its derivative along x per pixel. */
+typedef struct UvCapture {
+    float* u;
+    float* du_dx;
+    uint32_t width;
+} UvCapture;
+
+static bool capture_uv_fs(const void* uniforms, const WPE_FragmentInput* in, WPE_Vec4* out_color) {
+    const UvCapture* c = uniforms;
+    c->u[(size_t)in->y * c->width + (size_t)in->x] = in->varyings[0];
+    c->du_dx[(size_t)in->y * c->width + (size_t)in->x] = in->uv_dx.x;
+    *out_color = wpe_vec4(1, 1, 1, 1);
+    return true;
+}
+
+/* Renders a full-screen quad whose right edge is four times farther away (w = 4) than its left (w = 1), with
+ * u running 0..1 left to right, and checks u and du/dx along the middle row. */
+static void check_receding_quad(bool affine) {
+    enum { S = 64 };
+    static float u[S * S], du_dx[S * S];
+    const UvCapture c = {.u = u, .du_dx = du_dx, .width = S};
+    const WPE_ShaderProgram program = {.vertex = clip_vs,
+                                       .fragment = capture_uv_fs,
+                                       .varying_count = 4,
+                                       .uv_derivatives = true,
+                                       .uv_varying = 0};
+    ClipVertex lb = cv(-1, -1, 0, 1), rb = cv(4, -4, 0, 4), rt = cv(4, 4, 0, 4), lt = cv(-1, 1, 0, 1);
+    rb.attr[0] = rt.attr[0] = 1.0f; /* u; v (attr[1]) stays 0. */
+    const ClipVertex quad[6] = {lb, rb, rt, lb, rt, lt};
+    WPE_DrawDesc d = {.program = &program,
+                      .uniforms = &c,
+                      .uniforms_size = sizeof c,
+                      .vertices = quad,
+                      .vertex_stride = sizeof(ClipVertex),
+                      .vertex_count = 6,
+                      .state = state_no_cull(),
+                      .affine_textures = affine};
+    WPE_Renderer* renderer = make_renderer(S, S, NULL);
+    render(renderer, &d, 1);
+    wpe_renderer_destroy(renderer);
+    for (uint32_t x = 0; x < S; ++x) {
+        const float s = ((float)x + 0.5f) / S; /* Screen position across the quad. */
+        /* Affine: u follows the screen. Perspective: u = (s / 4) / ((1 - s) + s / 4). */
+        const float expected = affine ? s : (s / 4.0f) / ((1.0f - s) + s / 4.0f);
+        const float slope =
+            affine ? 1.0f / S : (1.0f / 4.0f) / (((1.0f - s) + s / 4.0f) * ((1.0f - s) + s / 4.0f)) / S;
+        WPE_TEST_ASSERT_NEAR(expected, u[(S / 2) * S + x], 1e-3);
+        WPE_TEST_ASSERT_NEAR(slope, du_dx[(S / 2) * S + x], 1e-4);
+    }
+}
+
+static void test_renderer_affine_textures_interpolate_in_screen_space(void) {
+    check_receding_quad(false);
+    check_receding_quad(true);
+}
+
 static void test_renderer_subdivision_is_watertight(void) {
     run_jittered_mesh_coverage(WPE_MAX_SUBDIVISION_LEVELS);
     run_pixel_center_edge_coverage(WPE_MAX_SUBDIVISION_LEVELS);
@@ -974,6 +1030,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_renderer_jittered_mesh_is_watertight),
     WPE_TEST_CASE(test_renderer_fill_rule_on_pixel_center_edges),
     WPE_TEST_CASE(test_renderer_vertex_snap_rounds_to_the_grid),
+    WPE_TEST_CASE(test_renderer_affine_textures_interpolate_in_screen_space),
     WPE_TEST_CASE(test_renderer_subdivision_is_watertight),
     WPE_TEST_CASE(test_renderer_subdivision_densifies_per_vertex_evaluation),
     WPE_TEST_CASE(test_renderer_subdivision_validation_and_determinism),

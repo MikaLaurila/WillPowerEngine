@@ -1011,6 +1011,7 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
                                              .subdivision_levels = settings->subdivision_levels,
                                              .subdivision_edge_pixels = settings->subdivision_edge_pixels,
                                              .vertex_snap = settings->vertex_snap,
+                                             .affine_textures = settings->affine_textures,
                                          });
             if (result == WPE_RESULT_OK) ++stats.primitives_submitted;
         }
