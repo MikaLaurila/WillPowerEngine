@@ -876,6 +876,10 @@ static void test_graphics_mesh_shadow_unlit_and_sides(void) {
     fb = render_scene(renderer, sr, ecs, camera, &stats);
     WPE_TEST_ASSERT_EQ_UINT(lit, pixel_at(fb, ecs, camera, shadowed));
     mesh_of(ecs, box)->cast_shadows = true;
+    mesh_of(ecs, box)->transparency = 0.5f; /* A faded box (an afterimage) casts none either. */
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+    WPE_TEST_ASSERT_EQ_UINT(lit, pixel_at(fb, ecs, camera, shadowed));
+    mesh_of(ecs, box)->transparency = 0.0f;
     mesh_of(ecs, ground)->receive_shadows = false;
     fb = render_scene(renderer, sr, ecs, camera, &stats);
     WPE_TEST_ASSERT_EQ_UINT(lit, pixel_at(fb, ecs, camera, shadowed));
@@ -1132,6 +1136,61 @@ static void test_graphics_sky_gradient_sun_and_occlusion(void) {
     settings.sky.mode = WPE_SKY_COLOR;
     fb = render_sky(renderer, sr, ecs, camera, &settings);
     WPE_TEST_ASSERT_EQ_UINT(0xFF000000u, fb->color[(fb->height / 2) * fb->width + 1]);
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
+static void test_graphics_mesh_overlay_and_transparency(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_SceneRenderSettings settings = wpe_scene_render_settings_default();
+    settings.sky.mode = WPE_SKY_COLOR; /* Black behind (the clear color). */
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 0, 0), wpe_quat_identity());
+    const WPE_Material white = wpe_material_solid(wpe_vec4(1, 1, 1, 1), 0.0f, 1.0f);
+    WPE_Model* cube = NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_create_box(wpe_vec3(1, 1, 1), &white, &cube));
+    const WPE_Entity box =
+        spawn_mesh(ecs, wpe_test_add_model(t.assets, "test/cube", cube), wpe_vec3(0, 0, -4));
+    WPE_MeshRenderer* mesh = mesh_of(ecs, box);
+    mesh->unlit = true;
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFFFFFFu, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+
+    /* An overlay replaces the color by its amount: all of it, then half. */
+    mesh->overlay = wpe_vec4(1, 0, 0, 1);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFF0000u, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+    mesh->overlay = wpe_vec4(1, 0, 0, 0.5f);
+    WPE_TEST_ASSERT(
+        near_color(center_pixel(render_sky(renderer, sr, ecs, camera, &settings)), wpe_vec3(1, 0.5f, 0.5f)));
+    mesh->overlay = wpe_vec4(0, 0, 0, 0);
+
+    /* Transparency blends with what is behind (black): half gray at 0.5, nothing at 1. */
+    mesh->transparency = 0.5f;
+    WPE_TEST_ASSERT(near_color(center_pixel(render_sky(renderer, sr, ecs, camera, &settings)),
+                               wpe_vec3(0.5f, 0.5f, 0.5f)));
+    mesh->transparency = 1.0f;
+    WPE_TEST_ASSERT_EQ_UINT(0xFF000000u, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+
+    /* Dithered: each pixel is the box or the background, about half each over a patch. */
+    settings.dither_transparency = true;
+    mesh->transparency = 0.5f;
+    const WPE_Framebuffer* fb = render_sky(renderer, sr, ecs, camera, &settings);
+    uint32_t solid = 0, empty = 0;
+    for (uint32_t y = fb->height / 2 - 4; y < fb->height / 2 + 4; ++y) {
+        for (uint32_t x = fb->width / 2 - 4; x < fb->width / 2 + 4; ++x) {
+            const WPE_Color c = fb->color[y * fb->width + x];
+            solid += c == 0xFFFFFFFFu;
+            empty += c == 0xFF000000u;
+        }
+    }
+    WPE_TEST_ASSERT_EQ_UINT(64, solid + empty);
+    WPE_TEST_ASSERT(solid >= 24 && solid <= 40);
 
     wpe_scene_renderer_destroy(sr);
     wpe_renderer_destroy(renderer);
@@ -2021,6 +2080,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_billboard_corners), WPE_TEST_CASE(test_graphics_billboard_animation),
     WPE_TEST_CASE(test_graphics_billboard_draws_frames_and_blends),
     WPE_TEST_CASE(test_graphics_mesh_shadow_unlit_and_sides),
+    WPE_TEST_CASE(test_graphics_mesh_overlay_and_transparency),
     WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
     WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),
     WPE_TEST_CASE(test_graphics_trail_records_and_draws), WPE_TEST_CASE(test_graphics_slash_sweeps),

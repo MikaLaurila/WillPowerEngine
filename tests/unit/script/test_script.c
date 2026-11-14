@@ -438,6 +438,28 @@ static void test_script_api_transforms_lights_prefabs(void) {
     WPE_TEST_ASSERT_EQ_UINT(0, count_meshes(f.ecs, e, false));
     WPE_TEST_ASSERT_OK(wpe_script_host_run(f.host, "lit", "wpe.set_unlit(wpe.find('ok'), false)"));
     WPE_TEST_ASSERT_EQ_UINT(before + 2, count_meshes(f.ecs, e, false));
+
+    /* wpe.set_overlay and set_transparency reach the same meshes; nil clears the overlay. */
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(f.host, "ghost",
+                                           "local root = wpe.find('ok')\n"
+                                           "wpe.set_overlay(root, wpe.color(0, 1, 1, 0.5))\n"
+                                           "wpe.set_transparency(root, 0.25)\n"
+                                           "assert(not pcall(wpe.set_transparency, root, 2))\n"));
+    uint32_t ghosts = 0;
+    WPE_EcsIter it = wpe_ecs_query(f.ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_MeshRenderer* mesh = wpe_ecs_iter_get(&it, WPE_COMP_MESH);
+        if (mesh->transparency == 0.25f && mesh->overlay.y == 1.0f && mesh->overlay.x == 0.0f &&
+            mesh->overlay.w > 0.49f && mesh->overlay.w < 0.51f)
+            ++ghosts;
+    }
+    WPE_TEST_ASSERT_EQ_UINT(before + 2, ghosts);
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(f.host, "clear", "wpe.set_overlay(wpe.find('ok'))"));
+    it = wpe_ecs_query(f.ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_MeshRenderer* mesh = wpe_ecs_iter_get(&it, WPE_COMP_MESH);
+        WPE_TEST_ASSERT(mesh->overlay.w == 0.0f);
+    }
     free_fixture(&f);
 }
 

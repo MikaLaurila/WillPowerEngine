@@ -434,8 +434,13 @@ static bool wpe__material_fs(const void* uniforms, const WPE_FragmentInput* in, 
 
     const float fog = wpe_fog_factor(&u->fog, v[WPE__V_DISTANCE]);
     if (fog > 0.0f) color = wpe_vec3_lerp(color, u->fog.color, fog);
+    if (u->overlay.w > 0.0f)
+        color = wpe_vec3_lerp(color, wpe_vec3(u->overlay.x, u->overlay.y, u->overlay.z),
+                              fminf(u->overlay.w, 1.0f));
+    float alpha = base.w;
+    if (u->transparency > 0.0f) alpha *= 1.0f - fminf(u->transparency, 1.0f);
 
-    *out_color = wpe_vec4(color.x, color.y, color.z, base.w);
+    *out_color = wpe_vec4(color.x, color.y, color.z, alpha);
     return true;
 }
 

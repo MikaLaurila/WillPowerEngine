@@ -492,6 +492,33 @@ static int wpe__api_set_unlit(lua_State* L) {
     return 0;
 }
 
+static WPE_Color wpe__opt_color(lua_State* L, int index); /* With the 2D drawing, below. */
+
+/* wpe.set_overlay(entity, [color]): every mesh in the subtree; the color's alpha is the amount, nil clears.
+ */
+static int wpe__api_set_overlay(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_Vec4 overlay =
+        lua_isnoneornil(L, 2) ? wpe_vec4(0, 0, 0, 0) : wpe_color_to_vec4(wpe__opt_color(L, 2));
+    WPE_MeshRenderer* meshes[WPE__TREE_MESHES];
+    const uint32_t count = wpe__tree_meshes(wpe__script_host_from(L)->ecs, entity, meshes);
+    for (uint32_t i = 0; i < count; ++i)
+        meshes[i]->overlay = overlay;
+    return 0;
+}
+
+/* wpe.set_transparency(entity, amount): 0 opaque .. 1 invisible, for every mesh in the subtree. */
+static int wpe__api_set_transparency(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const double amount = luaL_checknumber(L, 2);
+    if (!(amount >= 0.0 && amount <= 1.0)) luaL_errorL(L, "wpe.set_transparency: the amount must be in 0..1");
+    WPE_MeshRenderer* meshes[WPE__TREE_MESHES];
+    const uint32_t count = wpe__tree_meshes(wpe__script_host_from(L)->ecs, entity, meshes);
+    for (uint32_t i = 0; i < count; ++i)
+        meshes[i]->transparency = (float)amount;
+    return 0;
+}
+
 /* wpe.set_uv_scroll / set_uv_offset: the entity's meshes and those below it; raises when there are none. */
 static int wpe__set_uv(lua_State* L, bool scroll) {
     const WPE_Entity entity = wpe__check_entity(L, 1);
@@ -2324,8 +2351,6 @@ static const WPE_ScriptApp* wpe__app(lua_State* L, bool available, const char* f
     if (!available) luaL_errorL(L, "wpe.%s is not available in this application", function);
     return &wpe__script_host_from(L)->app;
 }
-
-static WPE_Color wpe__opt_color(lua_State* L, int index); /* With the 2D drawing, below. */
 
 static int wpe__api_load_scene(lua_State* L) {
     WPE_ScriptHost* host = wpe__script_host_from(L);
@@ -4210,6 +4235,8 @@ static const luaL_Reg wpe__api[] = {
     {"remove_light", wpe__api_remove_light},
     {"set_visible", wpe__api_set_visible},
     {"set_unlit", wpe__api_set_unlit},
+    {"set_overlay", wpe__api_set_overlay},
+    {"set_transparency", wpe__api_set_transparency},
     {"set_uv_scroll", wpe__api_set_uv_scroll},
     {"get_uv_scroll", wpe__api_get_uv_scroll},
     {"set_uv_offset", wpe__api_set_uv_offset},

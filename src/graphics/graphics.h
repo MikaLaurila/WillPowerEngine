@@ -64,6 +64,13 @@ typedef struct WPE_MeshRenderer {
     /* Added to the texture coordinates of every texture (after the material's texture transform). Moved by
      * uv_scroll and kept in [0, 2) so it never loses precision; set it to step through frames yourself. */
     WPE_Vec2 uv_offset;
+    /* Set by game code (scripts: wpe.set_overlay / set_transparency), not saved in scene files; zero is off.
+     * overlay: a color (rgb, 0..1) laid over the shaded result by its `w` (0 none, 1 the color alone): hit
+     * flashes, afterimages. transparency: 0 opaque .. 1 invisible; above 0 the mesh blends like a blended
+     * material (dithered with the scene's dither_transparency, else alpha-blended but still writing depth,
+     * so a see-through character hides its own far side) and casts no shadow. */
+    WPE_Vec4 overlay;
+    float transparency;
 } WPE_MeshRenderer;
 
 typedef struct WPE_Camera {

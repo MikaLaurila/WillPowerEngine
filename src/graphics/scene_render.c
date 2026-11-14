@@ -426,7 +426,7 @@ static WPE_Result wpe__render_shadow_map(WPE_SceneRenderer* sr, WPE_JobSystem* j
         wpe_renderer_begin_frame(sr->shadow_pass, &(WPE_ClearDesc){.clear_depth = true, .depth = 1.0f});
     for (uint32_t i = 0; i < instance_count && result == WPE_RESULT_OK; ++i) {
         const wpe__MeshInstance* inst = &instances[i];
-        if (!inst->mesh->cast_shadows) continue;
+        if (!inst->mesh->cast_shadows || inst->mesh->transparency > 0.0f) continue;
         const WPE_Model* model = inst->mesh->model;
         const WPE_Mesh* mesh = &model->meshes[inst->mesh->mesh];
         const WPE_Mat4 mvp = wpe_mat4_mul(light_view_projection, &inst->world);
@@ -956,6 +956,8 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             .model = model,
             .unlit = inst->mesh->unlit,
             .double_sided = inst->mesh->double_sided,
+            .overlay = inst->mesh->overlay,
+            .transparency = inst->mesh->transparency,
             .texture_filtering = settings->texture_filtering,
             .joint_palette = inst->palette,
             .joint_count = inst->palette ? inst->mesh->joint_count : 0,
@@ -978,12 +980,14 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
                          : mirrored                                         ? WPE_CULL_FRONT
                                                                             : WPE_CULL_BACK;
             bool transparent = false;
-            if (material->alpha_mode == WPE_ALPHA_BLEND) {
+            const bool faded = inst->mesh->transparency > 0.0f; /* Made see-through by game code. */
+            if (material->alpha_mode == WPE_ALPHA_BLEND || faded) {
                 if (settings->dither_transparency) {
                     state.blend = WPE_BLEND_ALPHA_DITHER;
                 } else {
                     state.blend = WPE_BLEND_ALPHA;
-                    state.depth_write = false;
+                    /* A faded solid keeps writing depth, so its own far side stays hidden behind it. */
+                    state.depth_write = material->alpha_mode != WPE_ALPHA_BLEND;
                     transparent = true;
                 }
             }

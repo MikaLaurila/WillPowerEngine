@@ -23,6 +23,10 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   animation; a non-looping layer holds its last pose until stopped; while a layer is on, the base pose is
   written every update even when the base animation is paused. C: `wpe_animator_play_layer`,
   `wpe_animator_stop_layer`, the `WPE_Animator.layer_*` fields and `wpe_model_find_node`.
+- Mesh overlay and transparency for game code: `wpe.set_overlay(entity, color)` lays a color over every mesh
+  in a subtree by the color's alpha (hit flashes, afterimage tints), `wpe.set_transparency(entity, amount)`
+  fades them (dithered with the scene's `dither_transparency`, else alpha-blended while still writing depth;
+  faded meshes cast no shadow). `WPE_MeshRenderer.overlay`/`transparency`, runtime only (not in scene files).
 
 ### Changed
 - `wpe.instantiate` gives a prefab root written without a `"transform"` one (at the origin, or at the position

@@ -103,6 +103,8 @@ typedef struct WPE_MaterialUniforms {
      * for a double-sided material. */
     bool unlit;
     bool double_sided;
+    WPE_Vec4 overlay;   /* rgb laid over the final color by w (0: none). */
+    float transparency; /* The output alpha is scaled by 1 - transparency (0: as the material has it). */
     /* Replaces the magnification and minification filters of every material texture (mip filtering is
      * kept). */
     WPE_TextureFiltering texture_filtering;
