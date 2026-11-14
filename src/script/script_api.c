@@ -226,6 +226,14 @@ static int wpe__api_instantiate(lua_State* L) {
         if (result != WPE_RESULT_ERROR_NOT_FOUND) {
             wpe__raise_result(L, "instantiate", result);
             WPE_Transform* t = wpe_ecs_get_component(host->ecs, root, WPE_COMP_TRANSFORM);
+            if (!t) {
+                /* A prefab root written without "transform" still gets placed (and moved by scripts). */
+                const WPE_Transform identity = wpe_transform_identity();
+                wpe__raise_result(
+                    L, "instantiate",
+                    wpe_ecs_add_component(host->ecs, root, WPE_COMP_TRANSFORM, &identity, NULL));
+                t = wpe_ecs_get_component(host->ecs, root, WPE_COMP_TRANSFORM);
+            }
             if (has_position && t) t->position = position;
             lua_pushnumber(L, (double)root);
             return 1;

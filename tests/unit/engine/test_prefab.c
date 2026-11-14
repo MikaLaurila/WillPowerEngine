@@ -263,6 +263,17 @@ static void test_prefab_save_apply_revert_unpack(void) {
                                            "assert(wpe.get_position(a).y == 5)\n"
                                            "wpe.instantiate('prefabs/crate.prefab')\n"));
     WPE_TEST_ASSERT_EQ_UINT(before + 3 + 1, wpe_ecs_entity_count(ecs));
+
+    /* A root written without "transform" (a shot, a script-only helper) gets one, so it can be placed. */
+    write_text(
+        PROJECT "/prefabs/bare.prefab",
+        "{\"format\": \"wpe.prefab\", \"version\": 1, \"entities\": [{\"id\": 1, \"name\": \"bare\"}]}");
+    WPE_TEST_ASSERT_OK(
+        wpe_script_host_run(wpe_engine_scripts(engine), "test",
+                            "local b = wpe.instantiate('prefabs/bare.prefab', vector.create(1, 2, 3))\n"
+                            "assert(wpe.get_position(b) == vector.create(1, 2, 3))\n"
+                            "wpe.set_position(b, vector.create(4, 0, 0))\n"
+                            "assert(wpe.get_position(wpe.instantiate('prefabs/bare.prefab')).x == 0)\n"));
     wpe_engine_destroy(engine);
 }
 

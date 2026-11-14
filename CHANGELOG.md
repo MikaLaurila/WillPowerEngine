@@ -25,6 +25,8 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   `wpe_animator_stop_layer`, the `WPE_Animator.layer_*` fields and `wpe_model_find_node`.
 
 ### Changed
+- `wpe.instantiate` gives a prefab root written without a `"transform"` one (at the origin, or at the position
+  given), instead of leaving an entity that `position` and `wpe.set_position` couldn't place.
 - UI focus navigation compares the buttons' edges, not their centers: only buttons wholly past the focused one's
   edge in the pressed direction count, and those in line with it come first. In a list whose rows put their
   buttons in different places (sliders in the middle, toggles at the end), up and down now go row by row,
