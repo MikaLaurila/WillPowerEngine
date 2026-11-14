@@ -28,7 +28,8 @@ void wpe_animation_sample_channel(const WPE_AnimationChannel* channel, float tim
  * Looping animators wrap; non-looping ones clamp at the end (or start, when playing backwards)
  * and stop playing. Nodes the playing animation doesn't key are at their rest pose (the model's
  * node transform), as glTF clips key only what they move: after a play or a fade, the next update
- * puts back whatever an earlier animation moved.
+ * puts back whatever an earlier animation moved. An animator with a layer on (wpe_animator_play_layer)
+ * is updated even while its base animation is paused.
  *
  * @return WPE_RESULT_OK or WPE_RESULT_ERROR_NULL_ARG.
  *
@@ -59,7 +60,40 @@ void wpe_animation_apply(WPE_Ecs* ecs, const WPE_Animator* animator);
  */
 WPE_Result wpe_animator_play(WPE_Animator* animator, uint32_t animation, float fade_seconds, bool loop);
 
+/**
+ * Plays a layer: a second animation over the nodes from `node` down its subtree (an upper body firing
+ * while the legs run the base animation), from its start. Its weight over the base pose rises from 0 to 1
+ * over `fade_seconds` (at once with 0); playing another layer clip while one is on keeps the weight it
+ * has (a re-fire restarts the clip without fading again). A node in the subtree the layer has no keys for
+ * keeps the base pose. A non-looping layer holds its last pose until wpe_animator_stop_layer(). While a
+ * layer is on, the base pose is written every update even when the base animation is paused.
+ *
+ * @param animation Index into the model's animations.
+ * @param node Index into the model's nodes: where the layer starts (an upper body's chest bone).
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_INVALID_ARG (no such animation or
+ *         node, or a negative or non-finite fade).
+ *
+ * @thread_safety Thread owning the world
+ */
+WPE_Result wpe_animator_play_layer(WPE_Animator* animator, uint32_t animation, uint32_t node,
+                                   float fade_seconds, bool loop);
+
+/**
+ * Fades the layer out over `fade_seconds` (at once with 0), after which it is off and the nodes it moved
+ * follow the base animation again. Does nothing without a layer.
+ *
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG or WPE_RESULT_ERROR_INVALID_ARG (a negative or
+ *         non-finite fade).
+ *
+ * @thread_safety Thread owning the world
+ */
+WPE_Result wpe_animator_stop_layer(WPE_Animator* animator, float fade_seconds);
+
 /** @return The index of the model's animation called `name`, or WPE_MODEL_NONE. @thread_safety Any thread */
 uint32_t wpe_model_find_animation(const WPE_Model* model, const char* name);
+
+/** @return The index of the model's node (bone) called `name`, or WPE_MODEL_NONE. @thread_safety Any thread
+ */
+uint32_t wpe_model_find_node(const WPE_Model* model, const char* name);
 
 #endif /* WPE_GRAPHICS_ANIMATION_H */

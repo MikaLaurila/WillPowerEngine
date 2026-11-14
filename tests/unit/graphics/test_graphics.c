@@ -261,6 +261,115 @@ static void test_graphics_animation_crossfade_between_clips(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* `node`'s rotation in clip `animation` at `time`, as a quaternion. */
+static WPE_Quat clip_rotation(const WPE_Model* model, uint32_t animation, uint32_t node, float time) {
+    const WPE_AnimationChannel* channel = find_channel(model, animation, node, WPE_ANIM_ROTATION);
+    if (!channel) return wpe_quat_identity(); /* The checks comparing clips then fail. */
+    float v[4];
+    wpe_animation_sample_channel(channel, time, v);
+    return (WPE_Quat){.x = v[0], .y = v[1], .z = v[2], .w = v[3]};
+}
+
+static void test_graphics_animation_layer(void) {
+    /* Beowulf running, with the held IdleFire pose layered over the chest and everything below it. */
+    WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 0);
+    const WPE_AssetHandle handle = wpe_test_load_model(t.assets, "meshes/Beowulf.glb");
+    const WPE_Model* model = wpe_asset_model(t.assets, handle);
+    const uint32_t run = wpe_model_find_animation(model, "Run");
+    const uint32_t fire = wpe_model_find_animation(model, "IdleFire");
+    const uint32_t chest = wpe_model_find_node(model, "chest");
+    const uint32_t arm = wpe_model_find_node(model, "right_arm"); /* Below the chest. */
+    const uint32_t leg = wpe_model_find_node(model, "left_leg");  /* Beside it, under the waist. */
+    WPE_TEST_ASSERT(run != WPE_MODEL_NONE && fire != WPE_MODEL_NONE);
+    WPE_TEST_ASSERT(chest != WPE_MODEL_NONE && arm != WPE_MODEL_NONE && leg != WPE_MODEL_NONE);
+    WPE_TEST_ASSERT_EQ_UINT(WPE_MODEL_NONE, wpe_model_find_node(model, "no such bone"));
+
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_Entity root = WPE_ENTITY_NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(
+        ecs, t.assets, handle, &(WPE_InstantiateOptions){.animation = run, .play = true}, &root));
+    WPE_Animator* animator = wpe_ecs_get_component(ecs, root, WPE_COMP_ANIMATOR);
+    const WPE_Transform* arm_t = wpe_ecs_get_component(ecs, animator->node_entities[arm], WPE_COMP_TRANSFORM);
+    const WPE_Transform* leg_t = wpe_ecs_get_component(ecs, animator->node_entities[leg], WPE_COMP_TRANSFORM);
+    const WPE_Quat aim = clip_rotation(model, fire, arm, 0.0f);
+    /* Both nodes are posed differently by the two clips, so the checks below can tell them apart. */
+    WPE_TEST_ASSERT(quat_alignment(clip_rotation(model, run, arm, 0.3f), aim.v) < 0.999f);
+    WPE_TEST_ASSERT(
+        quat_alignment(clip_rotation(model, run, leg, 0.3f), clip_rotation(model, fire, leg, 0).v) < 0.999f);
+
+    /* Fading in over 0.4 s: 0.2 s in, the arm is halfway between the run and the aim; the leg runs. */
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.1f));
+    WPE_TEST_ASSERT_OK(wpe_animator_play_layer(animator, fire, chest, 0.4f, false));
+    WPE_TEST_ASSERT(animator->layer_active && animator->layer_weight == 0.0f);
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.2f));
+    /* (Run is 0.67 s long and loops: the run's poses are sampled at the animator's time.) */
+    const WPE_Quat half = wpe_quat_slerp(clip_rotation(model, run, arm, animator->time), aim, 0.5f);
+    WPE_TEST_ASSERT_NEAR(1.0, quat_alignment(arm_t->rotation, half.v), 1e-4);
+    WPE_TEST_ASSERT_NEAR(
+        1.0, quat_alignment(leg_t->rotation, clip_rotation(model, run, leg, animator->time).v), 1e-5);
+
+    /* Faded in: the aim alone above the waist (a held pose lasts 0 s and, like a base one, keeps playing). */
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.3f));
+    WPE_TEST_ASSERT_NEAR(1.0, animator->layer_weight, 0);
+    WPE_TEST_ASSERT(animator->layer_playing && animator->layer_active);
+    WPE_TEST_ASSERT_NEAR(1.0, quat_alignment(arm_t->rotation, aim.v), 1e-5);
+    WPE_TEST_ASSERT_NEAR(
+        1.0, quat_alignment(leg_t->rotation, clip_rotation(model, run, leg, animator->time).v), 1e-5);
+
+    /* The base paused (a held landing pose): the layer is still applied over it. */
+    animator->playing = false;
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.1f));
+    WPE_TEST_ASSERT_NEAR(1.0, quat_alignment(arm_t->rotation, aim.v), 1e-5);
+    animator->playing = true;
+
+    /* Fading out over 0.2 s: halfway after 0.1 s, then off and the arm runs again. */
+    WPE_TEST_ASSERT_OK(wpe_animator_stop_layer(animator, 0.2f));
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.1f));
+    WPE_TEST_ASSERT(animator->layer_stopping);
+    WPE_TEST_ASSERT_NEAR(0.5, animator->layer_weight, 1e-5);
+    const WPE_Quat out = wpe_quat_slerp(clip_rotation(model, run, arm, animator->time), aim, 0.5f);
+    WPE_TEST_ASSERT_NEAR(1.0, quat_alignment(arm_t->rotation, out.v), 1e-4);
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, 0.15f));
+    WPE_TEST_ASSERT(!animator->layer_active);
+    WPE_TEST_ASSERT_NEAR(
+        1.0, quat_alignment(arm_t->rotation, clip_rotation(model, run, arm, animator->time).v), 1e-5);
+
+    /* No fade: on at once; a re-fire while on keeps the weight; stopping without a fade is immediate. */
+    WPE_TEST_ASSERT_OK(wpe_animator_play_layer(animator, fire, chest, 0.0f, true));
+    WPE_TEST_ASSERT_NEAR(1.0, animator->layer_weight, 0);
+    WPE_TEST_ASSERT_OK(wpe_animator_play_layer(animator, fire, chest, 0.5f, true));
+    WPE_TEST_ASSERT_NEAR(1.0, animator->layer_weight, 0);
+    WPE_TEST_ASSERT_OK(wpe_animator_stop_layer(animator, 0.0f));
+    WPE_TEST_ASSERT(!animator->layer_active);
+    WPE_TEST_ASSERT_OK(wpe_animator_stop_layer(animator, 0.3f)); /* Without a layer: nothing. */
+    WPE_TEST_ASSERT(!animator->layer_active && !animator->layer_stopping);
+
+    /* A one-shot layer stops playing at its end and holds its last pose until stopped. */
+    const uint32_t slash = wpe_model_find_animation(model, "Slash0");
+    const float length = model->animations[slash].duration;
+    WPE_TEST_ASSERT(length > 0.0f);
+    WPE_TEST_ASSERT_OK(wpe_animator_play_layer(animator, slash, chest, 0.0f, false));
+    WPE_TEST_ASSERT_OK(wpe_animation_update(ecs, length + 0.1f));
+    WPE_TEST_ASSERT(animator->layer_active && !animator->layer_playing);
+    WPE_TEST_ASSERT_NEAR(length, animator->layer_time, 0);
+    WPE_TEST_ASSERT_OK(wpe_animator_stop_layer(animator, 0.0f));
+    WPE_TEST_ASSERT(!animator->layer_active && !animator->layer_stopping);
+
+    /* Arguments. */
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_animator_play_layer(animator, 99, chest, 0, true));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_animator_play_layer(animator, fire, 999, 0, true));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_animator_play_layer(animator, fire, chest, -1, true));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG, wpe_animator_stop_layer(animator, -1.0f));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_animator_stop_layer(NULL, 0.0f));
+
+    wpe_ecs_destroy(ecs);
+    wpe_asset_release(t.assets, handle);
+    wpe_test_assets_destroy(&t);
+}
+
 /* Two empty nodes, "a" at the origin and "b" at (0, 1, 0), and two clips: "move" holds b at x = 5, "still"
  * keys only a (as exporters write clips: only the nodes they move). Written beside the test as a .gltf. */
 static WPE_Model* load_partial_clips_model(void) {
@@ -1904,7 +2013,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_sample_cubic_spline), WPE_TEST_CASE(test_graphics_instantiate_rigged_figure),
     WPE_TEST_CASE(test_graphics_animation_crossfade),
     WPE_TEST_CASE(test_graphics_animation_crossfade_between_clips),
-    WPE_TEST_CASE(test_graphics_animation_unkeyed_nodes_rest),
+    WPE_TEST_CASE(test_graphics_animation_layer), WPE_TEST_CASE(test_graphics_animation_unkeyed_nodes_rest),
     WPE_TEST_CASE(test_graphics_sky_gradient_sun_and_occlusion), WPE_TEST_CASE(test_graphics_sky_panorama),
     WPE_TEST_CASE(test_graphics_instantiate_validates_and_cleans_up),
     WPE_TEST_CASE(test_graphics_material_vertex_shader_skinning),

@@ -89,6 +89,17 @@ function Tour:on_start()
 	wpe.animation_speed(self.figure, 1)
 	assert(not pcall(wpe.play_animation, self.figure, "no such clip"))
 	assert(not pcall(wpe.play_animation, self.figure, 1, true, -1))
+	-- A layer: the clip again over the upper body only (from the torso's second joint down), fading in.
+	assert(wpe.get_layer(self.figure) == nil)
+	wpe.play_layer(self.figure, clip.names[1], "torso_joint_2", false, 0.1)
+	local layer = wpe.get_layer(self.figure)
+	assert(layer.index == 1 and layer.bone == "torso_joint_2" and layer.playing and not layer.loop)
+	assert(layer.weight == 0 and not layer.stopping and layer.duration > 0)
+	assert(not pcall(wpe.play_layer, self.figure, 1, "no such bone"))
+	assert(not pcall(wpe.play_layer, self.figure, "no such clip", "torso_joint_2"))
+	assert(not pcall(wpe.stop_layer, self.figure, -1))
+	wpe.stop_layer(self.figure, 0.2)
+	assert(wpe.get_layer(self.figure).stopping)
 
 	-- Scripts attaching scripts, and deferred destruction.
 	self.temp = wpe.spawn("tour_temp")

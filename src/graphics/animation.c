@@ -165,9 +165,46 @@ static void wpe__repose(WPE_Ecs* ecs, const WPE_Animator* animator) {
     }
 }
 
-void wpe_animation_apply(WPE_Ecs* ecs, const WPE_Animator* animator) {
-    if (!ecs || !animator || !animator->model || animator->animation >= animator->model->animation_count)
-        return;
+/* Whether model node `node` is `root` or below it. */
+static bool wpe__in_subtree(const WPE_Model* model, uint32_t node, uint32_t root) {
+    for (uint32_t depth = 0; node < model->node_count && depth <= model->node_count; ++depth) {
+        if (node == root) return true;
+        node = model->nodes[node].parent;
+    }
+    return false;
+}
+
+static bool wpe__layer_on(const WPE_Animator* animator) {
+    return animator->layer_active && animator->layer_animation < animator->model->animation_count &&
+           animator->layer_node < animator->model->node_count;
+}
+
+/* The layer over the base pose already written, on the nodes of its subtree. A node there that the base
+ * doesn't key would still hold last frame's blend, so it starts from its rest pose. */
+static void wpe__apply_layer(WPE_Ecs* ecs, const WPE_Animator* animator) {
+    if (!wpe__layer_on(animator) || !(animator->layer_weight > 0.0f)) return;
+    const WPE_Model* model = animator->model;
+    const uint32_t from = wpe__fading(animator) ? animator->from_animation : WPE_MODEL_NONE;
+    const WPE_Animation* layer = &model->animations[animator->layer_animation];
+    const float weight = animator->layer_weight > 1.0f ? 1.0f : animator->layer_weight;
+    float value[4];
+    for (uint32_t c = 0; c < layer->channel_count; ++c) {
+        const WPE_AnimationChannel* channel = &model->channels[layer->first_channel + c];
+        if (!wpe__in_subtree(model, channel->node, animator->layer_node)) continue;
+        WPE_Transform* t = wpe__channel_transform(ecs, animator, channel);
+        if (!t) continue;
+        if (!wpe__keys(model, animator->animation, channel->node, channel->path) &&
+            !wpe__keys(model, from, channel->node, channel->path)) {
+            wpe__rest_value(model, channel, value);
+            wpe__write(t, channel->path, value, 1.0f);
+        }
+        wpe_animation_sample_channel(channel, animator->layer_time, value);
+        wpe__write(t, channel->path, value, weight);
+    }
+}
+
+/* The base animation's pose: the current one, or during a crossfade the blend of both. */
+static void wpe__apply_base(WPE_Ecs* ecs, const WPE_Animator* animator) {
     const WPE_Model* model = animator->model;
     const WPE_Animation* current = &model->animations[animator->animation];
     float value[4];
@@ -210,6 +247,13 @@ void wpe_animation_apply(WPE_Ecs* ecs, const WPE_Animator* animator) {
     }
 }
 
+void wpe_animation_apply(WPE_Ecs* ecs, const WPE_Animator* animator) {
+    if (!ecs || !animator || !animator->model || animator->animation >= animator->model->animation_count)
+        return;
+    wpe__apply_base(ecs, animator);
+    wpe__apply_layer(ecs, animator);
+}
+
 /* Advances a playback time: looping wraps; otherwise it clamps at the end it runs toward, and
  * `*out_ended` reports reaching it. */
 static float wpe__advance(float time, float dt, float speed, float duration, bool loop, bool* out_ended) {
@@ -232,19 +276,53 @@ static float wpe__advance(float time, float dt, float speed, float duration, boo
     return time < 0.0f ? 0.0f : (time > duration ? duration : time);
 }
 
+/* Advances the layer's time and its weight toward 1, or toward 0 while stopping (then it is off, and the
+ * next apply puts what only it moved back under the base pose). */
+static void wpe__advance_layer(WPE_Animator* animator, float dt) {
+    if (!wpe__layer_on(animator)) {
+        animator->layer_active = false;
+        return;
+    }
+    if (animator->layer_playing) {
+        bool ended = false;
+        animator->layer_time = wpe__advance(animator->layer_time, dt, 1.0f,
+                                            animator->model->animations[animator->layer_animation].duration,
+                                            animator->layer_loop, &ended);
+        if (ended) animator->layer_playing = false;
+    }
+    const float step = animator->layer_fade > 0.0f ? dt / animator->layer_fade : 1.0f;
+    if (!animator->layer_stopping) {
+        animator->layer_weight = fminf(1.0f, animator->layer_weight + step);
+        return;
+    }
+    animator->layer_weight -= step;
+    if (!(animator->layer_weight > 0.0f)) {
+        animator->layer_weight = 0.0f;
+        animator->layer_active = false;
+        animator->layer_stopping = false;
+        animator->wpe__repose = true;
+    }
+}
+
 WPE_Result wpe_animation_update(WPE_Ecs* ecs, float dt) {
     if (!ecs) return WPE_RESULT_ERROR_NULL_ARG;
     WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_ANIMATOR)});
     while (wpe_ecs_iter_next(&it)) {
         WPE_Animator* animator = wpe_ecs_iter_get(&it, WPE_COMP_ANIMATOR);
-        if (!animator->playing || !animator->model || animator->animation >= animator->model->animation_count)
-            continue;
+        if (!animator->model || animator->animation >= animator->model->animation_count) continue;
+        /* A layer goes on over a paused base pose, which is written again under it every update. */
+        const bool layer = animator->layer_active;
+        if (!animator->playing && !layer && !animator->wpe__repose) continue;
         const WPE_Animation* animations = animator->model->animations;
+        if (layer) wpe__advance_layer(animator, dt);
+        const bool playing = animator->playing;
         bool ended = false;
-        animator->time = wpe__advance(animator->time, dt, animator->speed,
-                                      animations[animator->animation].duration, animator->loop, &ended);
+        if (playing) {
+            animator->time = wpe__advance(animator->time, dt, animator->speed,
+                                          animations[animator->animation].duration, animator->loop, &ended);
+        }
         if (ended) animator->playing = false;
-        if (wpe__fading(animator)) {
+        if (playing && wpe__fading(animator)) {
             bool from_ended = false; /* The old animation holds its last pose once it ends. */
             animator->from_time =
                 wpe__advance(animator->from_time, dt, animator->from_speed,
@@ -286,6 +364,47 @@ WPE_Result wpe_animator_play(WPE_Animator* animator, uint32_t animation, float f
     animator->playing = true;
     animator->wpe__repose = true; /* Nodes neither animation keys (anything a dropped one moved) rest. */
     return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_animator_play_layer(WPE_Animator* animator, uint32_t animation, uint32_t node,
+                                   float fade_seconds, bool loop) {
+    if (!animator || !animator->model) return WPE_RESULT_ERROR_NULL_ARG;
+    if (animation >= animator->model->animation_count || node >= animator->model->node_count ||
+        !isfinite(fade_seconds) || fade_seconds < 0.0f)
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    if (!animator->layer_active) animator->layer_weight = fade_seconds > 0.0f ? 0.0f : 1.0f;
+    animator->layer_active = true;
+    animator->layer_stopping = false;
+    animator->layer_animation = animation;
+    animator->layer_node = node;
+    animator->layer_time = 0.0f;
+    animator->layer_playing = true;
+    animator->layer_loop = loop;
+    animator->layer_fade = fade_seconds;
+    animator->wpe__repose = true; /* What an earlier layer clip moved and this one doesn't goes back. */
+    return WPE_RESULT_OK;
+}
+
+WPE_Result wpe_animator_stop_layer(WPE_Animator* animator, float fade_seconds) {
+    if (!animator) return WPE_RESULT_ERROR_NULL_ARG;
+    if (!isfinite(fade_seconds) || fade_seconds < 0.0f) return WPE_RESULT_ERROR_INVALID_ARG;
+    if (!animator->layer_active) return WPE_RESULT_OK;
+    animator->layer_fade = fade_seconds;
+    animator->layer_stopping = true;
+    if (fade_seconds <= 0.0f) {
+        animator->layer_weight = 0.0f;
+        animator->layer_active = false;
+        animator->layer_stopping = false;
+        animator->wpe__repose = true;
+    }
+    return WPE_RESULT_OK;
+}
+
+uint32_t wpe_model_find_node(const WPE_Model* model, const char* name) {
+    if (!model || !name) return WPE_MODEL_NONE;
+    for (uint32_t i = 0; i < model->node_count; ++i)
+        if (strcmp(model->nodes[i].name, name) == 0) return i;
+    return WPE_MODEL_NONE;
 }
 
 uint32_t wpe_model_find_animation(const WPE_Model* model, const char* name) {

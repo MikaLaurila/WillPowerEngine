@@ -16,6 +16,13 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   the affine UV's exact derivatives. Subdivision reduces the warping (levels 0 shows it fully). Scripts:
   `wpe.set_affine_textures(on)`/`wpe.get_affine_textures()`. Renderer: `WPE_DrawDesc.affine_textures`
   (the program's `uv_varying` pair, for programs with `uv_derivatives`).
+- Animation layers: a second animation over one bone's subtree (an upper body firing while the legs run,
+  jump or crouch), blended over the base animation with its own fade in and out. Scripts:
+  `wpe.play_layer(entity, animation, bone, [loop], [fade])`, `wpe.stop_layer(entity, [fade])` and
+  `wpe.get_layer(entity)`. Bones outside the subtree, and those in it the layer doesn't key, follow the base
+  animation; a non-looping layer holds its last pose until stopped; while a layer is on, the base pose is
+  written every update even when the base animation is paused. C: `wpe_animator_play_layer`,
+  `wpe_animator_stop_layer`, the `WPE_Animator.layer_*` fields and `wpe_model_find_node`.
 
 ### Changed
 - UI focus navigation compares the buttons' edges, not their centers: only buttons wholly past the focused one's

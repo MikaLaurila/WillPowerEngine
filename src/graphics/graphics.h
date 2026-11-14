@@ -110,6 +110,19 @@ typedef struct WPE_Animator {
     float fade;          /* Seconds into the fade. */
     float fade_duration; /* 0: no crossfade. */
 
+    /* Layer (wpe_animator_play_layer): a second animation over the nodes from `layer_node` down (an
+     * upper body: firing while running), blended over the base pose by `layer_weight`. Off while
+     * layer_active is false (a zeroed animator has no layer). */
+    bool layer_active;
+    uint32_t layer_animation; /* Index into model->animations. */
+    uint32_t layer_node;      /* Model node the layer starts at; it covers that node's subtree. */
+    float layer_time;         /* Playback position in seconds. */
+    bool layer_playing;       /* False once a non-looping layer ends (it holds its last pose). */
+    bool layer_loop;
+    float layer_weight;  /* 0..1: how much of the layer is over the base pose now. */
+    float layer_fade;    /* Seconds the weight takes to go between 0 and 1 (0: at once). */
+    bool layer_stopping; /* Fading out (wpe_animator_stop_layer); off when the weight reaches 0. */
+
     /* Private: set when the animations playing change (a play, a fade ending); the next update puts
      * every node the model animates but neither of them keys back to its rest pose. */
     bool wpe__repose;

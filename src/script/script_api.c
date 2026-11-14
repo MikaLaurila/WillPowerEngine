@@ -540,6 +540,21 @@ static WPE_Animator* wpe__check_animator(lua_State* L, WPE_Entity entity) {
     return animator;
 }
 
+/* The animation at stack slot `arg`: a name or a 1-based index; raises when the model has no such one. */
+static uint32_t wpe__check_clip(lua_State* L, const WPE_Animator* animator, int arg, const char* function) {
+    if (lua_type(L, arg) == LUA_TSTRING) {
+        const uint32_t index = wpe_model_find_animation(animator->model, lua_tostring(L, arg));
+        if (index == WPE_MODEL_NONE)
+            luaL_errorL(L, "wpe.%s: the model has no animation '%s'", function, lua_tostring(L, arg));
+        return index;
+    }
+    const int number = (int)luaL_checkinteger(L, arg); /* 1-based */
+    if (number < 1 || (uint32_t)number > animator->model->animation_count)
+        luaL_errorL(L, "animation index %d out of range (model has %u)", number,
+                    animator->model->animation_count);
+    return (uint32_t)(number - 1);
+}
+
 static int wpe__api_play_animation(lua_State* L) {
     const WPE_Entity entity = wpe__check_entity(L, 1);
     const bool loop = lua_isnoneornil(L, 3) ? true : luaL_checkboolean(L, 3);
@@ -552,21 +567,64 @@ static int wpe__api_play_animation(lua_State* L) {
         animator->playing = true;
         return 0;
     }
-    uint32_t index = WPE_MODEL_NONE;
-    if (lua_type(L, 2) == LUA_TSTRING) {
-        index = wpe_model_find_animation(animator->model, lua_tostring(L, 2));
-        if (index == WPE_MODEL_NONE)
-            luaL_errorL(L, "wpe.play_animation: the model has no animation '%s'", lua_tostring(L, 2));
-    } else {
-        const int number = (int)luaL_checkinteger(L, 2); /* 1-based */
-        if (number < 1 || (uint32_t)number > animator->model->animation_count) {
-            luaL_errorL(L, "animation index %d out of range (model has %u)", number,
-                        animator->model->animation_count);
-        }
-        index = (uint32_t)(number - 1);
-    }
+    const uint32_t index = wpe__check_clip(L, animator, 2, "play_animation");
     wpe__raise_result(L, "play_animation", wpe_animator_play(animator, index, (float)fade, loop));
     return 0;
+}
+
+/* wpe.play_layer(entity, animation, bone, [loop = true], [fade = 0]) */
+static int wpe__api_play_layer(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const char* bone = luaL_checkstring(L, 3);
+    const bool loop = lua_isnoneornil(L, 4) ? true : luaL_checkboolean(L, 4);
+    const double fade = luaL_optnumber(L, 5, 0.0);
+    if (!(fade >= 0.0 && isfinite(fade))) luaL_errorL(L, "wpe.play_layer: fade must be 0 or more seconds");
+    WPE_Animator* animator = wpe__check_animator(L, entity);
+    const uint32_t index = wpe__check_clip(L, animator, 2, "play_layer");
+    const uint32_t node = wpe_model_find_node(animator->model, bone);
+    if (node == WPE_MODEL_NONE) luaL_errorL(L, "wpe.play_layer: the model has no bone '%s'", bone);
+    wpe__raise_result(L, "play_layer", wpe_animator_play_layer(animator, index, node, (float)fade, loop));
+    return 0;
+}
+
+/* wpe.stop_layer(entity, [fade = 0]) */
+static int wpe__api_stop_layer(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const double fade = luaL_optnumber(L, 2, 0.0);
+    if (!(fade >= 0.0 && isfinite(fade))) luaL_errorL(L, "wpe.stop_layer: fade must be 0 or more seconds");
+    wpe__raise_result(L, "stop_layer", wpe_animator_stop_layer(wpe__check_animator(L, entity), (float)fade));
+    return 0;
+}
+
+/* wpe.get_layer(entity) -> {index, name, bone, time, duration, playing, loop, weight, stopping}? */
+static int wpe__api_get_layer(lua_State* L) {
+    const WPE_Animator copy = *wpe__check_animator(L, wpe__check_entity(L, 1));
+    if (!copy.layer_active || copy.layer_animation >= copy.model->animation_count ||
+        copy.layer_node >= copy.model->node_count) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const WPE_Animation* clip = &copy.model->animations[copy.layer_animation];
+    lua_createtable(L, 0, 9);
+    lua_pushnumber(L, (double)copy.layer_animation + 1.0);
+    lua_setfield(L, -2, "index");
+    lua_pushstring(L, clip->name);
+    lua_setfield(L, -2, "name");
+    lua_pushstring(L, copy.model->nodes[copy.layer_node].name);
+    lua_setfield(L, -2, "bone");
+    lua_pushnumber(L, copy.layer_time);
+    lua_setfield(L, -2, "time");
+    lua_pushnumber(L, clip->duration);
+    lua_setfield(L, -2, "duration");
+    lua_pushboolean(L, copy.layer_playing);
+    lua_setfield(L, -2, "playing");
+    lua_pushboolean(L, copy.layer_loop);
+    lua_setfield(L, -2, "loop");
+    lua_pushnumber(L, copy.layer_weight);
+    lua_setfield(L, -2, "weight");
+    lua_pushboolean(L, copy.layer_stopping);
+    lua_setfield(L, -2, "stopping");
+    return 1;
 }
 
 static int wpe__api_get_animation(lua_State* L) {
@@ -4163,6 +4221,9 @@ static const luaL_Reg wpe__api[] = {
     {"animation_time", wpe__api_animation_time},
     {"get_animation", wpe__api_get_animation},
     {"animation_speed", wpe__api_animation_speed},
+    {"play_layer", wpe__api_play_layer},
+    {"stop_layer", wpe__api_stop_layer},
+    {"get_layer", wpe__api_get_layer},
     {"add_rigidbody", wpe__api_add_rigidbody},
     {"add_collider", wpe__api_add_collider},
     {"remove_rigidbody", wpe__api_remove_rigidbody},
