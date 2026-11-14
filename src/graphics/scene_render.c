@@ -24,6 +24,9 @@ typedef struct wpe__MeshInstance {
     const WPE_MeshRenderer* mesh;
     WPE_Mat4 world; /* Identity for skinned meshes (palette is world space). */
     const WPE_Mat4* palette;
+    /* Drawn mirrored (a negative scale on an odd number of axes): the winding flips, so the culled face does
+     * too. A skinned mesh's comes from its joints (a mirrored character's root scales them all). */
+    bool mirrored;
     WPE_Vec3 sphere_center; /* World-space bounding sphere for light selection. */
     float sphere_radius;
     const WPE_Water* water; /* Or NULL. */
@@ -230,6 +233,7 @@ static WPE_Result wpe__gather_meshes(WPE_SceneRenderer* sr, const WPE_Ecs* ecs, 
             if (!palette) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
             inst->palette = palette;
             inst->world = wpe_mat4_identity();
+            inst->mirrored = mesh->joint_count > 0 && wpe__determinant3(&palette[0]) < 0.0f;
             /* Sphere around the joints, padded by the mesh's own extent. */
             WPE_Vec3 sum = wpe_vec3(0, 0, 0);
             for (uint32_t j = 0; j < mesh->joint_count; ++j) {
@@ -248,6 +252,7 @@ static WPE_Result wpe__gather_meshes(WPE_SceneRenderer* sr, const WPE_Ecs* ecs, 
             }
             inst->sphere_radius = radius;
         } else {
+            inst->mirrored = wpe__determinant3(&inst->world) < 0.0f;
             inst->sphere_center = wpe_mat4_transform_point(&inst->world, local_center);
             const float sx =
                 wpe_vec3_length(wpe_vec3(inst->world.m[0][0], inst->world.m[0][1], inst->world.m[0][2]));
@@ -431,7 +436,7 @@ static WPE_Result wpe__render_shadow_map(WPE_SceneRenderer* sr, WPE_JobSystem* j
         const WPE_Mesh* mesh = &model->meshes[inst->mesh->mesh];
         const WPE_Mat4 mvp = wpe_mat4_mul(light_view_projection, &inst->world);
         const wpe__Frustum frustum = wpe__frustum_from_matrix(&mvp);
-        const bool mirrored = wpe__determinant3(&inst->world) < 0.0f;
+        const bool mirrored = inst->mirrored;
 
         for (uint32_t p = 0; p < mesh->primitive_count && result == WPE_RESULT_OK; ++p) {
             const WPE_MeshPrimitive* prim = &model->primitives[mesh->first_primitive + p];
@@ -937,7 +942,7 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             }
         }
         /* A mirroring transform flips triangle winding, so the culled face must flip too. */
-        const bool mirrored = wpe__determinant3(&inst->world) < 0.0f;
+        const bool mirrored = inst->mirrored;
         const wpe__Frustum frustum = wpe__frustum_from_matrix(&mvp);
         const WPE_Mat4 model_view = wpe_mat4_mul(&view, &inst->world);
 

@@ -37,6 +37,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   where they could skip a row or jump to the wrong one, and left and right no longer jump to another row.
 
 ### Fixed
+- Skinned meshes scaled by a negative amount on one axis (a character flipped sprite-style to face the other
+  way) drew inside out: the culled face flipped for mirrored static meshes but not for skinned ones, whose
+  mirroring now comes from their joints. Their shadows too.
 - Animations: bones a clip has no keys for are at the model's rest pose while it plays (crossfades blend them
   between rest and the clip that keys them). They used to keep whatever pose an earlier clip left, so a model
   whose idle doesn't key the hands (Blockbench, and other exporters, key only the bones a clip moves) showed

@@ -1198,6 +1198,65 @@ static void test_graphics_mesh_overlay_and_transparency(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* A skinned character scaled by -1 on X (a sprite-style flip) draws as the mirror image of itself: its depth
+ * image is the unflipped one turned left to right. Its triangles' winding flips, so the faces culled must
+ * flip too; culled the usual way, the far side of the body would show (deeper) instead. */
+static void test_graphics_skinned_mesh_mirrored(void) {
+    WPE_TestAssets t = wpe_test_assets_create(WPE_TEST_ASSETS_DIR, 0);
+    const WPE_AssetHandle handle = wpe_test_load_model(t.assets, "meshes/RiggedFigure.glb");
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_Entity root = WPE_ENTITY_NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_instantiate(ecs, t.assets, handle,
+                                             &(WPE_InstantiateOptions){.animation = WPE_MODEL_NONE}, &root));
+    WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
+    WPE_EcsPoolView meshes;
+    WPE_TEST_ASSERT_OK(wpe_ecs_pool_view(ecs, WPE_COMP_MESH, &meshes));
+    const WPE_MeshRenderer* mesh = meshes.data;
+    WPE_TEST_ASSERT(mesh->joint_count > 0);
+    /* Framed from the front, on the mirror plane (x = 0, the root's): the joints' middle height and depth. */
+    WPE_Vec3 center = wpe_vec3(0, 0, 0);
+    for (uint32_t j = 0; j < mesh->joint_count; ++j) {
+        const WPE_Transform* joint = wpe_ecs_get_component(ecs, mesh->joints[j], WPE_COMP_TRANSFORM);
+        center =
+            wpe_vec3_add(center, wpe_vec3(joint->world.m[3][0], joint->world.m[3][1], joint->world.m[3][2]));
+    }
+    center = wpe_vec3_scale(center, 1.0f / (float)mesh->joint_count);
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, center.y, center.z + 2.0f), wpe_quat_identity());
+    WPE_Camera* lens = wpe_ecs_get_component(ecs, camera, WPE_COMP_CAMERA);
+    lens->near_z = 1.0f; /* Depth precision where the figure is. */
+    lens->far_z = 20.0f;
+
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 64}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_SceneRenderStats stats;
+    const WPE_Framebuffer* fb = render_scene(renderer, sr, ecs, camera, &stats);
+    static float plain[64 * 64];
+    memcpy(plain, fb->depth, sizeof plain);
+    ((WPE_Transform*)wpe_ecs_get_component(ecs, root, WPE_COMP_TRANSFORM))->scale = wpe_vec3(-1, 1, 1);
+    fb = render_scene(renderer, sr, ecs, camera, &stats);
+
+    uint32_t covered = 0, same = 0;
+    for (uint32_t y = 0; y < 64; ++y) {
+        for (uint32_t x = 0; x < 64; ++x) {
+            const float a = plain[y * 64 + x], b = fb->depth[y * 64 + (63 - x)];
+            if (a >= 1.0f && b >= 1.0f) continue;
+            ++covered;
+            same += fabsf(a - b) < 1e-4f;
+        }
+    }
+    WPE_TEST_ASSERT_MSG(covered > 200, "the figure covers %u pixels", covered);
+    /* Edge pixels may round to the other side; the rest match. */
+    WPE_TEST_ASSERT_MSG(same * 10 >= covered * 9, "%u of %u pixels match", same, covered);
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_asset_release(t.assets, handle);
+    wpe_test_assets_destroy(&t);
+}
+
 static void test_graphics_sky_panorama(void) {
     WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
     WPE_Ecs* ecs = make_world(t.assets);
@@ -2081,6 +2140,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_billboard_draws_frames_and_blends),
     WPE_TEST_CASE(test_graphics_mesh_shadow_unlit_and_sides),
     WPE_TEST_CASE(test_graphics_mesh_overlay_and_transparency),
+    WPE_TEST_CASE(test_graphics_skinned_mesh_mirrored),
     WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
     WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),
     WPE_TEST_CASE(test_graphics_trail_records_and_draws), WPE_TEST_CASE(test_graphics_slash_sweeps),
