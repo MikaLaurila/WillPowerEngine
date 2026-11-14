@@ -69,6 +69,9 @@ typedef struct WPE_SkySettings {
  * Any thread */
 WPE_SkySettings wpe_sky_settings_default(void);
 
+/** The largest WPE_SceneRenderSettings.vertex_snap scene files and scripts accept, in pixels. */
+#define WPE_VERTEX_SNAP_MAX 64
+
 typedef struct WPE_SceneRenderSettings {
     WPE_Vec3 ambient;
     WPE_FogParams fog;
@@ -80,7 +83,8 @@ typedef struct WPE_SceneRenderSettings {
     bool frustum_culling;
     uint32_t subdivision_levels;   /* 0 disables adaptive subdivision. */
     float subdivision_edge_pixels; /* Split edges longer than this on screen. */
-    bool default_sun;              /* Use default_sun_* when the world has no lights at all. */
+    float vertex_snap; /* PS1 vertex snapping of meshes and billboards (WPE_DrawDesc.vertex_snap; 0 = off). */
+    bool default_sun;  /* Use default_sun_* when the world has no lights at all. */
     WPE_Vec3 default_sun_direction;
     WPE_Vec3 default_sun_color;
 } WPE_SceneRenderSettings;

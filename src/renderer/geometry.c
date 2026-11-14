@@ -116,14 +116,20 @@ static void wpe__setup_triangle(WPE_Renderer* renderer, wpe__TriOutput* output, 
     const float width = (float)renderer->framebuffer.width;
     const float height = (float)renderer->framebuffer.height;
     const uint32_t varying_count = desc->program->varying_count;
+    const float snap = desc->vertex_snap;
 
     int32_t x[3], y[3];
     float z[3], inv_w[3];
     for (int i = 0; i < 3; ++i) {
         const WPE_Vec4 p = *positions[i];
         inv_w[i] = 1.0f / p.w;
-        const float sx = (p.x * inv_w[i] * 0.5f + 0.5f) * width;
-        const float sy = (0.5f - p.y * inv_w[i] * 0.5f) * height;
+        float sx = (p.x * inv_w[i] * 0.5f + 0.5f) * width;
+        float sy = (0.5f - p.y * inv_w[i] * 0.5f) * height;
+        if (snap >
+            0.0f) { /* PS1 wobble: whole grid steps (a shared vertex snaps the same in every triangle). */
+            sx = floorf(sx / snap + 0.5f) * snap;
+            sy = floorf(sy / snap + 0.5f) * snap;
+        }
         x[i] = (int32_t)floorf(sx * (float)WPE__RASTER_SUBPIXEL_ONE + 0.5f);
         y[i] = (int32_t)floorf(sy * (float)WPE__RASTER_SUBPIXEL_ONE + 0.5f);
         const float depth = p.z * inv_w[i] * 0.5f + 0.5f;

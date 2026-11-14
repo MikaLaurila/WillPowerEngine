@@ -240,6 +240,7 @@ static void test_engine_scene_round_trip(void) {
                     env.postfx[2].ps1.levels == 32);
     WPE_TEST_ASSERT_EQ_STR("music/ambient.wav", env.music);
     WPE_TEST_ASSERT_EQ_INT(WPE_FOG_EXPONENTIAL, env.render.fog.mode);
+    WPE_TEST_ASSERT_NEAR(0.5, env.render.vertex_snap, 1e-6);
     WPE_TEST_ASSERT_NEAR(0.35, env.navigation.agent_radius, 1e-6);
     WPE_TEST_ASSERT_NEAR(1.8, env.navigation.agent_height, 1e-6); /* Not given: the default. */
     WPE_TEST_ASSERT_NEAR(15.0, env.navigation.bounds_max.y, 1e-6);

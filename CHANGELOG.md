@@ -4,6 +4,13 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added
+- PS1-style vertex snapping: the scene environment's `vertex_snap` (pixels, 0..64; 0 = off, the default, not
+  written then) rounds every mesh and billboard vertex's screen position to a grid that coarse, so geometry
+  wobbles as it or the camera moves (1 is the PlayStation's whole pixels). Scripts switch it with
+  `wpe.set_vertex_snap(pixels)`/`wpe.get_vertex_snap()`. Renderer: `WPE_DrawDesc.vertex_snap`;
+  `WPE_SceneRenderSettings.vertex_snap`. Shadow maps, the sky, debug lines and 2D drawing are not snapped.
+
 ### Changed
 - UI focus navigation compares the buttons' edges, not their centers: only buttons wholly past the focused one's
   edge in the pressed direction count, and those in line with it come first. In a list whose rows put their

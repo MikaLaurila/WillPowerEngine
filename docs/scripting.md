@@ -554,6 +554,8 @@ The scene's post effects (its file's `postfx` list, see [scenes.md](scenes.md)) 
 | `wpe.remove_postfx(which)` | Removes an effect; later ones move up. |
 | `wpe.set_texture_filter(name)` | Filters every material texture one way: `"material"` (as each model says), `"nearest"`, `"bilinear"` or `"three_point"` (Nintendo 64 style); the scene file's `texture_filter`. Like the effects, it lasts until the scene is loaded again. |
 | `wpe.get_texture_filter() -> name` | The current texture filter. |
+| `wpe.set_vertex_snap(pixels)` | PlayStation-style vertex snapping: every vertex of the scene's meshes and billboards lands on a grid of `pixels` screen pixels, so geometry wobbles as it or the camera moves. 0 turns it off (the default), 1 is the PS1's whole pixels, more exaggerates it (up to 64). The scene file's `vertex_snap`; lasts until the scene is loaded again. |
+| `wpe.get_vertex_snap() -> pixels` | The current vertex snapping (0 = off). |
 | `wpe.capture_screen([slot = 1]) -> path` | Keeps this frame, as the scene renders it (before post effects, the UI and 2D drawing), in a slot 1..8, and returns its image asset path (`"capture/1"`). Use it as any image (billboards, sprites) or break it with a `shatter` effect (`capture = 1`). Capturing a slot again replaces its picture. |
 
 Two effects are made for scripts to animate: `shockwave` (a ring warping the image outward from `center_x`, `center_y` (fractions of the screen), at `radius` (fractions of its height), `width` thick, pushing `strength_pixels`) and `radial_blur` (smearing toward `center_x`, `center_y` by `strength`, 0..1). A hit that ripples out from the player:

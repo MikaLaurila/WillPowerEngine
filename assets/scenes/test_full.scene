@@ -11,6 +11,7 @@
     "texture_filter": "material",
     "frustum_culling": true,
     "subdivision": {"levels": 3, "edge_pixels": 24},
+    "vertex_snap": 0.5,
     "default_sun": {"enabled": true, "direction": [-0.4, -1, -0.3], "color": [1, 1, 1]},
     "gravity": [0, -9.81, 0],
     "navigation": {"agent_radius": 0.35, "step_height": 0.35, "bounds_min": [-30, -5, -30], "bounds_max": [30, 15, 30]},

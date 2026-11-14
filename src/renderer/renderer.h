@@ -183,6 +183,12 @@ typedef struct WPE_DrawDesc {
      */
     uint32_t subdivision_levels;
     float subdivision_edge_pixels;
+    /*
+     * PS1-style vertex snapping (0 = off): each vertex's screen position is rounded to a grid of this many
+     * pixels before rasterizing, so geometry jitters ("wobbles") as it or the camera moves. 1 is the
+     * PlayStation's whole pixels; more exaggerates it. Depth and varyings are not snapped.
+     */
+    float vertex_snap;
     /* Scissor test: when `scissor` is set, only pixels inside the rectangle (framebuffer pixels,
      * origin top-left, clamped to the framebuffer) are written. An empty rectangle draws nothing. */
     bool scissor;

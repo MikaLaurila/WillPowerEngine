@@ -388,6 +388,64 @@ static void test_renderer_fill_rule_on_pixel_center_edges(void) {
 }
 
 /* Subdivision must stay crack-free: every shared edge is split identically from both sides. */
+/* Covers a rectangle whose corners sit between pixels, from screen (x0, y0) to (x1, y1), with `snap`, and
+ * returns the bounds of the pixels drawn (half-open). */
+static void snapped_rect_bounds(float snap, float x0, float y0, float x1, float y1, uint32_t out_min[2],
+                                uint32_t out_max[2]) {
+    static uint32_t counts[W * H];
+    memset(counts, 0, sizeof counts);
+    const TestUniforms u = {.color = wpe_vec4(1, 1, 1, 1), .counts = counts, .width = W};
+    const float l = x0 / (W / 2.0f) - 1.0f, r = x1 / (W / 2.0f) - 1.0f;
+    const float t = 1.0f - y0 / (H / 2.0f), b = 1.0f - y1 / (H / 2.0f);
+    const ClipVertex quad[6] = {cv(l, b, 0, 1), cv(r, b, 0, 1), cv(r, t, 0, 1),
+                                cv(l, b, 0, 1), cv(r, t, 0, 1), cv(l, t, 0, 1)};
+    WPE_DrawDesc d = draw_of(quad, 6, &u, state_no_cull());
+    d.vertex_snap = snap;
+    WPE_Renderer* renderer = make_renderer(W, H, NULL);
+    render(renderer, &d, 1);
+    wpe_renderer_destroy(renderer);
+    out_min[0] = out_min[1] = UINT32_MAX;
+    out_max[0] = out_max[1] = 0;
+    for (uint32_t y = 0; y < H; ++y) {
+        for (uint32_t x = 0; x < W; ++x) {
+            if (!counts[y * W + x]) continue;
+            WPE_TEST_ASSERT_EQ_UINT(1, counts[y * W + x]); /* The two triangles still meet without overlap. */
+            out_min[0] = x < out_min[0] ? x : out_min[0];
+            out_min[1] = y < out_min[1] ? y : out_min[1];
+            out_max[0] = x + 1 > out_max[0] ? x + 1 : out_max[0];
+            out_max[1] = y + 1 > out_max[1] ? y + 1 : out_max[1];
+        }
+    }
+}
+
+static void test_renderer_vertex_snap_rounds_to_the_grid(void) {
+    uint32_t min[2], max[2];
+    /* Off: the edges fall where the corners are (pixel centers inside [13.3, 50.6) x [10.2, 37.9)). */
+    snapped_rect_bounds(0.0f, 13.3f, 10.2f, 50.6f, 37.9f, min, max);
+    WPE_TEST_ASSERT_EQ_UINT(13, min[0]);
+    WPE_TEST_ASSERT_EQ_UINT(10, min[1]);
+    WPE_TEST_ASSERT_EQ_UINT(51, max[0]);
+    WPE_TEST_ASSERT_EQ_UINT(38, max[1]);
+    /* An 8-pixel grid: the corners round to (16, 8) and (48, 40). */
+    snapped_rect_bounds(8.0f, 13.3f, 10.2f, 50.6f, 37.9f, min, max);
+    WPE_TEST_ASSERT_EQ_UINT(16, min[0]);
+    WPE_TEST_ASSERT_EQ_UINT(8, min[1]);
+    WPE_TEST_ASSERT_EQ_UINT(48, max[0]);
+    WPE_TEST_ASSERT_EQ_UINT(40, max[1]);
+    /* Whole pixels (the PS1): (13, 10) and (51, 38). */
+    snapped_rect_bounds(1.0f, 13.3f, 10.2f, 50.6f, 37.9f, min, max);
+    WPE_TEST_ASSERT_EQ_UINT(13, min[0]);
+    WPE_TEST_ASSERT_EQ_UINT(10, min[1]);
+    WPE_TEST_ASSERT_EQ_UINT(51, max[0]);
+    WPE_TEST_ASSERT_EQ_UINT(38, max[1]);
+    /* A shift smaller than half a grid step doesn't move a snapped edge. */
+    snapped_rect_bounds(8.0f, 15.0f, 9.0f, 49.0f, 41.0f, min, max);
+    WPE_TEST_ASSERT_EQ_UINT(16, min[0]);
+    WPE_TEST_ASSERT_EQ_UINT(8, min[1]);
+    WPE_TEST_ASSERT_EQ_UINT(48, max[0]);
+    WPE_TEST_ASSERT_EQ_UINT(40, max[1]);
+}
+
 static void test_renderer_subdivision_is_watertight(void) {
     run_jittered_mesh_coverage(WPE_MAX_SUBDIVISION_LEVELS);
     run_pixel_center_edge_coverage(WPE_MAX_SUBDIVISION_LEVELS);
@@ -915,6 +973,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_renderer_scissor_limits_pixels),
     WPE_TEST_CASE(test_renderer_jittered_mesh_is_watertight),
     WPE_TEST_CASE(test_renderer_fill_rule_on_pixel_center_edges),
+    WPE_TEST_CASE(test_renderer_vertex_snap_rounds_to_the_grid),
     WPE_TEST_CASE(test_renderer_subdivision_is_watertight),
     WPE_TEST_CASE(test_renderer_subdivision_densifies_per_vertex_evaluation),
     WPE_TEST_CASE(test_renderer_subdivision_validation_and_determinism),

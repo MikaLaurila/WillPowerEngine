@@ -577,7 +577,8 @@ static WPE_Result wpe__submit_quads(WPE_SceneRenderer* sr, WPE_Renderer* rendere
                                                          .indices = indices,
                                                          .index_count = quads * 6,
                                                          .state = state,
-                                                         .sort_key = sort_key});
+                                                         .sort_key = sort_key,
+                                                         .vertex_snap = pass->settings->vertex_snap});
 }
 
 static WPE_Result wpe__render_billboards(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const WPE_Ecs* ecs,
@@ -1009,6 +1010,7 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
                                              .sort_key = sort_key,
                                              .subdivision_levels = settings->subdivision_levels,
                                              .subdivision_edge_pixels = settings->subdivision_edge_pixels,
+                                             .vertex_snap = settings->vertex_snap,
                                          });
             if (result == WPE_RESULT_OK) ++stats.primitives_submitted;
         }

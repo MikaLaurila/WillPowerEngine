@@ -283,6 +283,13 @@ function Tour:on_start()
 	assert(wpe.get_texture_filter() == "three_point")
 	assert(not pcall(wpe.set_texture_filter, "trilinear") and not pcall(wpe.set_texture_filter))
 	wpe.set_texture_filter(filter)
+	-- PS1 vertex wobble: the scene snaps to half pixels; whole pixels, then back as it was.
+	local snap = wpe.get_vertex_snap()
+	assert(snap == 0.5)
+	wpe.set_vertex_snap(1)
+	assert(wpe.get_vertex_snap() == 1)
+	assert(not pcall(wpe.set_vertex_snap, -1) and not pcall(wpe.set_vertex_snap, 65) and not pcall(wpe.set_vertex_snap))
+	wpe.set_vertex_snap(snap)
 	-- Animated textures and retro water. An instantiated model is a tree: the UV functions reach its meshes.
 	local pool = wpe.instantiate("box")
 	assert(wpe.get_uv_scroll(pool) == 0 and wpe.get_uv_offset(pool) == 0)

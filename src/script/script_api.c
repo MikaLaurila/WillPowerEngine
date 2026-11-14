@@ -2519,6 +2519,20 @@ static int wpe__api_get_texture_filter(lua_State* L) {
     return 1;
 }
 
+static int wpe__api_set_vertex_snap(lua_State* L) {
+    WPE_SceneRenderSettings* settings = wpe__render_settings(L, "set_vertex_snap");
+    const double pixels = luaL_checknumber(L, 1);
+    if (!(pixels >= 0.0 && pixels <= WPE_VERTEX_SNAP_MAX))
+        luaL_errorL(L, "wpe.set_vertex_snap: %g is not between 0 and %d pixels", pixels, WPE_VERTEX_SNAP_MAX);
+    settings->vertex_snap = (float)pixels;
+    return 0;
+}
+
+static int wpe__api_get_vertex_snap(lua_State* L) {
+    lua_pushnumber(L, wpe__render_settings(L, "get_vertex_snap")->vertex_snap);
+    return 1;
+}
+
 /* ---- Game feel: time scale, slow motion, hit-stop, shakes ---------------------------------------------- */
 
 static WPE_GameFeel* wpe__game_feel(lua_State* L, const char* function) {
@@ -4243,6 +4257,8 @@ static const luaL_Reg wpe__api[] = {
     {"is_shaking", wpe__api_is_shaking},
     {"set_texture_filter", wpe__api_set_texture_filter},
     {"get_texture_filter", wpe__api_get_texture_filter},
+    {"set_vertex_snap", wpe__api_set_vertex_snap},
+    {"get_vertex_snap", wpe__api_get_vertex_snap},
     {"color", wpe__api_color},
     {"draw_text", wpe__api_draw_text},
     {"draw_rect", wpe__api_draw_rect},

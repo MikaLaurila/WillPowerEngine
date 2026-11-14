@@ -202,7 +202,9 @@ static void wpe__save_navigation(WPE_JsonWriter* w, const WPE_NavSettings* n, bo
     wpe_json_write_object_end(w);
 }
 
-static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment* env, bool all_navigation) {
+/* `all`: write settings that scene files leave out at their defaults too (the editor's environment panel
+ * lists what is written). */
+static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment* env, bool all) {
     const WPE_SceneRenderSettings* r = &env->render;
     wpe_json_write_object_begin(w);
     wpe__write_vec3(w, "clear_color", env->clear_color);
@@ -249,6 +251,7 @@ static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment*
     wpe__write_integer(w, "levels", r->subdivision_levels);
     wpe__write_number(w, "edge_pixels", r->subdivision_edge_pixels);
     wpe_json_write_object_end(w);
+    if (all || r->vertex_snap > 0.0f) wpe__write_number(w, "vertex_snap", r->vertex_snap);
     wpe_json_write_key(w, "default_sun");
     wpe_json_write_object_begin(w);
     wpe__write_bool(w, "enabled", r->default_sun);
@@ -256,7 +259,7 @@ static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment*
     wpe__write_vec3(w, "color", r->default_sun_color);
     wpe_json_write_object_end(w);
     wpe__write_vec3(w, "gravity", env->gravity);
-    wpe__save_navigation(w, &env->navigation, all_navigation);
+    wpe__save_navigation(w, &env->navigation, all);
     if (env->music[0]) {
         wpe_json_write_key(w, "music");
         wpe_json_write_object_begin(w);
@@ -957,7 +960,7 @@ static bool wpe__load_sky(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvir
 static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvironment* env) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "environment", "clear_color", "ambient", "fog", "sky", "shadows",
                                 "dither_transparency", "texture_filter", "frustum_culling", "subdivision",
-                                "default_sun", "gravity", "navigation", "music", "postfx"))
+                                "vertex_snap", "default_sun", "gravity", "navigation", "music", "postfx"))
         return false;
     const WPE_JsonValue* nav = wpe_json_get(v, "navigation");
     if (nav) {
@@ -988,7 +991,8 @@ static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_Sc
         !wpe__json_read_vec3(&l->r, v, "ambient", &r->ambient) ||
         !wpe__json_read_vec3(&l->r, v, "gravity", &env->gravity) ||
         !wpe__json_read_bool(&l->r, v, "dither_transparency", &r->dither_transparency) ||
-        !wpe__json_read_bool(&l->r, v, "frustum_culling", &r->frustum_culling))
+        !wpe__json_read_bool(&l->r, v, "frustum_culling", &r->frustum_culling) ||
+        !wpe__json_read_float(&l->r, v, "vertex_snap", 0, WPE_VERTEX_SNAP_MAX, &r->vertex_snap))
         return false;
     const WPE_JsonValue* fog = wpe_json_get(v, "fog");
     if (fog) {
