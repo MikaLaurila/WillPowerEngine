@@ -460,6 +460,29 @@ static void test_script_api_transforms_lights_prefabs(void) {
         const WPE_MeshRenderer* mesh = wpe_ecs_iter_get(&it, WPE_COMP_MESH);
         WPE_TEST_ASSERT(mesh->overlay.w == 0.0f);
     }
+
+    /* wpe.set_shadows reaches them too, changing only the fields given. */
+    WPE_TEST_ASSERT_OK(
+        wpe_script_host_run(f.host, "shade", "wpe.set_shadows(wpe.find('ok'), {receive = false})"));
+    uint32_t shaded = 0;
+    it = wpe_ecs_query(f.ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_MeshRenderer* mesh = wpe_ecs_iter_get(&it, WPE_COMP_MESH);
+        shaded += mesh->cast_shadows && !mesh->receive_shadows;
+    }
+    WPE_TEST_ASSERT_EQ_UINT(before + 2, shaded);
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(f.host, "cast",
+                                           "local root = wpe.find('ok')\n"
+                                           "wpe.set_shadows(root, {cast = false, receive = true})\n"
+                                           "assert(not pcall(wpe.set_shadows, root, {cast = 'no'}))\n"
+                                           "assert(not pcall(wpe.set_shadows, root))\n"));
+    shaded = 0;
+    it = wpe_ecs_query(f.ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_MeshRenderer* mesh = wpe_ecs_iter_get(&it, WPE_COMP_MESH);
+        shaded += !mesh->cast_shadows && mesh->receive_shadows;
+    }
+    WPE_TEST_ASSERT_EQ_UINT(before + 2, shaded);
     free_fixture(&f);
 }
 

@@ -10,6 +10,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   it is now: a script placing a puff and emitting it at once got it in the wrong place.
 
 ### Added
+- `wpe.set_shadows(entity, {cast, receive})`: whether every mesh in a subtree casts the sun's shadow and is
+  darkened by it (`WPE_MeshRenderer.cast_shadows`/`receive_shadows`, until now only from scene files), for
+  models made in code such as effects attached to a character.
 - Character resizing with a headroom check (crouching, rolling into a ball): `wpe.character_fits(entity,
   [{radius, height, offset}])` tells whether the capsule would fit where the character stands with that size,
   and `wpe.resize_character(entity, {radius, height, offset})` changes it only when it does (shrinking inside

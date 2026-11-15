@@ -492,6 +492,33 @@ static int wpe__api_set_unlit(lua_State* L) {
     return 0;
 }
 
+/* An optional boolean field of the table at `index`: -1 when absent, else 0 or 1. */
+static int wpe__opt_bool_field(lua_State* L, int index, const char* function, const char* name) {
+    lua_getfield(L, index, name);
+    int value = -1;
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isboolean(L, -1)) luaL_errorL(L, "wpe.%s: `%s` must be a boolean", function, name);
+        value = lua_toboolean(L, -1) ? 1 : 0;
+    }
+    lua_pop(L, 1);
+    return value;
+}
+
+/* wpe.set_shadows(entity, {cast, receive}): every mesh in the subtree; fields left out stay as they are. */
+static int wpe__api_set_shadows(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    const int cast = wpe__opt_bool_field(L, 2, "set_shadows", "cast");
+    const int receive = wpe__opt_bool_field(L, 2, "set_shadows", "receive");
+    WPE_MeshRenderer* meshes[WPE__TREE_MESHES];
+    const uint32_t count = wpe__tree_meshes(wpe__script_host_from(L)->ecs, entity, meshes);
+    for (uint32_t i = 0; i < count; ++i) {
+        if (cast >= 0) meshes[i]->cast_shadows = cast == 1;
+        if (receive >= 0) meshes[i]->receive_shadows = receive == 1;
+    }
+    return 0;
+}
+
 static WPE_Color wpe__opt_color(lua_State* L, int index); /* With the 2D drawing, below. */
 
 /* wpe.set_overlay(entity, [color]): every mesh in the subtree; the color's alpha is the amount, nil clears.
@@ -4282,6 +4309,7 @@ static const luaL_Reg wpe__api[] = {
     {"remove_light", wpe__api_remove_light},
     {"set_visible", wpe__api_set_visible},
     {"set_unlit", wpe__api_set_unlit},
+    {"set_shadows", wpe__api_set_shadows},
     {"set_overlay", wpe__api_set_overlay},
     {"set_transparency", wpe__api_set_transparency},
     {"set_uv_scroll", wpe__api_set_uv_scroll},
