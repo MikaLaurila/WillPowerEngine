@@ -1463,6 +1463,95 @@ WPE_Result wpe_character_move(WPE_Physics* physics, WPE_Entity entity, WPE_Vec3 
     return WPE_RESULT_OK;
 }
 
+/* How deep something may overlap a capsule that still fits: resting characters sit a slop inside
+ * the ground, and the mover keeps them about that close to walls. */
+#define WPE__FIT_TOLERANCE (2.0f * B3_LINEAR_SLOP)
+
+typedef struct wpe__FitContext {
+    const WPE_Physics* physics;
+    WPE_Entity self;
+    bool blocked;
+} wpe__FitContext;
+
+static bool wpe__fit_callback(b3ShapeId shape, void* context) {
+    wpe__FitContext* fit = context;
+    const WPE_QueryFilter filter = {.ignore = fit->self};
+    if (!wpe__query_accepts(fit->physics, &filter, shape) ||
+        b3Body_GetType(b3Shape_GetBody(shape)) == b3_dynamicBody)
+        return true;
+    fit->blocked = true;
+    return false;
+}
+
+static bool wpe__size_valid(float radius, float height, WPE_Vec3 offset) {
+    return isfinite(radius) && radius > 0.0f && isfinite(height) && height > 0.0f && wpe__finite3(offset);
+}
+
+bool wpe_character_fits(const WPE_Physics* physics, WPE_Entity entity, float radius, float height,
+                        WPE_Vec3 offset) {
+    if (!physics || !wpe__size_valid(radius, height, offset) ||
+        !wpe_ecs_has_component(physics->ecs, entity, WPE_COMP_CHARACTER))
+        return false;
+    wpe__Pose pose;
+    if (!wpe__character_pose(physics, entity, &pose)) return false;
+    /* The capsule shrunk by the tolerance all round (a sphere when that leaves no segment). */
+    const float shrunk = radius > 2.0f * WPE__FIT_TOLERANCE ? radius - WPE__FIT_TOLERANCE : radius * 0.5f;
+    const float half = height * 0.5f - radius;
+    b3Vec3 points[2] = {{0.0f, -half, 0.0f}, {0.0f, half, 0.0f}};
+    const b3ShapeProxy proxy = {.points = points, .count = half > WPE__MIN_EXTENT ? 2 : 1, .radius = shrunk};
+    if (proxy.count == 1) points[0] = (b3Vec3){0.0f, 0.0f, 0.0f};
+    wpe__FitContext fit = {.physics = physics, .self = entity};
+    b3World_OverlapShape(physics->world, wpe__b3_vec(wpe_vec3_add(pose.position, offset)), &proxy,
+                         b3DefaultQueryFilter(), wpe__fit_callback, &fit);
+    return !fit.blocked;
+}
+
+/* Distance from `point` to the vertical segment of half length `half` around `center`. */
+static float wpe__distance_to_upright(WPE_Vec3 point, WPE_Vec3 center, float half) {
+    float y = point.y;
+    if (y < center.y - half) y = center.y - half;
+    if (y > center.y + half) y = center.y + half;
+    return wpe_vec3_length(wpe_vec3_sub(point, wpe_vec3(center.x, y, center.z)));
+}
+
+/* Whether the capsule (radius, height, offset) lies inside the controller's current one. */
+static bool wpe__capsule_inside(const WPE_CharacterController* c, float radius, float height,
+                                WPE_Vec3 offset) {
+    const float room = c->radius - radius + 1e-4f;
+    if (room < 0.0f) return false;
+    const float outer_half = wpe__character_half_segment(c);
+    const float half =
+        wpe__character_half_segment(&(WPE_CharacterController){.radius = radius, .height = height});
+    /* Points within `room` of the outer segment form a convex set, so the ends decide. */
+    return wpe__distance_to_upright(wpe_vec3_add(offset, wpe_vec3(0.0f, -half, 0.0f)), c->offset,
+                                    outer_half) <= room &&
+           wpe__distance_to_upright(wpe_vec3_add(offset, wpe_vec3(0.0f, half, 0.0f)), c->offset,
+                                    outer_half) <= room;
+}
+
+WPE_Result wpe_character_resize(WPE_Physics* physics, WPE_Entity entity, float radius, float height,
+                                WPE_Vec3 offset, bool* out_resized) {
+    if (out_resized) *out_resized = false;
+    if (!physics) return WPE_RESULT_ERROR_NULL_ARG;
+    WPE_CharacterController* c = wpe_ecs_get_component(physics->ecs, entity, WPE_COMP_CHARACTER);
+    if (!c || !wpe_ecs_has_component(physics->ecs, entity, WPE_COMP_TRANSFORM))
+        return WPE_RESULT_ERROR_NOT_FOUND;
+    if (!wpe__size_valid(radius, height, offset)) {
+        wpe_log_error("wpe_character_resize: radius and height must be positive and finite (entity 0x%08x)",
+                      entity);
+        return WPE_RESULT_ERROR_INVALID_ARG;
+    }
+    if (!wpe__capsule_inside(c, radius, height, offset) &&
+        !wpe_character_fits(physics, entity, radius, height, offset))
+        return WPE_RESULT_OK;
+    c->radius = radius;
+    c->height = height;
+    c->offset = offset;
+    const WPE_Result result = wpe_physics_refresh(physics, entity);
+    if (result == WPE_RESULT_OK && out_resized) *out_resized = true;
+    return result;
+}
+
 /* Body of an entity's created rigid body. */
 static WPE_Result wpe__body_of(const WPE_Physics* physics, WPE_Entity entity, b3BodyId* out_body,
                                WPE_BodyType* out_type) {

@@ -334,6 +334,38 @@ WPE_CharacterController wpe_character_default(void);
 WPE_Result wpe_character_move(WPE_Physics* physics, WPE_Entity entity, WPE_Vec3 velocity, float dt,
                               WPE_Vec3* out_velocity);
 
+/**
+ * Whether a character's capsule would fit at its current position with another size (headroom
+ * before standing up from a crouch, unrolling from a ball): nothing solid overlaps the capsule of
+ * `radius`, `height` and `offset` (as in WPE_CharacterController) by more than a small tolerance, so
+ * resting on the ground or against a wall still fits.
+ *
+ * Static and kinematic colliders and other characters block; triggers, dynamic bodies (the
+ * character pushes those) and the entity's own capsule don't.
+ *
+ * @return false also when the entity has no character controller or transform, or the size is
+ *         invalid (radius and height must be positive and finite).
+ *
+ * @thread_safety Owning thread
+ */
+bool wpe_character_fits(const WPE_Physics* physics, WPE_Entity entity, float radius, float height,
+                        WPE_Vec3 offset);
+
+/**
+ * Changes a character's capsule when the new one fits (see wpe_character_fits()) or lies inside the
+ * current one (shrinking always works); otherwise nothing changes. The body is rebuilt at once, and
+ * the other settings and the ground state are kept.
+ *
+ * @param out_resized Optional: whether the size changed.
+ * @return WPE_RESULT_OK (also when blocked); WPE_RESULT_ERROR_NULL_ARG; WPE_RESULT_ERROR_NOT_FOUND (no
+ *         character controller or transform); WPE_RESULT_ERROR_INVALID_ARG (a non-positive or
+ *         non-finite size).
+ *
+ * @thread_safety Owning thread
+ */
+WPE_Result wpe_character_resize(WPE_Physics* physics, WPE_Entity entity, float radius, float height,
+                                WPE_Vec3 offset, bool* out_resized);
+
 /* Body control. These fail with WPE_RESULT_ERROR_NOT_FOUND when the entity has no simulated
  * rigid body yet (bodies are created at the next step); forces apply to dynamic bodies only. */
 WPE_Result wpe_physics_apply_force(WPE_Physics* physics, WPE_Entity entity, WPE_Vec3 force);

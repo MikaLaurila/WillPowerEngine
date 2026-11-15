@@ -332,7 +332,22 @@ A character controller is an upright capsule moved by your script rather than by
 | `wpe.add_character(entity, [{radius = 0.4, height = 1.8, offset = (0, 0.9, 0), max_slope = 45, step_height = 0.3, snap_distance = 0.3}])` | Add or update the controller. `offset` is the capsule's center from the entity's origin (the default puts the origin at the feet); `max_slope` is the steepest walkable ground in degrees; `step_height` the tallest step walked up onto; `snap_distance` how far it follows the ground down slopes and steps. |
 | `wpe.move_character(entity, velocity, dt) -> velocity, grounded` | Moves for `dt` seconds at `velocity` and returns what is left of it: the parts that ran into something are gone (landing zeroes the fall, a wall the speed into it, a ceiling the rise). Keep the returned velocity for the next frame. |
 | `wpe.get_character(entity) -> {grounded, ground_normal, ground?, radius, height, offset, max_slope, step_height, snap_distance}` | The settings, and what the latest move found under it (`ground` is the entity it stands on). |
+| `wpe.character_fits(entity, [{radius, height, offset}]) -> bool` | Whether the capsule would fit where the character stands now with this size (fields left out keep the current ones): headroom before standing up from a crouch or unrolling from a ball. Resting on the ground or against a wall still fits. Static and kinematic colliders and other characters block; triggers and dynamic bodies don't. |
+| `wpe.resize_character(entity, {radius, height, offset}) -> bool` | Changes the capsule's size if it fits (shrinking inside the current capsule always works) and returns whether it did; when blocked nothing changes, so try again later. The other settings and `grounded` are kept. |
 | `wpe.remove_character(entity)` | Remove the controller. |
+
+To keep the feet where they are, keep `offset.y` at half the height. A crouch that stands up only where there is room:
+
+```lua
+local STAND = {height = 3.2, offset = vector.create(0, 1.6, 0)}
+local CROUCH = {height = 1.8, offset = vector.create(0, 0.9, 0)}
+
+if crouch_held then
+	wpe.resize_character(self.entity, CROUCH)
+elseif not wpe.resize_character(self.entity, STAND) then
+	-- Blocked overhead: stay crouched.
+end
+```
 
 Gravity is the script's to apply: add it to the velocity each frame. A velocity pointing up (a jump) leaves the ground; one pointing down on walkable ground doesn't slide it downhill. Call `move_character` from `on_fixed_update` for frame-rate-independent movement:
 

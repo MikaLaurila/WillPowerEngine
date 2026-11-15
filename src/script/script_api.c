@@ -1083,6 +1083,53 @@ static int wpe__api_get_character(lua_State* L) {
     return 1;
 }
 
+/* A capsule size from an optional table {radius, height, offset}, each defaulting to the character's. */
+typedef struct wpe__CharacterSize {
+    float radius;
+    float height;
+    WPE_Vec3 offset;
+} wpe__CharacterSize;
+
+static wpe__CharacterSize wpe__check_character_size(lua_State* L, const char* function, int index,
+                                                    const WPE_CharacterController* c) {
+    wpe__CharacterSize size = {c->radius, c->height, c->offset};
+    if (!lua_isnoneornil(L, index)) {
+        luaL_checktype(L, index, LUA_TTABLE);
+        size.radius = wpe__field_number(L, index, "radius", size.radius);
+        size.height = wpe__field_number(L, index, "height", size.height);
+        lua_getfield(L, index, "offset");
+        if (!lua_isnil(L, -1)) size.offset = wpe__check_vec3(L, -1);
+        lua_pop(L, 1);
+    }
+    if (!(size.radius > 0.0f && size.height > 0.0f && isfinite(size.radius) && isfinite(size.height) &&
+          isfinite(size.offset.x) && isfinite(size.offset.y) && isfinite(size.offset.z)))
+        luaL_errorL(L, "wpe.%s: radius and height must be positive and finite", function);
+    return size;
+}
+
+static int wpe__api_character_fits(lua_State* L) {
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_CharacterController copy = *wpe__check_character(L, "character_fits", entity);
+    const wpe__CharacterSize size = wpe__check_character_size(L, "character_fits", 2, &copy);
+    lua_pushboolean(L, wpe_character_fits(physics, entity, size.radius, size.height, size.offset));
+    return 1;
+}
+
+static int wpe__api_resize_character(lua_State* L) {
+    wpe__check_unrestricted(L, "resize_character");
+    WPE_Physics* physics = wpe__physics(L);
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    const WPE_CharacterController copy = *wpe__check_character(L, "resize_character", entity);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    const wpe__CharacterSize size = wpe__check_character_size(L, "resize_character", 2, &copy);
+    bool resized = false;
+    wpe__raise_result(L, "resize_character",
+                      wpe_character_resize(physics, entity, size.radius, size.height, size.offset, &resized));
+    lua_pushboolean(L, resized);
+    return 1;
+}
+
 static int wpe__api_raycast(lua_State* L) {
     WPE_Physics* physics = wpe__physics(L);
     const WPE_Vec3 origin = wpe__check_vec3(L, 1);
@@ -4275,6 +4322,8 @@ static const luaL_Reg wpe__api[] = {
     {"remove_character", wpe__api_remove_character},
     {"move_character", wpe__api_move_character},
     {"get_character", wpe__api_get_character},
+    {"character_fits", wpe__api_character_fits},
+    {"resize_character", wpe__api_resize_character},
     {"after", wpe__api_after},
     {"every", wpe__api_every},
     {"cancel", wpe__api_cancel},

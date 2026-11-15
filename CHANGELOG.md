@@ -5,6 +5,12 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Character resizing with a headroom check (crouching, rolling into a ball): `wpe.character_fits(entity,
+  [{radius, height, offset}])` tells whether the capsule would fit where the character stands with that size,
+  and `wpe.resize_character(entity, {radius, height, offset})` changes it only when it does (shrinking inside
+  the current capsule always works), returning whether it did. Resting on the ground or against a wall still
+  fits; static and kinematic colliders and other characters block, dynamic bodies and triggers don't. C:
+  `wpe_character_fits`, `wpe_character_resize`.
 - PS1-style vertex snapping: the scene environment's `vertex_snap` (pixels, 0..64; 0 = off, the default, not
   written then) rounds every mesh and billboard vertex's screen position to a grid that coarse, so geometry
   wobbles as it or the camera moves (1 is the PlayStation's whole pixels). Scripts switch it with

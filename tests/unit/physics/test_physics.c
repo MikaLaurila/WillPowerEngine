@@ -1079,6 +1079,87 @@ static void test_physics_character_teleports_past_triggers(void) {
     destroy_world(&f);
 }
 
+static void test_physics_character_resizes_where_it_fits(void) {
+    Fixture f = make_world(GRAVITY);
+    const WPE_Entity ground = spawn_ground(f.ecs);
+    WPE_Collider slab = wpe_collider_default(WPE_COLLIDER_BOX);
+    slab.size = wpe_vec3(6.0f, 0.5f, 10.0f);
+    spawn_static(f.ecs, wpe_vec3(5.0f, 1.45f, 0.0f), slab); /* A tunnel: x 2..8, its roof at y = 1.2. */
+    WPE_Collider wall = wpe_collider_default(WPE_COLLIDER_BOX);
+    wall.size = wpe_vec3(1.0f, 4.0f, 10.0f);
+    spawn_static(f.ecs, wpe_vec3(12.0f, 2.0f, 0.0f), wall); /* Its face at x = 11.5. */
+    WPE_Collider box = wpe_collider_default(WPE_COLLIDER_BOX);
+    const WPE_Entity crate = spawn_dynamic(f.ecs, wpe_vec3(-4.0f, 1.5f, 0.0f), box); /* Never stepped. */
+    box.is_trigger = true;
+    spawn_static(f.ecs, wpe_vec3(-8.0f, 1.5f, 0.0f), box);
+    const WPE_Entity e = spawn_character(&f, wpe_vec3(0.0f, 0.0f, 0.0f));
+    WPE_TEST_ASSERT_OK(wpe_physics_create_bodies(f.physics));
+    WPE_Vec3 v = walk(&f, e, wpe_vec3(0, 0, 0), wpe_vec3(0, 0, 0), 0.2f, false);
+    const WPE_Vec3 stand = wpe_vec3(0.0f, 0.9f, 0.0f);
+    const WPE_Vec3 crouch = wpe_vec3(0.0f, 0.5f, 0.0f);
+
+    /* Resting on the ground fits; sunk into it doesn't. */
+    WPE_TEST_ASSERT(wpe_character_fits(f.physics, e, 0.4f, 1.8f, stand));
+    WPE_TEST_ASSERT(!wpe_character_fits(f.physics, e, 0.4f, 1.8f, wpe_vec3(0.0f, 0.5f, 0.0f)));
+
+    /* Crouched, it walks into the tunnel, where standing up is refused until it's out. */
+    bool resized = false;
+    WPE_TEST_ASSERT_OK(wpe_character_resize(f.physics, e, 0.4f, 1.0f, crouch, &resized));
+    WPE_TEST_ASSERT(resized && character_of(&f, e)->grounded);
+    WPE_TEST_ASSERT_NEAR(1.0, character_of(&f, e)->height, 1e-6);
+    v = walk(&f, e, v, wpe_vec3(2, 0, 0), 2.5f, false);
+    WPE_TEST_ASSERT_NEAR(5.0, transform_of(f.ecs, e)->position.x, 0.05);
+    WPE_TEST_ASSERT_NEAR(0.0, transform_of(f.ecs, e)->position.y, 0.02); /* It fit under the roof. */
+    WPE_TEST_ASSERT(!wpe_character_fits(f.physics, e, 0.4f, 1.8f, stand));
+    WPE_TEST_ASSERT_OK(wpe_character_resize(f.physics, e, 0.4f, 1.8f, stand, &resized));
+    WPE_TEST_ASSERT(!resized);
+    WPE_TEST_ASSERT_NEAR(1.0, character_of(&f, e)->height, 1e-6);
+    WPE_TEST_ASSERT_NEAR(0.5, character_of(&f, e)->offset.y, 1e-6);
+    /* Smaller always works. */
+    WPE_TEST_ASSERT_OK(wpe_character_resize(f.physics, e, 0.3f, 0.8f, wpe_vec3(0.0f, 0.4f, 0.0f), &resized));
+    WPE_TEST_ASSERT(resized);
+    WPE_TEST_ASSERT_OK(wpe_character_resize(f.physics, e, 0.4f, 1.0f, crouch, &resized)); /* Fits. */
+    WPE_TEST_ASSERT(resized);
+
+    /* Out at the far wall, touching it: room to stand, but not to grow wider into the wall. */
+    v = walk(&f, e, v, wpe_vec3(4, 0, 0), 2.5f, false);
+    WPE_TEST_ASSERT_NEAR(11.1, transform_of(f.ecs, e)->position.x, 0.02);
+    WPE_TEST_ASSERT(!wpe_character_fits(f.physics, e, 0.6f, 1.8f, wpe_vec3(0.0f, 0.9f, 0.0f)));
+    WPE_TEST_ASSERT_OK(wpe_character_resize(f.physics, e, 0.4f, 1.8f, stand, &resized));
+    WPE_TEST_ASSERT(resized);
+    v = walk(&f, e, v, wpe_vec3(0, 0, 0), 0.2f, false);
+    WPE_TEST_ASSERT(character_of(&f, e)->grounded);
+    WPE_TEST_ASSERT_NEAR(0.0, transform_of(f.ecs, e)->position.y, 0.02);
+
+    /* Already stuck under the roof: shrinking inside the capsule is allowed, growing isn't. */
+    transform_of(f.ecs, e)->position = wpe_vec3(5.0f, 0.0f, 0.0f);
+    WPE_TEST_ASSERT(!wpe_character_fits(f.physics, e, 0.4f, 1.6f, wpe_vec3(0.0f, 0.8f, 0.0f)));
+    WPE_TEST_ASSERT_OK(wpe_character_resize(f.physics, e, 0.4f, 1.6f, wpe_vec3(0.0f, 0.8f, 0.0f), &resized));
+    WPE_TEST_ASSERT(resized);
+    WPE_TEST_ASSERT_OK(wpe_character_resize(f.physics, e, 0.4f, 1.7f, wpe_vec3(0.0f, 0.85f, 0.0f), &resized));
+    WPE_TEST_ASSERT(!resized);
+
+    /* Dynamic bodies (pushed away) and triggers don't block. */
+    transform_of(f.ecs, e)->position = wpe_vec3(-4.0f, 0.0f, 0.0f);
+    WPE_TEST_ASSERT(wpe_character_fits(f.physics, e, 0.4f, 1.8f, stand));
+    transform_of(f.ecs, e)->position = wpe_vec3(-8.0f, 0.0f, 0.0f);
+    WPE_TEST_ASSERT(wpe_character_fits(f.physics, e, 0.4f, 1.8f, stand));
+
+    /* Bad arguments. */
+    WPE_TEST_ASSERT(!wpe_character_fits(f.physics, e, 0.0f, 1.8f, stand));
+    WPE_TEST_ASSERT(!wpe_character_fits(f.physics, e, 0.4f, NAN, stand));
+    WPE_TEST_ASSERT(!wpe_character_fits(f.physics, crate, 0.4f, 1.8f, stand));
+    wpe_log_set_stderr_enabled(false);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_INVALID_ARG,
+                           wpe_character_resize(f.physics, e, -1.0f, 1.8f, stand, &resized));
+    wpe_log_set_stderr_enabled(true);
+    WPE_TEST_ASSERT(!resized);
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND,
+                           wpe_character_resize(f.physics, ground, 0.4f, 1.8f, stand, NULL));
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NULL_ARG, wpe_character_resize(NULL, e, 0.4f, 1.8f, stand, NULL));
+    destroy_world(&f);
+}
+
 static void test_physics_character_component_lifecycle(void) {
     Fixture f = make_world(GRAVITY);
     const WPE_Entity e = spawn_character(&f, wpe_vec3(0.0f, 0.0f, 0.0f));
@@ -1117,6 +1198,7 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_physics_shape_casts_overlaps_and_filters),
               WPE_TEST_CASE(test_physics_character_jumps_into_a_ceiling),
               WPE_TEST_CASE(test_physics_character_pushes_bodies_and_enters_triggers),
               WPE_TEST_CASE(test_physics_character_teleports_past_triggers),
+              WPE_TEST_CASE(test_physics_character_resizes_where_it_fits),
               WPE_TEST_CASE(test_physics_character_component_lifecycle),
               WPE_TEST_CASE(test_physics_create_validates_world),
               WPE_TEST_CASE(test_physics_create_bodies_and_initial_velocity),
