@@ -4,6 +4,11 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Fixed
+- `wpe.emit_particles` (`wpe_particles_emit`) on a world-space emitter moved in the same frame emitted from
+  where the emitter was at the last transform update (the scene origin for one never moved before), not where
+  it is now: a script placing a puff and emitting it at once got it in the wrong place.
+
 ### Added
 - Character resizing with a headroom check (crouching, rolling into a ball): `wpe.character_fits(entity,
   [{radius, height, offset}])` tells whether the capsule would fit where the character stands with that size,

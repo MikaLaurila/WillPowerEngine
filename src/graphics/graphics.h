@@ -270,7 +270,8 @@ WPE_ParticleEmitter wpe_particle_emitter_default(void);
  */
 WPE_Result wpe_particles_update(WPE_Ecs* ecs, WPE_JobSystem* jobs, float dt);
 
-/** Emits `count` particles now (within max_particles), whether or not the emitter plays. @return The number
+/** Emits `count` particles now (within max_particles), whether or not the emitter plays, from the emitter's
+ * current transform (moved since the last wpe_scene_update_transforms() or not). @return The number
  * emitted. @thread_safety Thread owning the world */
 uint32_t wpe_particles_emit(WPE_Ecs* ecs, WPE_Entity entity, uint32_t count);
 

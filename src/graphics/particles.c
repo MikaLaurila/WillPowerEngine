@@ -5,6 +5,7 @@
 #include "core/alloc.h"
 #include "core/log.h"
 #include "graphics/billboard_internal.h"
+#include "scene/scene.h"
 
 #define WPE__PARTICLE_GRAIN 2048u /* Particles per job chunk; smaller emitters stay on this thread. */
 #define WPE__TWO_PI 6.28318530717958647692f
@@ -230,7 +231,10 @@ WPE_Result wpe_particles_update(WPE_Ecs* ecs, WPE_JobSystem* jobs, float dt) {
 uint32_t wpe_particles_emit(WPE_Ecs* ecs, WPE_Entity entity, uint32_t count) {
     WPE_ParticleEmitter* e = ecs ? wpe_ecs_get_component(ecs, entity, WPE_COMP_PARTICLES) : NULL;
     if (!e) return 0;
-    const WPE_Mat4 world = wpe__world_of(ecs, entity);
+    /* From where the emitter is now: game code often moves it and emits in one go, before the frame's
+     * transform update would refresh the cached world matrix. */
+    WPE_Mat4 world;
+    if (!wpe_scene_compute_world_matrix(ecs, entity, &world)) world = wpe__world_of(ecs, entity);
     return wpe__emit(e, &world, count);
 }
 

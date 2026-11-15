@@ -1471,6 +1471,11 @@ static void test_graphics_particles_move(void) {
     p = &emitter_of(ecs, turned)->particles[0];
     assert_vec3(wpe_vec3(-2, -1, 0), p->velocity);
     assert_vec3(wpe_vec3(4.8f, -0.1f, 0), p->position);
+    /* Moved and emitted before the transforms update: from where it is now, not where it was. */
+    ((WPE_Transform*)wpe_ecs_get_component(ecs, turned, WPE_COMP_TRANSFORM))->position = wpe_vec3(9, 1, 0);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_particles_emit(ecs, turned, 1));
+    assert_vec3(wpe_vec3(9, 1, 0), emitter_of(ecs, turned)->particles[1].position);
+    assert_vec3(wpe_vec3(-2, 0, 0), emitter_of(ecs, turned)->particles[1].velocity);
 
     /* Local space: particles keep their place relative to the emitter, so moving it moves them. */
     settings.world_space = false;
