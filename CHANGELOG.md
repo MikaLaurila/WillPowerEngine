@@ -49,6 +49,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   edge in the pressed direction count, and those in line with it come first. In a list whose rows put their
   buttons in different places (sliders in the middle, toggles at the end), up and down now go row by row,
   where they could skip a row or jump to the wrong one, and left and right no longer jump to another row.
+- Development now also happens on Linux (PikaOS: system GCC 16, Ninja, CMake 4); all tests pass there.
+  CLAUDE.md lists both toolchains and the packages SDL3 needs on Linux for windows and sound (the CI list plus
+  `pkgconf libwayland-bin libpipewire-0.3-dev`).
 
 ### Fixed
 - Skinned meshes scaled by a negative amount on one axis (a character flipped sprite-style to face the other

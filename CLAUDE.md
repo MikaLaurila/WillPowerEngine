@@ -36,7 +36,12 @@ Do not look outside the working directory. Third-party libraries come in through
 
 ## Commands
 
-The local toolchain is MSYS2 UCRT64 GCC 16 + Ninja + CMake 4, plus clang-format and clang-tidy (MSYS2 clang-tools-extra). There's no MSVC.
+The user switches between two machines, so check the platform in the environment info first:
+
+- **Linux** (PikaOS, Debian-based, bash): system GCC 16 + Ninja + CMake 4, plus clang-format and clang-tidy, all from apt. SDL3 builds its windowing and audio backends only if its development packages are installed; without them, configure fails or silently falls back to the dummy drivers. The apt list is in the Linux job of `.github/workflows/ci.yml`, plus `pkgconf libwayland-bin libpipewire-0.3-dev`. After installing them, delete the build tree and configure again. Repos clone over HTTPS through `gh auth` (a token).
+- **Windows** (PowerShell): MSYS2 UCRT64 GCC 16 + Ninja + CMake 4, plus clang-format and clang-tidy (MSYS2 clang-tools-extra). There's no MSVC.
+
+The commands below work in both shells: on Windows, executables end in `.exe`.
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug   # Release: use a separate build-release/ dir
