@@ -20,6 +20,19 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(WPE_BUILD_TESTS "Build the WillPowerEngine test suites" ON)
 option(SANITIZERS "Build with address and undefined-behavior sanitizers (GCC/Clang, non-MinGW)" OFF)
+option(WPE_USE_CCACHE "Compile through ccache when it is installed" ON)
+
+# Set before any target exists (the dependencies included next too), so every compile goes through it.
+if(WPE_USE_CCACHE AND NOT CMAKE_C_COMPILER_LAUNCHER)
+    find_program(WPE_CCACHE ccache)
+    if(WPE_CCACHE)
+        message(STATUS "Compiling through ccache: ${WPE_CCACHE}")
+        set(CMAKE_C_COMPILER_LAUNCHER "${WPE_CCACHE}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${WPE_CCACHE}")
+        # ccache can't cache compiles that use a precompiled header (SDL3's), and the engine uses none.
+        set(CMAKE_DISABLE_PRECOMPILE_HEADERS ON)
+    endif()
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(WpeCompilerOptions)

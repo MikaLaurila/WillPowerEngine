@@ -52,6 +52,8 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 - Development now also happens on Linux (PikaOS: system GCC 16, Ninja, CMake 4); all tests pass there.
   CLAUDE.md lists both toolchains and the packages SDL3 needs on Linux for windows and sound (the CI list plus
   `pkgconf libwayland-bin libpipewire-0.3-dev`).
+- Builds compile through ccache when it is installed (`WPE_USE_CCACHE`, on by default), with precompiled
+  headers off so that SDL3's compiles are cached too: a rebuild from a clean tree takes about 1 s instead of 20.
 
 ### Fixed
 - Skinned meshes scaled by a negative amount on one axis (a character flipped sprite-style to face the other
