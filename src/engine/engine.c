@@ -1874,6 +1874,8 @@ WPE_Result wpe_engine_run(WPE_Engine* engine, const WPE_RunOptions* options) {
         previous = now;
         if (options->watch && now - last_watch > 0.5) {
             wpe_script_host_reload_changed(engine->scripts);
+            (void)wpe_engine_reload_changed_assets(
+                engine); /* New instances use them; the scene keeps its own. */
             last_watch = now;
         }
         result = wpe_engine_frame(engine, dt);
@@ -1952,6 +1954,17 @@ bool wpe_engine_draws_scene(const WPE_Engine* engine) {
 
 WPE_ScriptHost* wpe_engine_scripts(const WPE_Engine* engine) {
     return engine ? engine->scripts : NULL;
+}
+
+uint32_t wpe_engine_reload_changed_assets(WPE_Engine* engine) {
+    if (!engine) return 0;
+    const uint32_t reloaded = wpe_asset_manager_reload_changed(engine->assets);
+    if (reloaded == 0) return 0;
+    wpe_script_host_refresh_assets(engine->scripts);
+    if (wpe_asset_is_outdated(engine->assets, engine->sky))
+        engine->sky_image[0] = '\0'; /* wpe__resolve_sky loads it again. */
+    /* NOTE(limitation): the project font stays as loaded (draw2d and the UI hold its pointer). */
+    return reloaded;
 }
 
 WPE_Window* wpe_engine_window(const WPE_Engine* engine) {

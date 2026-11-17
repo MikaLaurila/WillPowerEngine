@@ -323,8 +323,70 @@ static void test_assets_gltf_with_relative_buffer_from_directory_and_pak(void) {
     wpe_test_assets_destroy(&pak);
 }
 
+/* Rewrites a file until its modification time moves (file clocks can be coarse). */
+static void rewrite_os_file(const char* path, const char* text) {
+    int64_t before = 0;
+    WPE_TEST_ASSERT_OK(wpe_file_modified_time(path, &before));
+    int64_t after = before;
+    for (int attempt = 0; attempt < 400 && after == before; ++attempt) {
+        if (attempt > 0) wpe_platform_sleep_ms(5);
+        write_os_file(path, text, strlen(text));
+        WPE_TEST_ASSERT_OK(wpe_file_modified_time(path, &after));
+    }
+    WPE_TEST_ASSERT(after != before);
+}
+
+static const char g_ball_8[] = "{\"shape\": \"sphere\", \"radius\": 0.5, \"rings\": 8, \"segments\": 8}";
+static const char g_ball_16[] = "{\"shape\": \"sphere\", \"radius\": 0.5, \"rings\": 16, \"segments\": 16}";
+
+static void test_assets_reload_changed_files(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/reload"));
+    write_os_file(ROOT "/reload/ball.prim", g_ball_8, strlen(g_ball_8));
+    WPE_TestAssets t = wpe_test_assets_create(ROOT "/reload", 0);
+    const WPE_AssetHandle old = wpe_test_load_model(t.assets, "ball.prim");
+    const uint32_t old_vertices = wpe_asset_model(t.assets, old)->vertex_count;
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_reload_changed(t.assets)); /* Nothing changed yet. */
+    WPE_TEST_ASSERT(!wpe_asset_is_outdated(t.assets, old));
+
+    rewrite_os_file(ROOT "/reload/ball.prim", g_ball_16);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_asset_manager_reload_changed(t.assets));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_reload_changed(t.assets)); /* Once per change. */
+    /* The old one stays usable for its holder; loads get the new file. */
+    WPE_TEST_ASSERT(wpe_asset_is_outdated(t.assets, old));
+    WPE_TEST_ASSERT_EQ_UINT(old_vertices, wpe_asset_model(t.assets, old)->vertex_count);
+    const WPE_AssetHandle fresh = wpe_test_load_model(t.assets, "ball.prim");
+    WPE_TEST_ASSERT(fresh != old);
+    WPE_TEST_ASSERT(!wpe_asset_is_outdated(t.assets, fresh));
+    WPE_TEST_ASSERT(wpe_asset_model(t.assets, fresh)->vertex_count > old_vertices);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_asset_ref_count(t.assets, fresh));
+    WPE_TEST_ASSERT_EQ_UINT(fresh, wpe_asset_find(t.assets, WPE_ASSET_MODEL, "ball.prim"));
+    wpe_asset_release(t.assets, old);
+    WPE_TEST_ASSERT(!wpe_asset_is_valid(t.assets, old));
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_asset_manager_stats(t.assets).assets);
+
+    /* A broken version keeps the working one (once: not retried until the file changes again). */
+    quiet(true);
+    rewrite_os_file(ROOT "/reload/ball.prim", "{\"shape\": ");
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_reload_changed(t.assets));
+    quiet(false);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_reload_changed(t.assets));
+    WPE_TEST_ASSERT(!wpe_asset_is_outdated(t.assets, fresh));
+    WPE_TEST_ASSERT_EQ_UINT(fresh, wpe_asset_find(t.assets, WPE_ASSET_MODEL, "ball.prim"));
+
+    /* Fixed again; a fresh copy nobody takes is freed by the next check. */
+    rewrite_os_file(ROOT "/reload/ball.prim", g_ball_8);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_asset_manager_reload_changed(t.assets));
+    WPE_TEST_ASSERT_EQ_UINT(2, wpe_asset_manager_stats(t.assets).assets);
+    wpe_asset_release(t.assets, fresh);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_asset_manager_stats(t.assets).assets);
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_reload_changed(t.assets));
+    WPE_TEST_ASSERT_EQ_UINT(0, wpe_asset_manager_stats(t.assets).assets);
+    wpe_test_assets_destroy(&t);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_assets_load_caches_and_counts_references),
               WPE_TEST_CASE(test_assets_primitive_models), WPE_TEST_CASE(test_assets_load_errors),
               WPE_TEST_CASE(test_assets_add_takes_ownership), WPE_TEST_CASE(test_assets_fonts),
               WPE_TEST_CASE(test_assets_custom_type_from_pak),
-              WPE_TEST_CASE(test_assets_gltf_with_relative_buffer_from_directory_and_pak))
+              WPE_TEST_CASE(test_assets_gltf_with_relative_buffer_from_directory_and_pak),
+              WPE_TEST_CASE(test_assets_reload_changed_files))

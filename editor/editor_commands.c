@@ -952,6 +952,17 @@ static WPE_Result wpe__cmd_open_script(wpe__Call* call) {
 }
 
 /* {text} -> {ok, line, message}: whether Luau compiles, without running it. */
+static WPE_Result wpe__cmd_reload_assets(wpe__Call* call) {
+    uint32_t reloaded = 0;
+    const WPE_Result result = wpe__editor_reload_assets(call->editor, &reloaded);
+    if (result != WPE_RESULT_OK) return wpe__null(call, result);
+    wpe_json_write_object_begin(call->w);
+    wpe_json_write_key(call->w, "reloaded");
+    wpe_json_write_integer(call->w, reloaded);
+    wpe_json_write_object_end(call->w);
+    return WPE_RESULT_OK;
+}
+
 static WPE_Result wpe__cmd_check_script(wpe__Call* call) {
     const char* text = wpe__string_arg(call, "text");
     if (!text) return wpe__null(call, wpe__fail(call, WPE_RESULT_ERROR_INVALID_ARG, "\"text\" is required"));
@@ -2287,6 +2298,9 @@ static const struct {
     {"new_script", wpe__cmd_new_script,
      "{path, template = \"behavior\"|\"physics\"|\"ui\"|\"module\"} -> {path}: a script from a template, "
      "opened in the Script panel (refused when the file exists)"},
+    {"reload_assets", wpe__cmd_reload_assets,
+     "{} -> {reloaded}: load again the models, images and sounds whose files changed (in edit mode the scene "
+     "is rebuilt to show them; ids change). Hot reload does it twice a second, and play always does"},
     {"check_script", wpe__cmd_check_script,
      "{text} -> {ok, line?, message?}: compile Luau without running it"},
     {"open_script", wpe__cmd_open_script,

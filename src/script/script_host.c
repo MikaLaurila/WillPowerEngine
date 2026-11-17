@@ -1601,6 +1601,25 @@ WPE_AssetHandle wpe__script_find_sound(WPE_ScriptHost* host, const char* path) {
     return sound;
 }
 
+/* A fresh copy of `*handle` when the asset manager has one (its file changed), swapping this cache's
+ * reference over; otherwise it stays. */
+static void wpe__refresh_cached(WPE_ScriptHost* host, WPE_AssetType type, WPE_AssetHandle* handle) {
+    if (!wpe_asset_is_outdated(host->assets, *handle)) return;
+    WPE_AssetHandle fresh = WPE_ASSET_NONE;
+    if (wpe_asset_load(host->assets, type, wpe_asset_path(host->assets, *handle), &fresh) != WPE_RESULT_OK)
+        return;
+    wpe_asset_release(host->assets, *handle);
+    *handle = fresh;
+}
+
+void wpe_script_host_refresh_assets(WPE_ScriptHost* host) {
+    if (!host) return;
+    for (uint32_t i = 0; i < host->prefab_count; ++i)
+        wpe__refresh_cached(host, WPE_ASSET_MODEL, &host->prefabs[i].model);
+    for (uint32_t i = 0; i < host->sound_count; ++i)
+        wpe__refresh_cached(host, WPE_ASSET_SOUND, &host->sounds[i].sound);
+}
+
 WPE_ScriptStats wpe_script_host_stats(const WPE_ScriptHost* host) {
     WPE_ScriptStats stats = {0};
     if (!host) return stats;

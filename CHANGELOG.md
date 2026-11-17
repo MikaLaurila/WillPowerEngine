@@ -4,7 +4,19 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ## [Unreleased]
 
+### Added
+- Asset hot reload: models, images and sounds whose files changed on disk are loaded again. The editor checks
+  when play starts (so a new export shows up without restarting the editor, including models scripts
+  instantiate) and, with hot reload on, twice a second, rebuilding the scene in edit mode (not an edit; the
+  editor camera stays); `reload_assets` command; the View menu's toggle is now "Reload changed scripts and
+  assets". `wpe_runtime --watch` reloads them too, for what the game makes afterwards. C:
+  `wpe_asset_manager_reload_changed` (a changed file loads into a fresh asset that takes over the cache, the
+  old one stays valid for its holders; a broken file keeps the old one), `wpe_asset_is_outdated`,
+  `wpe_script_host_refresh_assets`, `wpe_engine_reload_changed_assets`.
+
 ### Fixed
+- The editor camera jumped back to its starting view whenever the scene was rebuilt from a snapshot (undo,
+  redo, stopping play, saving a prefab with other instances); it now stays where it was.
 - `wpe.emit_particles` (`wpe_particles_emit`) on a world-space emitter moved in the same frame emitted from
   where the emitter was at the last transform update (the scene origin for one never moved before), not where
   it is now: a script placing a puff and emitting it at once got it in the wrong place.

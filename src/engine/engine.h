@@ -192,7 +192,7 @@ typedef struct WPE_RunOptions {
     uint32_t frames;        /* Stop after this many frames (0 = until quit). */
     double fixed_dt;        /* Frame time to simulate instead of the real clock (0 = real time). */
     const char* screenshot; /* Save the last frame as PNG at this OS path (NULL = none). */
-    bool watch;             /* Hot-reload changed scripts twice a second (directory projects). */
+    bool watch;             /* Hot-reload changed scripts and assets twice a second (directory projects). */
     uint32_t max_fps;       /* Sleep so frames don't come faster than this (0 = no limit; a headless server
                                would otherwise spin a core at full speed). */
 } WPE_RunOptions;
@@ -238,6 +238,20 @@ WPE_ScriptHost* wpe_engine_scripts(const WPE_Engine* engine);
 WPE_Renderer* wpe_engine_renderer(const WPE_Engine* engine);
 WPE_Window* wpe_engine_window(const WPE_Engine* engine); /* NULL when headless or embedded. */
 const WPE_ProjectSettings* wpe_engine_project(const WPE_Engine* engine);
+
+/**
+ * Hot reload of assets: reloads the models, images, sounds and fonts whose files changed since they were
+ * loaded (wpe_asset_manager_reload_changed()) and points the engine's own caches at the new ones (the
+ * scripts' prefabs and sounds, the sky image). Entities built from the old ones keep them until they are
+ * made again: reload the scene to show the change everywhere (the editor does). Files in archives never
+ * change.
+ *
+ * @return How many assets were reloaded.
+ *
+ * @thread_safety Main thread
+ */
+uint32_t wpe_engine_reload_changed_assets(WPE_Engine* engine);
+
 /** The current scene's environment; changes apply from the next frame. */
 WPE_SceneEnvironment* wpe_engine_environment(WPE_Engine* engine);
 /** The game clock's speed (slow motion, hit-stops) and shakes; reset by every scene load. */

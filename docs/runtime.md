@@ -61,7 +61,7 @@ The editor's File > Update Claude skill and the `update_skill` command do the sa
 |---|---|
 | `--project <dir>` / `--pak <archive>` | The game to play. Without either, the runtime plays the game embedded in its own executable (an exported game). |
 | `--scene <path>` | Start with this scene instead of the project's `start_scene`. |
-| `--watch` | Reload changed scripts twice a second (project directories). |
+| `--watch` | Reload changed scripts twice a second (project directories), and changed models, images and sounds: what the game makes from then on (`wpe.instantiate`, `wpe.play_sound`) uses the new files; the loaded scene keeps its own until it loads again. |
 | `--mute` | Silence all audio. |
 | `--headless` | No window and no audio device. Rendering still runs, so `--screenshot` works. |
 | `--frames <n>` / `--fixed-dt <s>` | Stop after n frames / simulate a fixed frame time (reproducible runs). |

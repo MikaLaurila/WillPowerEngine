@@ -7,6 +7,9 @@
  * Components that reference assets (mesh renderers, animators, colliders, sound sources) hold one
  * reference each for as long as they exist, so an asset lives exactly as long as something uses it.
  *
+ * Hot reload: wpe_asset_manager_reload_changed() loads changed files again into fresh assets that take over
+ * the cache; the old ones stay valid for their holders until released.
+ *
  * Handles are 32-bit generational values (WPE_ASSET_NONE = 0 is never valid), so a stale handle
  * to a destroyed asset is detected instead of aliasing a newer one.
  *
@@ -178,6 +181,26 @@ void* wpe_asset_get(const WPE_AssetManager* assets, WPE_AssetHandle handle, WPE_
 /** @return The handle of a loaded asset without adding a reference, or WPE_ASSET_NONE. @thread_safety Owning
  * thread */
 WPE_AssetHandle wpe_asset_find(const WPE_AssetManager* assets, WPE_AssetType type, const char* path);
+
+/**
+ * Reloads the file-loaded assets whose files changed on disk since they were loaded (hot reload: the editor
+ * and `wpe_runtime --watch` call it). A changed file is loaded into a fresh asset that takes the old one's
+ * place in the cache, so later wpe_asset_load() calls of the path get it; the old asset is marked outdated
+ * (wpe_asset_is_outdated()) and stays valid for everything that holds it until they release it, so nothing
+ * is pulled out from under them. Rebuild the holders (reload the scene, swap cached handles) to show the
+ * new version. A changed file that fails to load (maybe still being written) keeps the old asset, with a
+ * warning, and is tried again when it changes again. A fresh asset nothing has taken by the next call is
+ * freed then. Files inside archives never change.
+ *
+ * @return How many assets were reloaded.
+ *
+ * @thread_safety Owning thread
+ */
+uint32_t wpe_asset_manager_reload_changed(WPE_AssetManager* assets);
+
+/** @return Whether a newer copy replaced this asset (wpe_asset_manager_reload_changed()); false for invalid
+ * handles. @thread_safety Owning thread */
+bool wpe_asset_is_outdated(const WPE_AssetManager* assets, WPE_AssetHandle handle);
 
 /** @return Current statistics. @thread_safety Owning thread */
 WPE_AssetStats wpe_asset_manager_stats(const WPE_AssetManager* assets);

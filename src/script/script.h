@@ -364,6 +364,16 @@ WPE_Result wpe_script_host_net_event(WPE_ScriptHost* host, const WPE_ScriptNetEv
 uint32_t wpe_script_host_reload_changed(WPE_ScriptHost* host);
 
 /**
+ * Points the host's cached models (prefabs registered by name or loaded by path) and sounds at the asset
+ * manager's fresh copies of the ones wpe_asset_manager_reload_changed() replaced, releasing the outdated
+ * ones, so later wpe.instantiate and wpe.play_sound use the new files. Entities already made from them keep
+ * theirs.
+ *
+ * @thread_safety Main thread
+ */
+void wpe_script_host_refresh_assets(WPE_ScriptHost* host);
+
+/**
  * Recompiles one script file now (whether or not it changed).
  *
  * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_NOT_FOUND (not loaded),

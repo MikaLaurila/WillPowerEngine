@@ -1374,6 +1374,64 @@ static void test_editor_orders_siblings(void) {
     wpe_editor_destroy(editor);
 }
 
+/* The model behind the mesh of the entity named `name` (or of its first child: an instantiated model). */
+static const WPE_Model* model_of(WPE_Editor* editor, const char* name) {
+    WPE_Ecs* ecs = wpe_engine_ecs(wpe_editor_engine(editor));
+    const WPE_Entity e = entity_named(editor, name);
+    const WPE_MeshRenderer* mesh = wpe_ecs_get_component(ecs, e, WPE_COMP_MESH);
+    const WPE_Hierarchy* h = wpe_ecs_get_component(ecs, e, WPE_COMP_HIERARCHY);
+    if (!mesh && h) mesh = wpe_ecs_get_component(ecs, h->first_child, WPE_COMP_MESH);
+    WPE_TEST_ASSERT(mesh != NULL);
+    return mesh->model;
+}
+
+static void test_editor_reloads_changed_assets(void) {
+    WPE_Editor* editor = open_editor();
+    WPE_AssetManager* assets = wpe_engine_assets(wpe_editor_engine(editor));
+    run_ok(editor, "{\"cmd\": \"set_view\", \"value\": {\"hot_reload\": false}}"); /* Only by command here. */
+    /* A script instantiates the model too (the scripts keep it cached). */
+    run_ok(editor, "{\"cmd\": \"run_lua\", \"code\": \"wpe.set_name(wpe.instantiate('meshes/box.prim'), "
+                   "'copy')\"}");
+    run_ok(editor, "{\"cmd\": \"camera\", \"position\": [20, 3, 4], \"target\": [0, 0, 0]}");
+    const uint32_t undo_steps = wpe_editor_undo_count(editor);
+    const uint32_t box_vertices = model_of(editor, "box")->vertex_count;
+    WPE_JsonDocument* none = run(editor, "{\"cmd\": \"reload_assets\"}", true);
+    WPE_TEST_ASSERT_NEAR(0.0, wpe_json_number(wpe_json_get(result_of(none), "reloaded"), -1), 0);
+    wpe_json_free(none);
+
+    /* The file changes (a new export). */
+    const char* path = ROOT "/project/meshes/box.prim";
+    rewrite(path, "{\"shape\": \"sphere\", \"radius\": 0.5, \"rings\": 10, \"segments\": 10}");
+    WPE_JsonDocument* reply = run(editor, "{\"cmd\": \"reload_assets\"}", true);
+    WPE_TEST_ASSERT_NEAR(1.0, wpe_json_number(wpe_json_get(result_of(reply), "reloaded"), 0), 0);
+    wpe_json_free(reply);
+
+    /* The scene shows it (both entities), and it was no edit; the editor camera stayed. */
+    WPE_TEST_ASSERT(model_of(editor, "box")->vertex_count != box_vertices);
+    WPE_TEST_ASSERT_EQ_UINT(model_of(editor, "box")->vertex_count, model_of(editor, "copy")->vertex_count);
+    WPE_TEST_ASSERT_EQ_UINT(undo_steps, wpe_editor_undo_count(editor));
+    WPE_TEST_ASSERT(wpe_editor_dirty(editor));
+    const WPE_Transform* camera = wpe_ecs_get_component(wpe_engine_ecs(wpe_editor_engine(editor)),
+                                                        wpe_editor_camera(editor), WPE_COMP_TRANSFORM);
+    WPE_TEST_ASSERT_NEAR(20.0, camera->position.x, 1e-4);
+    /* The scripts' cache moved to the new model, and the old one is gone. */
+    run_ok(editor, "{\"cmd\": \"run_lua\", \"code\": \"wpe.set_name(wpe.instantiate('meshes/box.prim'), "
+                   "'copy2')\"}");
+    WPE_TEST_ASSERT_EQ_UINT(model_of(editor, "box")->vertex_count, model_of(editor, "copy2")->vertex_count);
+    const WPE_AssetHandle current = wpe_asset_find(assets, WPE_ASSET_MODEL, "meshes/box.prim");
+    WPE_TEST_ASSERT(!wpe_asset_is_outdated(assets, current));
+    WPE_TEST_ASSERT_EQ_UINT(4, wpe_asset_ref_count(assets, current)); /* 3 entities + the scripts' cache. */
+
+    /* Play picks up a change by itself (hot reload off, as here, or not yet run). */
+    const uint32_t sphere_vertices = model_of(editor, "box")->vertex_count;
+    rewrite(path, "{\"shape\": \"box\"}");
+    run_ok(editor, "{\"cmd\": \"play\"}");
+    WPE_TEST_ASSERT(model_of(editor, "box")->vertex_count != sphere_vertices);
+    run_ok(editor, "{\"cmd\": \"stop\"}");
+    WPE_TEST_ASSERT(model_of(editor, "box")->vertex_count != sphere_vertices);
+    wpe_editor_destroy(editor);
+}
+
 WPE_TEST_MAIN(
     WPE_TEST_CASE(test_editor_coalesces_continuous_edits), WPE_TEST_CASE(test_editor_prefab_commands),
     WPE_TEST_CASE(test_editor_orders_siblings), WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
@@ -1388,4 +1446,5 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_editor_script_properties), WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
     WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
     WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
-    WPE_TEST_CASE(test_editor_play_mode_restores_the_scene))
+    WPE_TEST_CASE(test_editor_play_mode_restores_the_scene),
+    WPE_TEST_CASE(test_editor_reloads_changed_assets))

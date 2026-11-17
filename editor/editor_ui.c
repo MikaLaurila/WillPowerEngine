@@ -3227,7 +3227,7 @@ static void wpe__ui_menu(WPE_EditorUi* ui) {
         wpe__ui_navigation_menu(ui, &view);
         if (igMenuItem_Bool("Icons (lights, particles)", "L", view.icons, true))
             wpe__ui_set_view(ui, "icons", NULL, 0, !view.icons);
-        if (igMenuItem_Bool("Reload changed scripts", NULL, view.hot_reload, true))
+        if (igMenuItem_Bool("Reload changed scripts and assets", NULL, view.hot_reload, true))
             wpe__ui_set_view(ui, "hot_reload", NULL, 0, !view.hot_reload);
         if (igMenuItem_Bool("Network stats", NULL, view.network, true))
             wpe__ui_set_view(ui, "network", NULL, 0, !view.network);

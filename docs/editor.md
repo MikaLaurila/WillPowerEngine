@@ -49,6 +49,8 @@ The value shows next to the gizmo while you drag.
 
 **Script hot reload:** while it's on (the default), changed scripts are reloaded twice a second, in edit mode and while playing. Running instances switch to the new code and keep their state (`on_reload` is called). A script that fails to compile is reported in the console, and the previous version keeps running.
 
+**Asset hot reload:** models, images and sounds whose files changed since they were loaded (a new export from Blockbench or Blender) are loaded again. With hot reload on, the editor checks twice a second; in edit mode the scene is then rebuilt from its own text so it shows the new versions (the selection clears; it isn't an edit, so undo and unsaved changes are untouched, and the editor camera stays). Pressing play always checks first, so the game starts with the newest files, including models the scripts make with `wpe.instantiate` and sounds they play. While playing, only what the game makes from then on uses the new files; stop brings the scene back with them. A changed file that fails to load (an export still being written) keeps the previous version, with a warning in the console, and is tried again when it changes. `reload_assets` does a check on demand. The project font isn't reloaded.
+
 **Play mode** runs the game from the current scene: scripts, physics, audio and input work as in the runtime, with the game's own camera. Keyboard and mouse reach the game while the viewport is focused; gamepads always do. **Stop** returns the scene to exactly how it was when play started, and the scene can't be edited while it plays. A game that calls `wpe.quit()` simply stops. A multiplayer game the scripts hosted or joined ends with play mode.
 
 ## Commands
@@ -113,6 +115,7 @@ Entities and components use the **scene-file schema** ([scenes.md](scenes.md)), 
 | `rename_asset` | `{path, to, update_references = true}` → `{updated: [paths]}`: renames or moves a project file (same extension; not `project.json`; edit mode). With `update_references`, the files naming it, the open scene (unsaved changes stay unsaved) and its undo/redo steps change to the new name |
 | `duplicate_asset` | `{path, to?}` → `{path}`: copies a file; without `to`, next to it as `name_copy.ext` (`_copy2`, ...) |
 | `delete_asset` | `{path}`: deletes a project file (edit mode; not the open scene or `project.json`). Check `asset_references` first: files that name it aren't changed |
+| `reload_assets` | `{}` → `{reloaded}`: loads again the models, images and sounds whose files changed; in edit mode the scene is rebuilt to show them (entity ids change). Hot reload does this twice a second, and play always does |
 | `check_script` | `{text}` → `{ok, line?, message?}`: compiles Luau without running it |
 | `open_script` | `{path, line = 0, column = 0}`: shows a script in the Script panel, the cursor at the line and column (1-based; without a column, at the line's first non-blank character) |
 | `export` | `{output, runtime?}` → `{files, bytes}`: exports the game (runtime/export, [runtime.md](runtime.md)) |

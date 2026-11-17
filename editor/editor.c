@@ -123,11 +123,30 @@ WPE_Result wpe__editor_snapshot(WPE_Editor* editor, wpe__Snapshot* out) {
 }
 
 WPE_Result wpe__editor_restore(WPE_Editor* editor, const wpe__Snapshot* snapshot, const char* name) {
+    /* The editor camera isn't part of the scene: it stays where it is. */
+    WPE_Ecs* ecs = wpe_engine_ecs(editor->engine);
+    const WPE_Transform* view = wpe_ecs_get_component(ecs, editor->camera, WPE_COMP_TRANSFORM);
+    const WPE_Transform kept = view ? *view : wpe_transform_identity();
     editor->selection = WPE_ENTITY_NULL;
     editor->camera = WPE_ENTITY_NULL;
     WPE_Result result = wpe_engine_load_scene_text(editor->engine, snapshot->text, snapshot->size, name);
     const WPE_Result helpers = wpe__editor_create_helpers(editor);
+    WPE_Transform* camera = view ? wpe_ecs_get_component(ecs, editor->camera, WPE_COMP_TRANSFORM) : NULL;
+    if (camera) *camera = kept;
     return result != WPE_RESULT_OK ? result : helpers;
+}
+
+WPE_Result wpe__editor_reload_assets(WPE_Editor* editor, uint32_t* out_reloaded) {
+    const uint32_t reloaded = wpe_engine_reload_changed_assets(editor->engine);
+    if (out_reloaded) *out_reloaded = reloaded;
+    if (reloaded == 0 || editor->mode != WPE_EDITOR_EDIT) return WPE_RESULT_OK;
+    /* The scene made again from its own text takes the fresh copies. Not an edit: no undo step, and
+     * unsaved changes stay unsaved. */
+    wpe__Snapshot snapshot;
+    WPE_Result result = wpe__editor_snapshot(editor, &snapshot);
+    if (result == WPE_RESULT_OK) result = wpe__editor_restore(editor, &snapshot, "reloaded assets");
+    wpe__snapshot_free(&snapshot);
+    return result;
 }
 
 static void wpe__clear_stack(wpe__Snapshot* stack, uint32_t* count) {
@@ -232,8 +251,14 @@ static WPE_Result wpe__editor_play_from(WPE_Editor* editor, const wpe__Snapshot*
         return WPE_RESULT_OK;
     }
     if (editor->mode == WPE_EDITOR_PLAY) return WPE_RESULT_OK;
+    /* Models, images and sounds changed on disk (a new export) since they were loaded: the game gets them. */
+    const bool reloaded = wpe_engine_reload_changed_assets(editor->engine) > 0;
     WPE_Result result = wpe__editor_snapshot(editor, &editor->play);
-    if (result == WPE_RESULT_OK && start) result = wpe__editor_restore(editor, start, editor->scene_path);
+    if (result == WPE_RESULT_OK && start) {
+        result = wpe__editor_restore(editor, start, editor->scene_path);
+    } else if (result == WPE_RESULT_OK && reloaded) {
+        result = wpe__editor_restore(editor, &editor->play, "reloaded assets");
+    }
     if (result != WPE_RESULT_OK) {
         if (start) (void)wpe__editor_restore(editor, &editor->play, "play snapshot");
         wpe__snapshot_free(&editor->play);
@@ -646,6 +671,9 @@ WPE_Result wpe_editor_frame(WPE_Editor* editor, double dt) {
         editor->since_reload += dt;
         if (editor->since_reload >= WPE__EDITOR_RELOAD_SECONDS) {
             wpe_script_host_reload_changed(wpe_engine_scripts(editor->engine));
+            /* (While playing, only what the game makes from now on: stop reloads the scene anyway.) */
+            const WPE_Result reloaded = wpe__editor_reload_assets(editor, NULL);
+            if (reloaded != WPE_RESULT_OK) wpe_log_error("cannot rebuild the scene with the reloaded assets");
             editor->since_reload = 0.0;
         }
     }

@@ -19,9 +19,13 @@ typedef struct wpe__AssetSlot {
     void* asset; /* NULL when the slot is free. */
     char* path;
     WPE_AssetType type;
-    uint32_t refs;
+    uint32_t refs; /* 0 only for a reloaded asset nothing has taken yet (wpe_asset_manager_reload_changed). */
     uint32_t generation;
     uint32_t next_free; /* Free-list link (slot index), UINT32_MAX ends the list. */
+    bool from_file;     /* Loaded by wpe_asset_load (not added in code): its file is watched. */
+    bool outdated;    /* Its file changed and a fresh copy replaced it in the cache; holders keep this one. */
+    int64_t modified; /* The file's modification time when it was loaded (when from_file). */
+    int64_t failed;   /* The modification time of the last changed version that failed to load (0: none). */
 } wpe__AssetSlot;
 
 typedef struct wpe__TypeEntry {
@@ -150,6 +154,10 @@ static WPE_Result wpe__insert(WPE_AssetManager* assets, WPE_AssetType type, char
     slot->path = path;
     slot->type = type;
     slot->refs = 1;
+    slot->from_file = false;
+    slot->outdated = false;
+    slot->modified = 0;
+    slot->failed = 0;
     ++assets->live;
     *out_handle = wpe__handle(assets, index);
     return WPE_RESULT_OK;
@@ -185,6 +193,33 @@ static bool wpe__type_ok(const WPE_AssetManager* assets, WPE_AssetType type) {
     return type < WPE_ASSET_MAX_TYPES && assets->types[type].registered;
 }
 
+/* Loads `path` (normalized, existing) into a new slot with one reference, remembering the file's time. */
+static WPE_Result wpe__load_file(WPE_AssetManager* assets, WPE_AssetType type, const char* path,
+                                 WPE_AssetHandle* out_handle) {
+    int64_t modified = 0;
+    /* Read before loading: a file changed while it loads then looks changed again, not the other way. */
+    const bool timed = wpe_vfs_modified_time(assets->vfs, path, &modified) == WPE_RESULT_OK;
+    char* normalized = wpe__normalized_copy(path);
+    if (!normalized) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    const wpe__TypeEntry* entry = &assets->types[type];
+    void* asset = NULL;
+    WPE_Result result = entry->loader.load(assets, normalized, entry->loader.user_data, &asset);
+    if (result == WPE_RESULT_OK && !asset) result = WPE_RESULT_ERROR;
+    if (result == WPE_RESULT_OK) {
+        result = wpe__insert(assets, type, normalized, asset, out_handle);
+        if (result != WPE_RESULT_OK) entry->loader.destroy(asset, entry->loader.user_data);
+    }
+    if (result != WPE_RESULT_OK) {
+        wpe_free(normalized);
+        return result;
+    }
+    wpe__AssetSlot* slot = &assets->slots[(*out_handle & WPE__ASSET_INDEX_MASK) - 1u];
+    slot->from_file = timed;
+    slot->modified = modified;
+    ++assets->loads;
+    return WPE_RESULT_OK;
+}
+
 /* ---- Public API ---------------------------------------------------------------------------------- */
 
 WPE_Result wpe_asset_manager_create(const WPE_AssetManagerDesc* desc, WPE_AssetManager** out_assets) {
@@ -213,8 +248,9 @@ void wpe_asset_manager_destroy(WPE_AssetManager* assets) {
     for (uint32_t i = 0; i < assets->slot_count; ++i) {
         const wpe__AssetSlot* slot = &assets->slots[i];
         if (!slot->asset) continue;
-        wpe_log_warn("asset '%s' (%s) still has %u reference(s) at shutdown", slot->path,
-                     assets->types[slot->type].loader.name, slot->refs);
+        if (slot->refs > 0)
+            wpe_log_warn("asset '%s' (%s) still has %u reference(s) at shutdown", slot->path,
+                         assets->types[slot->type].loader.name, slot->refs);
         wpe__destroy_slot(assets, i);
     }
     wpe_free(assets->slots);
@@ -260,7 +296,7 @@ WPE_AssetHandle wpe_asset_find(const WPE_AssetManager* assets, WPE_AssetType typ
     /* NOTE(limitation): linear search; asset loads are rare compared to lookups by handle. */
     for (uint32_t i = 0; i < assets->slot_count; ++i) {
         const wpe__AssetSlot* slot = &assets->slots[i];
-        if (slot->asset && slot->type == type && strcmp(slot->path, normalized) == 0)
+        if (slot->asset && !slot->outdated && slot->type == type && strcmp(slot->path, normalized) == 0)
             return wpe__handle(assets, i);
     }
     return WPE_ASSET_NONE;
@@ -287,27 +323,11 @@ WPE_Result wpe_asset_load(WPE_AssetManager* assets, WPE_AssetType type, const ch
         *out_handle = existing;
         return WPE_RESULT_OK;
     }
-    char* normalized = wpe__normalized_copy(checked);
-    if (!normalized) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
-    const wpe__TypeEntry* entry = &assets->types[type];
-    if (!wpe_vfs_exists(assets->vfs, normalized)) {
-        wpe_log_error("%s '%s' not found", entry->loader.name, normalized);
-        wpe_free(normalized);
+    if (!wpe_vfs_exists(assets->vfs, checked)) {
+        wpe_log_error("%s '%s' not found", assets->types[type].loader.name, checked);
         return WPE_RESULT_ERROR_NOT_FOUND;
     }
-    void* asset = NULL;
-    WPE_Result result = entry->loader.load(assets, normalized, entry->loader.user_data, &asset);
-    if (result == WPE_RESULT_OK && !asset) result = WPE_RESULT_ERROR;
-    if (result == WPE_RESULT_OK) {
-        result = wpe__insert(assets, type, normalized, asset, out_handle);
-        if (result != WPE_RESULT_OK) entry->loader.destroy(asset, entry->loader.user_data);
-    }
-    if (result != WPE_RESULT_OK) {
-        wpe_free(normalized);
-        return result;
-    }
-    ++assets->loads;
-    return WPE_RESULT_OK;
+    return wpe__load_file(assets, type, checked, out_handle);
 }
 
 WPE_Result wpe_asset_add(WPE_AssetManager* assets, WPE_AssetType type, const char* name, void* asset,
@@ -329,6 +349,43 @@ WPE_Result wpe_asset_add(WPE_AssetManager* assets, WPE_AssetType type, const cha
     const WPE_Result result = wpe__insert(assets, type, copy, asset, out_handle);
     if (result != WPE_RESULT_OK) wpe_free(copy);
     return result;
+}
+
+uint32_t wpe_asset_manager_reload_changed(WPE_AssetManager* assets) {
+    if (!assets) return 0;
+    /* Copies from the last call that nothing took (their files' users were gone) are let go now. */
+    for (uint32_t i = 0; i < assets->slot_count; ++i) {
+        if (assets->slots[i].asset && assets->slots[i].refs == 0) wpe__destroy_slot(assets, i);
+    }
+    uint32_t reloaded = 0;
+    const uint32_t count = assets->slot_count; /* (Fresh copies go into new slots: not checked again.) */
+    for (uint32_t i = 0; i < count; ++i) {
+        wpe__AssetSlot* slot = &assets->slots[i];
+        if (!slot->asset || !slot->from_file || slot->outdated) continue;
+        int64_t modified = 0;
+        if (wpe_vfs_modified_time(assets->vfs, slot->path, &modified) != WPE_RESULT_OK) continue; /* Gone. */
+        if (modified == slot->modified || modified == slot->failed) continue;
+        WPE_AssetHandle fresh = WPE_ASSET_NONE;
+        const WPE_Result result = wpe__load_file(assets, slot->type, slot->path, &fresh);
+        slot = &assets->slots[i]; /* (The slot array may have moved.) */
+        if (result != WPE_RESULT_OK) {
+            /* Maybe still being written: the old one stays, and the next change is tried again. */
+            wpe_log_warn("the changed %s '%s' can't be loaded (%s); keeping the old one",
+                         assets->types[slot->type].loader.name, slot->path, wpe_result_to_string(result));
+            slot->failed = modified;
+            continue;
+        }
+        assets->slots[(fresh & WPE__ASSET_INDEX_MASK) - 1u].refs = 0; /* Waiting for its first load. */
+        slot->outdated = true;
+        wpe_log_info("reloaded %s '%s'", assets->types[slot->type].loader.name, slot->path);
+        ++reloaded;
+    }
+    return reloaded;
+}
+
+bool wpe_asset_is_outdated(const WPE_AssetManager* assets, WPE_AssetHandle handle) {
+    const wpe__AssetSlot* slot = wpe__slot(assets, handle);
+    return slot && slot->outdated;
 }
 
 void wpe_asset_retain(WPE_AssetManager* assets, WPE_AssetHandle handle) {

@@ -15,7 +15,8 @@
 #define WPE__EDITOR_UNDO_MAX 64u
 #define WPE__EDITOR_LOG_LINES 256u
 #define WPE__EDITOR_LOG_TEXT 512u
-#define WPE__EDITOR_RELOAD_SECONDS 0.5 /* Hot reload: how often scripts are checked for changes. */
+#define WPE__EDITOR_RELOAD_SECONDS 0.5 /* Hot reload: how often scripts and assets are checked for changes.  \
+                                        */
 #define WPE__EDITOR_MAX_CLIENTS 3u     /* play_network: other players besides the editor's host. */
 #define WPE__EDITOR_NAV_SETTLE 0.25    /* Seconds edits must rest before the shown nav grid is rebuilt. */
 
@@ -92,6 +93,9 @@ WPE_Result wpe__editor_snapshot(WPE_Editor* editor, wpe__Snapshot* out);
 
 /* Replaces the world with a snapshot, recreating the helpers; the selection is cleared. */
 WPE_Result wpe__editor_restore(WPE_Editor* editor, const wpe__Snapshot* snapshot, const char* name);
+/* Hot reload of assets (wpe_engine_reload_changed_assets): in edit mode the scene is made again from its own
+ * text when any changed, so it shows them (the selection clears). */
+WPE_Result wpe__editor_reload_assets(WPE_Editor* editor, uint32_t* out_reloaded);
 
 /* Records an undo step before a change (clears redo). */
 WPE_Result wpe__editor_begin_change(WPE_Editor* editor);
