@@ -422,7 +422,7 @@ Available when the host was created with audio (otherwise these raise errors). S
 | `wpe.music_length() -> seconds?` | The current track's length; nil without music or when the file doesn't say (some MP3s). |
 | `wpe.seek_music(seconds) -> boolean` | Jumps the current track to `seconds` (past the end: to the end). False without music. |
 | `wpe.set_ducking({volume, attack, release})` / `wpe.get_ducking() -> {volume, attack, release, active}` | How the music makes room for ducking sounds: its volume while ducked (0..1, 0.35), the seconds it takes to go down (0.15) and to come back after the last one ends (0.6). Fields left out keep their value; `active` tells whether it is ducked now. The project file sets the starting values. |
-| `wpe.set_volume(bus, volume)` / `wpe.get_volume(bus)` | Linear volume (1 = unchanged) of `wpe.BUS_MASTER`, `wpe.BUS_EFFECTS` (sounds and sources), `wpe.BUS_MUSIC` or `wpe.BUS_VOICE` (dialogue: it ducks the music, and keeps its speed in slow motion). |
+| `wpe.set_volume(bus, volume)` / `wpe.get_volume(bus)` | Linear volume (1 = unchanged) of `wpe.BUS_MASTER`, `wpe.BUS_EFFECTS` (sounds and sources), `wpe.BUS_MUSIC`, `wpe.BUS_VOICE` (dialogue: it ducks the music, and keeps its speed in slow motion) or `wpe.BUS_UI` (menus: keeps its speed, so its sounds play while the game is paused with `wpe.set_time_scale(0)`; sounds on the effects bus would wait for the game to run again). |
 
 Music to the beat: `music_position` is the track's own time, so a beat at 120 BPM is `math.floor(wpe.music_position() * 2)`. A line of dialogue over the music:
 

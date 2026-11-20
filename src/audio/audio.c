@@ -309,7 +309,8 @@ static wpe__Voice* wpe__acquire_voice(WPE_Audio* audio) {
 }
 
 static ma_sound_group* wpe__group(WPE_Audio* audio, WPE_AudioBus bus) {
-    if (bus == WPE_AUDIO_BUS_MUSIC || bus == WPE_AUDIO_BUS_VOICE) return &audio->groups[bus];
+    if (bus == WPE_AUDIO_BUS_MUSIC || bus == WPE_AUDIO_BUS_VOICE || bus == WPE_AUDIO_BUS_UI)
+        return &audio->groups[bus];
     return &audio->groups[WPE_AUDIO_BUS_EFFECTS];
 }
 
@@ -387,7 +388,8 @@ static wpe__Voice* wpe__start_sound(WPE_Audio* audio, WPE_AssetHandle asset, wpe
     voice->loop = p->loop;
     voice->serial = ++audio->serial;
     voice->pitch = p->pitch;
-    voice->effects = p->bus != WPE_AUDIO_BUS_MUSIC && p->bus != WPE_AUDIO_BUS_VOICE;
+    voice->effects =
+        p->bus != WPE_AUDIO_BUS_MUSIC && p->bus != WPE_AUDIO_BUS_VOICE && p->bus != WPE_AUDIO_BUS_UI;
     voice->ducks = p->duck || p->bus == WPE_AUDIO_BUS_VOICE;
     ma_sound_set_volume(&voice->sound, p->volume);
     ma_sound_set_looping(&voice->sound, p->loop);

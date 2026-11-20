@@ -36,7 +36,7 @@
 static const char* const wpe__light_types[] = {"directional", "point", "spot"};
 static const char* const wpe__body_types[] = {"static", "kinematic", "dynamic"};
 static const char* const wpe__collider_shapes[] = {"box", "sphere", "capsule", "convex", "mesh"};
-static const char* const wpe__buses[] = {"master", "effects", "music", "voice"};
+static const char* const wpe__buses[] = {"master", "effects", "music", "voice", "ui"};
 static const char* const wpe__fog_modes[] = {"none", "linear", "exponential"};
 static const char* const wpe__sky_modes[] = {"color", "gradient", "panorama"};
 static const char* const wpe__texture_filters[] = {"material", "nearest", "bilinear", "three_point"};

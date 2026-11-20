@@ -197,6 +197,14 @@ static void test_audio_time_scale_slows_effects(void) {
     advance(&f, 0.3f);
     WPE_TEST_ASSERT(!wpe_audio_is_playing(f.audio, late));
 
+    /* The UI bus keeps its speed at a standstill: a menu's click plays in a paused game. */
+    wpe_audio_set_time_scale(f.audio, 0.0f);
+    const WPE_Voice click = wpe_audio_play(f.audio, sound, &(WPE_AudioPlayDesc){.bus = WPE_AUDIO_BUS_UI});
+    WPE_TEST_ASSERT(render_rms(&f, 4800) > 0.1f);
+    advance(&f, 0.45f);
+    WPE_TEST_ASSERT(!wpe_audio_is_playing(f.audio, click));
+    wpe_audio_set_time_scale(f.audio, 1.0f);
+
     /* Nonsense is ignored. */
     wpe_audio_set_time_scale(f.audio, -1.0f);
     wpe_audio_set_time_scale(f.audio, NAN);

@@ -1712,8 +1712,9 @@ static WPE_Audio* wpe__audio(lua_State* L) {
 
 static WPE_AudioBus wpe__check_bus(lua_State* L, float value) {
     if (!(value == WPE_AUDIO_BUS_MASTER || value == WPE_AUDIO_BUS_EFFECTS || value == WPE_AUDIO_BUS_MUSIC ||
-          value == WPE_AUDIO_BUS_VOICE))
-        luaL_errorL(L, "bus must be wpe.BUS_MASTER, wpe.BUS_EFFECTS, wpe.BUS_MUSIC or wpe.BUS_VOICE");
+          value == WPE_AUDIO_BUS_VOICE || value == WPE_AUDIO_BUS_UI))
+        luaL_errorL(
+            L, "bus must be wpe.BUS_MASTER, wpe.BUS_EFFECTS, wpe.BUS_MUSIC, wpe.BUS_VOICE or wpe.BUS_UI");
     return (WPE_AudioBus)value;
 }
 
@@ -4544,12 +4545,19 @@ void wpe__script_api_register(lua_State* L) {
         const char* name;
         int value;
     } constants[] = {
-        {"BODY_STATIC", WPE_BODY_STATIC},         {"BODY_KINEMATIC", WPE_BODY_KINEMATIC},
-        {"BODY_DYNAMIC", WPE_BODY_DYNAMIC},       {"COLLIDER_BOX", WPE_COLLIDER_BOX},
-        {"COLLIDER_SPHERE", WPE_COLLIDER_SPHERE}, {"COLLIDER_CAPSULE", WPE_COLLIDER_CAPSULE},
-        {"COLLIDER_CONVEX", WPE_COLLIDER_CONVEX}, {"COLLIDER_MESH", WPE_COLLIDER_MESH},
-        {"BUS_MASTER", WPE_AUDIO_BUS_MASTER},     {"BUS_EFFECTS", WPE_AUDIO_BUS_EFFECTS},
-        {"BUS_MUSIC", WPE_AUDIO_BUS_MUSIC},       {"BUS_VOICE", WPE_AUDIO_BUS_VOICE},
+        {"BODY_STATIC", WPE_BODY_STATIC},
+        {"BODY_KINEMATIC", WPE_BODY_KINEMATIC},
+        {"BODY_DYNAMIC", WPE_BODY_DYNAMIC},
+        {"COLLIDER_BOX", WPE_COLLIDER_BOX},
+        {"COLLIDER_SPHERE", WPE_COLLIDER_SPHERE},
+        {"COLLIDER_CAPSULE", WPE_COLLIDER_CAPSULE},
+        {"COLLIDER_CONVEX", WPE_COLLIDER_CONVEX},
+        {"COLLIDER_MESH", WPE_COLLIDER_MESH},
+        {"BUS_MASTER", WPE_AUDIO_BUS_MASTER},
+        {"BUS_EFFECTS", WPE_AUDIO_BUS_EFFECTS},
+        {"BUS_MUSIC", WPE_AUDIO_BUS_MUSIC},
+        {"BUS_VOICE", WPE_AUDIO_BUS_VOICE},
+        {"BUS_UI", WPE_AUDIO_BUS_UI},
     };
     for (size_t i = 0; i < sizeof constants / sizeof constants[0]; ++i) {
         lua_pushnumber(L, constants[i].value);

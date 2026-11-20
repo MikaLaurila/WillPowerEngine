@@ -464,7 +464,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
     static const char* const lights[] = {"directional", "point", "spot"};
     static const char* const bodies[] = {"static", "kinematic", "dynamic"};
     static const char* const shapes[] = {"box", "sphere", "capsule", "convex", "mesh"};
-    static const char* const buses[] = {"effects", "music", "voice"};
+    static const char* const buses[] = {"effects", "music", "voice", "ui"};
     static const char* const fogs[] = {"none", "linear", "exponential"};
     static const char* const effects[] = {
         "ssao",      "chromatic_aberration", "ps1",       "vignette", "color_adjust", "depth_of_field",

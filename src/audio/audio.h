@@ -49,11 +49,12 @@ typedef enum WPE_AudioBus {
     WPE_AUDIO_BUS_EFFECTS,    /* Sound sources and one-shots (default). */
     WPE_AUDIO_BUS_MUSIC,      /* Music tracks. */
     WPE_AUDIO_BUS_VOICE,      /* Dialogue and narration: ducks the music; keeps its speed in slow motion. */
+    WPE_AUDIO_BUS_UI,         /* Menus and interface sounds: keep their speed (they play in a paused game). */
 } WPE_AudioBus;
 
 /* A define rather than an enumerator: structs pairing a bus with a vector union would otherwise
  * trip clang-tidy's tagged-union heuristics. */
-#define WPE_AUDIO_BUS_COUNT 4u
+#define WPE_AUDIO_BUS_COUNT 5u
 
 /** How the music makes room for ducking sounds (wpe_audio_set_ducking). */
 typedef struct WPE_AudioDucking {
@@ -77,7 +78,7 @@ typedef struct WPE_AudioSource {
     float pitch;           /* Playback rate, 1 = normal (> 0). */
     float min_distance;    /* Full volume up to this distance (spatial sources). */
     float max_distance;    /* No further attenuation beyond this distance. */
-    WPE_AudioBus bus;      /* EFFECTS, MUSIC or VOICE. */
+    WPE_AudioBus bus;      /* EFFECTS, MUSIC, VOICE or UI. */
     bool loop;
     bool spatial; /* Positioned at the entity; otherwise plays as-is (2D). */
     bool playing; /* Set to start/stop; cleared by the engine when a non-looping sound ends. */
@@ -160,8 +161,8 @@ void wpe_audio_set_listener(WPE_Audio* audio, WPE_Entity entity);
 
 /**
  * Plays every effects-bus voice (one-shots and sources) at its pitch times `scale` (slow motion lowers and
- * slows them; 1 is normal). Below 0.01 they are held where they are and resume when it rises. The music and
- * voice buses keep their speed. Negative or non-finite scales are ignored.
+ * slows them; 1 is normal). Below 0.01 they are held where they are and resume when it rises. The music,
+ * voice and UI buses keep their speed. Negative or non-finite scales are ignored.
  *
  * @thread_safety Owning thread
  */

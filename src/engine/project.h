@@ -12,7 +12,7 @@
  *   "display": {"width": 320, "height": 240, "scale": 3, "vsync": true, "resizable": true,
  *               "fullscreen": false, "scaling": "integer", "alt_enter": true},
  *   "simulation": {"fixed_rate": 60, "max_steps": 8}, "assets": {"max_texture_size": 256},
- *   "audio": {"master": 1, "effects": 1, "music": 0.8, "voice": 1, "duck_volume": 0.35,
+ *   "audio": {"master": 1, "effects": 1, "music": 0.8, "voice": 1, "ui": 1, "duck_volume": 0.35,
  *             "duck_attack": 0.15, "duck_release": 0.6},
  *   "scripting": {"memory_limit_mb": 64, "time_limit_ms": 250},
  *   "prefabs": {"crate": "meshes/crate.prim", "figure": "meshes/RiggedFigure.glb"},

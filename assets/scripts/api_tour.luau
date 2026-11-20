@@ -491,6 +491,7 @@ function Tour:on_start()
 	assert(near(wpe.get_volume(wpe.BUS_EFFECTS), 0.8))
 	wpe.set_volume(wpe.BUS_VOICE, 0.9)
 	assert(near(wpe.get_volume(wpe.BUS_VOICE), 0.9))
+	wpe.stop_sound(wpe.play_sound("sounds/chime.wav", { bus = wpe.BUS_UI, volume = 0.1 }))
 	wpe.stop_sound(wpe.play_sound("sounds/chime.wav", { duck = true, volume = 0.1 }))
 
 	-- Input. The scene test runs headless (no keyboard or mouse); gamepads are optional, so their

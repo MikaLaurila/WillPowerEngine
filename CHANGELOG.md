@@ -5,6 +5,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- A `ui` audio bus (`wpe.BUS_UI`, `WPE_AUDIO_BUS_UI`, scene `bus: "ui"`, project `audio.ui`) for menu sounds: it
+  keeps its speed, so its sounds play while the game is paused (on the effects bus they waited for the game to
+  run again, then all played at once).
 - The `acrylic` post effect: frosted glass behind menus (blur, saturation, a tint, a still grain), all scaled
   by `strength` so it fades in. C: `WPE_AcrylicParams`, `wpe_postfx_acrylic`.
 - The `black_hole` post effect: the image pulled in and swirled around a screen point, a black event horizon

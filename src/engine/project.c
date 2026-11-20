@@ -206,12 +206,13 @@ static bool wpe__parse_project(wpe__JsonReader* r, const WPE_JsonValue* root, WP
                    !wpe__json_read_uint(r, assets, "max_texture_size", 0, 16384, &out->max_texture_size)))
         return false;
     const WPE_JsonValue* audio = wpe_json_get(root, "audio");
-    if (audio && (!WPE__JSON_CHECK_OBJECT(r, audio, "audio", "master", "effects", "music", "voice",
+    if (audio && (!WPE__JSON_CHECK_OBJECT(r, audio, "audio", "master", "effects", "music", "voice", "ui",
                                           "duck_volume", "duck_attack", "duck_release") ||
                   !wpe__json_read_float(r, audio, "master", 0, 4, &out->volumes[WPE_AUDIO_BUS_MASTER]) ||
                   !wpe__json_read_float(r, audio, "effects", 0, 4, &out->volumes[WPE_AUDIO_BUS_EFFECTS]) ||
                   !wpe__json_read_float(r, audio, "music", 0, 4, &out->volumes[WPE_AUDIO_BUS_MUSIC]) ||
                   !wpe__json_read_float(r, audio, "voice", 0, 4, &out->volumes[WPE_AUDIO_BUS_VOICE]) ||
+                  !wpe__json_read_float(r, audio, "ui", 0, 4, &out->volumes[WPE_AUDIO_BUS_UI]) ||
                   !wpe__json_read_float(r, audio, "duck_volume", 0, 1, &out->ducking.volume) ||
                   !wpe__json_read_float(r, audio, "duck_attack", 0, 10, &out->ducking.attack) ||
                   !wpe__json_read_float(r, audio, "duck_release", 0, 10, &out->ducking.release)))
@@ -401,6 +402,7 @@ WPE_Result wpe_project_write(const WPE_ProjectSettings* s, WPE_JsonWriter* w) {
     wpe__key_number(w, "effects", s->volumes[WPE_AUDIO_BUS_EFFECTS]);
     wpe__key_number(w, "music", s->volumes[WPE_AUDIO_BUS_MUSIC]);
     wpe__key_number(w, "voice", s->volumes[WPE_AUDIO_BUS_VOICE]);
+    wpe__key_number(w, "ui", s->volumes[WPE_AUDIO_BUS_UI]);
     wpe__key_number(w, "duck_volume", s->ducking.volume);
     wpe__key_number(w, "duck_attack", s->ducking.attack);
     wpe__key_number(w, "duck_release", s->ducking.release);
