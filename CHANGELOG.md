@@ -5,6 +5,11 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- `wpe.set_clip_plane(entity, [point, normal, [cap_color]])`: cuts every mesh in a subtree along a plane, drawing
+  (and shadowing) only the side the normal points to. The plane is kept in the entity's space, so it moves with
+  it; a cap color draws the back faces seen through the cut flat, so a cut body looks solid. Two copies of a
+  model clipped with opposite normals make a body cut in half. C: `WPE_MeshRenderer.clip_space`, `clip_point`,
+  `clip_normal`, `cap_color`.
 - Asset hot reload: models, images and sounds whose files changed on disk are loaded again. The editor checks
   when play starts (so a new export shows up without restarting the editor, including models scripts
   instantiate) and, with hot reload on, twice a second, rebuilding the scene in edit mode (not an edit; the

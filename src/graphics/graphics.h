@@ -71,6 +71,15 @@ typedef struct WPE_MeshRenderer {
      * so a see-through character hides its own far side) and casts no shadow. */
     WPE_Vec4 overlay;
     float transparency;
+    /* A clip plane (scripts: wpe.set_clip_plane), also not saved: the mesh is drawn only on the side of the
+     * plane its normal points to, the shadow too, as if cut there. The plane is kept in `clip_space`'s
+     * space (an entity, usually the cut model's root; WPE_ENTITY_NULL: the world), so it moves with that
+     * entity: a half of a cut body falls with its cut. A zero `clip_normal` is off. cap_color (rgb, 0..1, by
+     * its `w`; 0: none): back faces are drawn too, flat in this color, so the cut looks solid. */
+    WPE_Entity clip_space;
+    WPE_Vec3 clip_point;
+    WPE_Vec3 clip_normal;
+    WPE_Vec4 cap_color;
 } WPE_MeshRenderer;
 
 typedef struct WPE_Camera {

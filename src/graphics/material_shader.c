@@ -18,10 +18,24 @@ enum {
     WPE__V_DISTANCE = 19, /* 1: view distance (fog) */
     WPE__V_SUN_TS = 20,   /* 3: sun direction in tangent space (normal-mapped only) */
     WPE__V_HALF_TS = 23,  /* 3: sun half vector in tangent space (normal-mapped only) */
-    WPE__V_COUNT = 26,
+    WPE__V_CLIP = 26,     /* 1: signed distance to the clip plane (scaled; only its sign matters) */
+    WPE__V_COUNT = 27,
+    /* The depth programs use UV0..COLOR, then the clip distance. */
+    WPE__V_DEPTH_CLIP = WPE__V_COLOR + 4,
+    WPE__V_DEPTH_COUNT = WPE__V_DEPTH_CLIP + 1,
 };
 
 static_assert(WPE__V_COUNT <= WPE_MAX_VARYINGS, "material varyings exceed the renderer limit");
+
+static bool wpe__clipping(const WPE_MaterialUniforms* u) {
+    return u->clip_plane.x != 0.0f || u->clip_plane.y != 0.0f || u->clip_plane.z != 0.0f;
+}
+
+static float wpe__clip_distance(const WPE_MaterialUniforms* u, WPE_Vec3 world_position) {
+    if (!wpe__clipping(u)) return 1.0f;
+    return u->clip_plane.x * world_position.x + u->clip_plane.y * world_position.y +
+           u->clip_plane.z * world_position.z + u->clip_plane.w;
+}
 
 static const char* const wpe__filtering_names[] = {"material", "nearest", "bilinear", "three_point"};
 static_assert(sizeof wpe__filtering_names / sizeof wpe__filtering_names[0] ==
@@ -146,6 +160,7 @@ static void wpe__material_vs(const void* uniforms, const void* vertex, WPE_Vec4*
         out[WPE__V_COLOR + i] = v->color[i] * (i < 3 ? brightness : 1.0f);
     for (int i = WPE__V_DIFFUSE; i < WPE__V_COUNT; ++i)
         out[i] = 0.0f;
+    out[WPE__V_CLIP] = wpe__clip_distance(u, world_position);
 
     const WPE_Vec3 to_camera = wpe_vec3_sub(u->camera_position, world_position);
     out[WPE__V_DISTANCE] = wpe_vec3_length(to_camera);
@@ -354,6 +369,19 @@ static bool wpe__material_fs(const void* uniforms, const WPE_FragmentInput* in, 
     const WPE_Material* m = u->material;
     const float* v = in->varyings;
     const WPE_Vec4 one = wpe_vec4(1, 1, 1, 1);
+    if (wpe__clipping(u) && v[WPE__V_CLIP] < 0.0f) return false; /* Cut away. */
+    if (u->cap_color.w > 0.0f && in->front_facing == u->mirrored) {
+        /* The inside of a cut (a back face): flat, with fog, overlay and transparency as usual. */
+        WPE_Vec3 cap = wpe_vec3(u->cap_color.x, u->cap_color.y, u->cap_color.z);
+        const float fog = wpe_fog_factor(&u->fog, v[WPE__V_DISTANCE]);
+        if (fog > 0.0f) cap = wpe_vec3_lerp(cap, u->fog.color, fog);
+        if (u->overlay.w > 0.0f)
+            cap = wpe_vec3_lerp(cap, wpe_vec3(u->overlay.x, u->overlay.y, u->overlay.z),
+                                fminf(u->overlay.w, 1.0f));
+        const float alpha = fminf(u->cap_color.w, 1.0f) * (1.0f - fminf(fmaxf(u->transparency, 0.0f), 1.0f));
+        *out_color = wpe_vec4(cap.x, cap.y, cap.z, alpha);
+        return true;
+    }
 
     const WPE_Vec4 tex = wpe__sample_ref(u, &m->diffuse_texture, in, one);
     WPE_Vec4 base = wpe_vec4(
@@ -451,8 +479,8 @@ static void wpe__depth_vs(const void* uniforms, const void* vertex, WPE_Vec4* ou
     const WPE_MeshVertex* v = vertex;
     WPE_Vec3 position = v->position, normal = v->normal, tangent = wpe_vec3(0, 0, 0);
     if (u->joint_palette) wpe__skin(u, v, &position, &normal, &tangent);
+    WPE_Vec3 world_position = wpe_mat4_transform_point(&u->world, position);
     if (u->water) {
-        WPE_Vec3 world_position = wpe_mat4_transform_point(&u->world, position);
         float height, slope_x, slope_z, brightness;
         wpe_water_wave(&u->waves, world_position.x, world_position.z, &height, &slope_x, &slope_z,
                        &brightness);
@@ -468,12 +496,18 @@ static void wpe__depth_vs(const void* uniforms, const void* vertex, WPE_Vec4* ou
     out[WPE__V_UV1 + 1] = v->uv1.y;
     for (int i = 0; i < 4; ++i)
         out[WPE__V_COLOR + i] = v->color[i];
+    out[WPE__V_DEPTH_CLIP] = wpe__clip_distance(u, world_position);
 }
 
-/* Alpha-tested casters: discard where the material would be cut out. */
+/* Alpha-tested or clipped casters: discard where the material would be cut out, or the clip plane cuts. */
 static bool wpe__depth_mask_fs(const void* uniforms, const WPE_FragmentInput* in, WPE_Vec4* out_color) {
     const WPE_MaterialUniforms* u = uniforms;
     const WPE_Material* m = u->material;
+    if (wpe__clipping(u) && in->varyings[WPE__V_DEPTH_CLIP] < 0.0f) return false; /* Cut away. */
+    if (m->alpha_mode == WPE_ALPHA_OPAQUE) {
+        *out_color = wpe_vec4(0, 0, 0, 1);
+        return true;
+    }
     const WPE_Vec4 tex = wpe__sample_ref(u, &m->diffuse_texture, in, wpe_vec4(1, 1, 1, 1));
     float alpha = m->diffuse_factor.w * tex.w * in->varyings[WPE__V_COLOR + 3];
     *out_color = wpe_vec4(0, 0, 0, 1);
@@ -492,14 +526,14 @@ static const WPE_ShaderProgram wpe__material_program = {
 static const WPE_ShaderProgram wpe__depth_program = {
     .vertex = wpe__depth_vs,
     .fragment = NULL, /* Opaque casters only write depth. */
-    .varying_count = WPE__V_COLOR + 4,
+    .varying_count = WPE__V_DEPTH_COUNT,
     .vertex_lerp = wpe__material_lerp,
 };
 
 static const WPE_ShaderProgram wpe__depth_masked_program = {
     .vertex = wpe__depth_vs,
     .fragment = wpe__depth_mask_fs,
-    .varying_count = WPE__V_COLOR + 4,
+    .varying_count = WPE__V_DEPTH_COUNT,
     .uv_derivatives = true,
     .uv_varying = WPE__V_UV0,
     .vertex_lerp = wpe__material_lerp,

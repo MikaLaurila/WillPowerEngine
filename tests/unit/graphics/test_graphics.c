@@ -1143,6 +1143,62 @@ static void test_graphics_sky_gradient_sun_and_occlusion(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* A clip plane cuts the mesh: only the side its normal points to is drawn, the plane moves with its entity,
+ * and a cap color fills the inside seen through the cut. */
+static void test_graphics_mesh_clip_plane(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 48}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_SceneRenderSettings settings = wpe_scene_render_settings_default();
+    settings.sky.mode = WPE_SKY_COLOR; /* Black behind (the clear color). */
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 0, 0), wpe_quat_identity());
+    const WPE_Material white = wpe_material_solid(wpe_vec4(1, 1, 1, 1), 0.0f, 1.0f);
+    WPE_Model* cube = NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_create_box(wpe_vec3(1, 1, 1), &white, &cube));
+    const WPE_Entity box =
+        spawn_mesh(ecs, wpe_test_add_model(t.assets, "test/cube", cube), wpe_vec3(0, 0, -4));
+    WPE_MeshRenderer* mesh = mesh_of(ecs, box);
+    mesh->unlit = true;
+    const uint32_t cx = 32, above = 24 - 4, below = 24 + 4;
+
+    /* Through the middle, keeping the top: white above the middle, black below. */
+    mesh->clip_space = box;
+    mesh->clip_point = wpe_vec3(0, 0, 0);
+    mesh->clip_normal = wpe_vec3(0, 1, 0);
+    const WPE_Framebuffer* fb = render_sky(renderer, sr, ecs, camera, &settings);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFFFFFFu, fb->color[above * fb->width + cx]);
+    WPE_TEST_ASSERT_EQ_UINT(0xFF000000u, fb->color[below * fb->width + cx]);
+
+    /* The plane is in the box's space: turned upside down, the kept half is below. */
+    WPE_Transform* transform = wpe_ecs_get_component(ecs, box, WPE_COMP_TRANSFORM);
+    transform->rotation = wpe_quat_from_axis_angle(wpe_vec3(0, 0, 1), WPE_PI);
+    fb = render_sky(renderer, sr, ecs, camera, &settings);
+    WPE_TEST_ASSERT_EQ_UINT(0xFF000000u, fb->color[above * fb->width + cx]);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFFFFFFu, fb->color[below * fb->width + cx]);
+    transform->rotation = wpe_quat_identity();
+
+    /* Keeping the far half: the near face is cut away and the inside shows nothing (back faces culled)... */
+    mesh->clip_normal = wpe_vec3(0, 0, -1);
+    WPE_TEST_ASSERT_EQ_UINT(0xFF000000u, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+    /* ...until a cap color fills it, mirrored or not. */
+    mesh->cap_color = wpe_vec4(1, 0, 0, 1);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFF0000u, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+    transform->scale = wpe_vec3(-1, 1, 1);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFF0000u, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+    transform->scale = wpe_vec3(1, 1, 1);
+    /* Uncut, the cap changes nothing; a zero normal is off. */
+    mesh->clip_normal = wpe_vec3(0, 0, 0);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFFFFFFu, center_pixel(render_sky(renderer, sr, ecs, camera, &settings)));
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
 static void test_graphics_mesh_overlay_and_transparency(void) {
     WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
     WPE_Ecs* ecs = make_world(t.assets);
@@ -2144,7 +2200,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_billboard_corners), WPE_TEST_CASE(test_graphics_billboard_animation),
     WPE_TEST_CASE(test_graphics_billboard_draws_frames_and_blends),
     WPE_TEST_CASE(test_graphics_mesh_shadow_unlit_and_sides),
-    WPE_TEST_CASE(test_graphics_mesh_overlay_and_transparency),
+    WPE_TEST_CASE(test_graphics_mesh_overlay_and_transparency), WPE_TEST_CASE(test_graphics_mesh_clip_plane),
     WPE_TEST_CASE(test_graphics_skinned_mesh_mirrored),
     WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
     WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),

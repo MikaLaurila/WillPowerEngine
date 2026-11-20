@@ -534,6 +534,41 @@ static int wpe__api_set_overlay(lua_State* L) {
     return 0;
 }
 
+/* wpe.set_clip_plane(entity, [point, normal, [cap_color]]): every mesh in the subtree is drawn only on the
+ * side `normal` points to of the plane through `point` (both in world space now), kept in the entity's space
+ * so it moves with the entity. nil (or no point) clears it. */
+static int wpe__api_set_clip_plane(lua_State* L) {
+    const WPE_Entity entity = wpe__check_entity(L, 1);
+    WPE_Vec3 point = wpe_vec3(0, 0, 0), normal = wpe_vec3(0, 0, 0);
+    WPE_Vec4 cap = wpe_vec4(0, 0, 0, 0);
+    WPE_Ecs* ecs = wpe__script_host_from(L)->ecs;
+    if (!lua_isnoneornil(L, 2)) {
+        point = wpe__check_vec3(L, 2);
+        normal = wpe__check_vec3(L, 3);
+        if (!(wpe_vec3_length_sq(normal) > 1e-12f))
+            luaL_errorL(L, "wpe.set_clip_plane: the normal must not be zero");
+        if (!lua_isnoneornil(L, 4)) cap = wpe_color_to_vec4(wpe__opt_color(L, 4));
+        /* Into the entity's space: points by the inverse, normals by the transpose (n . Mx = M^T n . x). */
+        WPE_Mat4 world, inverse;
+        wpe_scene_compute_world_matrix(ecs, entity, &world);
+        if (!wpe_mat4_inverse(&world, &inverse))
+            luaL_errorL(L, "wpe.set_clip_plane: the entity has a zero scale");
+        point = wpe_mat4_transform_point(&inverse, point);
+        const WPE_Vec3 n = normal;
+        for (int i = 0; i < 3; ++i)
+            normal.v[i] = world.m[i][0] * n.x + world.m[i][1] * n.y + world.m[i][2] * n.z;
+    }
+    WPE_MeshRenderer* meshes[WPE__TREE_MESHES];
+    const uint32_t count = wpe__tree_meshes(ecs, entity, meshes);
+    for (uint32_t i = 0; i < count; ++i) {
+        meshes[i]->clip_space = entity;
+        meshes[i]->clip_point = point;
+        meshes[i]->clip_normal = normal;
+        meshes[i]->cap_color = cap;
+    }
+    return 0;
+}
+
 /* wpe.set_transparency(entity, amount): 0 opaque .. 1 invisible, for every mesh in the subtree. */
 static int wpe__api_set_transparency(lua_State* L) {
     const WPE_Entity entity = wpe__check_entity(L, 1);
@@ -4312,6 +4347,7 @@ static const luaL_Reg wpe__api[] = {
     {"set_shadows", wpe__api_set_shadows},
     {"set_overlay", wpe__api_set_overlay},
     {"set_transparency", wpe__api_set_transparency},
+    {"set_clip_plane", wpe__api_set_clip_plane},
     {"set_uv_scroll", wpe__api_set_uv_scroll},
     {"get_uv_scroll", wpe__api_get_uv_scroll},
     {"set_uv_offset", wpe__api_set_uv_offset},

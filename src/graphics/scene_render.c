@@ -31,6 +31,9 @@ typedef struct wpe__MeshInstance {
     float sphere_radius;
     const WPE_Water* water; /* Or NULL. */
     float cull_margin; /* Object-space padding of the bounds for culling (how far waves move vertices). */
+    WPE_Vec4
+        clip_plane; /* The mesh's clip plane in world space (WPE_MaterialUniforms.clip_plane), or zero. */
+    bool capped;    /* Clipped with a cap color: back faces drawn too. */
 } wpe__MeshInstance;
 
 WPE_SceneRenderSettings wpe_scene_render_settings_default(void) {
@@ -203,6 +206,24 @@ static WPE_Mat4* wpe__build_palette(WPE_SceneRenderer* sr, const WPE_Ecs* ecs, c
     return palette;
 }
 
+/* The mesh's clip plane (kept in its clip_space entity's space) in world space, or zero for none. */
+static WPE_Vec4 wpe__world_clip_plane(const WPE_Ecs* ecs, const WPE_MeshRenderer* mesh) {
+    const WPE_Vec3 n = mesh->clip_normal;
+    if (n.x == 0.0f && n.y == 0.0f && n.z == 0.0f) return wpe_vec4(0, 0, 0, 0);
+    const WPE_Transform* space = mesh->clip_space != WPE_ENTITY_NULL
+                                     ? wpe_ecs_get_component(ecs, mesh->clip_space, WPE_COMP_TRANSFORM)
+                                     : NULL;
+    const WPE_Mat4 world = space ? space->world : wpe_mat4_identity();
+    WPE_Mat4 inverse;
+    if (!wpe_mat4_inverse(&world, &inverse)) return wpe_vec4(0, 0, 0, 0);
+    /* Normals go through the inverse transpose; only the plane's side matters, so no normalizing. */
+    WPE_Vec3 normal;
+    for (int i = 0; i < 3; ++i)
+        normal.v[i] = inverse.m[i][0] * n.x + inverse.m[i][1] * n.y + inverse.m[i][2] * n.z;
+    const WPE_Vec3 point = wpe_mat4_transform_point(&world, mesh->clip_point);
+    return wpe_vec4(normal.x, normal.y, normal.z, -wpe_vec3_dot(normal, point));
+}
+
 /* Collects visible mesh entities with their world matrices, palettes and bounding spheres. */
 static WPE_Result wpe__gather_meshes(WPE_SceneRenderer* sr, const WPE_Ecs* ecs, wpe__MeshInstance** out,
                                      uint32_t* out_count) {
@@ -222,6 +243,9 @@ static WPE_Result wpe__gather_meshes(WPE_SceneRenderer* sr, const WPE_Ecs* ecs, 
         if (!mesh->visible || !mesh->model || mesh->mesh >= mesh->model->mesh_count) continue;
         wpe__MeshInstance* inst = &instances[count];
         *inst = (wpe__MeshInstance){.mesh = mesh, .world = world};
+        inst->clip_plane = wpe__world_clip_plane(ecs, mesh);
+        inst->capped = mesh->cap_color.w > 0.0f && (inst->clip_plane.x != 0.0f ||
+                                                    inst->clip_plane.y != 0.0f || inst->clip_plane.z != 0.0f);
         const WPE_Aabb bounds = mesh->model->meshes[mesh->mesh].bounds;
         const WPE_Vec3 local_center = wpe_vec3_scale(wpe_vec3_add(bounds.min, bounds.max), 0.5f);
         const float local_radius = wpe_vec3_length(wpe_vec3_sub(bounds.max, local_center));
@@ -452,9 +476,13 @@ static WPE_Result wpe__render_shadow_map(WPE_SceneRenderer* sr, WPE_JobSystem* j
             state.cull = material->double_sided || inst->mesh->double_sided ? WPE_CULL_NONE
                          : mirrored                                         ? WPE_CULL_BACK
                                                                             : WPE_CULL_FRONT;
-            const bool masked = material->alpha_mode != WPE_ALPHA_OPAQUE;
+            const bool clipped =
+                inst->clip_plane.x != 0.0f || inst->clip_plane.y != 0.0f || inst->clip_plane.z != 0.0f;
+            const bool masked = material->alpha_mode != WPE_ALPHA_OPAQUE || clipped;
+            if (inst->capped) state.cull = WPE_CULL_NONE; /* The cap's inside casts as well. */
             WPE_MaterialUniforms uniforms = {.mvp = mvp,
                                              .world = inst->world,
+                                             .clip_plane = inst->clip_plane,
                                              .model = model,
                                              .material = material,
                                              .texture_filtering = settings->texture_filtering,
@@ -963,6 +991,9 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             .double_sided = inst->mesh->double_sided,
             .overlay = inst->mesh->overlay,
             .transparency = inst->mesh->transparency,
+            .clip_plane = inst->clip_plane,
+            .cap_color = inst->capped ? inst->mesh->cap_color : wpe_vec4(0, 0, 0, 0),
+            .mirrored = inst->mirrored,
             .texture_filtering = settings->texture_filtering,
             .joint_palette = inst->palette,
             .joint_count = inst->palette ? inst->mesh->joint_count : 0,
@@ -981,9 +1012,9 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             const WPE_Material* material = wpe__primitive_material(model, prim);
 
             WPE_RenderState state = wpe_render_state_default();
-            state.cull = material->double_sided || inst->mesh->double_sided ? WPE_CULL_NONE
-                         : mirrored                                         ? WPE_CULL_FRONT
-                                                                            : WPE_CULL_BACK;
+            state.cull = material->double_sided || inst->mesh->double_sided || inst->capped ? WPE_CULL_NONE
+                         : mirrored                                                         ? WPE_CULL_FRONT
+                                                                                            : WPE_CULL_BACK;
             bool transparent = false;
             const bool faded = inst->mesh->transparency > 0.0f; /* Made see-through by game code. */
             if (material->alpha_mode == WPE_ALPHA_BLEND || faded) {

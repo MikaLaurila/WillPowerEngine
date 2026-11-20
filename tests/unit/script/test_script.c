@@ -461,6 +461,30 @@ static void test_script_api_transforms_lights_prefabs(void) {
         WPE_TEST_ASSERT(mesh->overlay.w == 0.0f);
     }
 
+    /* wpe.set_clip_plane reaches them too, in the entity's space (here at the origin: as given); nil clears.
+     */
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(
+        f.host, "cut",
+        "local root = wpe.find('ok')\n"
+        "wpe.set_clip_plane(root, vector.create(0, 1, 0), vector.create(0, 2, 0),"
+        " wpe.color(1, 0, 0))\n"
+        "assert(not pcall(wpe.set_clip_plane, root, vector.create(0, 0, 0), vector.create(0, 0, 0)))\n"));
+    uint32_t cut = 0;
+    it = wpe_ecs_query(f.ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_MeshRenderer* mesh = wpe_ecs_iter_get(&it, WPE_COMP_MESH);
+        if (mesh->clip_space == e && mesh->clip_normal.y > 0.0f && mesh->cap_color.x == 1.0f &&
+            mesh->cap_color.w == 1.0f)
+            ++cut;
+    }
+    WPE_TEST_ASSERT_EQ_UINT(before + 2, cut);
+    WPE_TEST_ASSERT_OK(wpe_script_host_run(f.host, "uncut", "wpe.set_clip_plane(wpe.find('ok'))"));
+    it = wpe_ecs_query(f.ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_MESH)});
+    while (wpe_ecs_iter_next(&it)) {
+        const WPE_MeshRenderer* mesh = wpe_ecs_iter_get(&it, WPE_COMP_MESH);
+        WPE_TEST_ASSERT(mesh->clip_normal.y == 0.0f && mesh->cap_color.w == 0.0f);
+    }
+
     /* wpe.set_shadows reaches them too, changing only the fields given. */
     WPE_TEST_ASSERT_OK(
         wpe_script_host_run(f.host, "shade", "wpe.set_shadows(wpe.find('ok'), {receive = false})"));

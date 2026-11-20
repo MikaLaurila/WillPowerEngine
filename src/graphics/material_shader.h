@@ -105,6 +105,13 @@ typedef struct WPE_MaterialUniforms {
     bool double_sided;
     WPE_Vec4 overlay;   /* rgb laid over the final color by w (0: none). */
     float transparency; /* The output alpha is scaled by 1 - transparency (0: as the material has it). */
+    /* A world-space clip plane: pixels where dot(xyz, p) + w < 0 are discarded (all zero: no clipping). The
+     * depth programs honor it too (wpe_shader_material_depth with alpha_masked true runs the test). */
+    WPE_Vec4 clip_plane;
+    /* Back faces drawn flat in this rgb (by w > 0; the caller turns culling off), the inside of a cut.
+     * `mirrored` says the transform flips winding, so which faces are back faces flips too. */
+    WPE_Vec4 cap_color;
+    bool mirrored;
     /* Replaces the magnification and minification filters of every material texture (mip filtering is
      * kept). */
     WPE_TextureFiltering texture_filtering;
@@ -120,8 +127,9 @@ typedef struct WPE_MaterialUniforms {
 const WPE_ShaderProgram* wpe_shader_material(void);
 
 /**
- * @param alpha_masked true for WPE_ALPHA_MASK materials: the program then runs a fragment shader
- *                     that discards cut-out texels; otherwise no fragment shader runs at all.
+ * @param alpha_masked true for WPE_ALPHA_MASK materials or a clip plane: the program then runs a fragment
+ *                     shader that discards cut-out texels and pixels behind the clip plane; otherwise no
+ *                     fragment shader runs at all.
  * @return A depth-only program for shadow casters using WPE_MaterialUniforms (mvp, palette,
  *         material and model are used). Use with WPE_RenderState::depth_only. @thread_safety Any thread
  */
