@@ -5,6 +5,8 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- The `acrylic` post effect: frosted glass behind menus (blur, saturation, a tint, a still grain), all scaled
+  by `strength` so it fades in. C: `WPE_AcrylicParams`, `wpe_postfx_acrylic`.
 - The `black_hole` post effect: the image pulled in and swirled around a screen point, a black event horizon
   and a glowing ring at its edge (`radius`, `reach`, `pull_pixels`, `swirl`, `darkness`, `ring_pixels`, ring
   color). C: `WPE_BlackHoleParams`, `wpe_postfx_black_hole`.

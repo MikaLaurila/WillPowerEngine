@@ -434,6 +434,67 @@ static void wpe__black_hole_pass(const WPE_PostContext* c, const void* params_pt
     }
 }
 
+static uint32_t wpe__hash32(uint32_t x); /* With the cracks, below. */
+
+/* Acrylic: passes 0 and 2 blur rows, 1 and 3 columns (box blurs of radius_pixels * strength), pass 4
+ * saturates, tints and adds the grain (a hash of the pixel, so it stays still). */
+static void wpe__acrylic_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
+                              uint32_t row_begin, uint32_t row_end) {
+    const WPE_AcrylicParams* p = params_ptr;
+    const float strength = wpe__clamp01(p->strength);
+    const int32_t radius = (int32_t)lroundf(fminf(fmaxf(p->radius_pixels, 0.0f), 32.0f) * strength);
+    const int32_t w = (int32_t)c->width;
+    if (pass < 4) {
+        const bool rows = (pass & 1u) == 0;
+        for (uint32_t y = row_begin; y < row_end; ++y) {
+            for (int32_t x = 0; x < w; ++x) {
+                const size_t i = (size_t)y * c->width + (size_t)x;
+                if (radius <= 0) {
+                    c->dst[i] = c->src[i];
+                    continue;
+                }
+                float sum[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                for (int32_t k = -radius; k <= radius; ++k) {
+                    const WPE_Vec4 v = wpe_color_to_vec4(rows ? wpe__texel_clamped(c, x + k, (int32_t)y)
+                                                              : wpe__texel_clamped(c, x, (int32_t)y + k));
+                    sum[0] += v.x;
+                    sum[1] += v.y;
+                    sum[2] += v.z;
+                    sum[3] += v.w;
+                }
+                const float n = 1.0f / (float)(2 * radius + 1);
+                c->dst[i] = wpe_color_from_vec4(wpe_vec4(sum[0] * n, sum[1] * n, sum[2] * n, sum[3] * n));
+            }
+        }
+        return;
+    }
+    const float tint = wpe__clamp01(p->tint) * strength;
+    const float saturation = 1.0f + (fminf(fmaxf(p->saturation, 0.0f), 3.0f) - 1.0f) * strength;
+    const float noise = fminf(fmaxf(p->noise, 0.0f), 0.25f) * strength;
+    for (uint32_t y = row_begin; y < row_end; ++y) {
+        for (uint32_t x = 0; x < c->width; ++x) {
+            const size_t i = (size_t)y * c->width + x;
+            WPE_Vec4 v = wpe_color_to_vec4(c->src[i]);
+            if (strength <= 0.0f) {
+                c->dst[i] = c->src[i];
+                continue;
+            }
+            const float gray = 0.299f * v.x + 0.587f * v.y + 0.114f * v.z;
+            const float grain = noise * ((float)(wpe__hash32((uint32_t)i * 2654435761u + 0x51ED27u) >> 8) /
+                                             16777216.0f * 2.0f -
+                                         1.0f);
+            const float rgb[3] = {v.x, v.y, v.z};
+            const float tints[3] = {p->tint_r, p->tint_g, p->tint_b};
+            float out[3];
+            for (int k = 0; k < 3; ++k) {
+                const float rich = gray + (rgb[k] - gray) * saturation;
+                out[k] = wpe__clamp01(rich + (tints[k] - rich) * tint + grain);
+            }
+            c->dst[i] = wpe_color_from_vec4(wpe_vec4(out[0], out[1], out[2], v.w));
+        }
+    }
+}
+
 /* ---- Cracks ----------------------------------------------------------------------------------------- */
 
 /* A well-mixed 32-bit hash (the "lowbias32" finalizer): the lines come from it, the same everywhere. */
@@ -1063,6 +1124,23 @@ WPE_PostEffect wpe_postfx_black_hole(const WPE_BlackHoleParams* params) {
                             .enabled = true};
 }
 
+static const WPE_AcrylicParams wpe__acrylic_defaults = {.strength = 1.0f,
+                                                        .radius_pixels = 6.0f,
+                                                        .tint_r = 0.08f,
+                                                        .tint_g = 0.1f,
+                                                        .tint_b = 0.16f,
+                                                        .tint = 0.45f,
+                                                        .saturation = 1.4f,
+                                                        .noise = 0.04f};
+
+WPE_PostEffect wpe_postfx_acrylic(const WPE_AcrylicParams* params) {
+    return (WPE_PostEffect){.name = "acrylic",
+                            .pass = wpe__acrylic_pass,
+                            .pass_count = 5,
+                            .params = params ? params : &wpe__acrylic_defaults,
+                            .enabled = true};
+}
+
 WPE_PostEffect wpe_postfx_curve_distort(const WPE_CurveDistortParams* params) {
     return (WPE_PostEffect){.name = "curve_distort",
                             .pass = wpe__curve_distort_pass,
@@ -1102,7 +1180,8 @@ WPE_PostEffect wpe_postfx_radial_blur(const WPE_RadialBlurParams* params) {
 
 static const char* const wpe__kind_names[] = {
     "ssao",      "chromatic_aberration", "ps1",       "vignette", "color_adjust", "depth_of_field",
-    "shockwave", "radial_blur",          "grayscale", "cracks",   "shatter",      "black_hole"};
+    "shockwave", "radial_blur",          "grayscale", "cracks",   "shatter",      "black_hole",
+    "acrylic"};
 static_assert(sizeof wpe__kind_names / sizeof wpe__kind_names[0] == WPE_POSTFX_KIND_COUNT,
               "a name for every effect kind");
 
@@ -1151,6 +1230,15 @@ static const WPE_PostFxParam wpe__black_hole_params[] = {
     {"ring_r", offsetof(WPE_PostFxConfig, black_hole.ring_r), 0, 4, false},
     {"ring_g", offsetof(WPE_PostFxConfig, black_hole.ring_g), 0, 4, false},
     {"ring_b", offsetof(WPE_PostFxConfig, black_hole.ring_b), 0, 4, false}};
+static const WPE_PostFxParam wpe__acrylic_params[] = {
+    {"strength", offsetof(WPE_PostFxConfig, acrylic.strength), 0, 1, false},
+    {"radius_pixels", offsetof(WPE_PostFxConfig, acrylic.radius_pixels), 0, 32, false},
+    {"tint_r", offsetof(WPE_PostFxConfig, acrylic.tint_r), 0, 1, false},
+    {"tint_g", offsetof(WPE_PostFxConfig, acrylic.tint_g), 0, 1, false},
+    {"tint_b", offsetof(WPE_PostFxConfig, acrylic.tint_b), 0, 1, false},
+    {"tint", offsetof(WPE_PostFxConfig, acrylic.tint), 0, 1, false},
+    {"saturation", offsetof(WPE_PostFxConfig, acrylic.saturation), 0, 3, false},
+    {"noise", offsetof(WPE_PostFxConfig, acrylic.noise), 0, 0.25, false}};
 static const WPE_PostFxParam wpe__grayscale_params[] = {
     {"strength", offsetof(WPE_PostFxConfig, grayscale.strength), 0, 1, false},
     {"tint_r", offsetof(WPE_PostFxConfig, grayscale.tint_r), 0, 2, false},
@@ -1208,6 +1296,7 @@ static const struct {
     WPE__TABLE(wpe__shockwave_params),    WPE__TABLE(wpe__radial_blur_params),
     WPE__TABLE(wpe__grayscale_params),    WPE__TABLE(wpe__cracks_params),
     WPE__TABLE(wpe__shatter_params),      WPE__TABLE(wpe__black_hole_params),
+    WPE__TABLE(wpe__acrylic_params),
 #undef WPE__TABLE
 };
 
@@ -1269,7 +1358,8 @@ WPE_PostFxConfig wpe_postfx_config_default(WPE_PostFxKind kind) {
                               .grayscale = wpe__grayscale_defaults,
                               .cracks = wpe__cracks_defaults,
                               .shatter = wpe__shatter_defaults,
-                              .black_hole = wpe__black_hole_defaults};
+                              .black_hole = wpe__black_hole_defaults,
+                              .acrylic = wpe__acrylic_defaults};
 }
 
 WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* c) {
@@ -1310,6 +1400,9 @@ WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* c) {
         break;
     case WPE_POSTFX_BLACK_HOLE:
         effect = wpe_postfx_black_hole(&c->black_hole);
+        break;
+    case WPE_POSTFX_ACRYLIC:
+        effect = wpe_postfx_acrylic(&c->acrylic);
         break;
     }
     effect.enabled = c->enabled;

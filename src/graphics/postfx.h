@@ -253,6 +253,18 @@ typedef struct WPE_BlackHoleParams {
     float ring_r, ring_g, ring_b; /* Its color, added (0..4: above 1 it burns out to white sooner). */
 } WPE_BlackHoleParams;
 
+/* Frosted glass (an "acrylic" backdrop for menus): the image blurred (two rounds of box blur, close to a
+ * Gaussian), its colors saturated, tinted, and given a fine static grain. `strength` (0..1) scales all of it,
+ * so fading it in blurs the scene gradually. */
+typedef struct WPE_AcrylicParams {
+    float strength;               /* 0: off .. 1: full. */
+    float radius_pixels;          /* The blur at full strength (each of the two rounds; 0..32). */
+    float tint_r, tint_g, tint_b; /* The tint color. */
+    float tint;                   /* 0..1: how much of the tint color is mixed in. */
+    float saturation;             /* 1: as it is; more makes the blurred colors richer (0..3). */
+    float noise;                  /* 0..0.25: the grain's strength. */
+} WPE_AcrylicParams;
+
 /* ---- Configured effects (scene files, scripts) ---------------------------------------------------- */
 
 #define WPE_POSTFX_MAX_EFFECTS 8u /* Effects a scene can have. */
@@ -271,8 +283,9 @@ typedef enum WPE_PostFxKind {
     WPE_POSTFX_CRACKS,
     WPE_POSTFX_SHATTER,
     WPE_POSTFX_BLACK_HOLE,
+    WPE_POSTFX_ACRYLIC,
 } WPE_PostFxKind;
-#define WPE_POSTFX_KIND_COUNT 12u
+#define WPE_POSTFX_KIND_COUNT 13u
 
 /** One configured built-in effect; only the parameters matching `kind` are used. */
 typedef struct WPE_PostFxConfig {
@@ -290,6 +303,7 @@ typedef struct WPE_PostFxConfig {
     WPE_CracksParams cracks;
     WPE_ShatterParams shatter;
     WPE_BlackHoleParams black_hole;
+    WPE_AcrylicParams acrylic;
 } WPE_PostFxConfig;
 
 /** A parameter of an effect kind: its name (in scene files and scripts), where it lives in a
@@ -338,6 +352,7 @@ WPE_PostEffect wpe_postfx_grayscale(const WPE_GrayscaleParams* params);
 WPE_PostEffect wpe_postfx_cracks(const WPE_CracksParams* params);
 WPE_PostEffect wpe_postfx_shatter(const WPE_ShatterParams* params);
 WPE_PostEffect wpe_postfx_black_hole(const WPE_BlackHoleParams* params);
+WPE_PostEffect wpe_postfx_acrylic(const WPE_AcrylicParams* params);
 WPE_PostEffect wpe_postfx_curve_distort(const WPE_CurveDistortParams* params); /* params required. */
 
 /** @return Linear view-space depth for a window depth value. @thread_safety Any thread */

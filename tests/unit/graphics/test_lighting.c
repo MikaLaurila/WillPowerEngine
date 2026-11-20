@@ -578,6 +578,30 @@ static void test_lighting_postfx_distortions(void) {
     WPE_TEST_ASSERT_MSG(((rim >> 8) & 0xFFu) > 0x80u, "0x%08x has no ring", rim);
     wpe_renderer_destroy(r);
 
+    /* Acrylic: off at strength 0; at full strength the stripes blur to gray (and take the tint). */
+    WPE_AcrylicParams frost = {.strength = 0.0f,
+                               .radius_pixels = 4.0f,
+                               .tint_r = 0.0f,
+                               .tint_g = 0.0f,
+                               .tint_b = 1.0f,
+                               .tint = 0.5f,
+                               .saturation = 1.0f,
+                               .noise = 0.0f};
+    effect = wpe_postfx_acrylic(&frost);
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(wpe_renderer_framebuffer(r), 0, S, 0, S));
+    wpe_renderer_destroy(r);
+    frost.strength = 1.0f;
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    fb = wpe_renderer_framebuffer(r);
+    const WPE_Vec4 frosted = wpe_color_to_vec4(fb->color[32 * S + 32]);
+    WPE_TEST_ASSERT_MSG(frosted.x > 0.15f && frosted.x < 0.35f && frosted.z > 0.6f, "frosted (%f, %f, %f)",
+                        frosted.x, frosted.y,
+                        frosted.z); /* Half gray (0.5), half blue: (0.25, 0.25, 0.75). */
+    wpe_renderer_destroy(r);
+
     /* A radial blur leaves the center and smears toward it more at the edges. */
     const WPE_RadialBlurParams blur = {.center_x = 0.5f, .center_y = 0.5f, .strength = 0.3f};
     effect = wpe_postfx_radial_blur(&blur);
