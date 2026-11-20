@@ -582,6 +582,8 @@ The scene's post effects (its file's `postfx` list, see [scenes.md](scenes.md)) 
 | `wpe.get_affine_textures() -> on` | Whether affine texture mapping is on. |
 | `wpe.capture_screen([slot = 1]) -> path` | Keeps this frame, as the scene renders it (before post effects, the UI and 2D drawing), in a slot 1..8, and returns its image asset path (`"capture/1"`). Use it as any image (billboards, sprites) or break it with a `shatter` effect (`capture = 1`). Capturing a slot again replaces its picture. |
 
+A `black_hole` (`center_x`, `center_y`, `radius`, `reach`, `pull_pixels`, `swirl`, `darkness`, a ring: [scenes.md](scenes.md)) bends the image in around a point and swirls it, with a black event horizon and a glowing ring at its edge: grow its `radius` and `pull_pixels` to open one, shrink them to close it.
+
 Two effects are made for scripts to animate: `shockwave` (a ring warping the image outward from `center_x`, `center_y` (fractions of the screen), at `radius` (fractions of its height), `width` thick, pushing `strength_pixels`) and `radial_blur` (smearing toward `center_x`, `center_y` by `strength`, 0..1). A hit that ripples out from the player:
 
 ```lua

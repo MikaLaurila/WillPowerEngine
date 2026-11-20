@@ -550,6 +550,34 @@ static void test_lighting_postfx_distortions(void) {
     WPE_TEST_ASSERT(changed_pixels(fb, 28, 36, S / 2 + 12, S / 2 + 20) > 0); /* On it, beside the center. */
     wpe_renderer_destroy(r);
 
+    /* A black hole: black inside its horizon (radius 0.1 of the height: 6.4 pixels), the ring's color on its
+     * edge, the stripes bent near it and untouched far away. */
+    const WPE_BlackHoleParams hole = {.center_x = 0.5f,
+                                      .center_y = 0.5f,
+                                      .radius = 0.1f,
+                                      .reach = 0.08f,
+                                      .pull_pixels = 4.0f,
+                                      .swirl = 1.0f,
+                                      .darkness = 1.0f,
+                                      .ring_pixels = 1.0f,
+                                      .ring_r = 0.0f,
+                                      .ring_g = 4.0f,
+                                      .ring_b = 0.0f};
+    effect = wpe_postfx_black_hole(&hole);
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    fb = wpe_renderer_framebuffer(r);
+    uint32_t black = 0;
+    for (uint32_t y = 30; y < 34; ++y)
+        for (uint32_t x = 30; x < 34; ++x)
+            black += fb->color[y * S + x] == 0xFF000000u;
+    WPE_TEST_ASSERT_EQ_UINT(16, black);                         /* The horizon. */
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(fb, 0, 8, 0, S)); /* Far away. */
+    WPE_TEST_ASSERT(changed_pixels(fb, 20, 26, 20, 44) > 0);    /* Bent above it. */
+    const WPE_Color rim = fb->color[32 * S + 32 + 6];           /* On the ring: green added. */
+    WPE_TEST_ASSERT_MSG(((rim >> 8) & 0xFFu) > 0x80u, "0x%08x has no ring", rim);
+    wpe_renderer_destroy(r);
+
     /* A radial blur leaves the center and smears toward it more at the edges. */
     const WPE_RadialBlurParams blur = {.center_x = 0.5f, .center_y = 0.5f, .strength = 0.3f};
     effect = wpe_postfx_radial_blur(&blur);

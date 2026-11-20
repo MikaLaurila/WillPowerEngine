@@ -14,9 +14,8 @@
  *
  * Built-in effects: SSAO, chromatic aberration, PS1-style dither + color quantization, vignette,
  * color adjustment (brightness/contrast/saturation), grayscale (with a tint, e.g. sepia), depth of field,
- * the shockwave and radial blur distortions, cracks (straight cuts across the screen) and shatter (the
- * screen breaking along them). WPE_PostFxConfig
- * describes any of them as data (scene files, scripts).
+ * the shockwave, radial blur and black hole distortions, cracks (straight cuts across the screen) and shatter
+ * (the screen breaking along them). WPE_PostFxConfig describes any of them as data (scene files, scripts).
  *
  * Usage: wpe_renderer_end_frame() → wpe_postfx_apply() → optionally another renderer frame
  * without clearing for HUD/2D that should not be post-processed.
@@ -238,6 +237,22 @@ typedef struct WPE_RadialBlurParams {
     float strength;           /* 0..1: how far toward the center each pixel smears. */
 } WPE_RadialBlurParams;
 
+/* A black hole bending the image around a screen point: the image is pulled in toward it (pixels show what
+ * lies further out) and swirled around it, most near the event horizon and fading over `reach`; inside the
+ * horizon it turns black by `darkness`, and a photon ring glows at its edge. Positions are fractions of the
+ * screen, distances fractions of its height. Grow `radius` and `pull_pixels` over a moment for a hole that
+ * opens, and shrink them to close it. */
+typedef struct WPE_BlackHoleParams {
+    float center_x, center_y;
+    float radius;                 /* The event horizon. */
+    float reach;                  /* How far beyond the horizon the bending fades out (about a third left). */
+    float pull_pixels;            /* How far toward the center the image is drawn at the horizon. */
+    float swirl;                  /* Radians the image is turned around the center at the horizon. */
+    float darkness;               /* 0..1: how black inside the horizon (0 shows the image, swirled). */
+    float ring_pixels;            /* Width of the glowing ring at the horizon (0: none). */
+    float ring_r, ring_g, ring_b; /* Its color, added (0..4: above 1 it burns out to white sooner). */
+} WPE_BlackHoleParams;
+
 /* ---- Configured effects (scene files, scripts) ---------------------------------------------------- */
 
 #define WPE_POSTFX_MAX_EFFECTS 8u /* Effects a scene can have. */
@@ -255,8 +270,9 @@ typedef enum WPE_PostFxKind {
     WPE_POSTFX_GRAYSCALE,
     WPE_POSTFX_CRACKS,
     WPE_POSTFX_SHATTER,
+    WPE_POSTFX_BLACK_HOLE,
 } WPE_PostFxKind;
-#define WPE_POSTFX_KIND_COUNT 11u
+#define WPE_POSTFX_KIND_COUNT 12u
 
 /** One configured built-in effect; only the parameters matching `kind` are used. */
 typedef struct WPE_PostFxConfig {
@@ -273,6 +289,7 @@ typedef struct WPE_PostFxConfig {
     WPE_GrayscaleParams grayscale;
     WPE_CracksParams cracks;
     WPE_ShatterParams shatter;
+    WPE_BlackHoleParams black_hole;
 } WPE_PostFxConfig;
 
 /** A parameter of an effect kind: its name (in scene files and scripts), where it lives in a
@@ -320,6 +337,7 @@ WPE_PostEffect wpe_postfx_radial_blur(const WPE_RadialBlurParams* params);
 WPE_PostEffect wpe_postfx_grayscale(const WPE_GrayscaleParams* params);
 WPE_PostEffect wpe_postfx_cracks(const WPE_CracksParams* params);
 WPE_PostEffect wpe_postfx_shatter(const WPE_ShatterParams* params);
+WPE_PostEffect wpe_postfx_black_hole(const WPE_BlackHoleParams* params);
 WPE_PostEffect wpe_postfx_curve_distort(const WPE_CurveDistortParams* params); /* params required. */
 
 /** @return Linear view-space depth for a window depth value. @thread_safety Any thread */

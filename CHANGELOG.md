@@ -5,6 +5,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- The `black_hole` post effect: the image pulled in and swirled around a screen point, a black event horizon
+  and a glowing ring at its edge (`radius`, `reach`, `pull_pixels`, `swirl`, `darkness`, `ring_pixels`, ring
+  color). C: `WPE_BlackHoleParams`, `wpe_postfx_black_hole`.
 - `wpe.set_clip_plane(entity, [point, normal, [cap_color]])`: cuts every mesh in a subtree along a plane, drawing
   (and shadowing) only the side the normal points to. The plane is kept in the entity's space, so it moves with
   it; a cap color draws the back faces seen through the cut flat, so a cut body looks solid. Two copies of a

@@ -394,6 +394,46 @@ static void wpe__shockwave_pass(const WPE_PostContext* c, const void* params_ptr
     }
 }
 
+/* Each pixel outside the horizon shows the image from further out (the pull) and turned around the center
+ * (the swirl), both weighted by a Gaussian of the distance past the horizon (`reach` its spread); inside the
+ * horizon the image, swirled fully, fades to black by `darkness` over a pixel and a half; the ring is added
+ * on top. */
+static void wpe__black_hole_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
+                                 uint32_t row_begin, uint32_t row_end) {
+    (void)pass;
+    const WPE_BlackHoleParams* p = params_ptr;
+    const float h = (float)c->height;
+    const float cx = p->center_x * (float)c->width, cy = p->center_y * h;
+    const float horizon = fmaxf(p->radius, 0.0f) * h;
+    const float reach = fmaxf(p->reach * h, 1e-3f);
+    const float ring = fmaxf(p->ring_pixels, 0.0f);
+    const float darkness = wpe__clamp01(p->darkness);
+    for (uint32_t y = row_begin; y < row_end; ++y) {
+        for (uint32_t x = 0; x < c->width; ++x) {
+            const size_t i = (size_t)y * c->width + x;
+            const float dx = (float)x + 0.5f - cx, dy = (float)y + 0.5f - cy;
+            const float d = sqrtf(dx * dx + dy * dy);
+            const float past = fmaxf(d - horizon, 0.0f);
+            const float weight = expf(-0.5f * (past / reach) * (past / reach));
+            const float glow = ring > 0.0f ? fmaxf(0.0f, 1.0f - fabsf(d - horizon) / ring) : 0.0f;
+            if (weight < 1e-3f && glow <= 0.0f) {
+                c->dst[i] = c->src[i];
+                continue;
+            }
+            const float from = d + p->pull_pixels * weight;
+            const float angle = atan2f(dy, dx) + p->swirl * weight;
+            WPE_Vec4 v = wpe_color_to_vec4(wpe__texel_clamped(c, (int32_t)floorf(cx + from * cosf(angle)),
+                                                              (int32_t)floorf(cy + from * sinf(angle))));
+            const float inside = wpe__clamp01((horizon - d) / 1.5f + 0.5f) * darkness;
+            const float keep = 1.0f - inside;
+            v = wpe_vec4(wpe__clamp01(v.x * keep + p->ring_r * glow),
+                         wpe__clamp01(v.y * keep + p->ring_g * glow),
+                         wpe__clamp01(v.z * keep + p->ring_b * glow), v.w);
+            c->dst[i] = wpe_color_from_vec4(v);
+        }
+    }
+}
+
 /* ---- Cracks ----------------------------------------------------------------------------------------- */
 
 /* A well-mixed 32-bit hash (the "lowbias32" finalizer): the lines come from it, the same everywhere. */
@@ -1003,6 +1043,26 @@ WPE_PostEffect wpe_postfx_shatter(const WPE_ShatterParams* params) {
                             .enabled = true};
 }
 
+static const WPE_BlackHoleParams wpe__black_hole_defaults = {.center_x = 0.5f,
+                                                             .center_y = 0.5f,
+                                                             .radius = 0.08f,
+                                                             .reach = 0.15f,
+                                                             .pull_pixels = 20.0f,
+                                                             .swirl = 1.5f,
+                                                             .darkness = 1.0f,
+                                                             .ring_pixels = 2.0f,
+                                                             .ring_r = 0.8f,
+                                                             .ring_g = 0.4f,
+                                                             .ring_b = 1.2f};
+
+WPE_PostEffect wpe_postfx_black_hole(const WPE_BlackHoleParams* params) {
+    return (WPE_PostEffect){.name = "black_hole",
+                            .pass = wpe__black_hole_pass,
+                            .pass_count = 1,
+                            .params = params ? params : &wpe__black_hole_defaults,
+                            .enabled = true};
+}
+
 WPE_PostEffect wpe_postfx_curve_distort(const WPE_CurveDistortParams* params) {
     return (WPE_PostEffect){.name = "curve_distort",
                             .pass = wpe__curve_distort_pass,
@@ -1042,7 +1102,7 @@ WPE_PostEffect wpe_postfx_radial_blur(const WPE_RadialBlurParams* params) {
 
 static const char* const wpe__kind_names[] = {
     "ssao",      "chromatic_aberration", "ps1",       "vignette", "color_adjust", "depth_of_field",
-    "shockwave", "radial_blur",          "grayscale", "cracks",   "shatter"};
+    "shockwave", "radial_blur",          "grayscale", "cracks",   "shatter",      "black_hole"};
 static_assert(sizeof wpe__kind_names / sizeof wpe__kind_names[0] == WPE_POSTFX_KIND_COUNT,
               "a name for every effect kind");
 
@@ -1079,6 +1139,18 @@ static const WPE_PostFxParam wpe__radial_blur_params[] = {
     {"center_x", offsetof(WPE_PostFxConfig, radial_blur.center_x), -1, 2, false},
     {"center_y", offsetof(WPE_PostFxConfig, radial_blur.center_y), -1, 2, false},
     {"strength", offsetof(WPE_PostFxConfig, radial_blur.strength), 0, 1, false}};
+static const WPE_PostFxParam wpe__black_hole_params[] = {
+    {"center_x", offsetof(WPE_PostFxConfig, black_hole.center_x), -1, 2, false},
+    {"center_y", offsetof(WPE_PostFxConfig, black_hole.center_y), -1, 2, false},
+    {"radius", offsetof(WPE_PostFxConfig, black_hole.radius), 0, 4, false},
+    {"reach", offsetof(WPE_PostFxConfig, black_hole.reach), 0.001, 4, false},
+    {"pull_pixels", offsetof(WPE_PostFxConfig, black_hole.pull_pixels), -512, 512, false},
+    {"swirl", offsetof(WPE_PostFxConfig, black_hole.swirl), -50, 50, false},
+    {"darkness", offsetof(WPE_PostFxConfig, black_hole.darkness), 0, 1, false},
+    {"ring_pixels", offsetof(WPE_PostFxConfig, black_hole.ring_pixels), 0, 64, false},
+    {"ring_r", offsetof(WPE_PostFxConfig, black_hole.ring_r), 0, 4, false},
+    {"ring_g", offsetof(WPE_PostFxConfig, black_hole.ring_g), 0, 4, false},
+    {"ring_b", offsetof(WPE_PostFxConfig, black_hole.ring_b), 0, 4, false}};
 static const WPE_PostFxParam wpe__grayscale_params[] = {
     {"strength", offsetof(WPE_PostFxConfig, grayscale.strength), 0, 1, false},
     {"tint_r", offsetof(WPE_PostFxConfig, grayscale.tint_r), 0, 2, false},
@@ -1135,7 +1207,7 @@ static const struct {
     WPE__TABLE(wpe__color_adjust_params), WPE__TABLE(wpe__dof_params),
     WPE__TABLE(wpe__shockwave_params),    WPE__TABLE(wpe__radial_blur_params),
     WPE__TABLE(wpe__grayscale_params),    WPE__TABLE(wpe__cracks_params),
-    WPE__TABLE(wpe__shatter_params),
+    WPE__TABLE(wpe__shatter_params),      WPE__TABLE(wpe__black_hole_params),
 #undef WPE__TABLE
 };
 
@@ -1196,7 +1268,8 @@ WPE_PostFxConfig wpe_postfx_config_default(WPE_PostFxKind kind) {
                               .radial_blur = wpe__radial_blur_defaults,
                               .grayscale = wpe__grayscale_defaults,
                               .cracks = wpe__cracks_defaults,
-                              .shatter = wpe__shatter_defaults};
+                              .shatter = wpe__shatter_defaults,
+                              .black_hole = wpe__black_hole_defaults};
 }
 
 WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* c) {
@@ -1234,6 +1307,9 @@ WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* c) {
         break;
     case WPE_POSTFX_SHATTER:
         effect = wpe_postfx_shatter(&c->shatter);
+        break;
+    case WPE_POSTFX_BLACK_HOLE:
+        effect = wpe_postfx_black_hole(&c->black_hole);
         break;
     }
     effect.enabled = c->enabled;
