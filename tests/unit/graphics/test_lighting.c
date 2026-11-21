@@ -550,6 +550,27 @@ static void test_lighting_postfx_distortions(void) {
     WPE_TEST_ASSERT(changed_pixels(fb, 28, 36, S / 2 + 12, S / 2 + 20) > 0); /* On it, beside the center. */
     wpe_renderer_destroy(r);
 
+    /* The same wave from a vertical line half the height long (rows 16..48), 0.1 (6.4 pixels) out: it pushes
+     * the stripes sideways all along the line, far past where the round ring reaches, but not on the line
+     * itself or beyond its ends. */
+    const WPE_ShockwaveParams line = {.center_x = 0.5f,
+                                      .center_y = 0.5f,
+                                      .radius = 0.1f,
+                                      .width = 0.05f,
+                                      .strength_pixels = 3.0f,
+                                      .length = 0.5f,
+                                      .angle = 1.5707963f};
+    effect = wpe_postfx_shockwave(&line);
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    fb = wpe_renderer_framebuffer(r);
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(fb, 16, 48, 30, 35)); /* On the line. */
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(fb, 0, 5, 0, S));     /* Beyond its ends. */
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(fb, 59, S, 0, S));
+    WPE_TEST_ASSERT(changed_pixels(fb, 18, 22, 34, 41) > 0); /* Beside it, near an end. */
+    WPE_TEST_ASSERT(changed_pixels(fb, 18, 22, 23, 30) > 0); /* On both sides. */
+    wpe_renderer_destroy(r);
+
     /* A black hole: black inside its horizon (radius 0.1 of the height: 6.4 pixels), the ring's color on its
      * edge, the stripes bent near it and untouched far away. */
     const WPE_BlackHoleParams hole = {.center_x = 0.5f,

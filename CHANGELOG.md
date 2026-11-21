@@ -5,6 +5,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Straight shockwaves: a `shockwave` effect's `length` (a fraction of the screen height) and `angle` (radians)
+  turn its center into a line, so the wave spreads out from both sides of a cut, rounded at its ends (0, the
+  default, is the round ring as before). C: `WPE_ShockwaveParams.length`, `.angle`.
 - A `ui` audio bus (`wpe.BUS_UI`, `WPE_AUDIO_BUS_UI`, scene `bus: "ui"`, project `audio.ui`) for menu sounds: it
   keeps its speed, so its sounds play while the game is paused (on the effects bus they waited for the game to
   run again, then all played at once).

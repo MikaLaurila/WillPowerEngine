@@ -367,7 +367,8 @@ static void wpe__dof_pass(const WPE_PostContext* c, const void* params_ptr, uint
 /* ---- Distortions ------------------------------------------------------------------------------------ */
 
 /* Each pixel shows the image from a little toward the center across the ring, so the ring pushes it
- * outward; the push peaks mid-ring and fades smoothly to its edges. */
+ * outward; the push peaks mid-ring and fades smoothly to its edges. With a length, the distance and the
+ * direction are taken from the nearest point of the line instead. */
 static void wpe__shockwave_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
                                 uint32_t row_begin, uint32_t row_end) {
     (void)pass;
@@ -375,10 +376,16 @@ static void wpe__shockwave_pass(const WPE_PostContext* c, const void* params_ptr
     const float h = (float)c->height;
     const float cx = p->center_x * (float)c->width, cy = p->center_y * h;
     const float width = p->width > 1e-4f ? p->width : 1e-4f;
+    const float half = fmaxf(p->length, 0.0f) * 0.5f;
+    const float ux = cosf(p->angle), uy = sinf(p->angle);
     for (uint32_t y = row_begin; y < row_end; ++y) {
         for (uint32_t x = 0; x < c->width; ++x) {
             const size_t i = (size_t)y * c->width + x;
-            const float dx = ((float)x + 0.5f - cx) / h, dy = ((float)y + 0.5f - cy) / h;
+            const float rx = ((float)x + 0.5f - cx) / h, ry = ((float)y + 0.5f - cy) / h;
+            const float along = fminf(fmaxf(rx * ux + ry * uy, -half), half);
+            const float nx = cx + along * ux * h,
+                        ny = cy + along * uy * h; /* The nearest point, in pixels. */
+            const float dx = rx - along * ux, dy = ry - along * uy;
             const float d = sqrtf(dx * dx + dy * dy);
             const float ring = (d - p->radius) / width;
             if (!(fabsf(ring) < 1.0f) || !(d > 1e-6f)) {
@@ -387,8 +394,8 @@ static void wpe__shockwave_pass(const WPE_PostContext* c, const void* params_ptr
             }
             const float bump = (1.0f - ring * ring) * (1.0f - ring * ring);
             const float push = p->strength_pixels * bump / d / h; /* Along the unit direction, in heights. */
-            const int32_t sx = (int32_t)floorf(cx + (dx - dx * push) * h);
-            const int32_t sy = (int32_t)floorf(cy + (dy - dy * push) * h);
+            const int32_t sx = (int32_t)floorf(nx + (dx - dx * push) * h);
+            const int32_t sy = (int32_t)floorf(ny + (dy - dy * push) * h);
             c->dst[i] = wpe__texel_clamped(c, sx, sy);
         }
     }
@@ -1213,7 +1220,9 @@ static const WPE_PostFxParam wpe__shockwave_params[] = {
     {"center_y", offsetof(WPE_PostFxConfig, shockwave.center_y), -1, 2, false},
     {"radius", offsetof(WPE_PostFxConfig, shockwave.radius), 0, 4, false},
     {"width", offsetof(WPE_PostFxConfig, shockwave.width), 0.001, 2, false},
-    {"strength_pixels", offsetof(WPE_PostFxConfig, shockwave.strength_pixels), -64, 64, false}};
+    {"strength_pixels", offsetof(WPE_PostFxConfig, shockwave.strength_pixels), -64, 64, false},
+    {"length", offsetof(WPE_PostFxConfig, shockwave.length), 0, 4, false},
+    {"angle", offsetof(WPE_PostFxConfig, shockwave.angle), -50, 50, false}};
 static const WPE_PostFxParam wpe__radial_blur_params[] = {
     {"center_x", offsetof(WPE_PostFxConfig, radial_blur.center_x), -1, 2, false},
     {"center_y", offsetof(WPE_PostFxConfig, radial_blur.center_y), -1, 2, false},

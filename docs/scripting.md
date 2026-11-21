@@ -601,6 +601,30 @@ function Hero:hit_wave(t) -- t from 0 to 1 over a few tenths of a second
 end
 ```
 
+A `length` (a fraction of the screen height, 0 by default) stretches the center into a straight line through `center_x`, `center_y`, turned `angle` radians clockwise from pointing right: the wave then spreads out from both sides of the line, rounded at its ends. That's the shock of a cut, such as the moment a blade clicks back into its sheath after an Iai strike and the cuts it left burst. Each cut is its own effect (up to 8 effects in all), driven by index:
+
+```lua
+-- cuts: {{x, y, angle, length}, ...} in screen fractions and radians; t from 0 to 1 over about 0.3 s.
+function Hero:start_cut_waves(cuts)
+	self.waves = {}
+	for _, cut in cuts do
+		table.insert(self.waves, wpe.add_postfx({ effect = "shockwave", center_x = cut[1], center_y = cut[2],
+			angle = cut[3], length = cut[4], radius = 0, width = 0.04, strength_pixels = 0 }))
+	end
+end
+
+function Hero:cut_waves(t)
+	local ease = 1 - (1 - t) ^ 3 -- fast out, slowing down
+	for i = #self.waves, 1, -1 do -- last first, so removing keeps the earlier indices
+		if t >= 1 then
+			wpe.remove_postfx(self.waves[i])
+		else
+			wpe.set_postfx(self.waves[i], { radius = 0.15 * ease, strength_pixels = 10 * (1 - t) })
+		end
+	end
+end
+```
+
 **Judgement Cut.** `cracks` draws straight cuts across the screen that cross near a point, like broken glass: near each cut the image is pulled across it and streaked along it, with a tinted rim on one side (a `core` color adds a line along the cut, white for cuts of light); raising its `count` over time draws them in one by one. `shatter` breaks the screen along the same lines (same `count`, `seed`, `center_x`, `center_y`, `spread`) and lets the pieces fly and fall as its `time` runs, showing a captured frame. `scripts/lib/judgement_cut.luau` runs the whole move: `local cut = JudgementCut.start(x, y, {lines = 10, ending = "shatter"})`, then `cut:update(dt)` each frame until it returns false. Its endings are `"shatter"`, `"fade"` and `"stay"` (until `cut:stop()`), and it takes colors, timings and a dimming of the scene. The hero in `scenes/character.scene` uses it on Q (or the right shoulder button).
 
 `scripts/hero.luau` in `scenes/character.scene` does this on the fire button, with a radial blur. For a flashback, fade in `grayscale` by raising its `strength` from 0 to 1 (a tint such as `tint_g = 0.9, tint_b = 0.7` makes it sepia), perhaps with a `vignette`. Effects run in C over every pixel; scripts choose and drive them, but can't run their own per-pixel code (Luau would be far too slow for that).

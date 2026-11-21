@@ -258,6 +258,8 @@ function Tour:on_start()
 	assert(near(wpe.get_postfx()[wave].radius, 0.1) and near(wpe.get_postfx()[wave].width, 0.08)) -- defaults fill in
 	wpe.set_postfx(wave, { radius = 9 }) -- clamped to its range
 	assert(near(wpe.get_postfx()[wave].radius, 4))
+	wpe.set_postfx(wave, { length = 0.5, angle = 0.8 }) -- a straight cut's wave
+	assert(near(wpe.get_postfx()[wave].length, 0.5) and near(wpe.get_postfx()[wave].angle, 0.8))
 	assert(not pcall(wpe.set_postfx, wave, { bloom = 1 }))
 	assert(not pcall(wpe.set_postfx, 99, {}) and not pcall(wpe.set_postfx, "radial_blur", {}))
 	assert(not pcall(wpe.add_postfx, { effect = "bloom" }))

@@ -222,13 +222,16 @@ typedef struct WPE_DepthOfFieldParams {
 } WPE_DepthOfFieldParams;
 
 /* A ring that warps the image outward, centered on a screen point; grow `radius` over a moment for a
- * shockwave (an impact, a slash). Positions are fractions of the screen ((0, 0) top-left); distances
- * fractions of its height. */
+ * shockwave (an impact, a slash). With a `length`, the center is a straight line instead (centered on the
+ * point, turned by `angle`) and the wave spreads out from it on both sides, rounded at its ends: a cut's
+ * shock. Positions are fractions of the screen ((0, 0) top-left); distances fractions of its height. */
 typedef struct WPE_ShockwaveParams {
     float center_x, center_y;
-    float radius;          /* The ring's distance from the center. */
+    float radius;          /* The ring's distance from the center (point or line). */
     float width;           /* How thick the ring is. */
     float strength_pixels; /* How far the ring pushes the image (negative pulls it in). */
+    float length;          /* The line's length (0: a point, a round ring). */
+    float angle;           /* The line's direction in radians, clockwise on screen from pointing right. */
 } WPE_ShockwaveParams;
 
 /* Smears the image toward a screen point (a dash, a heavy hit), more toward the edges. */
