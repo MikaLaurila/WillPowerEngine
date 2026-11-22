@@ -703,6 +703,7 @@ static void write_tiny_game(void) {
     write_text(ROOT "/game/scripts/switch.luau",
                "local S = {}\n"
                "function S:on_start() self.n = 0; assert(wpe.get_camera() == nil)\n"
+               "  assert(wpe.get_scene() == 'scenes/a.scene')\n"
                "  assert(wpe.text_size('x') > 0) end -- the built-in font: the project names none\n"
                "function S:on_update(dt)\n"
                "  self.n += 1\n"
@@ -712,7 +713,8 @@ static void write_tiny_game(void) {
                "return S\n");
     write_text(ROOT "/game/scripts/quit.luau",
                "local S = {}\n"
-               "function S:on_start() self.n = 0; assert(wpe.get_name(wpe.get_camera()) == 'eye') end\n"
+               "function S:on_start() self.n = 0; assert(wpe.get_name(wpe.get_camera()) == 'eye')\n"
+               "  assert(wpe.get_scene() == 'scenes/b.scene') end\n"
                "function S:on_update(dt)\n"
                "  self.n += 1\n"
                "  wpe.draw_rect(0, 0, 8, 8, wpe.color(0, 1, 0))\n"

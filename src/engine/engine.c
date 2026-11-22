@@ -115,6 +115,8 @@ struct WPE_Engine {
     bool pending_from_host;            /* pending_scene is the host's scene (a player follows it). */
     char scene_path[WPE_VFS_PATH_MAX]; /* The scene file last loaded ("" after a text load): a host shares it.
                                         */
+    char scene_name[WPE_VFS_PATH_MAX]; /* The scene scripts are told they're in (wpe.get_scene): scene_path,
+                                          or what wpe_engine_set_scene_name() says a text load was. */
     uint64_t game_id;
     bool game_id_known;
     bool quit;
@@ -192,6 +194,11 @@ static void wpe__app_set_camera(void* user_data, WPE_Entity camera) {
 
 static WPE_Entity wpe__app_get_camera(void* user_data) {
     return wpe_engine_camera(user_data);
+}
+
+static const char* wpe__app_scene_name(void* user_data) {
+    const WPE_Engine* engine = user_data;
+    return engine->scene_name;
 }
 
 static void wpe__app_screen_size(void* user_data, uint32_t* out_width, uint32_t* out_height) {
@@ -632,6 +639,7 @@ static WPE_Result wpe__create_world(WPE_Engine* engine, const WPE_EngineDesc* de
                                    .quit = wpe__app_quit,
                                    .set_camera = wpe__app_set_camera,
                                    .get_camera = wpe__app_get_camera,
+                                   .scene_name = wpe__app_scene_name,
                                    .screen_size = wpe__app_screen_size,
                                    .instantiate = wpe__app_instantiate,
                                    .save_directory = wpe__app_save_directory,
@@ -785,6 +793,7 @@ WPE_Result wpe_engine_load_scene_text(WPE_Engine* engine, const char* text, size
     if (!engine || !text) return WPE_RESULT_ERROR_NULL_ARG;
     if (!name) name = "scene";
     engine->scene_path[0] = '\0';            /* wpe_engine_load_scene() sets it once a file has loaded. */
+    engine->scene_name[0] = '\0';            /* Set with it, or by wpe_engine_set_scene_name(). */
     wpe_engine_invalidate_nav_grid(engine);  /* The next scene has its own level. */
     wpe_input_stop_listening(engine->input); /* Whoever listened for a binding is gone. */
     WPE_Result result = wpe_scene_clear(engine->ecs);
@@ -823,6 +832,7 @@ static WPE_Result wpe__load_scene_file(WPE_Engine* engine, const char* path, boo
         result = wpe_engine_load_scene_text(engine, data, size, path);
         if (result == WPE_RESULT_OK) {
             snprintf(engine->scene_path, sizeof engine->scene_path, "%s", path);
+            snprintf(engine->scene_name, sizeof engine->scene_name, "%s", path);
             /* A host takes its players along; replication runs on the session's scene only. */
             const bool host = wpe_session_is_host(engine->session);
             if (host) (void)wpe_session_set_scene(engine->session, path);
@@ -847,6 +857,11 @@ WPE_Result wpe_engine_load_scene(WPE_Engine* engine, const char* path) {
 
 const char* wpe_engine_scene_path(const WPE_Engine* engine) {
     return engine ? engine->scene_path : "";
+}
+
+void wpe_engine_set_scene_name(WPE_Engine* engine, const char* path) {
+    if (!engine) return;
+    snprintf(engine->scene_name, sizeof engine->scene_name, "%s", path ? path : "");
 }
 
 WPE_Result wpe_engine_save_scene(const WPE_Engine* engine, const char* os_path) {

@@ -2522,6 +2522,13 @@ static int wpe__api_get_camera(lua_State* L) {
     return 1;
 }
 
+static int wpe__api_get_scene(lua_State* L) {
+    const WPE_ScriptApp* app = wpe__app(L, wpe__script_host_from(L)->app.scene_name != NULL, "get_scene");
+    const char* name = app->scene_name(app->user_data);
+    lua_pushstring(L, name ? name : "");
+    return 1;
+}
+
 static int wpe__api_screen_size(lua_State* L) {
     const WPE_ScriptApp* app = wpe__app(L, wpe__script_host_from(L)->app.screen_size != NULL, "screen_size");
     uint32_t width = 0, height = 0;
@@ -4462,6 +4469,7 @@ static const luaL_Reg wpe__api[] = {
     {"quit", wpe__api_quit},
     {"set_camera", wpe__api_set_camera},
     {"get_camera", wpe__api_get_camera},
+    {"get_scene", wpe__api_get_scene},
     {"screen_size", wpe__api_screen_size},
     {"capture_screen", wpe__api_capture_screen},
     {"world_to_screen", wpe__api_world_to_screen},

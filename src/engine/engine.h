@@ -215,6 +215,15 @@ WPE_Result wpe_engine_screenshot(const WPE_Engine* engine, const char* os_path);
  * @thread_safety Main thread only */
 const char* wpe_engine_scene_path(const WPE_Engine* engine);
 
+/**
+ * Names the scene file the world came from when it was loaded from text (the editor plays the scene it has
+ * open from a snapshot), for scripts' wpe.get_scene(). Loading a file sets the name itself and loading text
+ * clears it, so call this after such a load. It doesn't change wpe_engine_scene_path() (what a host shares).
+ * @param path asset path, copied; NULL or "" for none.
+ * @thread_safety Main thread only
+ */
+void wpe_engine_set_scene_name(WPE_Engine* engine, const char* path);
+
 /** Saves the world and environment as a scene file. @thread_safety Main thread only */
 WPE_Result wpe_engine_save_scene(const WPE_Engine* engine, const char* os_path);
 

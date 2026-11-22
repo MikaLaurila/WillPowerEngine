@@ -399,6 +399,9 @@ function Tour:on_start()
 	assert(not pcall(wpe.shake, shaker, { duration = 0 }) and not pcall(wpe.shake, shaker, { rotation = 500 }))
 	wpe.destroy(shaker)
 
+	-- The scene the world was loaded from.
+	assert(wpe.get_scene() == "scenes/test_full.scene", "get_scene: " .. wpe.get_scene())
+
 	-- Screen positions: a point straight ahead of the camera is in the middle of the screen.
 	local camera = wpe.get_camera()
 	local ahead = wpe.get_world_position(camera) + wpe.forward(camera) * 5

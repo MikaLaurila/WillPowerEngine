@@ -5,6 +5,8 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- `wpe.get_scene()`: the scene file the world was loaded from, also while the editor plays its open scene (so
+  scripts can key what a level remembers by it). C: `WPE_ScriptApp.scene_name`, `wpe_engine_set_scene_name`.
 - Straight shockwaves: a `shockwave` effect's `length` (a fraction of the screen height) and `angle` (radians)
   turn its center into a line, so the wave spreads out from both sides of a cut, rounded at its ends (0, the
   default, is the round ring as before). C: `WPE_ShockwaveParams.length`, `.angle`.

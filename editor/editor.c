@@ -264,6 +264,8 @@ static WPE_Result wpe__editor_play_from(WPE_Editor* editor, const wpe__Snapshot*
         wpe__snapshot_free(&editor->play);
         return result;
     }
+    /* The game is in the scene the editor has open (restores load it from text). */
+    wpe_engine_set_scene_name(editor->engine, editor->scene_path);
     /* The game runs without the editor's helpers, from its own camera. */
     wpe_ecs_despawn(wpe_engine_ecs(editor->engine), editor->camera);
     editor->camera = WPE_ENTITY_NULL;

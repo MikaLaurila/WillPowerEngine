@@ -159,6 +159,8 @@ typedef struct WPE_ScriptApp {
     /* Makes an entity the camera the scene is rendered from (and heard from). */
     void (*set_camera)(void* user_data, WPE_Entity camera);
     WPE_Entity (*get_camera)(void* user_data);
+    /* The asset path of the scene file the world was loaded from (wpe.get_scene), "" when it isn't known. */
+    const char* (*scene_name)(void* user_data);
     /* Size of the 2D canvas (framebuffer) in pixels. */
     void (*screen_size)(void* user_data, uint32_t* out_width, uint32_t* out_height);
     /* wpe.instantiate of names the application resolves itself (prefab files): creates the instance,

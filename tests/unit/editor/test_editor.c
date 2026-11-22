@@ -1107,6 +1107,29 @@ static void test_editor_play_does_not_keep_keys_held(void) {
     wpe_editor_destroy(editor);
 }
 
+/* Playing, scripts are in the scene the editor has open, even after undo and redo rebuilt it from text. */
+static void test_editor_play_knows_the_scene(void) {
+    WPE_Editor* editor = open_editor();
+    write_text(
+        ROOT "/project/scripts/where.luau",
+        "local W = {}\nfunction W:on_start() wpe.set_name(self.entity, wpe.get_scene()) end\nreturn W\n");
+    run_ok(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"where\", \"script\": {\"path\": "
+                   "\"scripts/where.luau\"}}}");
+    run_ok(editor, "{\"cmd\": \"undo\"}");
+    run_ok(editor, "{\"cmd\": \"redo\"}");
+    run_ok(editor, "{\"cmd\": \"play\"}");
+    WPE_TEST_ASSERT_OK(wpe_editor_frame(editor, 1.0 / 60.0));
+    WPE_Ecs* ecs = wpe_engine_ecs(wpe_editor_engine(editor));
+    bool found = false;
+    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){.all = WPE_ECS_MASK(WPE_COMP_SCRIPT)});
+    while (wpe_ecs_iter_next(&it))
+        found = found || strcmp(wpe_scene_get_name(ecs, it.entity), "scenes/start.scene") == 0;
+    WPE_TEST_ASSERT(found);
+    run_ok(editor, "{\"cmd\": \"stop\"}");
+    remove(ROOT "/project/scripts/where.luau");
+    wpe_editor_destroy(editor);
+}
+
 /* A game holding the mouse (mouse look) gives it back on release_mouse and when paused, and can take it
  * again. */
 static void test_editor_takes_the_mouse_back_from_the_game(void) {
@@ -1435,7 +1458,7 @@ static void test_editor_reloads_changed_assets(void) {
 WPE_TEST_MAIN(
     WPE_TEST_CASE(test_editor_coalesces_continuous_edits), WPE_TEST_CASE(test_editor_prefab_commands),
     WPE_TEST_CASE(test_editor_orders_siblings), WPE_TEST_CASE(test_editor_2d_view_shows_the_game_and_its_ui),
-    WPE_TEST_CASE(test_editor_play_does_not_keep_keys_held),
+    WPE_TEST_CASE(test_editor_play_does_not_keep_keys_held), WPE_TEST_CASE(test_editor_play_knows_the_scene),
     WPE_TEST_CASE(test_editor_takes_the_mouse_back_from_the_game),
     WPE_TEST_CASE(test_editor_fits_colliders_to_meshes), WPE_TEST_CASE(test_editor_guards_unsaved_changes),
     WPE_TEST_CASE(test_editor_focus_frames_the_selection), WPE_TEST_CASE(test_editor_snap_settings),
