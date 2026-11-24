@@ -173,6 +173,30 @@ static void test_game_feel_shakes_restore_the_real_pose(void) {
     WPE_TEST_ASSERT(feel.shake_count == 0 && feel.base_scale == 1.0f &&
                     same_pose(t, wpe_vec3(9, 9, 9), still));
 
+    /* A weaker shake doesn't replace a stronger running one; a stronger one, or the old one faded below the
+     * new one, does. */
+    wpe_game_feel_reset(&feel, ecs);
+    const WPE_ShakeParams small = {
+        .amplitude = 0.05f, .rotation = 0.0f, .duration = 0.1f, .frequency = 20.0f};
+    wpe_game_feel_shake(&feel, e, &params);
+    wpe_game_feel_apply_shakes(&feel, ecs, 0.05f);
+    wpe_game_feel_restore_shakes(&feel, ecs);
+    wpe_game_feel_shake(&feel, e, &small);
+    WPE_TEST_ASSERT_NEAR(0.5, feel.shakes[0].params.amplitude, EPS);
+    WPE_TEST_ASSERT_NEAR(0.05, feel.shakes[0].elapsed, EPS);
+    const WPE_ShakeParams turning = {
+        .amplitude = 0.05f, .rotation = 20.0f, .duration = 0.1f, .frequency = 20.0f};
+    wpe_game_feel_shake(&feel, e, &turning); /* Turns further than the running one: replaces it. */
+    WPE_TEST_ASSERT_NEAR(20.0, feel.shakes[0].params.rotation, EPS);
+    WPE_TEST_ASSERT_NEAR(0.0, feel.shakes[0].elapsed, EPS);
+    wpe_game_feel_reset(&feel, ecs);
+    wpe_game_feel_shake(&feel, e, &params);
+    wpe_game_feel_apply_shakes(&feel, ecs, 0.4f); /* 0.1 s left of 0.5: (0.2)^2 * 0.5 = 0.02 m. */
+    wpe_game_feel_restore_shakes(&feel, ecs);
+    wpe_game_feel_shake(&feel, e, &small);
+    WPE_TEST_ASSERT_NEAR(0.05, feel.shakes[0].params.amplitude, EPS);
+    wpe_game_feel_reset(&feel, ecs);
+
     /* A destroyed entity's shake ends quietly. */
     wpe_game_feel_shake(&feel, e, &params);
     wpe_game_feel_apply_shakes(&feel, ecs, 0.05f);

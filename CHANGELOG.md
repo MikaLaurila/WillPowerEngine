@@ -32,6 +32,11 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   old one stays valid for its holders; a broken file keeps the old one), `wpe_asset_is_outdated`,
   `wpe_script_host_refresh_assets`, `wpe_engine_reload_changed_assets`.
 
+### Changed
+- `wpe.shake` (`wpe_game_feel_shake`) no longer lets a weaker shake replace a stronger one still running: the
+  new one is ignored while what's left of the running shake moves and turns at least as far. Before, a sword
+  hit's small shake right after the enemy's own killing-blow shake cut the big one to nothing.
+
 ### Fixed
 - The editor camera jumped back to its starting view whenever the scene was rebuilt from a snapshot (undo,
   redo, stopping play, saving a prefab with other instances); it now stays where it was.

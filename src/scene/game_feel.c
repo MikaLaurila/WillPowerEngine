@@ -107,6 +107,14 @@ void wpe_game_feel_shake(WPE_GameFeel* feel, WPE_Entity entity, const WPE_ShakeP
         !isfinite(params->amplitude) || !isfinite(params->rotation) || !isfinite(params->frequency))
         return;
     WPE_Shake* shake = wpe__find_shake(feel, entity);
+    if (shake && shake->elapsed < shake->params.duration) {
+        /* A weaker shake doesn't cut a stronger one short (a hit's small shake right after a kill's big one):
+         * the running one stays if what's left of it still moves and turns at least as far. */
+        const float fade = 1.0f - shake->elapsed / shake->params.duration, left = fade * fade;
+        if (left * shake->params.amplitude >= params->amplitude &&
+            left * shake->params.rotation >= params->rotation)
+            return;
+    }
     if (!shake) {
         if (feel->shake_count == WPE_MAX_SHAKES) {
             wpe_log_warn("too many shakes at once (%u); entity 0x%08x won't shake", WPE_MAX_SHAKES, entity);

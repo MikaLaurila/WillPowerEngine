@@ -261,7 +261,7 @@ The game clock can run slower or stop. Everything simulated follows it: `dt` in 
 | `wpe.set_time_scale(scale)` | The speed outside slow motion and hit-stops (1; 0..100), e.g. 0 for a pause that still runs the UI. |
 | `wpe.get_time_scale() -> scale` | The speed now: 0 during a hit-stop, slow motion's while it runs, else the one set. |
 | `wpe.real_delta() -> seconds` | This frame's real time, unscaled: for HUD animation that should keep moving during slow motion. |
-| `wpe.shake(entity, {amplitude, rotation, duration, frequency}?)` | Shakes an entity (it needs a transform): it moves up to `amplitude` meters (0.1) and turns up to `rotation` degrees (0) on each axis, changing direction about `frequency` times a second (20), fading out over `duration` real seconds (0.3). Shaking it again starts over. Shake the camera (`wpe.get_camera()`) for impacts. |
+| `wpe.shake(entity, {amplitude, rotation, duration, frequency}?)` | Shakes an entity (it needs a transform): it moves up to `amplitude` meters (0.1) and turns up to `rotation` degrees (0) on each axis, changing direction about `frequency` times a second (20), fading out over `duration` real seconds (0.3). Shaking it again starts over, unless what's left of the running shake is still at least as strong (amplitude and rotation): then the weaker new one is ignored, so a hit's small shake can't cut a kill's big one short. Shake the camera (`wpe.get_camera()`) for impacts. |
 | `wpe.stop_shake(entity)` | Ends its shake. |
 | `wpe.is_shaking(entity) -> bool` | Whether it is shaking. |
 

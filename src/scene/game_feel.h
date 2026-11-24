@@ -85,7 +85,9 @@ void wpe_game_feel_slow_motion(WPE_GameFeel* feel, float scale, float duration, 
 void wpe_game_feel_hit_stop(WPE_GameFeel* feel, float duration);
 
 /**
- * Starts shaking an entity (replacing its shake if it has one). The entity needs a Transform.
+ * Starts shaking an entity, replacing its shake if it has one, unless what's left of that one is at least as
+ * strong (its faded amplitude and rotation both at least the new ones): then the new shake is ignored, so a
+ * small shake can't cut a big one short. The entity needs a Transform.
  *
  * @thread_safety Thread owning the world
  */
