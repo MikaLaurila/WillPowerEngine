@@ -86,6 +86,15 @@ typedef enum WPE_MaterialWorkflow {
     WPE_MATERIAL_UNLIT,                   /* Diffuse color only, no lighting. */
 } WPE_MaterialWorkflow;
 
+typedef enum WPE_UvProjection {
+    WPE_UV_MESH = 0, /* The mesh's own texture coordinates. */
+    /* World positions: neighbouring meshes line up seamlessly, but the texture slides over a moving mesh. */
+    WPE_UV_WORLD,
+    /* The mesh's own positions times its world scale: the texture moves with it and still repeats rather
+     * than stretching when it is scaled. */
+    WPE_UV_OBJECT,
+} WPE_UvProjection;
+
 /** Reference to a texture with its sampler, UV set and KHR_texture_transform. */
 typedef struct WPE_TextureRef {
     uint32_t texture;  /* Index into WPE_Model::textures, or WPE_MODEL_NONE. */
@@ -123,6 +132,12 @@ typedef struct WPE_Material {
     WPE_AlphaMode alpha_mode;
     float alpha_cutoff;
     bool double_sided;
+
+    /* Where texture coordinates come from: the mesh's own UVs, or projected onto each face along the axis it
+     * faces most (box mapping), repeating every `uv_tile` meters, so a scaled box repeats its texture instead
+     * of stretching it. Projected UVs replace both UV sets. */
+    WPE_UvProjection uv_projection;
+    float uv_tile; /* Meters per repeat (> 0) for a projection. */
 } WPE_Material;
 
 typedef struct WPE_ModelNode {

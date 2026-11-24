@@ -42,6 +42,7 @@ Simple shapes don't need a 3D package. A `.prim` file is a small JSON descriptio
 {"shape": "box", "size": [1, 2, 1], "color": [0.9, 0.55, 0.15], "roughness": 0.4}
 {"shape": "sphere", "radius": 0.5, "rings": 12, "segments": 24, "color": [0.2, 0.45, 0.9], "metallic": 0.2}
 {"shape": "plane", "size": 60, "segments": 30, "color": [0.3, 0.9, 0.5, 0.35], "double_sided": true}
+{"shape": "box", "texture": "textures/bricks.png", "tile": 1, "filter": "nearest"}
 ```
 
 | Key | Description |
@@ -53,6 +54,12 @@ Simple shapes don't need a 3D package. A `.prim` file is a small JSON descriptio
 | `metallic`, `roughness` | Material (0 and 0.6 by default). |
 | `emissive` | `[r, g, b]` glow. |
 | `double_sided` | Render back faces too. |
+| `texture` | An image (asset path, PNG or JPEG) as the color texture, multiplied by `color`. A missing or broken image is logged and the shape loads untextured. Editing the image doesn't hot-reload the `.prim`; save the `.prim` too. |
+| `tile` | Meters per texture repeat (1). Each face takes the texture projected along the axis it faces most (box mapping), so scaling the entity repeats the texture instead of stretching it. 0: the shape's own UVs (the texture once per face). |
+| `tile_space` | `"world"` (default): projected from world positions, so neighbouring pieces line up without seams; best for level geometry that stays put (on something that moves, the texture slides). `"object"`: from the shape's own positions times its scale, so the texture moves with it (moving platforms, doors). |
+| `filter` | `"linear"` (default) or `"nearest"` (crisp pixel art). A scene's `texture_filter` (or `wpe.set_texture_filter`), when not `"material"`, overrides it. |
+
+Textured boxes are the quick way to block out levels: one box per wall or floor run, scaled to size, with the texture tiling at a fixed density, instead of many small cubes. Slopes can be the same boxes turned (their top tiles a little stretched, by 1/cos of the angle).
 
 Unknown keys and out-of-range values are errors. `assets/meshes/*.prim` has examples.
 

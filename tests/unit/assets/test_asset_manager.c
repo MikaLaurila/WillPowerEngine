@@ -183,6 +183,73 @@ static void test_assets_primitive_models(void) {
     wpe_test_assets_destroy(&t);
 }
 
+static void test_assets_primitive_textures(void) {
+    WPE_TEST_ASSERT_OK(wpe_directory_create(ROOT "/prims"));
+    const WPE_Color checker[4] = {0xFF000000u, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFF000000u};
+    WPE_TEST_ASSERT_OK(wpe_image_save_png(ROOT "/prims/checker.png", 2, 2, checker));
+    write_prim("wall.prim", "{\"shape\": \"box\", \"size\": [4, 2, 1], \"texture\": \"checker.png\",\n"
+                            " \"tile\": 2, \"filter\": \"nearest\"}");
+    write_prim("platform.prim",
+               "{\"shape\": \"box\", \"texture\": \"checker.png\", \"tile_space\": \"object\"}");
+    write_prim("own_uvs.prim", "{\"shape\": \"plane\", \"texture\": \"checker.png\", \"tile\": 0}");
+    write_prim("lost.prim", "{\"shape\": \"box\", \"texture\": \"nowhere.png\"}");
+    write_prim("badtile.prim", "{\"shape\": \"box\", \"texture\": \"checker.png\", \"tile\": -1}");
+    write_prim("badspace.prim",
+               "{\"shape\": \"box\", \"texture\": \"checker.png\", \"tile_space\": \"screen\"}");
+    write_prim("badfilter.prim", "{\"shape\": \"box\", \"filter\": \"cubic\"}");
+    write_prim("badtexture.prim", "{\"shape\": \"box\", \"texture\": 3}");
+    WPE_TestAssets t = wpe_test_assets_create(ROOT "/prims", 0);
+
+    /* The image becomes the diffuse texture, box-mapped in world space every `tile` meters, crisp. */
+    WPE_AssetHandle wall = WPE_ASSET_NONE, platform = WPE_ASSET_NONE, own = WPE_ASSET_NONE;
+    WPE_TEST_ASSERT_OK(wpe_asset_load(t.assets, WPE_ASSET_MODEL, "wall.prim", &wall));
+    const WPE_Model* m = wpe_asset_model(t.assets, wall);
+    WPE_TEST_ASSERT(m && m->texture_count == 1 && m->textures[0] != NULL);
+    const WPE_Material* material = &m->materials[0];
+    WPE_TEST_ASSERT_EQ_UINT(0, material->diffuse_texture.texture);
+    WPE_TEST_ASSERT_EQ_INT(WPE_FILTER_NEAREST, material->diffuse_texture.sampler.mag_filter);
+    WPE_TEST_ASSERT_EQ_INT(WPE_WRAP_REPEAT, material->diffuse_texture.sampler.wrap_u);
+    WPE_TEST_ASSERT_EQ_INT(WPE_UV_WORLD, material->uv_projection);
+    WPE_TEST_ASSERT_NEAR(2.0, material->uv_tile, 1e-6);
+
+    /* Object space, a meter by default, filtered smoothly. */
+    WPE_TEST_ASSERT_OK(wpe_asset_load(t.assets, WPE_ASSET_MODEL, "platform.prim", &platform));
+    material = &wpe_asset_model(t.assets, platform)->materials[0];
+    WPE_TEST_ASSERT_EQ_INT(WPE_UV_OBJECT, material->uv_projection);
+    WPE_TEST_ASSERT_NEAR(1.0, material->uv_tile, 1e-6);
+    WPE_TEST_ASSERT_EQ_INT(WPE_FILTER_BILINEAR, material->diffuse_texture.sampler.mag_filter);
+
+    /* Tile 0: the shape's own UVs. */
+    WPE_TEST_ASSERT_OK(wpe_asset_load(t.assets, WPE_ASSET_MODEL, "own_uvs.prim", &own));
+    material = &wpe_asset_model(t.assets, own)->materials[0];
+    WPE_TEST_ASSERT(material->uv_projection == WPE_UV_MESH && material->diffuse_texture.texture == 0);
+
+    quiet(true);
+    /* A missing image is reported and the shape loads untextured. */
+    WPE_AssetHandle lost = WPE_ASSET_NONE;
+    WPE_TEST_ASSERT_OK(wpe_asset_load(t.assets, WPE_ASSET_MODEL, "lost.prim", &lost));
+    m = wpe_asset_model(t.assets, lost);
+    WPE_TEST_ASSERT(m->texture_count == 0 && m->materials[0].diffuse_texture.texture == WPE_MODEL_NONE);
+    /* Without a VFS (the plain parser) too. */
+    WPE_Model* plain = NULL;
+    const char* text = "{\"shape\": \"box\", \"texture\": \"checker.png\"}";
+    WPE_TEST_ASSERT_OK(wpe_model_parse_primitive(text, strlen(text), "plain", &plain));
+    WPE_TEST_ASSERT(plain->texture_count == 0);
+    wpe_model_destroy(plain);
+    const char* bad[] = {"badtile.prim", "badspace.prim", "badfilter.prim", "badtexture.prim"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; ++i) {
+        WPE_AssetHandle h = WPE_ASSET_NONE;
+        WPE_TEST_ASSERT_MSG(wpe_asset_load(t.assets, WPE_ASSET_MODEL, bad[i], &h) == WPE_RESULT_ERROR_PARSE,
+                            "%s was accepted", bad[i]);
+    }
+    quiet(false);
+    wpe_asset_release(t.assets, wall);
+    wpe_asset_release(t.assets, platform);
+    wpe_asset_release(t.assets, own);
+    wpe_asset_release(t.assets, lost);
+    wpe_test_assets_destroy(&t);
+}
+
 static void test_assets_add_takes_ownership(void) {
     WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
     WPE_Model* box = NULL;
@@ -385,8 +452,8 @@ static void test_assets_reload_changed_files(void) {
 }
 
 WPE_TEST_MAIN(WPE_TEST_CASE(test_assets_load_caches_and_counts_references),
-              WPE_TEST_CASE(test_assets_primitive_models), WPE_TEST_CASE(test_assets_load_errors),
-              WPE_TEST_CASE(test_assets_add_takes_ownership), WPE_TEST_CASE(test_assets_fonts),
-              WPE_TEST_CASE(test_assets_custom_type_from_pak),
+              WPE_TEST_CASE(test_assets_primitive_models), WPE_TEST_CASE(test_assets_primitive_textures),
+              WPE_TEST_CASE(test_assets_load_errors), WPE_TEST_CASE(test_assets_add_takes_ownership),
+              WPE_TEST_CASE(test_assets_fonts), WPE_TEST_CASE(test_assets_custom_type_from_pak),
               WPE_TEST_CASE(test_assets_gltf_with_relative_buffer_from_directory_and_pak),
               WPE_TEST_CASE(test_assets_reload_changed_files))

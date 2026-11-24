@@ -66,7 +66,8 @@ WPE_Material wpe_material_solid(WPE_Vec4 color, float metallic, float roughness)
  * Builds a model from a primitive description (a ".prim" JSON file, see docs/assets.md), e.g.
  * `{"shape": "box", "size": [1, 2, 1], "color": [0.9, 0.5, 0.1], "roughness": 0.4}`.
  * Shapes: "plane" (size, segments), "box" (size [x, y, z]), "sphere" (radius, rings, segments).
- * Material keys: color (RGB or RGBA, sRGB), metallic, roughness, emissive (RGB), double_sided.
+ * Material keys: color (RGB or RGBA, sRGB), metallic, roughness, emissive (RGB), double_sided; texture keys
+ * (texture, tile, tile_space, filter) are read but need wpe_model_load_primitive() to load the image.
  * Unknown keys are errors.
  *
  * @param name Used in error messages (usually the asset path).
@@ -77,5 +78,19 @@ WPE_Material wpe_material_solid(WPE_Vec4 color, float metallic, float roughness)
  */
 [[nodiscard]] WPE_Result wpe_model_parse_primitive(const char* text, size_t size, const char* name,
                                                    WPE_Model** out_model);
+
+/**
+ * wpe_model_parse_primitive() with textures: a description's "texture" (an asset path read through
+ * `options->vfs`, downscaled to `options->max_texture_size`) becomes the diffuse texture, box-mapped every
+ * "tile" meters (1; 0: the shape's own UVs) in "tile_space" "world" (default) or "object", sampled with
+ * "filter" "linear" (default) or "nearest". A texture that can't be read or decoded is logged and left out.
+ *
+ * @param options May be NULL (then a description with a texture loads untextured, logged).
+ * @return As wpe_model_parse_primitive().
+ *
+ * @thread_safety Any thread
+ */
+[[nodiscard]] WPE_Result wpe_model_load_primitive(const char* text, size_t size, const char* name,
+                                                  const WPE_ModelLoadOptions* options, WPE_Model** out_model);
 
 #endif /* WPE_ASSETS_PROCEDURAL_H */

@@ -57,8 +57,10 @@ static WPE_Result wpe__load_model(WPE_AssetManager* assets, const char* path, vo
         size_t size = 0;
         WPE_Result result = wpe_vfs_read_all(assets->vfs, path, &data, &size);
         if (result == WPE_RESULT_ERROR_NOT_FOUND) wpe_log_error("model '%s' not found", path);
+        const WPE_ModelLoadOptions options = {
+            .jobs = assets->jobs, .max_texture_size = assets->max_texture_size, .vfs = assets->vfs};
         if (result == WPE_RESULT_OK)
-            result = wpe_model_parse_primitive(data, size, path, (WPE_Model**)out_asset);
+            result = wpe_model_load_primitive(data, size, path, &options, (WPE_Model**)out_asset);
         wpe_free(data);
         return result;
     }

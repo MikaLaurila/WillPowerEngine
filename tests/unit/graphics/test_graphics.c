@@ -785,6 +785,61 @@ static void test_graphics_material_vertex_shader_skinning(void) {
     WPE_TEST_ASSERT_NEAR(3.0, clip.z, 1e-6);
 }
 
+/* Box-mapped UVs (WPE_Material.uv_projection): varyings 0..1 are UV0, 2..3 UV1. */
+static void test_graphics_material_projected_uvs(void) {
+    WPE_Material material = {.workflow = WPE_MATERIAL_UNLIT,
+                             .diffuse_factor = {{1, 1, 1, 1}},
+                             .uv_projection = WPE_UV_WORLD,
+                             .uv_tile = 2.0f};
+    /* A box stretched 4 times along X and moved 10 m to the right. */
+    const WPE_Mat4 world = wpe_mat4_from_trs(wpe_vec3(10, 0, 0), wpe_quat_identity(), wpe_vec3(4, 1, 1));
+    WPE_MaterialUniforms u = {
+        .mvp = world, .world = world, .normal_matrix = wpe_mat4_identity(), .material = &material};
+    WPE_MeshVertex v = {.position = {{0.5f, 0.5f, 0.5f}}, .normal = {{0, 0, 1}}, .uv0 = {{0.3f, 0.7f}}};
+    WPE_Vec4 clip;
+    float out[WPE_MAX_VARYINGS];
+    const WPE_ShaderProgram* programs[2] = {wpe_shader_material(), wpe_shader_material_depth(true)};
+    for (int k = 0; k < 2; ++k) {
+        /* World: the front face takes world X across and -Y down, a repeat every 2 m. */
+        material.uv_projection = WPE_UV_WORLD;
+        v.position = wpe_vec3(0.5f, 0.5f, 0.5f);
+        v.normal = wpe_vec3(0, 0, 1);
+        programs[k]->vertex(&u, &v, &clip, out);
+        WPE_TEST_ASSERT_NEAR(12.0 / 2.0, out[0], 1e-5);
+        WPE_TEST_ASSERT_NEAR(-0.5 / 2.0, out[1], 1e-5);
+        WPE_TEST_ASSERT(out[2] == out[0] && out[3] == out[1]); /* Both UV sets. */
+        /* The top: X across, Z down; the right side: -Z across. */
+        v.normal = wpe_vec3(0, 1, 0);
+        programs[k]->vertex(&u, &v, &clip, out);
+        WPE_TEST_ASSERT_NEAR(6.0, out[0], 1e-5);
+        WPE_TEST_ASSERT_NEAR(0.25, out[1], 1e-5);
+        v.normal = wpe_vec3(1, 0, 0);
+        programs[k]->vertex(&u, &v, &clip, out);
+        WPE_TEST_ASSERT_NEAR(-0.25, out[0], 1e-5);
+        WPE_TEST_ASSERT_NEAR(-0.25, out[1], 1e-5);
+        /* Object: the scaled position, so moving the box doesn't slide the texture. */
+        material.uv_projection = WPE_UV_OBJECT;
+        v.normal = wpe_vec3(0, 0, 1);
+        programs[k]->vertex(&u, &v, &clip, out);
+        WPE_TEST_ASSERT_NEAR(2.0 / 2.0, out[0], 1e-5);
+        WPE_TEST_ASSERT_NEAR(-0.25, out[1], 1e-5);
+        /* None: the mesh's own coordinates. */
+        material.uv_projection = WPE_UV_MESH;
+        programs[k]->vertex(&u, &v, &clip, out);
+        WPE_TEST_ASSERT_NEAR(0.3, out[0], 1e-6);
+        WPE_TEST_ASSERT_NEAR(0.7, out[1], 1e-6);
+    }
+    /* A turned box: its front face now faces +X in the world, so it is mapped as a side. */
+    material.uv_projection = WPE_UV_WORLD;
+    u.world = wpe_mat4_from_trs(wpe_vec3(0, 0, 0), wpe_quat_from_axis_angle(wpe_vec3(0, 1, 0), WPE_PI * 0.5f),
+                                wpe_vec3(1, 1, 1));
+    v.position = wpe_vec3(0.5f, 0.5f, 0.5f); /* At world (0.5, 0.5, -0.5). */
+    v.normal = wpe_vec3(0, 0, 1);
+    wpe_shader_material()->vertex(&u, &v, &clip, out);
+    WPE_TEST_ASSERT_NEAR(0.25, out[0], 1e-5); /* -z / 2 */
+    WPE_TEST_ASSERT_NEAR(-0.25, out[1], 1e-5);
+}
+
 static void test_graphics_shininess_range(void) {
     WPE_TEST_ASSERT_NEAR(2.0, wpe_material_shininess(0.0f), 1e-4);
     WPE_TEST_ASSERT_NEAR(2048.0, wpe_material_shininess(1.0f), 1e-1);
@@ -2196,8 +2251,9 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_sky_gradient_sun_and_occlusion), WPE_TEST_CASE(test_graphics_sky_panorama),
     WPE_TEST_CASE(test_graphics_instantiate_validates_and_cleans_up),
     WPE_TEST_CASE(test_graphics_material_vertex_shader_skinning),
-    WPE_TEST_CASE(test_graphics_shininess_range), WPE_TEST_CASE(test_graphics_scene_render_frustum_culling),
-    WPE_TEST_CASE(test_graphics_billboard_corners), WPE_TEST_CASE(test_graphics_billboard_animation),
+    WPE_TEST_CASE(test_graphics_material_projected_uvs), WPE_TEST_CASE(test_graphics_shininess_range),
+    WPE_TEST_CASE(test_graphics_scene_render_frustum_culling), WPE_TEST_CASE(test_graphics_billboard_corners),
+    WPE_TEST_CASE(test_graphics_billboard_animation),
     WPE_TEST_CASE(test_graphics_billboard_draws_frames_and_blends),
     WPE_TEST_CASE(test_graphics_mesh_shadow_unlit_and_sides),
     WPE_TEST_CASE(test_graphics_mesh_overlay_and_transparency), WPE_TEST_CASE(test_graphics_mesh_clip_plane),

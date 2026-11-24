@@ -128,6 +128,47 @@ static bool wpe__skin(const WPE_MaterialUniforms* u, const WPE_MeshVertex* v, WP
     return true;
 }
 
+/* Writes both UV sets: the vertex's own, or, for a material with a projection, box-mapped coordinates. A face
+ * takes the two axes across the one it faces most, signed so the texture reads the right way round from in
+ * front of it with v running down. `position` is the (skinned) object-space position, `world_position` its
+ * world position. */
+static void wpe__write_uvs(const WPE_MaterialUniforms* u, const WPE_MeshVertex* v, WPE_Vec3 position,
+                           WPE_Vec3 normal, WPE_Vec3 world_position, float* out) {
+    const WPE_Material* material = u->material;
+    if (material->uv_projection == WPE_UV_MESH || !(material->uv_tile > 0.0f)) {
+        out[WPE__V_UV0 + 0] = v->uv0.x;
+        out[WPE__V_UV0 + 1] = v->uv0.y;
+        out[WPE__V_UV1 + 0] = v->uv1.x;
+        out[WPE__V_UV1 + 1] = v->uv1.y;
+        return;
+    }
+    /* (The world matrix turns the normal: exact for normals along the object's axes, like a box's faces, and
+     * the shadow pass has no normal matrix.) */
+    WPE_Vec3 p = world_position, n = wpe_mat4_transform_dir(&u->world, normal);
+    if (material->uv_projection == WPE_UV_OBJECT) {
+        const WPE_Mat4* w = &u->world;
+        p = wpe_vec3(position.x * wpe_vec3_length(wpe_vec3(w->m[0][0], w->m[0][1], w->m[0][2])),
+                     position.y * wpe_vec3_length(wpe_vec3(w->m[1][0], w->m[1][1], w->m[1][2])),
+                     position.z * wpe_vec3_length(wpe_vec3(w->m[2][0], w->m[2][1], w->m[2][2])));
+        n = normal;
+    }
+    const float ax = fabsf(n.x), ay = fabsf(n.y), az = fabsf(n.z);
+    float s, t;
+    if (ay >= ax && ay >= az) {
+        s = p.x; /* Top and bottom: x across, z down (toward the viewer) on top. */
+        t = n.y >= 0.0f ? p.z : -p.z;
+    } else if (ax >= az) {
+        s = n.x >= 0.0f ? -p.z : p.z;
+        t = -p.y;
+    } else {
+        s = n.z >= 0.0f ? p.x : -p.x;
+        t = -p.y;
+    }
+    const float scale = 1.0f / material->uv_tile;
+    out[WPE__V_UV0 + 0] = out[WPE__V_UV1 + 0] = s * scale;
+    out[WPE__V_UV0 + 1] = out[WPE__V_UV1 + 1] = t * scale;
+}
+
 static bool wpe__normal_mapped(const WPE_MaterialUniforms* u) {
     return u->material->normal_texture.texture != WPE_MODEL_NONE && u->has_sun;
 }
@@ -141,6 +182,7 @@ static void wpe__material_vs(const void* uniforms, const void* vertex, WPE_Vec4*
     if (u->joint_palette) wpe__skin(u, v, &position, &normal, &tangent);
 
     WPE_Vec3 world_position = wpe_mat4_transform_point(&u->world, position);
+    wpe__write_uvs(u, v, position, normal, world_position, out); /* (From where it rests, not the waves.) */
     float wave_slope_x = 0.0f, wave_slope_z = 0.0f, brightness = 1.0f;
     if (u->water) {
         float height;
@@ -152,10 +194,6 @@ static void wpe__material_vs(const void* uniforms, const void* vertex, WPE_Vec4*
     } else {
         *out_position = wpe_mat4_mul_vec4(&u->mvp, wpe_vec4(position.x, position.y, position.z, 1.0f));
     }
-    out[WPE__V_UV0 + 0] = v->uv0.x;
-    out[WPE__V_UV0 + 1] = v->uv0.y;
-    out[WPE__V_UV1 + 0] = v->uv1.x;
-    out[WPE__V_UV1 + 1] = v->uv1.y;
     for (int i = 0; i < 4; ++i)
         out[WPE__V_COLOR + i] = v->color[i] * (i < 3 ? brightness : 1.0f);
     for (int i = WPE__V_DIFFUSE; i < WPE__V_COUNT; ++i)
@@ -480,6 +518,7 @@ static void wpe__depth_vs(const void* uniforms, const void* vertex, WPE_Vec4* ou
     WPE_Vec3 position = v->position, normal = v->normal, tangent = wpe_vec3(0, 0, 0);
     if (u->joint_palette) wpe__skin(u, v, &position, &normal, &tangent);
     WPE_Vec3 world_position = wpe_mat4_transform_point(&u->world, position);
+    wpe__write_uvs(u, v, position, normal, world_position, out); /* (Alpha-masked casters sample them.) */
     if (u->water) {
         float height, slope_x, slope_z, brightness;
         wpe_water_wave(&u->waves, world_position.x, world_position.z, &height, &slope_x, &slope_z,
@@ -490,10 +529,6 @@ static void wpe__depth_vs(const void* uniforms, const void* vertex, WPE_Vec4* ou
     } else {
         *out_position = wpe_mat4_mul_vec4(&u->mvp, wpe_vec4(position.x, position.y, position.z, 1.0f));
     }
-    out[WPE__V_UV0 + 0] = v->uv0.x;
-    out[WPE__V_UV0 + 1] = v->uv0.y;
-    out[WPE__V_UV1 + 0] = v->uv1.x;
-    out[WPE__V_UV1 + 1] = v->uv1.y;
     for (int i = 0; i < 4; ++i)
         out[WPE__V_COLOR + i] = v->color[i];
     out[WPE__V_DEPTH_CLIP] = wpe__clip_distance(u, world_position);

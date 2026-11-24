@@ -5,9 +5,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "assets/image.h"
 #include "core/alloc.h"
 #include "core/json.h"
 #include "core/log.h"
+#include "platform/platform.h"
+#include "vfs/vfs.h"
 
 static bool wpe__material_has_textures(const WPE_Material* m) {
     const WPE_TextureRef* refs[] = {
@@ -276,7 +279,60 @@ static bool wpe__prim_number(const WPE_JsonValue* root, const char* key, float* 
     return true;
 }
 
+/* Gives `model` the image at `path` (read through `options->vfs`) as its diffuse texture. A missing or broken
+ * image is logged and leaves the model untextured, as a glTF's would. */
+static WPE_Result wpe__prim_texture(WPE_Model* model, const char* path, bool nearest, const char* name,
+                                    const WPE_ModelLoadOptions* options) {
+    void* data = NULL;
+    size_t size = 0;
+    WPE_Result result = WPE_RESULT_ERROR_INVALID_ARG;
+    if (!options || !options->vfs) {
+        wpe_log_error("'%s': a texture needs a VFS to read \"%s\" through", name, path);
+    } else {
+        result = wpe_vfs_read_all(options->vfs, path, &data, &size);
+        if (result != WPE_RESULT_OK) wpe_log_error("'%s': can't read the texture \"%s\"", name, path);
+    }
+    WPE_Image image = {0};
+    if (result == WPE_RESULT_OK) result = wpe_image_decode(data, size, path, &image);
+    wpe_free(data);
+    WPE_Texture* texture = NULL;
+    if (result == WPE_RESULT_OK) {
+        result = wpe_texture_create(&(WPE_TextureDesc){.width = image.width,
+                                                       .height = image.height,
+                                                       .texels = image.pixels,
+                                                       .generate_mips = true,
+                                                       .srgb = true,
+                                                       .max_dimension = options->max_texture_size,
+                                                       .point_downsample = nearest},
+                                    &texture);
+        wpe_image_free(&image);
+    }
+    if (result != WPE_RESULT_OK) return result == WPE_RESULT_ERROR_OUT_OF_MEMORY ? result : WPE_RESULT_OK;
+    model->textures = wpe_arena_alloc_zeroed(&model->wpe__memory, 1, sizeof(WPE_Texture*), 0);
+    if (!model->textures) {
+        wpe_texture_destroy(texture);
+        return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+    model->textures[0] = texture;
+    model->texture_count = 1;
+    const WPE_TextureFilter filter = nearest ? WPE_FILTER_NEAREST : WPE_FILTER_BILINEAR;
+    model->materials[0].diffuse_texture =
+        (WPE_TextureRef){.texture = 0,
+                         .sampler = {.mag_filter = filter,
+                                     .min_filter = filter,
+                                     .mip_filter = nearest ? WPE_MIP_NEAREST : WPE_MIP_LINEAR,
+                                     .wrap_u = WPE_WRAP_REPEAT,
+                                     .wrap_v = WPE_WRAP_REPEAT},
+                         .scale = {{1, 1}}};
+    return WPE_RESULT_OK;
+}
+
 WPE_Result wpe_model_parse_primitive(const char* text, size_t size, const char* name, WPE_Model** out_model) {
+    return wpe_model_load_primitive(text, size, name, NULL, out_model);
+}
+
+WPE_Result wpe_model_load_primitive(const char* text, size_t size, const char* name,
+                                    const WPE_ModelLoadOptions* options, WPE_Model** out_model) {
     if (!text || !out_model) return WPE_RESULT_ERROR_NULL_ARG;
     *out_model = NULL;
     if (!name) name = "primitive";
@@ -288,8 +344,9 @@ WPE_Result wpe_model_parse_primitive(const char* text, size_t size, const char* 
     if (result != WPE_RESULT_OK) return result;
 
     const WPE_JsonValue* root = wpe_json_root(doc);
-    static const char* const known[] = {"shape", "size",     "segments",  "rings",    "radius",
-                                        "color", "metallic", "roughness", "emissive", "double_sided"};
+    static const char* const known[] = {"shape",   "size",     "segments",   "rings",    "radius",
+                                        "color",   "metallic", "roughness",  "emissive", "double_sided",
+                                        "texture", "tile",     "tile_space", "filter"};
     result = wpe_json_type(root) == WPE_JSON_OBJECT ? WPE_RESULT_OK : WPE_RESULT_ERROR_PARSE;
     if (result != WPE_RESULT_OK) wpe_log_error("'%s': a primitive description must be a JSON object", name);
     for (uint32_t i = 0; result == WPE_RESULT_OK && i < wpe_json_count(root); ++i) {
@@ -329,11 +386,40 @@ WPE_Result wpe_model_parse_primitive(const char* text, size_t size, const char* 
         wpe_log_error("'%s': \"double_sided\" must be true or false", name);
         result = WPE_RESULT_ERROR_PARSE;
     }
+    /* A texture, box-mapped every `tile` meters in world or object space (0: the shape's own UVs). */
+    const WPE_JsonValue* texture_value = wpe_json_get(root, "texture");
+    const char* texture = wpe_json_string(texture_value);
+    const char* tile_space = wpe_json_string(wpe_json_get(root, "tile_space"));
+    const char* filter = wpe_json_string(wpe_json_get(root, "filter"));
+    float tile = 1.0f;
+    if (result == WPE_RESULT_OK && texture_value && (!texture || !texture[0])) {
+        wpe_log_error("'%s': \"texture\" must be an image path", name);
+        result = WPE_RESULT_ERROR_PARSE;
+    }
+    if (result == WPE_RESULT_OK && (!wpe__prim_number(root, "tile", &tile, name) || !(tile >= 0.0f))) {
+        if (tile < 0.0f) wpe_log_error("'%s': \"tile\" must be 0 or more meters", name);
+        result = WPE_RESULT_ERROR_PARSE;
+    }
+    if (result == WPE_RESULT_OK && wpe_json_get(root, "tile_space") &&
+        (!tile_space || (strcmp(tile_space, "world") != 0 && strcmp(tile_space, "object") != 0))) {
+        wpe_log_error("'%s': \"tile_space\" must be \"world\" or \"object\"", name);
+        result = WPE_RESULT_ERROR_PARSE;
+    }
+    if (result == WPE_RESULT_OK && wpe_json_get(root, "filter") &&
+        (!filter || (strcmp(filter, "nearest") != 0 && strcmp(filter, "linear") != 0))) {
+        wpe_log_error("'%s': \"filter\" must be \"nearest\" or \"linear\"", name);
+        result = WPE_RESULT_ERROR_PARSE;
+    }
 
     WPE_Material material =
         wpe_material_solid(wpe_vec4(color[0], color[1], color[2], color[3]), metallic, roughness);
     material.emissive_factor = wpe_vec3(emissive[0], emissive[1], emissive[2]);
     material.double_sided = wpe_json_bool(double_sided, false);
+    if (texture && tile > 0.0f) {
+        material.uv_projection =
+            tile_space && strcmp(tile_space, "object") == 0 ? WPE_UV_OBJECT : WPE_UV_WORLD;
+        material.uv_tile = tile;
+    }
     if (result != WPE_RESULT_OK) {
         /* Reported above. */
     } else if (!shape) {
@@ -363,6 +449,14 @@ WPE_Result wpe_model_parse_primitive(const char* text, size_t size, const char* 
     if (result == WPE_RESULT_ERROR_INVALID_ARG) {
         wpe_log_error("'%s': %s parameters out of range", name, shape);
         result = WPE_RESULT_ERROR_PARSE;
+    }
+    if (result == WPE_RESULT_OK && texture) {
+        result =
+            wpe__prim_texture(*out_model, texture, filter && strcmp(filter, "nearest") == 0, name, options);
+        if (result != WPE_RESULT_OK) {
+            wpe_model_destroy(*out_model);
+            *out_model = NULL;
+        }
     }
     wpe_json_free(doc);
     return result;

@@ -5,6 +5,12 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Textured `.prim` shapes with world-space tiling: `texture` (an image), `tile` (meters per repeat, 1),
+  `tile_space` (`"world"`: seamless across neighbouring pieces; `"object"`: moves with the shape) and `filter`
+  (`"nearest"` for pixel art). Each face is box-mapped along the axis it faces, so a scaled box repeats its
+  texture instead of stretching it: big boxes block out a level instead of many small cubes. C:
+  `WPE_Material.uv_projection`/`.uv_tile` (`WPE_UvProjection`: any mesh's material can use it),
+  `wpe_model_load_primitive` (`wpe_model_parse_primitive` with a VFS for the image).
 - `wpe.get_scene()`: the scene file the world was loaded from, also while the editor plays its open scene (so
   scripts can key what a level remembers by it). C: `WPE_ScriptApp.scene_name`, `wpe_engine_set_scene_name`.
 - Straight shockwaves: a `shockwave` effect's `length` (a fraction of the screen height) and `angle` (radians)
