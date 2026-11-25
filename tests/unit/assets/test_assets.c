@@ -5,6 +5,7 @@
 #include "assets/font.h"
 #include "assets/image.h"
 #include "assets/model.h"
+#include "assets/procedural.h"
 #include "platform/platform.h"
 
 #define ASSET(path) WPE_TEST_ASSETS_DIR "/" path
@@ -337,6 +338,51 @@ static void test_assets_model_strip_without_normals_gets_flat_normals(void) {
     remove("strip.gltf");
 }
 
+/* Two meshes on nodes at different heights (a trunk and its leaves): each records its height in the model
+ * through its node, and the model its whole height range, so the wind sways them as one. */
+static void test_assets_model_heights_follow_nodes(void) {
+    /* One triangle per mesh: mesh 0 spans y -1..1 locally, mesh 1 y -0.5..0.5. */
+    const float positions[18] = {0, -1, 0, 1, -1, 0, 0, 1, 0, 0, -0.5f, 0, 1, -0.5f, 0, 0, 0.5f, 0};
+    write_gltf("heights.gltf",
+               "\"bufferViews\":[{\"buffer\":0,\"byteLength\":36},{\"buffer\":0,\"byteOffset\":36,"
+               "\"byteLength\":36}],"
+               "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+               "\"min\":[0,-1,0],\"max\":[1,1,0]},{\"bufferView\":1,\"componentType\":5126,\"count\":3,"
+               "\"type\":\"VEC3\",\"min\":[0,-0.5,0],\"max\":[1,0.5,0]}],"
+               "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0}}]},"
+               "{\"primitives\":[{\"attributes\":{\"POSITION\":1}}]}],"
+               /* The trunk 1 m up (0..2); the leaves under a parent 2 m up, 1.5 m above it and scaled
+                * twice (2.5..4.5). */
+               "\"nodes\":[{\"mesh\":0,\"translation\":[0,1,0]},{\"children\":[2],\"translation\":[0,2,0]},"
+               "{\"mesh\":1,\"translation\":[0,1.5,0],\"scale\":[2,2,2]}],"
+               "\"scenes\":[{\"nodes\":[0,1]}],\"scene\":0}",
+               positions, 18, NULL, 0);
+    WPE_Model* m = load_model("heights.gltf", 0, NULL);
+    assert_model_consistent(m);
+    WPE_TEST_ASSERT_EQ_UINT(2, m->mesh_count);
+    WPE_TEST_ASSERT_NEAR(0.0, m->min_y, 1e-6);
+    WPE_TEST_ASSERT_NEAR(4.5, m->max_y, 1e-6);
+    WPE_TEST_ASSERT_NEAR(1.0, m->meshes[0].model_y.y, 1e-6);
+    WPE_TEST_ASSERT_NEAR(1.0, m->meshes[0].model_y.w, 1e-6);
+    WPE_TEST_ASSERT_NEAR(2.0, m->meshes[1].model_y.y, 1e-6);
+    WPE_TEST_ASSERT_NEAR(3.5, m->meshes[1].model_y.w, 1e-6);
+    WPE_TEST_ASSERT_NEAR(0.0, m->meshes[1].model_y.x, 1e-6);
+    wpe_model_destroy(m);
+    remove("heights.gltf");
+
+    /* A procedural mesh measures by its own bounds. */
+    const WPE_MeshVertex vertices[3] = {{.position = {.x = 0, .y = -2, .z = 0}},
+                                        {.position = {.x = 1, .y = -2, .z = 0}},
+                                        {.position = {.x = 0, .y = 3, .z = 0}}};
+    const uint32_t indices[3] = {0, 1, 2};
+    WPE_Model* p = NULL;
+    WPE_TEST_ASSERT(wpe_model_create_mesh(vertices, 3, indices, 3, NULL, "tri", &p) == WPE_RESULT_OK);
+    WPE_TEST_ASSERT_NEAR(-2.0, p->min_y, 0);
+    WPE_TEST_ASSERT_NEAR(3.0, p->max_y, 0);
+    WPE_TEST_ASSERT_NEAR(1.0, p->meshes[0].model_y.y, 0);
+    wpe_model_destroy(p);
+}
+
 static void test_assets_model_rejects_unsupported_required_extension(void) {
     write_file("required.gltf",
                "{\"asset\":{\"version\":\"2.0\"},\"extensionsUsed\":[\"KHR_draco_mesh_compression\"],"
@@ -396,6 +442,7 @@ WPE_TEST_MAIN(WPE_TEST_CASE(test_assets_image_decode_png_roundtrip),
               WPE_TEST_CASE(test_assets_model_fridge_with_required_transmission),
               WPE_TEST_CASE(test_assets_model_rigged_figure),
               WPE_TEST_CASE(test_assets_model_strip_without_normals_gets_flat_normals),
+              WPE_TEST_CASE(test_assets_model_heights_follow_nodes),
               WPE_TEST_CASE(test_assets_model_rejects_unsupported_required_extension),
               WPE_TEST_CASE(test_assets_model_rejects_out_of_range_indices),
               WPE_TEST_CASE(test_assets_model_missing_and_malformed_files))

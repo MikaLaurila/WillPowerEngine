@@ -66,8 +66,10 @@ typedef struct WPE_WindUniforms {
     float gust_speed; /* Meters per second. */
     float flutter;    /* 0..1. */
     float time;       /* Seconds. */
-    float base_y;     /* The mesh's lowest local Y (bounds), where it doesn't move... */
-    float inv_height; /* ...and 1 / its height (bounds), where it moves the whole amount. */
+    /* A local position p's height in the model, 0 at its lowest point (it doesn't move) and 1 at its highest
+     * (it moves the whole amount): dot(height, p) + height_base. */
+    WPE_Vec3 height;
+    float height_base;
 } WPE_WindUniforms;
 
 /** A point or spot light in world space, as consumed by the shader. */
@@ -174,14 +176,16 @@ void wpe_water_wave(const WPE_WaveUniforms* waves, float x, float z, float* out_
                     float* out_slope_z, float* out_brightness);
 
 /**
- * How far the wind moves a vertex: along the wind's direction, by its height within the mesh (`local_y`
- * between base_y and base_y + 1/inv_height, squared), times a gust rolling along the direction (a quarter of
- * the amount always, the rest with the gust) and a flutter varying with time and the world position.
+ * How far the wind moves a vertex: along the wind's direction, by its height within the model (`local`
+ * through `height`/`height_base`, clamped to 0..1 and squared), times a gust rolling along the direction (a
+ * quarter of the amount always, the rest with the gust) and a flutter varying with time and the world
+ * position.
  *
- * @param world The vertex's world position at rest. @return The world-space offset (Y is always 0).
+ * @param world The vertex's world position at rest. @param local Its position in the mesh.
+ * @return The world-space offset (Y is always 0).
  * @thread_safety Any thread
  */
-WPE_Vec3 wpe_wind_offset(const WPE_WindUniforms* wind, WPE_Vec3 world, float local_y);
+WPE_Vec3 wpe_wind_offset(const WPE_WindUniforms* wind, WPE_Vec3 world, WPE_Vec3 local);
 
 /** @return Blinn-Phong exponent for a glossiness in [0, 1] (2 at 0, 2048 at 1). @thread_safety Any thread */
 float wpe_material_shininess(float glossiness);

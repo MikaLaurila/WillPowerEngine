@@ -6,11 +6,13 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 
 ### Added
 - Wind: meshes sway in the scene's wind (grass, leaves, flags). A mesh's `wind` (0..; 0 still) sets how much,
-  each vertex by its height within the mesh (squared, so bases stay put and tips bend); the scene's
+  each vertex by its height within its whole model (squared, so bases stay put and tips bend; a tree's
+  trunk and leaves, separate meshes in one file, sway together); the scene's
   environment `wind` sets the `direction`, `strength` (meters at the top), gusts rolling across the world
   (`gust_speed`, `gust_size`) and a `flutter`. It moves vertices in the vertex shader, shadows included, and
   runs on game time (and while editing). C: `WPE_MeshRenderer.wind`, `WPE_SceneRenderSettings.wind`
-  (`WPE_WindSettings`, `wpe_wind_default`, `wpe_wind_advance`), `wpe_wind_offset`.
+  (`WPE_WindSettings`, `wpe_wind_default`, `wpe_wind_advance`), `wpe_wind_offset`; models record each
+  mesh's model-space height (`WPE_Mesh.model_y`) and their height range (`WPE_Model.min_y`/`max_y`).
 - Textured `.prim` shapes with world-space tiling: `texture` (an image), `tile` (meters per repeat, 1),
   `tile_space` (`"world"`: seamless across neighbouring pieces; `"object"`: moves with the shape) and `filter`
   (`"nearest"` for pixel art). Each face is box-mapped along the axis it faces, so a scaled box repeats its

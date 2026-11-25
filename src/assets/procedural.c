@@ -101,7 +101,10 @@ WPE_Result wpe_model_create_mesh(const WPE_MeshVertex* vertices, uint32_t vertex
     model->primitives[0] = (WPE_MeshPrimitive){
         .vertex_count = vertex_count, .index_count = index_count, .material = 0, .bounds = bounds};
     model->primitive_count = 1;
-    model->meshes[0] = (WPE_Mesh){.first_primitive = 0, .primitive_count = 1, .bounds = bounds};
+    model->meshes[0] = (WPE_Mesh){
+        .first_primitive = 0, .primitive_count = 1, .bounds = bounds, .model_y = wpe_vec4(0, 1, 0, 0)};
+    model->min_y = bounds.min.y;
+    model->max_y = bounds.max.y;
     snprintf(model->meshes[0].name, WPE_MODEL_NAME_MAX, "%s", name ? name : "mesh");
     model->mesh_count = 1;
     model->nodes[0] = (WPE_ModelNode){.parent = WPE_MODEL_NONE,

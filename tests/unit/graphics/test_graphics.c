@@ -1994,38 +1994,38 @@ static void test_graphics_wind_offset_bends_by_height(void) {
                              .gust_speed = 4.0f,
                              .flutter = 0.3f,
                              .time = 1.3f,
-                             .base_y = -1.0f,
-                             .inv_height = 0.5f};
+                             .height = wpe_vec3(0.0f, 0.5f, 0.0f), /* From y = -1 to y = 1. */
+                             .height_base = 0.5f};
     for (float x = -5.0f; x <= 5.0f; x += 1.1f) {
         for (float t = 0.0f; t < 6.0f; t += 0.7f) {
             wind.time = t;
             const WPE_Vec3 world = wpe_vec3(x, 0.0f, 0.5f * x);
             /* The bottom stays; below it too. */
-            const WPE_Vec3 base = wpe_wind_offset(&wind, world, -1.0f);
+            const WPE_Vec3 base = wpe_wind_offset(&wind, world, wpe_vec3(0, -1.0f, 0));
             WPE_TEST_ASSERT(base.x == 0.0f && base.y == 0.0f && base.z == 0.0f);
-            WPE_TEST_ASSERT(wpe_wind_offset(&wind, world, -3.0f).x == 0.0f);
+            WPE_TEST_ASSERT(wpe_wind_offset(&wind, world, wpe_vec3(0, -3.0f, 0)).x == 0.0f);
             /* The top moves along the direction, at most the amount with all the flutter. */
-            const WPE_Vec3 top = wpe_wind_offset(&wind, world, 1.0f);
+            const WPE_Vec3 top = wpe_wind_offset(&wind, world, wpe_vec3(0, 1.0f, 0));
             const float sway = top.x * wind.dir_x + top.z * wind.dir_z;
             WPE_TEST_ASSERT_NEAR(0.0, top.y, 0.0);
             WPE_TEST_ASSERT_NEAR(0.0, top.x * wind.dir_z - top.z * wind.dir_x, 1e-6); /* Nothing across it. */
             WPE_TEST_ASSERT(fabsf(sway) <= wind.amount * (1.0f + wind.flutter) + 1e-5f);
             /* Halfway up moves a quarter as far (it bends), above the top no further than the top. */
-            const WPE_Vec3 middle = wpe_wind_offset(&wind, world, 0.0f);
+            const WPE_Vec3 middle = wpe_wind_offset(&wind, world, wpe_vec3(0, 0.0f, 0));
             WPE_TEST_ASSERT_NEAR(0.25 * sway, middle.x * wind.dir_x + middle.z * wind.dir_z, 1e-5);
-            WPE_TEST_ASSERT_NEAR(top.x, wpe_wind_offset(&wind, world, 5.0f).x, 1e-6);
+            WPE_TEST_ASSERT_NEAR(top.x, wpe_wind_offset(&wind, world, wpe_vec3(0, 5.0f, 0)).x, 1e-6);
         }
     }
     /* Without flutter it always leans downwind: a quarter of the amount at least. */
     wind.flutter = 0.0f;
     for (float t = 0.0f; t < 6.0f; t += 0.3f) {
         wind.time = t;
-        const WPE_Vec3 top = wpe_wind_offset(&wind, wpe_vec3(1, 0, 2), 1.0f);
+        const WPE_Vec3 top = wpe_wind_offset(&wind, wpe_vec3(1, 0, 2), wpe_vec3(0, 1.0f, 0));
         const float sway = top.x * wind.dir_x + top.z * wind.dir_z;
         WPE_TEST_ASSERT(sway >= 0.25f * wind.amount - 1e-5f && sway <= wind.amount + 1e-5f);
     }
     wind.amount = 0.0f;
-    WPE_TEST_ASSERT(wpe_wind_offset(&wind, wpe_vec3(1, 0, 2), 1.0f).x == 0.0f);
+    WPE_TEST_ASSERT(wpe_wind_offset(&wind, wpe_vec3(1, 0, 2), wpe_vec3(0, 1.0f, 0)).x == 0.0f);
 
     /* The clock: advances, wraps after an hour, ignores negative and non-finite steps. */
     WPE_WindSettings settings = wpe_wind_default();

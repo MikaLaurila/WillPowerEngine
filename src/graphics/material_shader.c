@@ -86,8 +86,9 @@ void wpe_water_wave(const WPE_WaveUniforms* waves, float x, float z, float* out_
     *out_brightness = 1.0f + waves->shimmer * sinf(1.5f * k1 * (x - z) - 2.0f * k1 * t);
 }
 
-WPE_Vec3 wpe_wind_offset(const WPE_WindUniforms* wind, WPE_Vec3 world, float local_y) {
-    float h = (local_y - wind->base_y) * wind->inv_height;
+WPE_Vec3 wpe_wind_offset(const WPE_WindUniforms* wind, WPE_Vec3 world, WPE_Vec3 local) {
+    float h =
+        wind->height.x * local.x + wind->height.y * local.y + wind->height.z * local.z + wind->height_base;
     h = h < 0.0f ? 0.0f : (h > 1.0f ? 1.0f : h);
     if (!(h > 0.0f) || wind->amount == 0.0f) return wpe_vec3(0, 0, 0);
     const float t = wind->time;
@@ -207,7 +208,7 @@ static void wpe__material_vs(const void* uniforms, const void* vertex, WPE_Vec4*
         }
         if (u->wind)
             world_position =
-                wpe_vec3_add(world_position, wpe_wind_offset(&u->winds, world_position, position.y));
+                wpe_vec3_add(world_position, wpe_wind_offset(&u->winds, world_position, position));
         *out_position = wpe_mat4_mul_vec4(
             &u->view_projection, wpe_vec4(world_position.x, world_position.y, world_position.z, 1.0f));
     } else {
@@ -547,7 +548,7 @@ static void wpe__depth_vs(const void* uniforms, const void* vertex, WPE_Vec4* ou
         }
         if (u->wind)
             world_position =
-                wpe_vec3_add(world_position, wpe_wind_offset(&u->winds, world_position, position.y));
+                wpe_vec3_add(world_position, wpe_wind_offset(&u->winds, world_position, position));
         *out_position = wpe_mat4_mul_vec4(
             &u->view_projection, wpe_vec4(world_position.x, world_position.y, world_position.z, 1.0f));
     } else {

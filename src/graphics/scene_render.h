@@ -73,10 +73,10 @@ WPE_SkySettings wpe_sky_settings_default(void);
 #define WPE_VERTEX_SNAP_MAX 64
 
 /**
- * Wind: meshes with a `wind` amount (WPE_MeshRenderer) sway, each vertex by its height within its mesh
- * (squared, so a blade bends: bases stay put, tips move the most). Gusts roll across the world along
- * `direction`, so neighbouring plants move together and a field ripples; a quick flutter on top varies by
- * position. Grass, leaves, flags.
+ * Wind: meshes with a `wind` amount (WPE_MeshRenderer) sway, each vertex by its height within its model
+ * (squared, so a blade bends: bases stay put, tips move the most; one model's meshes move together). Gusts
+ * roll across the world along `direction`, so neighbouring plants move together and a field ripples; a quick
+ * flutter on top varies by position. Grass, leaves, flags.
  */
 typedef struct WPE_WindSettings {
     WPE_Vec2 direction; /* World X and Z the wind blows toward (normalized when used; zero: no wind). */

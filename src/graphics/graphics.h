@@ -65,7 +65,8 @@ typedef struct WPE_MeshRenderer {
      * uv_scroll and kept in [0, 2) so it never loses precision; set it to step through frames yourself. */
     WPE_Vec2 uv_offset;
     /* How much the scene's wind sways it (WPE_WindSettings): 0 still (default), 1 its top moves the wind's
-     * full `strength`; by height within the mesh, so its bottom stays put. Grass 1, leaves less. Skinned
+     * full `strength`; by height within its whole model (WPE_Model::min_y..max_y), so the bottom stays put
+     * and the meshes of one model (a trunk and its leaves) sway together. Grass 1, leaves less. Skinned
      * meshes ignore it. */
     float wind;
     /* Set by game code (scripts: wpe.set_overlay / set_transparency), not saved in scene files; zero is off.

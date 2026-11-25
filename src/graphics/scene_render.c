@@ -169,22 +169,24 @@ static WPE_Aabb wpe__padded(const WPE_Aabb* box, float margin) {
     return (WPE_Aabb){.min = wpe_vec3_sub(box->min, pad), .max = wpe_vec3_add(box->max, pad)};
 }
 
-/* The wind as `mesh` (bounds in its local space) sways in it; false when it doesn't. */
-static bool wpe__wind_uniforms(const WPE_WindSettings* wind, float amount, const WPE_Aabb* bounds,
-                               WPE_WindUniforms* out) {
+/* The wind as `mesh` sways in it, by its height in the whole model (so a tree's trunk and leaves move
+ * together); false when it doesn't. */
+static bool wpe__wind_uniforms(const WPE_WindSettings* wind, float amount, const WPE_Model* model,
+                               const WPE_Mesh* mesh, WPE_WindUniforms* out) {
     const float length = sqrtf(wind->direction.x * wind->direction.x + wind->direction.y * wind->direction.y);
-    const float height = bounds->max.y - bounds->min.y;
+    const float height = model->max_y - model->min_y;
     amount *= wind->strength;
     if (!(length > 1e-6f) || !(height > 1e-6f) || !(fabsf(amount) > 0.0f) || !isfinite(amount)) return false;
-    *out = (WPE_WindUniforms){.dir_x = wind->direction.x / length,
-                              .dir_z = wind->direction.y / length,
-                              .amount = amount,
-                              .gust_k = wind->gust_size > 1e-3f ? 2.0f * WPE_PI / wind->gust_size : 0.0f,
-                              .gust_speed = wind->gust_speed,
-                              .flutter = wind->flutter,
-                              .time = wind->time,
-                              .base_y = bounds->min.y,
-                              .inv_height = 1.0f / height};
+    *out = (WPE_WindUniforms){
+        .dir_x = wind->direction.x / length,
+        .dir_z = wind->direction.y / length,
+        .amount = amount,
+        .gust_k = wind->gust_size > 1e-3f ? 2.0f * WPE_PI / wind->gust_size : 0.0f,
+        .gust_speed = wind->gust_speed,
+        .flutter = wind->flutter,
+        .time = wind->time,
+        .height = wpe_vec3_scale(wpe_vec3(mesh->model_y.x, mesh->model_y.y, mesh->model_y.z), 1.0f / height),
+        .height_base = (mesh->model_y.w - model->min_y) / height};
     return true;
 }
 
@@ -332,7 +334,8 @@ static WPE_Result wpe__gather_meshes(WPE_SceneRenderer* sr, const WPE_Ecs* ecs,
             inst->sphere_radius = local_radius * fmaxf(sx, fmaxf(sy, sz));
             inst->water = wpe_ecs_get_component(ecs, it.entity, WPE_COMP_WATER);
             inst->wind =
-                mesh->wind != 0.0f && wpe__wind_uniforms(&settings->wind, mesh->wind, &bounds, &inst->winds);
+                mesh->wind != 0.0f && wpe__wind_uniforms(&settings->wind, mesh->wind, mesh->model,
+                                                         &mesh->model->meshes[mesh->mesh], &inst->winds);
             /* Waves move vertices up to `amplitude` in world space, the wind up to its amount with all the
              * flutter: that much in the smallest scaled axis. */
             const float reach =

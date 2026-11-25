@@ -2,6 +2,7 @@
 #include "assets/model.h"
 
 #include <cgltf.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -921,6 +922,40 @@ static WPE_Result wpe__load_nodes(wpe__Loader* loader) {
     return WPE_RESULT_OK;
 }
 
+/* Each mesh's model-space height (through the first node showing it) and the model's height range. */
+static void wpe__compute_heights(WPE_Model* model) {
+    for (uint32_t m = 0; m < model->mesh_count; ++m)
+        model->meshes[m].model_y = wpe_vec4(0, 1, 0, 0);
+    for (uint32_t n = model->node_count; n-- > 0;) { /* Backwards, so the first node showing a mesh wins. */
+        if (model->nodes[n].mesh >= model->mesh_count) continue;
+        WPE_Mat4 to_model = wpe_model_node_local_matrix(&model->nodes[n]);
+        uint32_t depth = 0; /* Bounded, in case of a cycle a validator missed. */
+        for (uint32_t a = model->nodes[n].parent; a < model->node_count && depth < model->node_count;
+             a = model->nodes[a].parent, ++depth) {
+            const WPE_Mat4 local = wpe_model_node_local_matrix(&model->nodes[a]);
+            to_model = wpe_mat4_mul(&local, &to_model);
+        }
+        model->meshes[model->nodes[n].mesh].model_y =
+            wpe_vec4(to_model.m[0][1], to_model.m[1][1], to_model.m[2][1], to_model.m[3][1]);
+    }
+    bool any = false;
+    for (uint32_t m = 0; m < model->mesh_count; ++m) {
+        const WPE_Mesh* mesh = &model->meshes[m];
+        const WPE_Vec4 h = mesh->model_y;
+        for (uint32_t p = mesh->first_primitive; p < mesh->first_primitive + mesh->primitive_count; ++p) {
+            const WPE_MeshPrimitive* primitive = &model->primitives[p];
+            for (uint32_t v = 0; v < primitive->vertex_count; ++v) {
+                const WPE_Vec3 q = model->vertices[primitive->vertex_offset + v].position;
+                const float y = h.x * q.x + h.y * q.y + h.z * q.z + h.w;
+                if (!isfinite(y)) continue;
+                model->min_y = any ? fminf(model->min_y, y) : y;
+                model->max_y = any ? fmaxf(model->max_y, y) : y;
+                any = true;
+            }
+        }
+    }
+}
+
 static WPE_Result wpe__load_skins(wpe__Loader* loader) {
     const cgltf_data* gltf = loader->gltf;
     WPE_Model* model = loader->model;
@@ -1144,6 +1179,7 @@ WPE_Result wpe_model_load(const char* path, const WPE_ModelLoadOptions* options,
     }
     if (result == WPE_RESULT_OK) result = wpe__load_meshes(&loader);
     if (result == WPE_RESULT_OK) result = wpe__load_nodes(&loader);
+    if (result == WPE_RESULT_OK) wpe__compute_heights(model);
     if (result == WPE_RESULT_OK) result = wpe__load_skins(&loader);
     if (result == WPE_RESULT_OK) result = wpe__load_animations(&loader);
 

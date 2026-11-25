@@ -72,6 +72,9 @@ typedef struct WPE_Mesh {
     uint32_t first_primitive;
     uint32_t primitive_count;
     WPE_Aabb bounds;
+    /* The model-space height of a point p of this mesh: dot(model_y.xyz, p) + model_y.w, through the first
+     * node showing it ((0, 1, 0, 0) for a mesh no node shows). The wind measures sway with it. */
+    WPE_Vec4 model_y;
 } WPE_Mesh;
 
 typedef enum WPE_AlphaMode {
@@ -211,6 +214,9 @@ typedef struct WPE_Model {
     uint32_t animation_count;
     WPE_AnimationChannel* channels;
     uint32_t channel_count;
+    /* The lowest and highest model-space height (WPE_Mesh::model_y) of any vertex: the wind sways every mesh
+     * of the model by its height in this range, so a tree's trunk and leaves move together. */
+    float min_y, max_y;
 
     WPE_Arena wpe__memory; /* Owns every array above except the textures themselves. */
 } WPE_Model;
