@@ -58,6 +58,18 @@ typedef struct WPE_WaveUniforms {
     float time;       /* Seconds. */
 } WPE_WaveUniforms;
 
+/** The scene's wind (WPE_WindSettings) for one mesh, as the shader applies it. */
+typedef struct WPE_WindUniforms {
+    float dir_x, dir_z; /* Unit direction the wind blows toward. */
+    float amount; /* Meters the mesh's top moves in a full gust (the wind's strength x the mesh's wind). */
+    float gust_k; /* 2 pi / the gust size. */
+    float gust_speed; /* Meters per second. */
+    float flutter;    /* 0..1. */
+    float time;       /* Seconds. */
+    float base_y;     /* The mesh's lowest local Y (bounds), where it doesn't move... */
+    float inv_height; /* ...and 1 / its height (bounds), where it moves the whole amount. */
+} WPE_WindUniforms;
+
 /** A point or spot light in world space, as consumed by the shader. */
 typedef struct WPE_ShaderLight {
     WPE_Vec3 position;
@@ -120,6 +132,9 @@ typedef struct WPE_MaterialUniforms {
      * clip) instead of `mvp`. */
     bool water;
     WPE_WaveUniforms waves;
+    /* Wind: vertices sway in world space by `winds` (projected by `view_projection` as for water). */
+    bool wind;
+    WPE_WindUniforms winds;
     WPE_Mat4 view_projection;
 } WPE_MaterialUniforms;
 
@@ -157,6 +172,16 @@ bool wpe_texture_filtering_from_name(const char* name, WPE_TextureFiltering* out
  */
 void wpe_water_wave(const WPE_WaveUniforms* waves, float x, float z, float* out_height, float* out_slope_x,
                     float* out_slope_z, float* out_brightness);
+
+/**
+ * How far the wind moves a vertex: along the wind's direction, by its height within the mesh (`local_y`
+ * between base_y and base_y + 1/inv_height, squared), times a gust rolling along the direction (a quarter of
+ * the amount always, the rest with the gust) and a flutter varying with time and the world position.
+ *
+ * @param world The vertex's world position at rest. @return The world-space offset (Y is always 0).
+ * @thread_safety Any thread
+ */
+WPE_Vec3 wpe_wind_offset(const WPE_WindUniforms* wind, WPE_Vec3 world, float local_y);
 
 /** @return Blinn-Phong exponent for a glossiness in [0, 1] (2 at 0, 2048 at 1). @thread_safety Any thread */
 float wpe_material_shininess(float glossiness);

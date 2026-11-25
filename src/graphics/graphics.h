@@ -64,6 +64,10 @@ typedef struct WPE_MeshRenderer {
     /* Added to the texture coordinates of every texture (after the material's texture transform). Moved by
      * uv_scroll and kept in [0, 2) so it never loses precision; set it to step through frames yourself. */
     WPE_Vec2 uv_offset;
+    /* How much the scene's wind sways it (WPE_WindSettings): 0 still (default), 1 its top moves the wind's
+     * full `strength`; by height within the mesh, so its bottom stays put. Grass 1, leaves less. Skinned
+     * meshes ignore it. */
+    float wind;
     /* Set by game code (scripts: wpe.set_overlay / set_transparency), not saved in scene files; zero is off.
      * overlay: a color (rgb, 0..1) laid over the shaded result by its `w` (0 none, 1 the color alone): hit
      * flashes, afterimages. transparency: 0 opaque .. 1 invisible; above 0 the mesh blends like a blended

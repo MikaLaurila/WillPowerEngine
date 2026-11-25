@@ -1984,6 +1984,143 @@ static void test_graphics_uv_offset_and_water_render(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* ---- Wind ---------------------------------------------------------------------------------------------- */
+
+static void test_graphics_wind_offset_bends_by_height(void) {
+    WPE_WindUniforms wind = {.dir_x = 0.6f,
+                             .dir_z = 0.8f,
+                             .amount = 0.5f,
+                             .gust_k = 2.0f * WPE_PI / 10.0f,
+                             .gust_speed = 4.0f,
+                             .flutter = 0.3f,
+                             .time = 1.3f,
+                             .base_y = -1.0f,
+                             .inv_height = 0.5f};
+    for (float x = -5.0f; x <= 5.0f; x += 1.1f) {
+        for (float t = 0.0f; t < 6.0f; t += 0.7f) {
+            wind.time = t;
+            const WPE_Vec3 world = wpe_vec3(x, 0.0f, 0.5f * x);
+            /* The bottom stays; below it too. */
+            const WPE_Vec3 base = wpe_wind_offset(&wind, world, -1.0f);
+            WPE_TEST_ASSERT(base.x == 0.0f && base.y == 0.0f && base.z == 0.0f);
+            WPE_TEST_ASSERT(wpe_wind_offset(&wind, world, -3.0f).x == 0.0f);
+            /* The top moves along the direction, at most the amount with all the flutter. */
+            const WPE_Vec3 top = wpe_wind_offset(&wind, world, 1.0f);
+            const float sway = top.x * wind.dir_x + top.z * wind.dir_z;
+            WPE_TEST_ASSERT_NEAR(0.0, top.y, 0.0);
+            WPE_TEST_ASSERT_NEAR(0.0, top.x * wind.dir_z - top.z * wind.dir_x, 1e-6); /* Nothing across it. */
+            WPE_TEST_ASSERT(fabsf(sway) <= wind.amount * (1.0f + wind.flutter) + 1e-5f);
+            /* Halfway up moves a quarter as far (it bends), above the top no further than the top. */
+            const WPE_Vec3 middle = wpe_wind_offset(&wind, world, 0.0f);
+            WPE_TEST_ASSERT_NEAR(0.25 * sway, middle.x * wind.dir_x + middle.z * wind.dir_z, 1e-5);
+            WPE_TEST_ASSERT_NEAR(top.x, wpe_wind_offset(&wind, world, 5.0f).x, 1e-6);
+        }
+    }
+    /* Without flutter it always leans downwind: a quarter of the amount at least. */
+    wind.flutter = 0.0f;
+    for (float t = 0.0f; t < 6.0f; t += 0.3f) {
+        wind.time = t;
+        const WPE_Vec3 top = wpe_wind_offset(&wind, wpe_vec3(1, 0, 2), 1.0f);
+        const float sway = top.x * wind.dir_x + top.z * wind.dir_z;
+        WPE_TEST_ASSERT(sway >= 0.25f * wind.amount - 1e-5f && sway <= wind.amount + 1e-5f);
+    }
+    wind.amount = 0.0f;
+    WPE_TEST_ASSERT(wpe_wind_offset(&wind, wpe_vec3(1, 0, 2), 1.0f).x == 0.0f);
+
+    /* The clock: advances, wraps after an hour, ignores negative and non-finite steps. */
+    WPE_WindSettings settings = wpe_wind_default();
+    wpe_wind_advance(&settings, 2.5f);
+    WPE_TEST_ASSERT_NEAR(2.5, settings.time, 1e-6);
+    wpe_wind_advance(&settings, -1.0f);
+    wpe_wind_advance(&settings, NAN);
+    WPE_TEST_ASSERT_NEAR(2.5, settings.time, 1e-6);
+    wpe_wind_advance(&settings, 3600.0f);
+    WPE_TEST_ASSERT_NEAR(2.5, settings.time, 1e-3);
+    wpe_wind_advance(NULL, 1.0f);
+}
+
+/* The mean column of the lit pixels in rows [y0, y1), or -1 if none. */
+static float lit_column(const WPE_Framebuffer* fb, uint32_t y0, uint32_t y1) {
+    double sum = 0.0;
+    uint32_t count = 0;
+    for (uint32_t y = y0; y < y1; ++y) {
+        for (uint32_t x = 0; x < fb->width; ++x) {
+            if ((fb->color[(size_t)y * fb->width + x] & 0x00FFFFFFu) == 0) continue;
+            sum += x;
+            ++count;
+        }
+    }
+    return count ? (float)(sum / count) : -1.0f;
+}
+
+static void test_graphics_wind_sways_meshes(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    /* A tall thin post, its bottom at the entity's origin, seen from the front. */
+    const WPE_Material white = wpe_material_solid(wpe_vec4(1, 1, 1, 1), 0.0f, 1.0f);
+    WPE_Model* post = NULL;
+    WPE_TEST_ASSERT_OK(wpe_model_create_box(wpe_vec3(0.2f, 2.0f, 0.2f), &white, &post));
+    const WPE_AssetHandle asset = wpe_test_add_model(t.assets, "test/post", post);
+    WPE_Ecs* ecs = make_world(t.assets);
+    const WPE_Entity e = spawn_mesh(ecs, asset, wpe_vec3(0, 1, 0));
+    mesh_of(ecs, e)->unlit = true;
+    const WPE_Entity sun = wpe_ecs_spawn(ecs); /* Straight down, casting shadows. */
+    WPE_Transform st = wpe_transform_identity();
+    st.rotation = wpe_quat_from_axis_angle(wpe_vec3(1, 0, 0), -WPE_PI * 0.5f);
+    WPE_Light light = wpe_light_default(WPE_LIGHT_DIRECTIONAL);
+    light.cast_shadows = true;
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, sun, WPE_COMP_TRANSFORM, &st, NULL));
+    WPE_TEST_ASSERT_OK(wpe_ecs_add_component(ecs, sun, WPE_COMP_LIGHT, &light, NULL));
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 1, 4), wpe_quat_identity());
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 64}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_SceneRenderSettings settings = wpe_scene_render_settings_default();
+    settings.wind = (WPE_WindSettings){
+        .direction = {.x = 2.0f, .y = 0.0f}, .strength = 0.5f, .gust_speed = 4.0f, .gust_size = 10.0f};
+
+    float still_top = 0.0f, still_bottom = 0.0f;
+    /* Still, swaying, then with no strength (still again). The sun's shadow map sways with it. */
+    static float still_shadow[1024 * 1024];
+    for (int pass = 0; pass < 3; ++pass) {
+        mesh_of(ecs, e)->wind = pass ? 1.0f : 0.0f;
+        if (pass == 2) settings.wind.strength = 0.0f;
+        WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
+        WPE_TEST_ASSERT_OK(wpe_renderer_begin_frame(
+            renderer,
+            &(WPE_ClearDesc){.clear_color = true, .color = 0xFF000000u, .clear_depth = true, .depth = 1.0f}));
+        WPE_TEST_ASSERT_OK(wpe_scene_render(sr, renderer, ecs, camera, &settings, NULL));
+        WPE_TEST_ASSERT_OK(wpe_renderer_end_frame(renderer));
+        const WPE_Framebuffer* fb = wpe_renderer_framebuffer(renderer);
+        const float top = lit_column(fb, 19, 23), bottom = lit_column(fb, 41, 45);
+        WPE_TEST_ASSERT(top >= 0.0f && bottom >= 0.0f);
+        const WPE_ShadowSampler* shadow = wpe_scene_renderer_shadow_map(sr);
+        WPE_TEST_ASSERT(shadow && shadow->size == 1024);
+        const bool same_shadow = memcmp(shadow->depth, still_shadow, sizeof still_shadow) == 0;
+        if (pass == 0) {
+            still_top = top;
+            still_bottom = bottom;
+            WPE_TEST_ASSERT_NEAR(still_top, still_bottom, 0.5);
+            memcpy(still_shadow, shadow->depth, sizeof still_shadow);
+        } else if (pass == 2) {
+            WPE_TEST_ASSERT_NEAR(still_top, top, 1e-6);
+            WPE_TEST_ASSERT(same_shadow);
+        } else {
+            WPE_TEST_ASSERT(!same_shadow);
+            /* At time 0 the gust is halfway: the top leans 0.5 x (0.25 + 0.75 / 2) m toward +X, to the right;
+             * the bottom stays. */
+            WPE_TEST_ASSERT(top > still_top + 2.0f);
+            WPE_TEST_ASSERT_NEAR(still_bottom, bottom, 0.5);
+        }
+    }
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_asset_release(t.assets, asset);
+    wpe_test_assets_destroy(&t);
+}
+
 /* ---- Scene transitions ----------------------------------------------------------------------------------
  */
 
@@ -2263,6 +2400,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_trail_records_and_draws), WPE_TEST_CASE(test_graphics_slash_sweeps),
     WPE_TEST_CASE(test_graphics_anim_states), WPE_TEST_CASE(test_graphics_surface_update_wraps),
     WPE_TEST_CASE(test_graphics_water_wave_is_periodic_with_matching_slopes),
+    WPE_TEST_CASE(test_graphics_wind_offset_bends_by_height), WPE_TEST_CASE(test_graphics_wind_sways_meshes),
     WPE_TEST_CASE(test_graphics_uv_offset_and_water_render), WPE_TEST_CASE(test_graphics_transition_shapes),
     WPE_TEST_CASE(test_graphics_camera_matrices_validation),
     WPE_TEST_CASE(test_graphics_draw2d_text_is_pixel_exact), WPE_TEST_CASE(test_graphics_debug_lines))

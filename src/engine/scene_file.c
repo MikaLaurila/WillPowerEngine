@@ -202,6 +202,27 @@ static void wpe__save_navigation(WPE_JsonWriter* w, const WPE_NavSettings* n, bo
     wpe_json_write_object_end(w);
 }
 
+/* The wind, unless `all` is false and it is the default (scene files leave it out then). */
+static void wpe__save_wind(WPE_JsonWriter* w, const WPE_WindSettings* wind, bool all) {
+    const WPE_WindSettings d = wpe_wind_default();
+    if (!all && wind->direction.x == d.direction.x && wind->direction.y == d.direction.y &&
+        wind->strength == d.strength && wind->gust_speed == d.gust_speed && wind->gust_size == d.gust_size &&
+        wind->flutter == d.flutter)
+        return;
+    wpe_json_write_key(w, "wind");
+    wpe_json_write_object_begin(w);
+    wpe_json_write_key(w, "direction");
+    wpe_json_write_array_begin(w, true);
+    wpe_json_write_number(w, wind->direction.x);
+    wpe_json_write_number(w, wind->direction.y);
+    wpe_json_write_array_end(w);
+    wpe__write_number(w, "strength", wind->strength);
+    wpe__write_number(w, "gust_speed", wind->gust_speed);
+    wpe__write_number(w, "gust_size", wind->gust_size);
+    wpe__write_number(w, "flutter", wind->flutter);
+    wpe_json_write_object_end(w);
+}
+
 /* `all`: write settings that scene files leave out at their defaults too (the editor's environment panel
  * lists what is written). */
 static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment* env, bool all) {
@@ -260,6 +281,7 @@ static void wpe__save_environment(WPE_JsonWriter* w, const WPE_SceneEnvironment*
     wpe__write_vec3(w, "color", r->default_sun_color);
     wpe_json_write_object_end(w);
     wpe__write_vec3(w, "gravity", env->gravity);
+    wpe__save_wind(w, &r->wind, all);
     wpe__save_navigation(w, &env->navigation, all);
     if (env->music[0]) {
         wpe_json_write_key(w, "music");
@@ -362,6 +384,7 @@ void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
         wpe_json_write_number(w, mesh->uv_scroll.x);
         wpe_json_write_number(w, mesh->uv_scroll.y);
         wpe_json_write_array_end(w);
+        wpe__write_number(w, "wind", mesh->wind);
         wpe_json_write_object_end(w);
     }
     const WPE_Camera* camera = wpe_ecs_get_component(ecs, e, WPE_COMP_CAMERA);
@@ -1064,8 +1087,8 @@ static bool wpe__load_sky(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvir
 static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_SceneEnvironment* env) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "environment", "clear_color", "ambient", "fog", "sky", "shadows",
                                 "dither_transparency", "texture_filter", "frustum_culling", "subdivision",
-                                "vertex_snap", "affine_textures", "default_sun", "gravity", "navigation",
-                                "music", "postfx"))
+                                "vertex_snap", "affine_textures", "default_sun", "gravity", "wind",
+                                "navigation", "music", "postfx"))
         return false;
     const WPE_JsonValue* nav = wpe_json_get(v, "navigation");
     if (nav) {
@@ -1141,6 +1164,19 @@ static bool wpe__load_environment(wpe__Loader* l, const WPE_JsonValue* v, WPE_Sc
     if (wpe_vec3_length(r->default_sun_direction) < 1e-6f)
         return wpe__json_fail(&l->r, sun ? sun : v, WPE_RESULT_ERROR_PARSE,
                               "the default sun direction must not be zero");
+    const WPE_JsonValue* wind = wpe_json_get(v, "wind");
+    if (wind) {
+        WPE_WindSettings* d = &r->wind;
+        const WPE_JsonValue* direction = wpe_json_get(wind, "direction");
+        if (!WPE__JSON_CHECK_OBJECT(&l->r, wind, "wind", "direction", "strength", "gust_speed", "gust_size",
+                                    "flutter") ||
+            (direction && !wpe__json_read_floats(&l->r, direction, "direction", 2, d->direction.v)) ||
+            !wpe__json_read_float(&l->r, wind, "strength", 0, 100, &d->strength) ||
+            !wpe__json_read_float(&l->r, wind, "gust_speed", -1000, 1000, &d->gust_speed) ||
+            !wpe__json_read_float(&l->r, wind, "gust_size", 0.01, 1e6, &d->gust_size) ||
+            !wpe__json_read_float(&l->r, wind, "flutter", 0, 1, &d->flutter))
+            return false;
+    }
     const WPE_JsonValue* music = wpe_json_get(v, "music");
     if (music) {
         if (!WPE__JSON_CHECK_OBJECT(&l->r, music, "music", "path", "fade") ||
@@ -1215,7 +1251,7 @@ static bool wpe__skin_covers_mesh(const WPE_Model* model, uint32_t mesh_index, u
 
 static bool wpe__load_mesh(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "mesh", "model", "mesh", "skin", "joints", "visible", "unlit",
-                                "cast_shadows", "receive_shadows", "double_sided", "uv_scroll"))
+                                "cast_shadows", "receive_shadows", "double_sided", "uv_scroll", "wind"))
         return false;
     WPE_MeshRenderer mesh = wpe_mesh_renderer_default(WPE_ASSET_NONE, 0);
     const WPE_JsonValue* uv_scroll = wpe_json_get(v, "uv_scroll");
@@ -1225,6 +1261,7 @@ static bool wpe__load_mesh(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v)
         !wpe__json_read_bool(&l->r, v, "cast_shadows", &mesh.cast_shadows) ||
         !wpe__json_read_bool(&l->r, v, "receive_shadows", &mesh.receive_shadows) ||
         !wpe__json_read_bool(&l->r, v, "double_sided", &mesh.double_sided) ||
+        !wpe__json_read_float(&l->r, v, "wind", 0, 10, &mesh.wind) ||
         !wpe__read_asset(l, v, "model", WPE_ASSET_MODEL, &mesh.model_asset))
         return false;
     const WPE_Model* model = wpe_asset_model(l->context->assets, mesh.model_asset);

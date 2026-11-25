@@ -30,7 +30,10 @@ typedef struct wpe__MeshInstance {
     WPE_Vec3 sphere_center; /* World-space bounding sphere for light selection. */
     float sphere_radius;
     const WPE_Water* water; /* Or NULL. */
-    float cull_margin; /* Object-space padding of the bounds for culling (how far waves move vertices). */
+    bool wind;              /* Sways in the wind (`winds`). */
+    WPE_WindUniforms winds;
+    float cull_margin; /* Object-space padding of the bounds for culling (how far waves and wind move
+                          vertices). */
     WPE_Vec4
         clip_plane; /* The mesh's clip plane in world space (WPE_MaterialUniforms.clip_plane), or zero. */
     bool capped;    /* Clipped with a cap color: back faces drawn too. */
@@ -56,7 +59,22 @@ WPE_SceneRenderSettings wpe_scene_render_settings_default(void) {
         .default_sun = true,
         .default_sun_direction = wpe_vec3_normalize(wpe_vec3(-0.4f, -1.0f, -0.6f)),
         .default_sun_color = wpe_vec3(0.85f, 0.85f, 0.80f),
+        .wind = wpe_wind_default(),
     };
+}
+
+WPE_WindSettings wpe_wind_default(void) {
+    return (WPE_WindSettings){.direction = {.x = 1.0f, .y = 0.0f},
+                              .strength = 0.25f,
+                              .gust_speed = 4.0f,
+                              .gust_size = 10.0f,
+                              .flutter = 0.3f};
+}
+
+void wpe_wind_advance(WPE_WindSettings* wind, float dt) {
+    if (!wind || !(dt >= 0.0f) || !isfinite(dt)) return;
+    /* Wrapped so the sines keep their precision; the jump once an hour is a single small step. */
+    wind->time = fmodf(wind->time + dt, 3600.0f);
 }
 
 WPE_Result wpe_scene_renderer_create(WPE_SceneRenderer** out_scene_renderer) {
@@ -151,10 +169,36 @@ static WPE_Aabb wpe__padded(const WPE_Aabb* box, float margin) {
     return (WPE_Aabb){.min = wpe_vec3_sub(box->min, pad), .max = wpe_vec3_add(box->max, pad)};
 }
 
-/* The material uniforms that depend on the mesh renderer alone: animated UVs and water. */
-static void wpe__surface_uniforms(const WPE_MeshRenderer* mesh, const WPE_Water* water,
-                                  const WPE_Mat4* view_projection, WPE_MaterialUniforms* uniforms) {
+/* The wind as `mesh` (bounds in its local space) sways in it; false when it doesn't. */
+static bool wpe__wind_uniforms(const WPE_WindSettings* wind, float amount, const WPE_Aabb* bounds,
+                               WPE_WindUniforms* out) {
+    const float length = sqrtf(wind->direction.x * wind->direction.x + wind->direction.y * wind->direction.y);
+    const float height = bounds->max.y - bounds->min.y;
+    amount *= wind->strength;
+    if (!(length > 1e-6f) || !(height > 1e-6f) || !(fabsf(amount) > 0.0f) || !isfinite(amount)) return false;
+    *out = (WPE_WindUniforms){.dir_x = wind->direction.x / length,
+                              .dir_z = wind->direction.y / length,
+                              .amount = amount,
+                              .gust_k = wind->gust_size > 1e-3f ? 2.0f * WPE_PI / wind->gust_size : 0.0f,
+                              .gust_speed = wind->gust_speed,
+                              .flutter = wind->flutter,
+                              .time = wind->time,
+                              .base_y = bounds->min.y,
+                              .inv_height = 1.0f / height};
+    return true;
+}
+
+/* The material uniforms that depend on the mesh instance alone: animated UVs, water and wind. */
+static void wpe__surface_uniforms(const wpe__MeshInstance* inst, const WPE_Mat4* view_projection,
+                                  WPE_MaterialUniforms* uniforms) {
+    const WPE_MeshRenderer* mesh = inst->mesh;
+    const WPE_Water* water = inst->water;
     uniforms->uv_offset = mesh->uv_offset;
+    if (inst->wind) {
+        uniforms->wind = true;
+        uniforms->winds = inst->winds;
+        uniforms->view_projection = *view_projection;
+    }
     if (!water) return;
     uniforms->water = true;
     uniforms->view_projection = *view_projection;
@@ -225,7 +269,8 @@ static WPE_Vec4 wpe__world_clip_plane(const WPE_Ecs* ecs, const WPE_MeshRenderer
 }
 
 /* Collects visible mesh entities with their world matrices, palettes and bounding spheres. */
-static WPE_Result wpe__gather_meshes(WPE_SceneRenderer* sr, const WPE_Ecs* ecs, wpe__MeshInstance** out,
+static WPE_Result wpe__gather_meshes(WPE_SceneRenderer* sr, const WPE_Ecs* ecs,
+                                     const WPE_SceneRenderSettings* settings, wpe__MeshInstance** out,
                                      uint32_t* out_count) {
     const uint32_t capacity = wpe_ecs_component_count(ecs, WPE_COMP_MESH);
     wpe__MeshInstance* instances =
@@ -286,12 +331,17 @@ static WPE_Result wpe__gather_meshes(WPE_SceneRenderer* sr, const WPE_Ecs* ecs, 
                 wpe_vec3_length(wpe_vec3(inst->world.m[2][0], inst->world.m[2][1], inst->world.m[2][2]));
             inst->sphere_radius = local_radius * fmaxf(sx, fmaxf(sy, sz));
             inst->water = wpe_ecs_get_component(ecs, it.entity, WPE_COMP_WATER);
-            if (inst->water) {
-                /* Waves move vertices up to `amplitude` in world space: that much in the smallest scaled
-                 * axis. */
+            inst->wind =
+                mesh->wind != 0.0f && wpe__wind_uniforms(&settings->wind, mesh->wind, &bounds, &inst->winds);
+            /* Waves move vertices up to `amplitude` in world space, the wind up to its amount with all the
+             * flutter: that much in the smallest scaled axis. */
+            const float reach =
+                (inst->water ? fabsf(inst->water->amplitude) : 0.0f) +
+                (inst->wind ? fabsf(inst->winds.amount) * (1.0f + fabsf(inst->winds.flutter)) : 0.0f);
+            if (reach > 0.0f) {
                 const float smallest = fminf(sx, fminf(sy, sz));
-                inst->cull_margin = smallest > 1e-6f ? fabsf(inst->water->amplitude) / smallest : 1e30f;
-                inst->sphere_radius += fabsf(inst->water->amplitude);
+                inst->cull_margin = smallest > 1e-6f ? reach / smallest : 1e30f;
+                inst->sphere_radius += reach;
             }
         }
         ++count;
@@ -488,7 +538,7 @@ static WPE_Result wpe__render_shadow_map(WPE_SceneRenderer* sr, WPE_JobSystem* j
                                              .texture_filtering = settings->texture_filtering,
                                              .joint_palette = inst->palette,
                                              .joint_count = inst->palette ? inst->mesh->joint_count : 0};
-            wpe__surface_uniforms(inst->mesh, inst->water, light_view_projection, &uniforms);
+            wpe__surface_uniforms(inst, light_view_projection, &uniforms);
             result =
                 wpe_renderer_submit(sr->shadow_pass, &(WPE_DrawDesc){
                                                          .program = wpe_shader_material_depth(masked),
@@ -935,7 +985,7 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
 
     wpe__MeshInstance* instances = NULL;
     uint32_t instance_count = 0;
-    WPE_Result result = wpe__gather_meshes(sr, ecs, &instances, &instance_count);
+    WPE_Result result = wpe__gather_meshes(sr, ecs, settings, &instances, &instance_count);
     wpe__Sun sun = {0};
     WPE_ShaderLight* lights = NULL;
     uint32_t light_count = 0;
@@ -998,7 +1048,7 @@ WPE_Result wpe_scene_render(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const
             .joint_palette = inst->palette,
             .joint_count = inst->palette ? inst->mesh->joint_count : 0,
         };
-        wpe__surface_uniforms(inst->mesh, inst->water, &view_projection, &uniforms);
+        wpe__surface_uniforms(inst, &view_projection, &uniforms);
         uniforms.light_count = wpe__select_lights(lights, light_count, inst->sphere_center,
                                                   inst->sphere_radius, uniforms.lights);
 

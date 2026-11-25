@@ -72,6 +72,28 @@ WPE_SkySettings wpe_sky_settings_default(void);
 /** The largest WPE_SceneRenderSettings.vertex_snap scene files and scripts accept, in pixels. */
 #define WPE_VERTEX_SNAP_MAX 64
 
+/**
+ * Wind: meshes with a `wind` amount (WPE_MeshRenderer) sway, each vertex by its height within its mesh
+ * (squared, so a blade bends: bases stay put, tips move the most). Gusts roll across the world along
+ * `direction`, so neighbouring plants move together and a field ripples; a quick flutter on top varies by
+ * position. Grass, leaves, flags.
+ */
+typedef struct WPE_WindSettings {
+    WPE_Vec2 direction; /* World X and Z the wind blows toward (normalized when used; zero: no wind). */
+    float strength;     /* Meters the top of a mesh with wind 1 moves in a full gust (0: still). */
+    float gust_speed;   /* Meters per second the gusts roll along `direction`. */
+    float gust_size;    /* Meters from one gust to the next (> 0). */
+    float flutter;      /* 0..1: the quick wobble on top of the gusts, as a share of `strength`. */
+    float time;         /* Runtime: seconds the wind has blown (wpe_wind_advance); not saved. */
+} WPE_WindSettings;
+
+/** @return A breeze toward +X: 0.25 m, gusts 10 m apart at 4 m/s, flutter 0.3. @thread_safety Any thread */
+WPE_WindSettings wpe_wind_default(void);
+
+/** Moves the wind's clock by `dt` seconds (wrapped after an hour; negative or non-finite dt is ignored).
+ * @thread_safety Not thread-safe on the same settings */
+void wpe_wind_advance(WPE_WindSettings* wind, float dt);
+
 typedef struct WPE_SceneRenderSettings {
     WPE_Vec3 ambient;
     WPE_FogParams fog;
@@ -88,6 +110,7 @@ typedef struct WPE_SceneRenderSettings {
     bool default_sun;     /* Use default_sun_* when the world has no lights at all. */
     WPE_Vec3 default_sun_direction;
     WPE_Vec3 default_sun_color;
+    WPE_WindSettings wind; /* How meshes with a `wind` amount sway. */
 } WPE_SceneRenderSettings;
 
 typedef struct WPE_SceneRenderStats {

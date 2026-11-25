@@ -245,6 +245,9 @@ static void test_engine_scene_round_trip(void) {
     WPE_TEST_ASSERT_NEAR(0.35, env.navigation.agent_radius, 1e-6);
     WPE_TEST_ASSERT_NEAR(1.8, env.navigation.agent_height, 1e-6); /* Not given: the default. */
     WPE_TEST_ASSERT_NEAR(15.0, env.navigation.bounds_max.y, 1e-6);
+    WPE_TEST_ASSERT_NEAR(0.5, env.render.wind.direction.y, 1e-6);
+    WPE_TEST_ASSERT_NEAR(0.4, env.render.wind.strength, 1e-6);
+    WPE_TEST_ASSERT_NEAR(0.5, env.render.wind.flutter, 1e-6);
     const WPE_ComponentType all[] = {WPE_COMP_TRANSFORM,
                                      WPE_COMP_HIERARCHY,
                                      WPE_COMP_NAME,
@@ -277,6 +280,8 @@ static void test_engine_scene_round_trip(void) {
 
     WPE_JsonWriter* w1 = NULL;
     const char* first = save_text(&ctx_a, &env, camera, &w1);
+    WPE_TEST_ASSERT(strstr(first, "\"wind\": 0.5") != NULL);    /* The pillar's sway. */
+    WPE_TEST_ASSERT(strstr(first, "\"gust_size\": 8") != NULL); /* The scene's wind. */
     const uint32_t entities = wpe_ecs_entity_count(a.ecs);
 
     World b = make_world();

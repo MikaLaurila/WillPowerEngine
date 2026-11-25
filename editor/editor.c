@@ -683,8 +683,11 @@ WPE_Result wpe_editor_frame(WPE_Editor* editor, double dt) {
      * and play starts from them). */
     WPE_Result result = editing ? wpe_physics_sync(wpe_engine_physics(editor->engine)) : WPE_RESULT_OK;
     if (result == WPE_RESULT_OK && editing) result = wpe__editor_preview_particles(editor, dt);
-    /* Scrolling textures and water move while editing too (their runtime state is never saved). */
-    if (editing) wpe_surface_update(wpe_engine_ecs(editor->engine), (float)dt);
+    /* Scrolling textures, water and wind move while editing too (their runtime state is never saved). */
+    if (editing) {
+        wpe_surface_update(wpe_engine_ecs(editor->engine), (float)dt);
+        wpe_wind_advance(&wpe_engine_environment(editor->engine)->render.wind, (float)dt);
+    }
     wpe__editor_nav_frame(editor, dt);
     const bool probe = editing && editor->nav_probe_count > 1;
     wpe_engine_set_debug_draw(

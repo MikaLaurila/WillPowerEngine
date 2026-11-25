@@ -266,6 +266,7 @@ static void test_editor_scenes_environment_and_screenshots(void) {
     size_t size = 0;
     WPE_TEST_ASSERT_OK(wpe_file_read_all(ROOT "/project/scenes/saved.scene", &data, &size));
     WPE_TEST_ASSERT(strstr(data, "editor camera") == NULL && strstr(data, "\"extra\"") != NULL);
+    WPE_TEST_ASSERT(strstr(data, "gust_size") == NULL); /* The default wind is left out. */
     wpe_free(data);
     run_ok(editor, "{\"cmd\": \"new_scene\"}");
     WPE_TEST_ASSERT_EQ_UINT(0, entity_count(editor));

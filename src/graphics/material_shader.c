@@ -86,6 +86,20 @@ void wpe_water_wave(const WPE_WaveUniforms* waves, float x, float z, float* out_
     *out_brightness = 1.0f + waves->shimmer * sinf(1.5f * k1 * (x - z) - 2.0f * k1 * t);
 }
 
+WPE_Vec3 wpe_wind_offset(const WPE_WindUniforms* wind, WPE_Vec3 world, float local_y) {
+    float h = (local_y - wind->base_y) * wind->inv_height;
+    h = h < 0.0f ? 0.0f : (h > 1.0f ? 1.0f : h);
+    if (!(h > 0.0f) || wind->amount == 0.0f) return wpe_vec3(0, 0, 0);
+    const float t = wind->time;
+    const float along = world.x * wind->dir_x + world.z * wind->dir_z;
+    const float gust = 0.5f + 0.5f * sinf(wind->gust_k * (along - wind->gust_speed * t));
+    /* Two unrelated waves, so neighbouring plants flutter out of step and it never visibly repeats. */
+    const float flutter = 0.6f * sinf(5.3f * t + 2.1f * world.x + 1.7f * world.z) +
+                          0.4f * sinf(8.9f * t + 1.3f * world.x - 2.9f * world.z);
+    const float sway = wind->amount * h * h * (0.25f + 0.75f * gust + wind->flutter * flutter);
+    return wpe_vec3(wind->dir_x * sway, 0.0f, wind->dir_z * sway);
+}
+
 float wpe_shadow_visibility(const WPE_ShadowSampler* shadow, float u, float v, float depth) {
     if (!shadow || !shadow->depth || shadow->size == 0) return 1.0f;
     if (!(u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f && depth <= 1.0f)) return 1.0f;
@@ -184,11 +198,16 @@ static void wpe__material_vs(const void* uniforms, const void* vertex, WPE_Vec4*
     WPE_Vec3 world_position = wpe_mat4_transform_point(&u->world, position);
     wpe__write_uvs(u, v, position, normal, world_position, out); /* (From where it rests, not the waves.) */
     float wave_slope_x = 0.0f, wave_slope_z = 0.0f, brightness = 1.0f;
-    if (u->water) {
-        float height;
-        wpe_water_wave(&u->waves, world_position.x, world_position.z, &height, &wave_slope_x, &wave_slope_z,
-                       &brightness);
-        world_position.y += height;
+    if (u->water || u->wind) {
+        if (u->water) {
+            float height;
+            wpe_water_wave(&u->waves, world_position.x, world_position.z, &height, &wave_slope_x,
+                           &wave_slope_z, &brightness);
+            world_position.y += height;
+        }
+        if (u->wind)
+            world_position =
+                wpe_vec3_add(world_position, wpe_wind_offset(&u->winds, world_position, position.y));
         *out_position = wpe_mat4_mul_vec4(
             &u->view_projection, wpe_vec4(world_position.x, world_position.y, world_position.z, 1.0f));
     } else {
@@ -519,11 +538,16 @@ static void wpe__depth_vs(const void* uniforms, const void* vertex, WPE_Vec4* ou
     if (u->joint_palette) wpe__skin(u, v, &position, &normal, &tangent);
     WPE_Vec3 world_position = wpe_mat4_transform_point(&u->world, position);
     wpe__write_uvs(u, v, position, normal, world_position, out); /* (Alpha-masked casters sample them.) */
-    if (u->water) {
-        float height, slope_x, slope_z, brightness;
-        wpe_water_wave(&u->waves, world_position.x, world_position.z, &height, &slope_x, &slope_z,
-                       &brightness);
-        world_position.y += height;
+    if (u->water || u->wind) {
+        if (u->water) {
+            float height, slope_x, slope_z, brightness;
+            wpe_water_wave(&u->waves, world_position.x, world_position.z, &height, &slope_x, &slope_z,
+                           &brightness);
+            world_position.y += height;
+        }
+        if (u->wind)
+            world_position =
+                wpe_vec3_add(world_position, wpe_wind_offset(&u->winds, world_position, position.y));
         *out_position = wpe_mat4_mul_vec4(
             &u->view_projection, wpe_vec4(world_position.x, world_position.y, world_position.z, 1.0f));
     } else {
