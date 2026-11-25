@@ -340,8 +340,69 @@ static void test_prefab_mistakes_are_reported(void) {
     wpe_engine_destroy(engine);
 }
 
+/* Duplicating copies the whole subtree as a save and load would: a prefab instance inside it stays a
+ * linked instance with its overrides and the child added to one of its members, plain children come along,
+ * references inside point at the copies and those leaving the subtree stay. */
+static void test_prefab_duplicate_copies_subtrees(void) {
+    WPE_Engine* engine = open_project();
+    write_text(PROJECT "/scenes/holder.scene",
+               "{\"format\": \"wpe.scene\", \"version\": 1, \"entities\": [\n"
+               " {\"id\": 1, \"name\": \"left\", \"prefab\": {\"path\": \"prefabs/lamp.prefab\"}},\n"
+               " {\"id\": 2, \"name\": \"holder\", \"transform\": {\"position\": [10, 0, 0]},\n"
+               "  \"trail\": {\"base\": 4, \"tip\": 1}},\n"
+               " {\"id\": 3, \"name\": \"right\", \"parent\": 2, \"transform\": {\"position\": [0, 2, 0]},\n"
+               "  \"prefab\": {\"path\": \"prefabs/lamp.prefab\", \"ids\": {\"2\": 7},\n"
+               "   \"overrides\": {\"1\": {\"light\": {\"type\": \"spot\"}}, \"3\": null}}},\n"
+               " {\"id\": 4, \"name\": \"rope\", \"parent\": 2, \"transform\": {\"position\": [0, 3, 0]}},\n"
+               " {\"id\": 5, \"name\": \"moth\", \"parent\": 7}]}\n");
+    WPE_TEST_ASSERT_OK(wpe_engine_load_scene(engine, "scenes/holder.scene"));
+    WPE_Ecs* ecs = wpe_engine_ecs(engine);
+    const WPE_SceneContext context = context_of(engine);
+    const WPE_Entity holder = find(engine, "holder"), left = find(engine, "left");
+    const uint32_t before = wpe_ecs_entity_count(ecs);
+
+    WPE_Entity copy = WPE_ENTITY_NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_duplicate(&context, holder, &copy));
+    WPE_TEST_ASSERT(copy != holder && wpe_ecs_is_alive(ecs, copy));
+    /* holder, right and its bulb (its glow is overridden away), rope and moth. */
+    WPE_TEST_ASSERT_EQ_UINT(before + 5, wpe_ecs_entity_count(ecs));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_scene_get_parent(ecs, copy));
+    const WPE_Transform* t = wpe_ecs_get_component(ecs, copy, WPE_COMP_TRANSFORM);
+    WPE_TEST_ASSERT_NEAR(10.0, t->position.x, 1e-6);
+
+    const WPE_Entity right = child(engine, copy, "right"), rope = child(engine, copy, "rope");
+    WPE_TEST_ASSERT(right != WPE_ENTITY_NULL && right != find(engine, "right"));
+    WPE_TEST_ASSERT(rope != WPE_ENTITY_NULL && rope != find(engine, "rope"));
+    WPE_TEST_ASSERT_EQ_UINT(right, wpe_prefab_root(ecs, right));
+    WPE_TEST_ASSERT_EQ_INT(WPE_LIGHT_SPOT, light_of(engine, right)->type);
+    const WPE_Entity bulb = child(engine, right, "bulb");
+    WPE_TEST_ASSERT_EQ_UINT(right, wpe_prefab_root(ecs, bulb));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, child(engine, bulb, "glow")); /* Removed by the override. */
+    WPE_TEST_ASSERT(child(engine, bulb, "moth") != WPE_ENTITY_NULL);
+    WPE_TEST_ASSERT(wpe_prefab_is_overridden(&context, right, "light"));
+
+    const WPE_Trail* trail = wpe_ecs_get_component(ecs, copy, WPE_COMP_TRAIL);
+    WPE_TEST_ASSERT_EQ_UINT(rope, trail->base); /* Inside: the copy's own rope. */
+    WPE_TEST_ASSERT_EQ_UINT(left, trail->tip);  /* Outside: the same lamp. */
+
+    /* A child keeps its parent; a prefab member alone becomes a plain copy beside it. */
+    WPE_Entity rope_copy = WPE_ENTITY_NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_duplicate(&context, rope, &rope_copy));
+    WPE_TEST_ASSERT_EQ_UINT(copy, wpe_scene_get_parent(ecs, rope_copy));
+    WPE_Entity bulb_copy = WPE_ENTITY_NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_duplicate(&context, bulb, &bulb_copy));
+    WPE_TEST_ASSERT_EQ_UINT(right, wpe_scene_get_parent(ecs, bulb_copy));
+    WPE_TEST_ASSERT_EQ_UINT(WPE_ENTITY_NULL, wpe_prefab_root(ecs, bulb_copy));
+    WPE_TEST_ASSERT(wpe_ecs_has_component(ecs, bulb_copy, WPE_COMP_MESH));
+    WPE_TEST_ASSERT(child(engine, bulb_copy, "moth") != WPE_ENTITY_NULL);
+
+    WPE_TEST_ASSERT_EQ_INT(WPE_RESULT_ERROR_NOT_FOUND, wpe_scene_duplicate(&context, WPE_ENTITY_NULL, &copy));
+    wpe_engine_destroy(engine);
+}
+
 WPE_TEST_MAIN(WPE_TEST_CASE(test_prefab_instances_load_with_overrides),
               WPE_TEST_CASE(test_prefab_scenes_save_references_and_round_trip),
               WPE_TEST_CASE(test_prefab_edits_reach_instances),
               WPE_TEST_CASE(test_prefab_save_apply_revert_unpack),
-              WPE_TEST_CASE(test_prefab_mistakes_are_reported))
+              WPE_TEST_CASE(test_prefab_mistakes_are_reported),
+              WPE_TEST_CASE(test_prefab_duplicate_copies_subtrees))

@@ -1002,22 +1002,11 @@ static WPE_Result wpe__cmd_create_entity(wpe__Call* call) {
 static WPE_Result wpe__cmd_duplicate_entity(wpe__Call* call) {
     WPE_Entity source = WPE_ENTITY_NULL;
     WPE_Result result = wpe__entity_arg(call, "id", &source);
-    if (result != WPE_RESULT_OK) return wpe__null(call, result);
-    /* The saved entity is a valid creation description (its "id" is ignored); children are not copied. */
-    const WPE_SceneContext context = wpe__editor_context(call->editor);
-    WPE_JsonWriter* writer = NULL;
-    WPE_JsonDocument* doc = NULL;
-    result = wpe_json_writer_create(&writer);
-    if (result == WPE_RESULT_OK) result = wpe_scene_save_entity(&context, source, writer);
-    const char* text = NULL;
-    size_t size = 0;
-    if (result == WPE_RESULT_OK) result = wpe_json_writer_finish(writer, &text, &size);
-    if (result == WPE_RESULT_OK) result = wpe_json_parse(text, size, &doc, NULL);
-    WPE_Entity e = WPE_ENTITY_NULL;
     if (result == WPE_RESULT_OK) result = wpe__editor_begin_change(call->editor);
-    if (result == WPE_RESULT_OK) result = wpe_scene_create_entity(&context, wpe_json_root(doc), &e);
-    wpe_json_free(doc);
-    wpe_json_writer_destroy(writer);
+    /* With its children: the subtree as a save and load would bring it back (wpe_scene_duplicate). */
+    const WPE_SceneContext context = wpe__editor_context(call->editor);
+    WPE_Entity e = WPE_ENTITY_NULL;
+    if (result == WPE_RESULT_OK) result = wpe_scene_duplicate(&context, source, &e);
     if (result != WPE_RESULT_OK) return wpe__null(call, result);
     call->editor->selection = e;
     wpe_json_write_integer(call->w, e);
@@ -2211,7 +2200,7 @@ static const struct {
     {"list_entities", wpe__cmd_list_entities, "{} -> [{id, name, parent, components}]"},
     {"get_entity", wpe__cmd_get_entity, "{id} -> the entity in the scene-file schema (ids are handles)"},
     {"create_entity", wpe__cmd_create_entity, "{entity: {name, parent, transform, mesh, ...}} -> id"},
-    {"duplicate_entity", wpe__cmd_duplicate_entity, "{id} -> id of the copy (without children)"},
+    {"duplicate_entity", wpe__cmd_duplicate_entity, "{id} -> id of the copy (with its children)"},
     {"delete_entity", wpe__cmd_delete_entity, "{id} (with its children)"},
     {"set_component", wpe__cmd_set_component,
      "{id, component, value} -> the entity (replaces the component)"},

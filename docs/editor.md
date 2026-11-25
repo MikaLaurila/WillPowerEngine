@@ -75,7 +75,7 @@ Entities and components use the **scene-file schema** ([scenes.md](scenes.md)), 
 | `list_entities` | → `[{id, name, parent, components, prefab?}]`. `prefab` is `{path, root}` for members of prefab instances. |
 | `get_entity` | `{id}` → the entity (`{"id", "name", "parent", "transform": {...}, "light": {...}, ...}`) |
 | `create_entity` | `{entity: {name, parent, transform, instance, mesh, light, ..., script}}` → id (and selects it). With `"prefab": {"path": ...}` it places a prefab instance; the other keys given then replace the root's. |
-| `duplicate_entity` | `{id}` → id of the copy (children are not copied) |
+| `duplicate_entity` | `{id}` → id of the copy, with its children (prefab instances stay linked; references between the copied entities point at the copies) |
 | `delete_entity` | `{id}` (with its children) |
 | `set_component` | `{id, component, value}` → the entity. Replaces the component as a whole: fields left out take their defaults, so read the entity first to change one field. `component` can also be `"name"` or `"parent"`. |
 | `remove_component` | `{id, component}` |

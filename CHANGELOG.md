@@ -39,11 +39,17 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
   `wpe_script_host_refresh_assets`, `wpe_engine_reload_changed_assets`.
 
 ### Changed
+- The editor's Duplicate (Ctrl+D, `duplicate_entity`) copies the entity with all its children, as saving and
+  loading them would: prefab instances inside stay linked with their overrides, and references between the
+  copied entities (a trail's ends...) point at the copies. Before, only the entity itself was copied. C:
+  `wpe_scene_duplicate`.
 - `wpe.shake` (`wpe_game_feel_shake`) no longer lets a weaker shake replace a stronger one still running: the
   new one is ignored while what's left of the running shake moves and turns at least as far. Before, a sword
   hit's small shake right after the enemy's own killing-blow shake cut the big one to nothing.
 
 ### Fixed
+- Saving a scene with a prefab instance under a parent logged a false warning that the instance's root "was
+  moved within it".
 - The editor camera jumped back to its starting view whenever the scene was rebuilt from a snapshot (undo,
   redo, stopping play, saving a prefab with other instances); it now stays where it was.
 - `wpe.emit_particles` (`wpe_particles_emit`) on a world-space emitter moved in the same frame emitted from

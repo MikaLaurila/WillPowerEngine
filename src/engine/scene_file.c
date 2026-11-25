@@ -675,6 +675,109 @@ WPE_Result wpe_scene_save_file(const WPE_SceneContext* context, const WPE_SceneE
     return result;
 }
 
+static int wpe__compare_entities(const void* a, const void* b) {
+    const WPE_Entity x = *(const WPE_Entity*)a, y = *(const WPE_Entity*)b;
+    return (x > y) - (x < y);
+}
+
+/* Whether `e` is in `sorted` (ascending). */
+static bool wpe__entity_listed(const WPE_Entity* sorted, uint32_t count, WPE_Entity e) {
+    return e != WPE_ENTITY_NULL && bsearch(&e, sorted, count, sizeof e, wpe__compare_entities) != NULL;
+}
+
+WPE_Result wpe_scene_duplicate(const WPE_SceneContext* context, WPE_Entity root, WPE_Entity* out_copy) {
+    if (!context || !context->ecs || !context->assets || !out_copy) return WPE_RESULT_ERROR_NULL_ARG;
+    *out_copy = WPE_ENTITY_NULL;
+    WPE_Ecs* ecs = context->ecs;
+    if (!wpe_ecs_is_alive(ecs, root)) return WPE_RESULT_ERROR_NOT_FOUND;
+    /* The subtree goes through a save and a load like a scene's: its entities get file ids 1..n (prefab
+     * instances written as references, so they come back whole), every other entity an id above n, so
+     * the copies' references to each other point at the copies and those leaving the subtree (the
+     * root's parent included) at the same entities as before. */
+    const uint32_t count = wpe_ecs_entity_count(ecs);
+    WPE_Entity* order = wpe_alloc_zeroed(count, sizeof *order);
+    WPE_Entity* stack = wpe_alloc_zeroed(count, sizeof *stack);
+    WPE_Entity* sorted = wpe_alloc_zeroed(count, sizeof *sorted); /* The subtree, for lookups. */
+    wpe__Saver s = {.context = context};
+    s.ids.by_entity = wpe_alloc_zeroed(count, sizeof *s.ids.by_entity);
+    WPE_JsonWriter* writer = NULL;
+    WPE_JsonDocument* doc = NULL;
+    WPE_Entity* created = NULL;
+    wpe__Loader l = {.r = {.name = "duplicate", .kind = "edit"}, .context = context};
+    WPE_Result result =
+        order && stack && sorted && s.ids.by_entity ? WPE_RESULT_OK : WPE_RESULT_ERROR_OUT_OF_MEMORY;
+    if (result == WPE_RESULT_OK) result = wpe_json_writer_create(&writer);
+    if (result != WPE_RESULT_OK) goto done;
+
+    const uint32_t inside = wpe__append_subtree(context, root, order, 0, stack);
+    memcpy(sorted, order, (size_t)inside * sizeof *sorted);
+    qsort(sorted, inside, sizeof *sorted, wpe__compare_entities);
+    uint32_t n = 0;
+    for (; n < inside; ++n)
+        s.ids.by_entity[n] = (wpe__IdPair){.id = n + 1, .entity = order[n]};
+    WPE_EcsIter it = wpe_ecs_query(ecs, (WPE_EcsQuery){0});
+    while (wpe_ecs_iter_next(&it) && n < count) {
+        if (wpe__entity_listed(sorted, inside, it.entity)) continue;
+        s.ids.by_entity[n] = (wpe__IdPair){.id = n + 1, .entity = it.entity};
+        ++n;
+    }
+    s.ids.count = n;
+    /* The loader starts with the outside entities (before the sort below reorders the table). */
+    const uint32_t outside = n - inside;
+    s.w = writer;
+    wpe_json_write_array_begin(writer, false);
+    qsort(s.ids.by_entity, n, sizeof *s.ids.by_entity, wpe__compare_by_entity);
+    for (uint32_t i = 0; i < inside && s.result == WPE_RESULT_OK; ++i) {
+        /* As in a scene save: instances as references, their members from the prefab. A member whose
+         * instance root is outside the subtree (a part of an instance duplicated alone) is a plain copy. */
+        const WPE_Entity instance = wpe__prefab_root(ecs, order[i]);
+        if (instance == order[i]) {
+            wpe__save_instance(&s, order[i]);
+        } else if (!wpe__entity_listed(sorted, inside, instance)) {
+            wpe__save_entity(&s, order[i]);
+        }
+    }
+    wpe_json_write_array_end(writer);
+    result = s.result;
+    const char* text = NULL;
+    size_t size = 0;
+    if (result == WPE_RESULT_OK) result = wpe_json_writer_finish(writer, &text, &size);
+    if (result == WPE_RESULT_OK) result = wpe_json_parse(text, size, &doc, NULL);
+    if (result != WPE_RESULT_OK) goto done;
+
+    const WPE_JsonValue* entities = wpe_json_root(doc);
+    const uint32_t entries = wpe_json_count(entities);
+    created = wpe_alloc_zeroed(entries ? entries : 1, sizeof *created);
+    l.ids.by_id = wpe_alloc_zeroed(outside + wpe__entity_id_capacity(entities) + 1, sizeof *l.ids.by_id);
+    if (!created || !l.ids.by_id) {
+        result = WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        goto done;
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        if (s.ids.by_entity[i].id > inside) l.ids.by_id[l.ids.count++] = s.ids.by_entity[i];
+    }
+    uint32_t created_count = 0;
+    if (wpe__load_entities(&l, entities, created, &created_count)) {
+        *out_copy = created[0];
+    } else {
+        result = l.r.result;
+        for (uint32_t i = created_count; i-- > 0;) {
+            if (wpe_ecs_is_alive(ecs, created[i])) wpe_scene_destroy_recursive(ecs, created[i]);
+        }
+    }
+
+done:
+    wpe_free(created);
+    wpe_free(l.ids.by_id);
+    wpe_json_free(doc);
+    wpe_json_writer_destroy(writer);
+    wpe_free(order);
+    wpe_free(stack);
+    wpe_free(sorted);
+    wpe_free(s.ids.by_entity);
+    return result;
+}
+
 WPE_Result wpe__write_file_atomic(const char* os_path, const char* text, size_t size) {
     /* Write next to the target, then replace it, so a failed save never leaves a truncated file. */
     char temp[1024];
@@ -1593,8 +1696,9 @@ bool wpe__load_entities(wpe__Loader* l, const WPE_JsonValue* entities, WPE_Entit
     WPE_Ecs* ecs = l->context->ecs;
     const uint32_t count = wpe_json_count(entities);
     /* 1. Create every entity first so references can resolve in any order. Prefab instances are
-     * created whole, so their members' scene ids resolve too. */
-    uint32_t id_count = 0;
+     * created whole, so their members' scene ids resolve too. Entries already in the table stay: ids of
+     * existing entities a duplicated subtree refers to (wpe_scene_duplicate). */
+    uint32_t id_count = l->ids.count;
     for (uint32_t i = 0; i < count; ++i) {
         const WPE_JsonValue* v = wpe_json_at(entities, i);
         if (!WPE__JSON_CHECK_OBJECT(

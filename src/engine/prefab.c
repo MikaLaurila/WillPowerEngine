@@ -252,7 +252,8 @@ static uint32_t wpe__instance_overrides(WPE_JsonWriter* w, const wpe__PrefabLink
             }
             continue;
         }
-        if (!wpe_json_equal(wpe_json_get(base, "parent"), wpe_json_get(member, "parent")))
+        /* (The root's parent is outside the instance: it may have any.) */
+        if (!is_root && !wpe_json_equal(wpe_json_get(base, "parent"), wpe_json_get(member, "parent")))
             wpe_log_warn(
                 "entity %s of a '%s' instance was moved within it; prefab instances keep their structure "
                 "(unpack the instance to restructure it)",

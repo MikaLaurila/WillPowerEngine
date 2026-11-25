@@ -211,6 +211,35 @@ static void test_editor_edits_with_undo_and_redo(void) {
     wpe_editor_destroy(editor);
 }
 
+/* duplicate_entity copies the children too, as one undo step, and selects the copy. */
+static void test_editor_duplicate_copies_children(void) {
+    WPE_Editor* editor = open_editor();
+    WPE_JsonDocument* created =
+        run(editor, "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"tree\"}}", true);
+    const WPE_Entity tree = (WPE_Entity)wpe_json_number(result_of(created), 0);
+    wpe_json_free(created);
+    char command[256];
+    snprintf(command, sizeof command,
+             "{\"cmd\": \"create_entity\", \"entity\": {\"name\": \"leaves\", \"parent\": %u}}", tree);
+    run_ok(editor, command);
+    WPE_TEST_ASSERT_EQ_UINT(4, entity_count(editor));
+    snprintf(command, sizeof command, "{\"cmd\": \"duplicate_entity\", \"id\": %u}", tree);
+    WPE_JsonDocument* reply = run(editor, command, true);
+    const WPE_Entity copy = (WPE_Entity)wpe_json_number(result_of(reply), 0);
+    wpe_json_free(reply);
+    WPE_TEST_ASSERT(copy != tree);
+    WPE_TEST_ASSERT_EQ_UINT(copy, wpe_editor_selection(editor));
+    WPE_TEST_ASSERT_EQ_UINT(6, entity_count(editor));
+    const WPE_Hierarchy* h =
+        wpe_ecs_get_component(wpe_engine_ecs(wpe_editor_engine(editor)), copy, WPE_COMP_HIERARCHY);
+    WPE_TEST_ASSERT(h && h->child_count == 1);
+    WPE_TEST_ASSERT_EQ_STR("leaves",
+                           wpe_scene_get_name(wpe_engine_ecs(wpe_editor_engine(editor)), h->first_child));
+    run_ok(editor, "{\"cmd\": \"undo\"}");
+    WPE_TEST_ASSERT_EQ_UINT(4, entity_count(editor));
+    wpe_editor_destroy(editor);
+}
+
 static void test_editor_scenes_environment_and_screenshots(void) {
     WPE_Editor* editor = open_editor();
     run_ok(editor, "{\"cmd\": \"set_environment\", \"value\": {\"fog\": {\"mode\": \"linear\", \"start\": 2, "
@@ -1467,7 +1496,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_editor_script_files), WPE_TEST_CASE(test_editor_new_script),
     WPE_TEST_CASE(test_editor_asset_files), WPE_TEST_CASE(test_editor_every_api_function_is_documented),
     WPE_TEST_CASE(test_editor_script_properties), WPE_TEST_CASE(test_editor_opens_project_in_edit_mode),
-    WPE_TEST_CASE(test_editor_edits_with_undo_and_redo),
+    WPE_TEST_CASE(test_editor_edits_with_undo_and_redo), WPE_TEST_CASE(test_editor_duplicate_copies_children),
     WPE_TEST_CASE(test_editor_scenes_environment_and_screenshots),
     WPE_TEST_CASE(test_editor_play_mode_restores_the_scene),
     WPE_TEST_CASE(test_editor_reloads_changed_assets))

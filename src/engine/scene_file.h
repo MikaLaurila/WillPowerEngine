@@ -167,6 +167,22 @@ WPE_Result wpe_scene_load_asset(const WPE_SceneContext* context, const char* pat
 WPE_Result wpe_scene_save_entity(const WPE_SceneContext* context, WPE_Entity entity, WPE_JsonWriter* writer);
 
 /**
+ * Copies an entity with all its descendants, as saving and loading them would: prefab instances in the
+ * subtree come back as linked instances with their overrides, references between the copied entities
+ * (parents, a trail's ends...) point at the copies, and references to anything else (the root's parent
+ * included) stay as they were. The copy is the parent's last child (or a new root). Entities the
+ * context's `include` filter leaves out are not copied.
+ *
+ * @param out_copy Receives the copy of `root`.
+ * @return WPE_RESULT_OK, WPE_RESULT_ERROR_NULL_ARG, WPE_RESULT_ERROR_NOT_FOUND (dead entity),
+ *         WPE_RESULT_ERROR_OUT_OF_MEMORY or a loading error (nothing is created then).
+ *
+ * @thread_safety Owning thread
+ */
+[[nodiscard]] WPE_Result wpe_scene_duplicate(const WPE_SceneContext* context, WPE_Entity root,
+                                             WPE_Entity* out_copy);
+
+/**
  * Creates an entity from a description with the keys of a scene entity ("id" is ignored, so the output of
  * wpe_scene_save_entity() makes a copy): "name",
  * "parent", "transform", "instance", "mesh", ..., "script", "components".
