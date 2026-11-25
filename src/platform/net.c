@@ -159,7 +159,8 @@ WPE_Result wpe_net_connect(uint16_t port, uint32_t timeout_ms, WPE_Socket** out_
     const DWORD timeout = timeout_ms;
     setsockopt(handle, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof timeout);
 #else
-    const struct timeval timeout = {.tv_sec = timeout_ms / 1000, .tv_usec = (timeout_ms % 1000) * 1000};
+    const struct timeval timeout = {.tv_sec = timeout_ms / 1000,
+                                    .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000};
     setsockopt(handle, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
 #endif
     return wpe__wrap(handle, true, out_connection);

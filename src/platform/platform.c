@@ -639,16 +639,17 @@ WPE_Result wpe_platform_executable_path(char* out_path, size_t capacity) {
     wpe_free(wide);
     if (result != WPE_RESULT_OK) return result;
 #else
-    const ssize_t length = readlink("/proc/self/exe", out_path, capacity);
-    if (length < 0) {
+    char
+        link[4096]; /* PATH_MAX on Linux. readlink adds no terminator, so read into a buffer of known size. */
+    const ssize_t read = readlink("/proc/self/exe", link, sizeof link);
+    if (read < 0) {
         wpe_log_error("cannot determine the executable path");
         return WPE_RESULT_ERROR_IO;
     }
-    if ((size_t)length >= capacity) {
-        out_path[0] = '\0';
-        return WPE_RESULT_ERROR_CAPACITY;
-    }
-    out_path[length] = '\0';
+    const size_t length = (size_t)read;
+    if (length >= sizeof link || length >= capacity) return WPE_RESULT_ERROR_CAPACITY;
+    memcpy(out_path, link, length);
+    memset(out_path + length, 0, capacity - length);
 #endif
     return WPE_RESULT_OK;
 }

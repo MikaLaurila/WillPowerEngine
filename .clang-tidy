@@ -4,6 +4,8 @@
 # - signed-bitwise: flags shifts by plain int literals (`x << 24`), which is idiomatic C.
 # - multi-level-implicit-pointer-conversion: flags the standard `T** p = alloc(...)` C idiom.
 # - insecureAPI.DeprecatedOrUnsafeBufferHandling: Annex K (memcpy_s etc.) is not portable.
+# - reserved-identifier allows _POSIX_C_SOURCE: defining it before any include is how C asks for the
+#   POSIX functions (readlink, sockets), so it can't be renamed.
 # - optin.performance.Padding: we keep related fields together (array next to its count) for
 #   readability; hot-path structs are laid out deliberately and reviewed by hand.
 Checks: >
@@ -26,3 +28,5 @@ Checks: >
   readability-duplicate-include
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/(src|tests)/.*'
+CheckOptions:
+  bugprone-reserved-identifier.AllowedIdentifiers: '_POSIX_C_SOURCE'
