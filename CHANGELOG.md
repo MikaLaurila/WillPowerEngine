@@ -5,6 +5,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Weather from scripts: `wpe.set_fog`/`get_fog`, `set_ambient`/`get_ambient`, `set_sky`/`get_sky` (colors and
+  sun disc) and `set_wind`/`get_wind` change the scene's environment while playing (colors are vectors, so
+  they ease with `wpe.tween_value`), until the scene is loaded again.
 - Particle streaks: an emitter's `stretch` (seconds; scene files, the editor and `wpe.set_particles`) draws
   each particle along its motion, `size` wide and as long as the distance it covers in that time, the
   image's top at the head: rain, sparks, blown sand. C: `WPE_ParticleEmitter.stretch`.

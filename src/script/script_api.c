@@ -2753,6 +2753,149 @@ static int wpe__api_get_affine_textures(lua_State* L) {
     return 1;
 }
 
+/* ---- Environment: fog, ambient light, sky and wind ----------------------------------------------------- */
+
+/* A vector field of a settings table (nil keeps `fallback`). */
+static WPE_Vec3 wpe__field_vec3(lua_State* L, int table, const char* key, WPE_Vec3 fallback) {
+    lua_getfield(L, table, key);
+    const WPE_Vec3 value = lua_isnil(L, -1) ? fallback : wpe__check_vec3(L, -1);
+    lua_pop(L, 1);
+    return value;
+}
+
+/* A number field (nil keeps `fallback`) that must lie in [low, high], as in scene files. */
+static float wpe__field_ranged(lua_State* L, int table, const char* function, const char* key, float low,
+                               float high, float fallback) {
+    const float value = wpe__field_number(L, table, key, fallback);
+    if (!(value >= low && value <= high))
+        luaL_errorL(L, "wpe.%s: %s (%g) must be %g..%g", function, key, (double)value, (double)low,
+                    (double)high);
+    return value;
+}
+
+/* Colors are vectors of 0..1 channels, like scene files' arrays (and so ease with wpe.tween_value). Each
+ * setter checks the whole table into a copy before changing anything. */
+static int wpe__api_set_fog(lua_State* L) {
+    WPE_SceneRenderSettings* settings = wpe__render_settings(L, "set_fog");
+    luaL_checktype(L, 1, LUA_TTABLE);
+    WPE_FogParams fog = settings->fog;
+    lua_getfield(L, 1, "mode");
+    if (!lua_isnil(L, -1)) {
+        static const char* const modes[] = {"none", "linear", "exponential", NULL};
+        fog.mode = (WPE_FogMode)luaL_checkoption(L, -1, NULL, modes);
+    }
+    lua_pop(L, 1);
+    fog.color = wpe__field_vec3(L, 1, "color", fog.color);
+    fog.start = wpe__field_ranged(L, 1, "set_fog", "start", 0.0f, 1e9f, fog.start);
+    fog.end = wpe__field_ranged(L, 1, "set_fog", "end", 0.0f, 1e9f, fog.end);
+    fog.density = wpe__field_ranged(L, 1, "set_fog", "density", 0.0f, 1e3f, fog.density);
+    settings->fog = fog;
+    return 0;
+}
+
+static int wpe__api_get_fog(lua_State* L) {
+    const WPE_FogParams fog = wpe__render_settings(L, "get_fog")->fog;
+    static const char* const modes[] = {"none", "linear", "exponential"};
+    lua_createtable(L, 0, 5);
+    lua_pushstring(L, modes[fog.mode]);
+    lua_setfield(L, -2, "mode");
+    wpe__push_vec3(L, fog.color);
+    lua_setfield(L, -2, "color");
+    lua_pushnumber(L, fog.start);
+    lua_setfield(L, -2, "start");
+    lua_pushnumber(L, fog.end);
+    lua_setfield(L, -2, "end");
+    lua_pushnumber(L, fog.density);
+    lua_setfield(L, -2, "density");
+    return 1;
+}
+
+static int wpe__api_set_ambient(lua_State* L) {
+    WPE_SceneRenderSettings* settings = wpe__render_settings(L, "set_ambient");
+    settings->ambient = wpe__check_vec3(L, 1);
+    return 0;
+}
+
+static int wpe__api_get_ambient(lua_State* L) {
+    wpe__push_vec3(L, wpe__render_settings(L, "get_ambient")->ambient);
+    return 1;
+}
+
+static int wpe__api_set_sky(lua_State* L) {
+    WPE_SceneRenderSettings* settings = wpe__render_settings(L, "set_sky");
+    luaL_checktype(L, 1, LUA_TTABLE);
+    WPE_SkySettings sky = settings->sky;
+    sky.zenith = wpe__field_vec3(L, 1, "zenith", sky.zenith);
+    sky.horizon = wpe__field_vec3(L, 1, "horizon", sky.horizon);
+    sky.ground = wpe__field_vec3(L, 1, "ground", sky.ground);
+    sky.curve = wpe__field_ranged(L, 1, "set_sky", "curve", 0.01f, 100.0f, sky.curve);
+    sky.sun_size = wpe__field_ranged(L, 1, "set_sky", "sun_size", 0.0f, 45.0f, sky.sun_size);
+    sky.sun_color = wpe__field_vec3(L, 1, "sun_color", sky.sun_color);
+    sky.sun_glow = wpe__field_ranged(L, 1, "set_sky", "sun_glow", 0.0f, 1.0f, sky.sun_glow);
+    settings->sky = sky;
+    return 0;
+}
+
+static int wpe__api_get_sky(lua_State* L) {
+    const WPE_SkySettings sky = wpe__render_settings(L, "get_sky")->sky;
+    static const char* const modes[] = {"color", "gradient", "panorama"};
+    lua_createtable(L, 0, 8);
+    lua_pushstring(L, modes[sky.mode]);
+    lua_setfield(L, -2, "mode");
+    const struct {
+        const char* key;
+        WPE_Vec3 value;
+    } colors[] = {{"zenith", sky.zenith},
+                  {"horizon", sky.horizon},
+                  {"ground", sky.ground},
+                  {"sun_color", sky.sun_color}};
+    for (size_t i = 0; i < sizeof colors / sizeof colors[0]; ++i) {
+        wpe__push_vec3(L, colors[i].value);
+        lua_setfield(L, -2, colors[i].key);
+    }
+    lua_pushnumber(L, sky.curve);
+    lua_setfield(L, -2, "curve");
+    lua_pushnumber(L, sky.sun_size);
+    lua_setfield(L, -2, "sun_size");
+    lua_pushnumber(L, sky.sun_glow);
+    lua_setfield(L, -2, "sun_glow");
+    return 1;
+}
+
+static int wpe__api_set_wind(lua_State* L) {
+    WPE_SceneRenderSettings* settings = wpe__render_settings(L, "set_wind");
+    luaL_checktype(L, 1, LUA_TTABLE);
+    WPE_WindSettings wind = settings->wind;
+    const WPE_Vec3 direction =
+        wpe__field_vec3(L, 1, "direction", wpe_vec3(wind.direction.x, 0.0f, wind.direction.y));
+    wind.direction = (WPE_Vec2){.x = direction.x, .y = direction.z};
+    wind.strength = wpe__field_ranged(L, 1, "set_wind", "strength", 0.0f, 100.0f, wind.strength);
+    wind.gust_speed = wpe__field_ranged(L, 1, "set_wind", "gust_speed", -1000.0f, 1000.0f, wind.gust_speed);
+    wind.gust_size = wpe__field_ranged(L, 1, "set_wind", "gust_size", 0.01f, 1e6f, wind.gust_size);
+    wind.flutter = wpe__field_ranged(L, 1, "set_wind", "flutter", 0.0f, 1.0f, wind.flutter);
+    settings->wind = wind; /* Its clock (time) goes on. */
+    return 0;
+}
+
+static int wpe__api_get_wind(lua_State* L) {
+    const WPE_WindSettings wind = wpe__render_settings(L, "get_wind")->wind;
+    lua_createtable(L, 0, 5);
+    wpe__push_vec3(L, wpe_vec3(wind.direction.x, 0.0f, wind.direction.y));
+    lua_setfield(L, -2, "direction");
+    const struct {
+        const char* key;
+        float value;
+    } numbers[] = {{"strength", wind.strength},
+                   {"gust_speed", wind.gust_speed},
+                   {"gust_size", wind.gust_size},
+                   {"flutter", wind.flutter}};
+    for (size_t i = 0; i < sizeof numbers / sizeof numbers[0]; ++i) {
+        lua_pushnumber(L, numbers[i].value);
+        lua_setfield(L, -2, numbers[i].key);
+    }
+    return 1;
+}
+
 /* ---- Game feel: time scale, slow motion, hit-stop, shakes ---------------------------------------------- */
 
 static WPE_GameFeel* wpe__game_feel(lua_State* L, const char* function) {
@@ -4490,6 +4633,14 @@ static const luaL_Reg wpe__api[] = {
     {"get_texture_filter", wpe__api_get_texture_filter},
     {"set_vertex_snap", wpe__api_set_vertex_snap},
     {"get_vertex_snap", wpe__api_get_vertex_snap},
+    {"set_fog", wpe__api_set_fog},
+    {"get_fog", wpe__api_get_fog},
+    {"set_ambient", wpe__api_set_ambient},
+    {"get_ambient", wpe__api_get_ambient},
+    {"set_sky", wpe__api_set_sky},
+    {"get_sky", wpe__api_get_sky},
+    {"set_wind", wpe__api_set_wind},
+    {"get_wind", wpe__api_get_wind},
     {"set_affine_textures", wpe__api_set_affine_textures},
     {"get_affine_textures", wpe__api_get_affine_textures},
     {"color", wpe__api_color},
