@@ -30,6 +30,9 @@ typedef struct WPE_ShakeParams {
     float rotation;  /* Degrees it turns at most (each axis, in its own space), at the start. */
     float duration;  /* Real seconds until it has faded out (> 0). */
     float frequency; /* About how many times a second it changes direction. */
+    /* A jolt on top (parent space, meters; zero: none): the entity is thrown this far at once and springs
+     * back, overshooting a little, over the duration. A hit's direction makes the view recoil from it. */
+    WPE_Vec3 kick;
 } WPE_ShakeParams;
 
 typedef struct WPE_Shake {
@@ -86,8 +89,8 @@ void wpe_game_feel_hit_stop(WPE_GameFeel* feel, float duration);
 
 /**
  * Starts shaking an entity, replacing its shake if it has one, unless what's left of that one is at least as
- * strong (its faded amplitude and rotation both at least the new ones): then the new shake is ignored, so a
- * small shake can't cut a big one short. The entity needs a Transform.
+ * strong (its faded amplitude, rotation and kick all at least the new ones): then the new shake is ignored,
+ * so a small shake can't cut a big one short. The entity needs a Transform.
  *
  * @thread_safety Thread owning the world
  */

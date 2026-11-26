@@ -101,6 +101,27 @@ static void test_game_feel_shake_offset_bounds_and_fade(void) {
     WPE_TEST_ASSERT(a.x == 0.0f && a.y == 0.0f && a.z == 0.0f && ra.x == 0.0f); /* Over. */
 }
 
+/* A kick throws the entity along it at once, springs back through zero a third of the way in, overshoots a
+ * little the other way and settles; with no amplitude nothing else moves. */
+static void test_game_feel_shake_kick_springs_back(void) {
+    const WPE_ShakeParams params = {.duration = 0.3f, .frequency = 20.0f, .kick = {.x = 0.4f, .y = -0.2f}};
+    WPE_Vec3 p, r;
+    wpe_shake_offset(&params, 3, 0.0f, &p, &r);
+    WPE_TEST_ASSERT_NEAR(0.4, p.x, 1e-6);
+    WPE_TEST_ASSERT_NEAR(-0.2, p.y, 1e-6);
+    WPE_TEST_ASSERT(p.z == 0.0f && r.x == 0.0f && r.y == 0.0f && r.z == 0.0f);
+    wpe_shake_offset(&params, 3, 0.1f, &p, &r); /* A third of the way: back through the rest pose. */
+    WPE_TEST_ASSERT_NEAR(0.0, p.x, 1e-5);
+    float overshoot = 0.0f;
+    for (int i = 34; i < 100; ++i) {
+        wpe_shake_offset(&params, 3, 0.3f * (float)i / 100.0f, &p, &r);
+        overshoot = fminf(overshoot, p.x);
+    }
+    WPE_TEST_ASSERT(overshoot < -0.02f && overshoot > -0.2f); /* Past the rest pose, less than the kick. */
+    wpe_shake_offset(&params, 3, 0.3f, &p, &r);
+    WPE_TEST_ASSERT(p.x == 0.0f && p.y == 0.0f); /* Over. */
+}
+
 static WPE_Ecs* make_scene(void) {
     WPE_Ecs* ecs = NULL;
     WPE_TEST_ASSERT_OK(wpe_ecs_create(&ecs));
@@ -196,6 +217,17 @@ static void test_game_feel_shakes_restore_the_real_pose(void) {
     wpe_game_feel_shake(&feel, e, &small);
     WPE_TEST_ASSERT_NEAR(0.05, feel.shakes[0].params.amplitude, EPS);
     wpe_game_feel_reset(&feel, ecs);
+    /* A kick counts too: a stronger one replaces a running shake that would otherwise win. */
+    wpe_game_feel_shake(&feel, e, &params);
+    const WPE_ShakeParams kicking = {.duration = 0.2f, .frequency = 20.0f, .kick = {.x = 1.0f}};
+    wpe_game_feel_shake(&feel, e, &kicking);
+    WPE_TEST_ASSERT_NEAR(1.0, feel.shakes[0].params.kick.x, EPS);
+    const WPE_ShakeParams nudge = {.duration = 0.2f, .frequency = 20.0f, .kick = {.y = 0.5f}};
+    wpe_game_feel_shake(&feel, e, &nudge); /* A smaller kick (any way) is ignored... */
+    WPE_TEST_ASSERT_NEAR(1.0, feel.shakes[0].params.kick.x, EPS);
+    wpe_game_feel_shake(&feel, e, &small); /* ...but one that also moves further replaces it. */
+    WPE_TEST_ASSERT_NEAR(0.0, feel.shakes[0].params.kick.x, EPS);
+    wpe_game_feel_reset(&feel, ecs);
 
     /* A destroyed entity's shake ends quietly. */
     wpe_game_feel_shake(&feel, e, &params);
@@ -228,5 +260,6 @@ static void test_game_feel_shake_limits(void) {
 WPE_TEST_MAIN(WPE_TEST_CASE(test_game_feel_base_scale_and_hit_stop),
               WPE_TEST_CASE(test_game_feel_slow_motion),
               WPE_TEST_CASE(test_game_feel_shake_offset_bounds_and_fade),
+              WPE_TEST_CASE(test_game_feel_shake_kick_springs_back),
               WPE_TEST_CASE(test_game_feel_shakes_restore_the_real_pose),
               WPE_TEST_CASE(test_game_feel_shake_limits))

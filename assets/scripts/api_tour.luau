@@ -421,6 +421,15 @@ function Tour:on_start()
 	wpe.shake(shaker) -- The defaults: 0.1 m for 0.3 s.
 	assert(wpe.is_shaking(shaker))
 	assert(not pcall(wpe.shake, shaker, { duration = 0 }) and not pcall(wpe.shake, shaker, { rotation = 500 }))
+	wpe.shake(shaker, { amplitude = 0, kick = vector.create(0.3, 0, 0), duration = 0.2 }) -- A jolt along +X.
+	assert(wpe.is_shaking(shaker) and not pcall(wpe.shake, shaker, { kick = 1 }))
+	-- A zoom punch: the camera's field of view, in degrees.
+	local view = wpe.get_camera()
+	local fov = wpe.get_fov(view)
+	wpe.set_fov(view, fov - 4)
+	assert(math.abs(wpe.get_fov(view) - (fov - 4)) < 1e-3)
+	assert(not pcall(wpe.set_fov, view, 0) and not pcall(wpe.set_fov, shaker, 40))
+	wpe.set_fov(view, fov)
 	wpe.destroy(shaker)
 
 	-- The scene the world was loaded from.

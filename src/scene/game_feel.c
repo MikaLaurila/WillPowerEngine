@@ -90,8 +90,13 @@ void wpe_shake_offset(const WPE_ShakeParams* params, uint32_t seed, float elapse
         channel[c] = envelope * (0.6f * sinf(w + p1) + 0.4f * sinf(1.618034f * w + p2));
     }
     const float radians = params->rotation * (WPE_PI / 180.0f);
-    *out_position = wpe_vec3(channel[0] * params->amplitude, channel[1] * params->amplitude,
-                             channel[2] * params->amplitude);
+    /* The kick: all the way out at once, back through zero a third of the way in, a small overshoot, settled.
+     */
+    const float u = elapsed / params->duration;
+    const float spring = (1.0f - u) * (1.0f - u) * cosf(1.5f * WPE_PI * u);
+    *out_position = wpe_vec3(channel[0] * params->amplitude + params->kick.x * spring,
+                             channel[1] * params->amplitude + params->kick.y * spring,
+                             channel[2] * params->amplitude + params->kick.z * spring);
     *out_rotation = wpe_vec3(channel[3] * radians, channel[4] * radians, channel[5] * radians);
 }
 
@@ -104,7 +109,8 @@ static WPE_Shake* wpe__find_shake(WPE_GameFeel* feel, WPE_Entity entity) {
 
 void wpe_game_feel_shake(WPE_GameFeel* feel, WPE_Entity entity, const WPE_ShakeParams* params) {
     if (!params || !(params->duration > 0.0f) || !isfinite(params->duration) ||
-        !isfinite(params->amplitude) || !isfinite(params->rotation) || !isfinite(params->frequency))
+        !isfinite(params->amplitude) || !isfinite(params->rotation) || !isfinite(params->frequency) ||
+        !isfinite(params->kick.x) || !isfinite(params->kick.y) || !isfinite(params->kick.z))
         return;
     WPE_Shake* shake = wpe__find_shake(feel, entity);
     if (shake && shake->elapsed < shake->params.duration) {
@@ -112,7 +118,8 @@ void wpe_game_feel_shake(WPE_GameFeel* feel, WPE_Entity entity, const WPE_ShakeP
          * the running one stays if what's left of it still moves and turns at least as far. */
         const float fade = 1.0f - shake->elapsed / shake->params.duration, left = fade * fade;
         if (left * shake->params.amplitude >= params->amplitude &&
-            left * shake->params.rotation >= params->rotation)
+            left * shake->params.rotation >= params->rotation &&
+            left * wpe_vec3_length(shake->params.kick) >= wpe_vec3_length(params->kick))
             return;
     }
     if (!shake) {

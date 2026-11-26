@@ -5,6 +5,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Camera punches: `wpe.shake`'s `kick` (a vector) throws the entity along it and springs back with a small
+  overshoot, so a hit can knock the view away from it; `wpe.set_fov`/`get_fov` change a camera's field of view
+  (a zoom punch). C: `WPE_ShakeParams.kick`.
 - Weather from scripts: `wpe.set_fog`/`get_fog`, `set_ambient`/`get_ambient`, `set_sky`/`get_sky` (colors and
   sun disc) and `set_wind`/`get_wind` change the scene's environment while playing (colors are vectors, so
   they ease with `wpe.tween_value`), until the scene is loaded again.

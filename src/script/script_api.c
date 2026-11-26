@@ -2954,7 +2954,11 @@ static int wpe__api_shake(lua_State* L) {
         params.rotation = wpe__field_number(L, 2, "rotation", params.rotation);
         params.duration = wpe__field_number(L, 2, "duration", params.duration);
         params.frequency = wpe__field_number(L, 2, "frequency", params.frequency);
+        lua_getfield(L, 2, "kick");
+        if (!lua_isnil(L, -1)) params.kick = wpe__check_vec3(L, -1);
+        lua_pop(L, 1);
     }
+    if (!(wpe_vec3_length(params.kick) <= 1e3f)) luaL_errorL(L, "wpe.shake: kick must be at most 1000 m");
     if (!(params.amplitude >= 0.0f && params.amplitude <= 1e3f))
         luaL_errorL(L, "wpe.shake: amplitude must be 0..1000");
     if (!(params.rotation >= 0.0f && params.rotation <= 180.0f))
@@ -2967,6 +2971,28 @@ static int wpe__api_shake(lua_State* L) {
         luaL_errorL(L, "wpe.shake: entity 0x%08x has no transform", entity);
     wpe_game_feel_shake(feel, entity, &params);
     return 0;
+}
+
+/* A camera component of `entity`, or a raise naming `function`. */
+static WPE_Camera* wpe__check_camera(lua_State* L, int index, const char* function) {
+    const WPE_Entity entity = wpe__check_entity(L, index);
+    WPE_Camera* camera = wpe_ecs_get_component(wpe__script_host_from(L)->ecs, entity, WPE_COMP_CAMERA);
+    if (!camera) luaL_errorL(L, "wpe.%s: entity 0x%08x has no camera", function, entity);
+    return camera;
+}
+
+static int wpe__api_set_fov(lua_State* L) {
+    const double degrees = luaL_checknumber(L, 2);
+    if (!(degrees >= 1.0 && degrees <= 170.0))
+        luaL_errorL(L, "wpe.set_fov: %g is not 1..170 degrees", degrees);
+    WPE_Camera* camera = wpe__check_camera(L, 1, "set_fov");
+    camera->fov_y = (float)(degrees * (WPE_PI / 180.0));
+    return 0;
+}
+
+static int wpe__api_get_fov(lua_State* L) {
+    lua_pushnumber(L, (double)wpe__check_camera(L, 1, "get_fov")->fov_y * (180.0 / WPE_PI));
+    return 1;
 }
 
 static int wpe__api_stop_shake(lua_State* L) {
@@ -4633,6 +4659,8 @@ static const luaL_Reg wpe__api[] = {
     {"get_texture_filter", wpe__api_get_texture_filter},
     {"set_vertex_snap", wpe__api_set_vertex_snap},
     {"get_vertex_snap", wpe__api_get_vertex_snap},
+    {"set_fov", wpe__api_set_fov},
+    {"get_fov", wpe__api_get_fov},
     {"set_fog", wpe__api_set_fog},
     {"get_fog", wpe__api_get_fog},
     {"set_ambient", wpe__api_set_ambient},

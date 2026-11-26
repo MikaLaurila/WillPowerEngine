@@ -261,7 +261,7 @@ The game clock can run slower or stop. Everything simulated follows it: `dt` in 
 | `wpe.set_time_scale(scale)` | The speed outside slow motion and hit-stops (1; 0..100), e.g. 0 for a pause that still runs the UI. |
 | `wpe.get_time_scale() -> scale` | The speed now: 0 during a hit-stop, slow motion's while it runs, else the one set. |
 | `wpe.real_delta() -> seconds` | This frame's real time, unscaled: for HUD animation that should keep moving during slow motion. |
-| `wpe.shake(entity, {amplitude, rotation, duration, frequency}?)` | Shakes an entity (it needs a transform): it moves up to `amplitude` meters (0.1) and turns up to `rotation` degrees (0) on each axis, changing direction about `frequency` times a second (20), fading out over `duration` real seconds (0.3). Shaking it again starts over, unless what's left of the running shake is still at least as strong (amplitude and rotation): then the weaker new one is ignored, so a hit's small shake can't cut a kill's big one short. Shake the camera (`wpe.get_camera()`) for impacts. |
+| `wpe.shake(entity, {amplitude, rotation, duration, frequency, kick}?)` | Shakes an entity (it needs a transform): it moves up to `amplitude` meters (0.1) and turns up to `rotation` degrees (0) on each axis, changing direction about `frequency` times a second (20), fading out over `duration` real seconds (0.3). Shaking it again starts over, unless what's left of the running shake is still at least as strong (amplitude and rotation): then the weaker new one is ignored, so a hit's small shake can't cut a kill's big one short. Shake the camera (`wpe.get_camera()`) for impacts. `kick` (a vector, meters in the parent's space) adds a jolt: the entity is thrown that far at once and springs back with a small overshoot over the duration, so a hit can knock the camera away from it (`kick = direction * 0.3`); a kick counts as strength when a new shake meets a running one. |
 | `wpe.stop_shake(entity)` | Ends its shake. |
 | `wpe.is_shaking(entity) -> bool` | Whether it is shaking. |
 
@@ -514,6 +514,7 @@ Provided by the application running the scripts (the engine runtime). Elsewhere 
 | `wpe.quit()` | Exit the game after the current frame. |
 | `wpe.get_scene() -> path` | The asset path of the scene file the world was loaded from (`"scenes/main.scene"`), also while the editor plays the scene it has open; `""` when it came from elsewhere (a new, unsaved scene in the editor). Handy as a key for what a level remembers, such as a lever pulled. |
 | `wpe.set_camera(entity)` / `wpe.get_camera() -> entity?` | The camera the scene is rendered from and heard from. Without one, the scene file's `camera`, then the first camera found, is used. |
+| `wpe.set_fov(camera, degrees)` / `wpe.get_fov(camera) -> degrees` | A camera's vertical field of view (the scene file's `fov`, 1..170; orthographic cameras ignore it). Narrowing it for an instant and easing back (`wpe.tween_value`) is a zoom punch for big hits. Raises for an entity without a camera. |
 | `wpe.screen_size() -> width, height` | The framebuffer (canvas) size in pixels. |
 | `wpe.world_to_screen(position) -> x, y, in_front` | Where a world point shows on screen, in pixels from the top-left, through the current camera (as it is now, even after a script moved it this frame). `in_front` is false for points behind the camera. |
 
