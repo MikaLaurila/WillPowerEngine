@@ -195,7 +195,8 @@ static void wpe__surface_uniforms(const wpe__MeshInstance* inst, const WPE_Mat4*
                                   WPE_MaterialUniforms* uniforms) {
     const WPE_MeshRenderer* mesh = inst->mesh;
     const WPE_Water* water = inst->water;
-    uniforms->uv_offset = mesh->uv_offset;
+    uniforms->uv_offset = (WPE_Vec2){.x = mesh->uv_offset.x + mesh->texture_offset.x,
+                                     .y = mesh->uv_offset.y + mesh->texture_offset.y};
     if (inst->wind) {
         uniforms->wind = true;
         uniforms->winds = inst->winds;

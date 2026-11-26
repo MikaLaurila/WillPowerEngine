@@ -280,8 +280,9 @@ static void test_engine_scene_round_trip(void) {
 
     WPE_JsonWriter* w1 = NULL;
     const char* first = save_text(&ctx_a, &env, camera, &w1);
-    WPE_TEST_ASSERT(strstr(first, "\"wind\": 0.5") != NULL);    /* The pillar's sway. */
-    WPE_TEST_ASSERT(strstr(first, "\"gust_size\": 8") != NULL); /* The scene's wind. */
+    WPE_TEST_ASSERT(strstr(first, "\"wind\": 0.5") != NULL);                   /* The pillar's sway. */
+    WPE_TEST_ASSERT(strstr(first, "\"gust_size\": 8") != NULL);                /* The scene's wind. */
+    WPE_TEST_ASSERT(strstr(first, "\"texture_offset\": [0.25, 0.5]") != NULL); /* The convex crate's. */
     const uint32_t entities = wpe_ecs_entity_count(a.ecs);
 
     World b = make_world();

@@ -64,6 +64,9 @@ typedef struct WPE_MeshRenderer {
     /* Added to the texture coordinates of every texture (after the material's texture transform). Moved by
      * uv_scroll and kept in [0, 2) so it never loses precision; set it to step through frames yourself. */
     WPE_Vec2 uv_offset;
+    /* A fixed shift of every texture, in texture repeats, added to uv_offset (saved in scene files, which
+     * uv_offset isn't): lines up a tiled texture across neighbouring pieces. 0 by default. */
+    WPE_Vec2 texture_offset;
     /* How much the scene's wind sways it (WPE_WindSettings): 0 still (default), 1 its top moves the wind's
      * full `strength`; by height within its whole model (WPE_Model::min_y..max_y), so the bottom stays put
      * and the meshes of one model (a trunk and its leaves) sway together. Grass 1, leaves less. Skinned

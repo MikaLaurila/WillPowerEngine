@@ -384,6 +384,11 @@ void wpe__save_entity(wpe__Saver* s, WPE_Entity e) {
         wpe_json_write_number(w, mesh->uv_scroll.x);
         wpe_json_write_number(w, mesh->uv_scroll.y);
         wpe_json_write_array_end(w);
+        wpe_json_write_key(w, "texture_offset");
+        wpe_json_write_array_begin(w, true);
+        wpe_json_write_number(w, mesh->texture_offset.x);
+        wpe_json_write_number(w, mesh->texture_offset.y);
+        wpe_json_write_array_end(w);
         wpe__write_number(w, "wind", mesh->wind);
         wpe_json_write_object_end(w);
     }
@@ -1251,11 +1256,16 @@ static bool wpe__skin_covers_mesh(const WPE_Model* model, uint32_t mesh_index, u
 
 static bool wpe__load_mesh(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "mesh", "model", "mesh", "skin", "joints", "visible", "unlit",
-                                "cast_shadows", "receive_shadows", "double_sided", "uv_scroll", "wind"))
+                                "cast_shadows", "receive_shadows", "double_sided", "uv_scroll",
+                                "texture_offset", "wind"))
         return false;
     WPE_MeshRenderer mesh = wpe_mesh_renderer_default(WPE_ASSET_NONE, 0);
     const WPE_JsonValue* uv_scroll = wpe_json_get(v, "uv_scroll");
     if (uv_scroll && !wpe__json_read_floats(&l->r, uv_scroll, "uv_scroll", 2, mesh.uv_scroll.v)) return false;
+    const WPE_JsonValue* texture_offset = wpe_json_get(v, "texture_offset");
+    if (texture_offset &&
+        !wpe__json_read_floats(&l->r, texture_offset, "texture_offset", 2, mesh.texture_offset.v))
+        return false;
     if (!wpe__json_read_bool(&l->r, v, "visible", &mesh.visible) ||
         !wpe__json_read_bool(&l->r, v, "unlit", &mesh.unlit) ||
         !wpe__json_read_bool(&l->r, v, "cast_shadows", &mesh.cast_shadows) ||

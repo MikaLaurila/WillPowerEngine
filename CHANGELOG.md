@@ -5,6 +5,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- A mesh's `texture_offset` (`[u, v]` in texture repeats, scene files and the editor's inspector) shifts
+  every texture of the mesh, to line up world-tiled `.prim` textures across neighbouring pieces. C:
+  `WPE_MeshRenderer.texture_offset` (added to the runtime `uv_offset` that `uv_scroll` moves).
 - Wind: meshes sway in the scene's wind (grass, leaves, flags). A mesh's `wind` (0..; 0 still) sets how much,
   each vertex by its height within its whole model (squared, so bases stay put and tips bend; a tree's
   trunk and leaves, separate meshes in one file, sway together); the scene's

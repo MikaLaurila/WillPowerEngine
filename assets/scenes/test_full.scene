@@ -156,7 +156,7 @@
       "id": 14,
       "name": "convex crate",
       "transform": {"position": [-3, 3, -3], "euler": [20, 30, 10]},
-      "mesh": {"model": "meshes/crate.prim"},
+      "mesh": {"model": "meshes/crate.prim", "texture_offset": [0.25, 0.5]},
       "rigidbody": {"type": "dynamic", "angular_damping": 0.2},
       "collider": {"shape": "convex", "model": "meshes/crate.prim", "mesh": 0, "density": 0.8}
     },
