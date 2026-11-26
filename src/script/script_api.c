@@ -3110,9 +3110,10 @@ static WPE_ParticleEmitter wpe__check_particles(lua_State* L, int table, WPE_Par
     base.rate = wpe__field_number(L, table, "rate", base.rate);
     base.duration = wpe__field_number(L, table, "duration", base.duration);
     base.drag = wpe__field_number(L, table, "drag", base.drag);
+    base.stretch = wpe__field_number(L, table, "stretch", base.stretch);
     base.spread = wpe__field_number(L, table, "spread", base.spread);
-    if (!(base.rate >= 0.0f && base.duration >= 0.0f && base.drag >= 0.0f))
-        luaL_errorL(L, "rate, duration and drag must not be negative");
+    if (!(base.rate >= 0.0f && base.duration >= 0.0f && base.drag >= 0.0f && base.stretch >= 0.0f))
+        luaL_errorL(L, "rate, duration, drag and stretch must not be negative");
     if (!(base.spread >= 0.0f && base.spread <= WPE_PI)) luaL_errorL(L, "spread must be 0..pi radians");
     base.burst = wpe__field_count(L, table, "burst", 0, 100000, base.burst);
     base.max_particles = wpe__field_count(L, table, "max_particles", 1, 100000, base.max_particles);
@@ -3201,7 +3202,7 @@ static int wpe__api_get_particles(lua_State* L) {
         double value;
     } numbers[] = {{"rate", e.rate},     {"duration", e.duration}, {"drag", e.drag},
                    {"spread", e.spread}, {"burst", e.burst},       {"max_particles", e.max_particles},
-                   {"count", e.count}};
+                   {"count", e.count},   {"stretch", e.stretch}};
     for (size_t i = 0; i < sizeof numbers / sizeof numbers[0]; ++i) {
         lua_pushnumber(L, numbers[i].value);
         lua_setfield(L, -2, numbers[i].key);

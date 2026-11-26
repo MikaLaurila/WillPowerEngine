@@ -5,6 +5,9 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Particle streaks: an emitter's `stretch` (seconds; scene files, the editor and `wpe.set_particles`) draws
+  each particle along its motion, `size` wide and as long as the distance it covers in that time, the
+  image's top at the head: rain, sparks, blown sand. C: `WPE_ParticleEmitter.stretch`.
 - A mesh's `texture_offset` (`[u, v]` in texture repeats, scene files and the editor's inspector) shifts
   every texture of the mesh, to line up world-tiled `.prim` textures across neighbouring pieces. C:
   `WPE_MeshRenderer.texture_offset` (added to the runtime `uv_offset` that `uv_scroll` moves).

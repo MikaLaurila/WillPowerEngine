@@ -116,6 +116,7 @@ A `particles` component emits particles from its entity and simulates them: scre
 | `blend`, `lit` | As for billboards (`"alpha"`, false). Alpha-blended particles are sorted back to front within the emitter. |
 | `color_start`, `color_end` | RGBA (0..1) from birth to death (white to transparent white). |
 | `size` | `[start, end]` in world units over each particle's life (`[0.2, 0.05]`). |
+| `stretch` | Seconds of motion each particle is drawn along (0: square quads). Above 0 a particle is a streak, `size` wide, from where it is back to where its velocity had it `stretch` seconds before (and half its size past each end), the image's top at the head: rain, sparks, blown sand. Faster particles make longer streaks; spin and `random_rotation` don't apply to streaks. |
 | `playing` | Emitting now (true). Particles already out live on when it stops. |
 | `rate` | Particles per second while playing (20). |
 | `burst` | Particles emitted at once when a cycle starts (0). |

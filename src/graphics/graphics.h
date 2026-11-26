@@ -242,6 +242,11 @@ typedef struct WPE_ParticleEmitter {
     bool lit;
     WPE_Vec4 color_start, color_end; /* RGBA (0..1) over each particle's life. */
     float size_start, size_end;      /* World units over each particle's life. */
+    /* Seconds of motion each particle is drawn along (0: square quads). Above 0 a particle is a streak,
+     * `size` wide, from where it is back to where its velocity had it `stretch` seconds before (plus half its
+     * size at each end), the image's top at the head: rain, sparks, blown sand. Its rotation is then ignored.
+     */
+    float stretch;
     /* Emission. */
     bool playing;           /* Emitting (particles already out live on when it stops). */
     float duration;         /* Seconds of emission per cycle (0 = endless). */

@@ -722,6 +722,26 @@ static int wpe__compare_far_first(const void* a, const void* b) {
     return (i > j) - (i < j); /* Equal depths keep emission order, so sorting is deterministic. */
 }
 
+/* A streak's quad: centered between the head (`head`) and the tail (head - trail), `half` wide each side
+ * across the line as seen from `eye`, and reaching `half` past both ends along it (so a slow particle is
+ * still its square). False when the trail is too short, or points at the eye, for a direction across it:
+ * the caller draws the plain square. */
+static bool wpe__particle_streak(WPE_Vec3 head, WPE_Vec3 trail, WPE_Vec3 eye, float half,
+                                 WPE_Vec3* out_center, WPE_Vec3* out_right, WPE_Vec3* out_up) {
+    const float length = wpe_vec3_length(trail);
+    if (!(length > 1e-6f)) return false;
+    const WPE_Vec3 along = wpe_vec3_scale(trail, 1.0f / length); /* Tail to head. */
+    const WPE_Vec3 across = wpe_vec3_cross(along, wpe_vec3_sub(eye, head));
+    const float across_length = wpe_vec3_length(across);
+    if (!(across_length > 1e-6f)) return false;
+    *out_center = wpe_vec3_sub(head, wpe_vec3_scale(trail, 0.5f));
+    /* up x toward-the-eye is the screen's right with the head up, as a camera's right x up faces it: the
+     * corners stay counter-clockwise. */
+    *out_right = wpe_vec3_scale(across, half / across_length);
+    *out_up = wpe_vec3_scale(along, length * 0.5f + half);
+    return true;
+}
+
 /* One draw per emitter: every live particle as a screen-facing quad, sized, colored and framed by its age.
  * Alpha-blended emitters sort their particles back to front within the draw. */
 static WPE_Result wpe__render_particles(WPE_SceneRenderer* sr, WPE_Renderer* renderer, const WPE_Ecs* ecs,
@@ -746,10 +766,24 @@ static WPE_Result wpe__render_particles(WPE_SceneRenderer* sr, WPE_Renderer* ren
         const float reach = fmaxf(e->size_start, e->size_end) * 0.70710678f;
         WPE_Aabb box = {.min = wpe_vec3(INFINITY, INFINITY, INFINITY),
                         .max = wpe_vec3(-INFINITY, -INFINITY, -INFINITY)};
+        /* Streaks: each particle's world-space reach back along its motion (its tail is at
+         * position - trails[i]). */
+        WPE_Vec3* trails = NULL;
+        if (e->stretch > 0.0f) {
+            trails = wpe_arena_alloc(&sr->frame, (size_t)n * sizeof *trails, 0);
+            if (!trails) return WPE_RESULT_ERROR_OUT_OF_MEMORY;
+        }
         for (uint32_t i = 0; i < n; ++i) {
             positions[i] = e->world_space ? e->particles[i].position
                                           : wpe_mat4_transform_point(&world, e->particles[i].position);
             wpe__grow_box(&box, positions[i]);
+            if (trails) {
+                const WPE_Vec3 velocity = e->world_space
+                                              ? e->particles[i].velocity
+                                              : wpe_mat4_transform_dir(&world, e->particles[i].velocity);
+                trails[i] = wpe_vec3_scale(velocity, e->stretch);
+                wpe__grow_box(&box, wpe_vec3_sub(positions[i], trails[i]));
+            }
         }
         box.min = wpe_vec3_sub(box.min, wpe_vec3(reach, reach, reach));
         box.max = wpe_vec3_add(box.max, wpe_vec3(reach, reach, reach));
@@ -774,16 +808,18 @@ static WPE_Result wpe__render_particles(WPE_SceneRenderer* sr, WPE_Renderer* ren
             const WPE_Particle* p = &e->particles[order[k].index];
             const float life = fminf(fmaxf(p->age / p->lifetime, 0.0f), 1.0f);
             const float half = (e->size_start + (e->size_end - e->size_start) * life) * 0.5f;
-            const float c = cosf(p->rotation), s = sinf(p->rotation);
-            const WPE_Vec3 r =
-                wpe_vec3_scale(wpe_vec3_add(wpe_vec3_scale(right, c), wpe_vec3_scale(up, s)), half);
-            const WPE_Vec3 u =
-                wpe_vec3_scale(wpe_vec3_sub(wpe_vec3_scale(up, c), wpe_vec3_scale(right, s)), half);
+            WPE_Vec3 at = positions[order[k].index];
+            WPE_Vec3 r, u;
+            if (!trails ||
+                !wpe__particle_streak(at, trails[order[k].index], pass->camera_position, half, &at, &r, &u)) {
+                const float c = cosf(p->rotation), s = sinf(p->rotation);
+                r = wpe_vec3_scale(wpe_vec3_add(wpe_vec3_scale(right, c), wpe_vec3_scale(up, s)), half);
+                u = wpe_vec3_scale(wpe_vec3_sub(wpe_vec3_scale(up, c), wpe_vec3_scale(right, s)), half);
+            }
             float u0, v0, u1, v1;
             const uint32_t frame = (uint32_t)(life * (float)frames);
             wpe__sheet_uvs(e->texture, (WPE_Rect){0}, e->columns, e->rows, e->frame_count, frame, &u0, &v0,
                            &u1, &v1);
-            const WPE_Vec3 at = positions[order[k].index];
             const WPE_Vec3 corners[4] = {
                 wpe_vec3_sub(wpe_vec3_sub(at, r), u), wpe_vec3_sub(wpe_vec3_add(at, r), u),
                 wpe_vec3_add(wpe_vec3_add(at, r), u), wpe_vec3_add(wpe_vec3_sub(at, r), u)};

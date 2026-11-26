@@ -1681,6 +1681,109 @@ static void test_graphics_particles_draw(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* The pixels of one color: their count and bounding box. */
+typedef struct ColorBox {
+    uint32_t count;
+    int min_x, min_y, max_x, max_y;
+} ColorBox;
+
+static ColorBox color_box(const WPE_Framebuffer* fb, uint32_t color) {
+    ColorBox box = {0, INT32_MAX, INT32_MAX, -1, -1};
+    for (uint32_t y = 0; y < fb->height; ++y) {
+        for (uint32_t x = 0; x < fb->width; ++x) {
+            if (fb->color[y * fb->width + x] != color) continue;
+            ++box.count;
+            box.min_x = (int)x < box.min_x ? (int)x : box.min_x;
+            box.max_x = (int)x > box.max_x ? (int)x : box.max_x;
+            box.min_y = (int)y < box.min_y ? (int)y : box.min_y;
+            box.max_y = (int)y > box.max_y ? (int)y : box.max_y;
+        }
+    }
+    return box;
+}
+
+/* With `stretch`, a particle is a streak from its position back along its velocity; an emitter that isn't
+ * in world space turns the velocity with itself. */
+static void test_graphics_particles_stretch_into_streaks(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    const WPE_Entity camera = spawn_camera(ecs, wpe_vec3(0, 0, 5), wpe_quat_identity());
+    WPE_ParticleEmitter settings = wpe_particle_emitter_default();
+    settings.rate = 0.0f;
+    settings.shape = WPE_PARTICLES_POINT;
+    settings.direction = wpe_vec3(1, 0, 0);
+    settings.spread = 0.0f;
+    settings.speed_min = settings.speed_max = 4.0f;
+    settings.size_start = settings.size_end = 0.2f;
+    settings.color_start = settings.color_end = wpe_vec4(1, 0, 0, 1);
+    settings.blend = WPE_BILLBOARD_CUTOUT;
+    const WPE_Entity e = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_particles_emit(ecs, e, 1));
+
+    WPE_Renderer* renderer = NULL;
+    WPE_TEST_ASSERT_OK(wpe_renderer_create(&(WPE_RendererDesc){.width = 64, .height = 64}, &renderer));
+    WPE_SceneRenderer* sr = NULL;
+    WPE_TEST_ASSERT_OK(wpe_scene_renderer_create(&sr));
+    WPE_SceneRenderStats stats;
+    /* Without stretch: a small square in the middle. */
+    ColorBox square = color_box(render_scene(renderer, sr, ecs, camera, &stats), 0xFFFF0000u);
+    WPE_TEST_ASSERT(square.count > 0 && square.max_x - square.min_x <= 4 && square.max_y - square.min_y <= 4);
+    /* Half a second of motion at 4 m/s: 2 m back to the left of the head, as thin as before. */
+    WPE_ParticleEmitter* live = wpe_ecs_get_component(ecs, e, WPE_COMP_PARTICLES);
+    live->stretch = 0.5f;
+    ColorBox streak = color_box(render_scene(renderer, sr, ecs, camera, &stats), 0xFFFF0000u);
+    WPE_TEST_ASSERT_EQ_UINT(1, stats.particles_drawn);
+    WPE_TEST_ASSERT_MSG(streak.max_x - streak.min_x >= 8 * (square.max_x - square.min_x + 1) / 2,
+                        "streak %d..%d", streak.min_x, streak.max_x);
+    WPE_TEST_ASSERT(streak.max_y - streak.min_y <= square.max_y - square.min_y + 1);
+    WPE_TEST_ASSERT(streak.max_x <= square.max_x + 1 && streak.min_x < square.min_x - 8);
+    /* Facing the camera from either side: the same streak seen from behind. */
+    WPE_Transform* view = wpe_ecs_get_component(ecs, camera, WPE_COMP_TRANSFORM);
+    view->position = wpe_vec3(0, 0, -5);
+    view->rotation = wpe_quat_from_axis_angle(wpe_vec3(0, 1, 0), WPE_PI);
+    ColorBox behind = color_box(render_scene(renderer, sr, ecs, camera, &stats), 0xFFFF0000u);
+    WPE_TEST_ASSERT(behind.count > streak.count / 2 && behind.max_x - behind.min_x >= 8);
+    view->position = wpe_vec3(0, 0, 5);
+    view->rotation = wpe_quat_identity();
+    /* Emitter-space particles: their velocity turns with the emitter, so a quarter turn stands it upright. */
+    live = wpe_ecs_get_component(ecs, e, WPE_COMP_PARTICLES);
+    live->world_space = false;
+    ((WPE_Transform*)wpe_ecs_get_component(ecs, e, WPE_COMP_TRANSFORM))->rotation =
+        wpe_quat_from_axis_angle(wpe_vec3(0, 0, 1), WPE_PI / 2);
+    ColorBox upright = color_box(render_scene(renderer, sr, ecs, camera, &stats), 0xFFFF0000u);
+    WPE_TEST_ASSERT(upright.max_y - upright.min_y >= 8 && upright.max_x - upright.min_x <= 4);
+    /* Moving straight at the camera: no direction across it, so the plain square. */
+    live = wpe_ecs_get_component(ecs, e, WPE_COMP_PARTICLES);
+    live->world_space = true;
+    live->particles[0].velocity = wpe_vec3(0, 0, 4);
+    ColorBox head_on = color_box(render_scene(renderer, sr, ecs, camera, &stats), 0xFFFF0000u);
+    WPE_TEST_ASSERT(head_on.count > 0 && head_on.max_x - head_on.min_x <= 4);
+    WPE_TEST_ASSERT_OK(wpe_ecs_despawn(ecs, e));
+    /* The image's top is at the head: red over blue, moving right, puts the red half on the right. */
+    const uint32_t texels[2] = {0xFFFF0000u, 0xFF0000FFu}; /* Top row, bottom row. */
+    WPE_Texture* texture = NULL;
+    WPE_TEST_ASSERT_OK(
+        wpe_texture_create(&(WPE_TextureDesc){.width = 1, .height = 2, .texels = texels}, &texture));
+    WPE_AssetHandle image = WPE_ASSET_NONE;
+    WPE_TEST_ASSERT_OK(wpe_asset_add(t.assets, WPE_ASSET_IMAGE, "test/streak", texture, &image));
+    settings.image = image;
+    settings.color_start = settings.color_end = wpe_vec4(1, 1, 1, 1);
+    settings.stretch = 0.5f;
+    const WPE_Entity imaged = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+    wpe_asset_release(t.assets, image); /* The emitter holds its own reference. */
+    WPE_TEST_ASSERT_EQ_UINT(1, wpe_particles_emit(ecs, imaged, 1));
+    const WPE_Framebuffer* fb = render_scene(renderer, sr, ecs, camera, &stats);
+    const ColorBox head = color_box(fb, 0xFFFF0000u), tail = color_box(fb, 0xFF0000FFu);
+    WPE_TEST_ASSERT(head.count > 4 && tail.count > 4);
+    WPE_TEST_ASSERT_MSG(head.min_x >= tail.max_x - 1, "head %d..%d, tail %d..%d", head.min_x, head.max_x,
+                        tail.min_x, tail.max_x);
+
+    wpe_scene_renderer_destroy(sr);
+    wpe_renderer_destroy(renderer);
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
 /* ---- Trails ---------------------------------------------------------------------------------------- */
 
 static WPE_Entity spawn_point(WPE_Ecs* ecs, WPE_Vec3 position) {
@@ -2397,6 +2500,7 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_skinned_mesh_mirrored),
     WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
     WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),
+    WPE_TEST_CASE(test_graphics_particles_stretch_into_streaks),
     WPE_TEST_CASE(test_graphics_trail_records_and_draws), WPE_TEST_CASE(test_graphics_slash_sweeps),
     WPE_TEST_CASE(test_graphics_anim_states), WPE_TEST_CASE(test_graphics_surface_update_wraps),
     WPE_TEST_CASE(test_graphics_water_wave_is_periodic_with_matching_slopes),

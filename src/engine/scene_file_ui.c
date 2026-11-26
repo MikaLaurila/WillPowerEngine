@@ -237,6 +237,8 @@ void wpe__save_particles(wpe__Saver* s, WPE_Entity e) {
     wpe__write_floats(w, "color_start", p->color_start.v, 4);
     wpe__write_floats(w, "color_end", p->color_end.v, 4);
     wpe__write_pair_of(w, "size", p->size_start, p->size_end);
+    wpe_json_write_key(w, "stretch");
+    wpe_json_write_number(w, p->stretch);
     wpe_json_write_key(w, "duration");
     wpe_json_write_number(w, p->duration);
     wpe_json_write_key(w, "rate");
@@ -395,8 +397,8 @@ bool wpe__load_particles(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     uint32_t blend = p.blend, shape = p.shape;
     float size[2] = {p.size_start, p.size_end}, spin[2] = {0, 0};
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "particles", "image", "columns", "rows", "frame_count", "blend",
-                                "lit", "color_start", "color_end", "size", "playing", "duration", "loop",
-                                "rate", "burst", "max_particles", "world_space", "seed", "shape",
+                                "lit", "color_start", "color_end", "size", "stretch", "playing", "duration",
+                                "loop", "rate", "burst", "max_particles", "world_space", "seed", "shape",
                                 "shape_size", "lifetime", "speed", "direction", "spread", "gravity", "drag",
                                 "spin", "random_rotation") ||
         !wpe__json_read_uint(&l->r, v, "columns", 1, 256, &p.columns) ||
@@ -408,6 +410,7 @@ bool wpe__load_particles(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
         !wpe__read_ranged(l, v, "color_start", 4, 0.0, 1.0, p.color_start.v) ||
         !wpe__read_ranged(l, v, "color_end", 4, 0.0, 1.0, p.color_end.v) ||
         !wpe__read_ranged(l, v, "size", 2, 0.0, 1e4, size) ||
+        !wpe__json_read_float(&l->r, v, "stretch", 0.0, 100.0, &p.stretch) ||
         !wpe__json_read_bool(&l->r, v, "playing", &p.playing) ||
         !wpe__json_read_float(&l->r, v, "duration", 0.0, 1e6, &p.duration) ||
         !wpe__json_read_bool(&l->r, v, "loop", &p.loop) ||
