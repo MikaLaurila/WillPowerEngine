@@ -5,6 +5,11 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- An `underwater` post effect: below a water line on screen (and between its sides) the image is tinted
+  toward the water's color, more and darker deeper below the line, distant things fading into the water
+  by depth (murk) while near ones stay clear, rows swaying sideways and the line itself waving and glowing.
+  It animates on game time. Scene files, scripts and the editor. C: `WPE_UnderwaterParams`,
+  `wpe_postfx_underwater`, `WPE_POSTFX_UNDERWATER`, `wpe_postfx_advance` (moves effects' clocks).
 - Particle bursts and attractors: an emitter's `outward` sends each particle away from the emitter's origin
   through where it appeared (a `"disk_edge"` ring bursts out like a shockwave); a new `"sphere_edge"` shape
   spawns on a sphere's surface; `attractor` (a point in the emitter's space), `attraction` (pull, negative

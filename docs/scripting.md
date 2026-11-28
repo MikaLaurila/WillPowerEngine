@@ -588,6 +588,8 @@ The scene's post effects (its file's `postfx` list, see [scenes.md](scenes.md)) 
 | `wpe.get_affine_textures() -> on` | Whether affine texture mapping is on. |
 | `wpe.capture_screen([slot = 1]) -> path` | Keeps this frame, as the scene renders it (before post effects, the UI and 2D drawing), in a slot 1..8, and returns its image asset path (`"capture/1"`). Use it as any image (billboards, sprites) or break it with a `shatter` effect (`capture = 1`). Capturing a slot again replaces its picture. |
 
+For water the player can dive into, add an `underwater` effect and move its line with the camera: each frame, put the water's surface on screen with `wpe.world_to_screen` (a point at the surface's height, in the plane the game is played in) and set `surface_y` to its y divided by the screen's height (and `left`/`right`/`bottom` from the water's ends and floor, if it doesn't fill the view). With the surface above the screen everything is under water; below it, nothing is.
+
 For a menu over the game, `acrylic` frosts the scene behind it (blurred, tinted, a fine grain): add it once and raise its `strength` from 0 to 1 as the menu opens (with `wpe.real_delta()`, since a paused game's tweens stand still). Your 2D drawing and the UI come after the post effects, so the menu itself stays sharp.
 
 A `black_hole` (`center_x`, `center_y`, `radius`, `reach`, `pull_pixels`, `swirl`, `darkness`, a ring: [scenes.md](scenes.md)) bends the image in around a point and swirls it, with a black event horizon and a glowing ring at its edge: grow its `radius` and `pull_pixels` to open one, shrink them to close it.

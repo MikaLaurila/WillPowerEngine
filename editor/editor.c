@@ -687,6 +687,8 @@ WPE_Result wpe_editor_frame(WPE_Editor* editor, double dt) {
     if (editing) {
         wpe_surface_update(wpe_engine_ecs(editor->engine), (float)dt);
         wpe_wind_advance(&wpe_engine_environment(editor->engine)->render.wind, (float)dt);
+        WPE_SceneEnvironment* environment = wpe_engine_environment(editor->engine);
+        wpe_postfx_advance(environment->postfx, environment->postfx_count, (float)dt);
     }
     wpe__editor_nav_frame(editor, dt);
     const bool probe = editing && editor->nav_probe_count > 1;

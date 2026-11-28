@@ -533,6 +533,91 @@ static uint32_t changed_pixels(const WPE_Framebuffer* fb, uint32_t y0, uint32_t 
     return changed;
 }
 
+/* Under water: nothing changes above the line or beside the water; below it the image takes the water's
+ * color, more and darker deeper down and where it's far from the camera; rows sway sideways. */
+static void test_lighting_postfx_underwater(void) {
+    WPE_PostChain* chain = NULL;
+    WPE_TEST_ASSERT_OK(wpe_postfx_create(&chain));
+    WPE_UnderwaterParams water = wpe_postfx_config_default(WPE_POSTFX_UNDERWATER).underwater;
+    water.surface_y = 0.25f; /* Row 16. */
+    water.right = 0.75f;     /* Columns 48 and on stay dry. */
+    water.color_r = water.color_g = 0.0f;
+    water.color_b = 1.0f;
+    water.tint = 0.2f;
+    water.deep_tint = 0.6f;
+    water.deep = 0.5f; /* Full at row 48. */
+    water.darken = 0.0f;
+    water.murk = 0.0f;
+    water.wobble_pixels = 0.0f;
+    water.wave_pixels = 0.0f;
+    water.glow = 0.0f;
+    WPE_PostEffect effect = wpe_postfx_underwater(&water);
+    WPE_Renderer* r = filled_renderer(0xFFFFFFFFu);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    const WPE_Framebuffer* fb = wpe_renderer_framebuffer(r);
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFFFFFFu, fb->color[15 * S + 10]); /* Above the line. */
+    WPE_TEST_ASSERT_EQ_UINT(0xFFFFFFFFu, fb->color[40 * S + 50]); /* Beside the water. */
+    wpe_renderer_destroy(r);
+    water.bottom = 0.5f; /* Dry again from row 32. */
+    r = filled_renderer(0xFFFFFFFFu);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    fb = wpe_renderer_framebuffer(r);
+    WPE_TEST_ASSERT(fb->color[31 * S + 10] != 0xFFFFFFFFu && fb->color[32 * S + 10] == 0xFFFFFFFFu);
+    water.bottom = 2.0f;
+    wpe_renderer_destroy(r);
+    r = filled_renderer(0xFFFFFFFFu);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    fb = wpe_renderer_framebuffer(r);
+    const WPE_Vec4 shallow = wpe_color_to_vec4(fb->color[17 * S + 10]);
+    const WPE_Vec4 deep = wpe_color_to_vec4(fb->color[60 * S + 10]);
+    WPE_TEST_ASSERT_MSG(fabsf(shallow.x - 0.8f) < 0.03f && shallow.z > 0.99f, "shallow (%f, %f, %f)",
+                        shallow.x, shallow.y, shallow.z);
+    WPE_TEST_ASSERT_MSG(fabsf(deep.x - 0.4f) < 0.01f && deep.z > 0.99f, "deep (%f, %f, %f)", deep.x, deep.y,
+                        deep.z);
+    wpe_renderer_destroy(r);
+
+    /* Darkening follows depth too; murk takes the far background (cleared depth: the far plane) fully. */
+    water.darken = 0.5f;
+    water.murk = 1.0f;
+    water.murk_start = 1.0f;
+    water.murk_distance = 10.0f;
+    r = filled_renderer(0xFFFFFFFFu);
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    const WPE_Vec4 murky = wpe_color_to_vec4(wpe_renderer_framebuffer(r)->color[60 * S + 10]);
+    WPE_TEST_ASSERT_MSG(murky.x < 0.01f && fabsf(murky.z - 0.5f) < 0.02f, "murky (%f, %f, %f)", murky.x,
+                        murky.y, murky.z);
+    wpe_renderer_destroy(r);
+
+    /* The sway moves the stripes under water only, and a whole screen under water (the line above it)
+     * sways from the top row. */
+    water = wpe_postfx_config_default(WPE_POSTFX_UNDERWATER).underwater;
+    water.tint = water.deep_tint = water.darken = water.murk = water.glow = 0.0f;
+    water.wave_pixels = 0.0f;
+    water.wobble_pixels = 1.0f;
+    water.wobble_rows = 8.0f;
+    water.surface_y = 0.5f;
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    fb = wpe_renderer_framebuffer(r);
+    WPE_TEST_ASSERT_EQ_UINT(0, changed_pixels(fb, 0, 32, 0, S));
+    WPE_TEST_ASSERT(changed_pixels(fb, 32, S, 1, S - 1) > 0);
+    wpe_renderer_destroy(r);
+    water.surface_y = -1.0f;
+    r = striped();
+    WPE_TEST_ASSERT_OK(wpe_postfx_apply(chain, r, &effect, 1, &k_post_camera));
+    WPE_TEST_ASSERT(changed_pixels(wpe_renderer_framebuffer(r), 0, 8, 1, S - 1) > 0);
+    wpe_renderer_destroy(r);
+
+    /* Its clock: configs advance, wrapping, and other kinds keep theirs. */
+    WPE_PostFxConfig configs[2] = {wpe_postfx_config_default(WPE_POSTFX_UNDERWATER),
+                                   wpe_postfx_config_default(WPE_POSTFX_SHATTER)};
+    wpe_postfx_advance(configs, 2, 0.25f);
+    WPE_TEST_ASSERT(fabsf(configs[0].underwater.time - 0.25f) < 1e-6f && configs[1].underwater.time == 0.0f);
+    wpe_postfx_advance(configs, 2, 1000.0f);
+    WPE_TEST_ASSERT(configs[0].underwater.time >= 0.0f && configs[0].underwater.time < 600.0f);
+    wpe_postfx_destroy(chain);
+}
+
 static void test_lighting_postfx_distortions(void) {
     WPE_PostChain* chain = NULL;
     WPE_TEST_ASSERT_OK(wpe_postfx_create(&chain));
@@ -915,15 +1000,18 @@ static void test_lighting_postfx_configs(void) {
     WPE_TEST_ASSERT(!wpe_postfx_from_config(&ps1).enabled);
 }
 
-WPE_TEST_MAIN(
-    WPE_TEST_CASE(test_lighting_attenuation_shape), WPE_TEST_CASE(test_lighting_shadow_visibility_pcf),
-    WPE_TEST_CASE(test_lighting_point_light_pool), WPE_TEST_CASE(test_lighting_spot_cone),
-    WPE_TEST_CASE(test_lighting_more_lights_than_object_limit),
-    WPE_TEST_CASE(test_lighting_directional_shadow), WPE_TEST_CASE(test_lighting_fog_and_default_sun),
-    WPE_TEST_CASE(test_lighting_subdivision_near_camera), WPE_TEST_CASE(test_lighting_procedural_models),
-    WPE_TEST_CASE(test_lighting_generated_tangents_are_orthonormal),
-    WPE_TEST_CASE(test_lighting_postfx_color_effects),
-    WPE_TEST_CASE(test_lighting_postfx_ssao_darkens_creases_only),
-    WPE_TEST_CASE(test_lighting_postfx_depth_of_field), WPE_TEST_CASE(test_lighting_postfx_distortions),
-    WPE_TEST_CASE(test_lighting_postfx_grayscale), WPE_TEST_CASE(test_lighting_postfx_cracks),
-    WPE_TEST_CASE(test_lighting_postfx_shatter), WPE_TEST_CASE(test_lighting_postfx_configs))
+WPE_TEST_MAIN(WPE_TEST_CASE(test_lighting_attenuation_shape),
+              WPE_TEST_CASE(test_lighting_shadow_visibility_pcf),
+              WPE_TEST_CASE(test_lighting_point_light_pool), WPE_TEST_CASE(test_lighting_spot_cone),
+              WPE_TEST_CASE(test_lighting_more_lights_than_object_limit),
+              WPE_TEST_CASE(test_lighting_directional_shadow),
+              WPE_TEST_CASE(test_lighting_fog_and_default_sun),
+              WPE_TEST_CASE(test_lighting_subdivision_near_camera),
+              WPE_TEST_CASE(test_lighting_procedural_models),
+              WPE_TEST_CASE(test_lighting_generated_tangents_are_orthonormal),
+              WPE_TEST_CASE(test_lighting_postfx_color_effects),
+              WPE_TEST_CASE(test_lighting_postfx_ssao_darkens_creases_only),
+              WPE_TEST_CASE(test_lighting_postfx_depth_of_field),
+              WPE_TEST_CASE(test_lighting_postfx_distortions), WPE_TEST_CASE(test_lighting_postfx_underwater),
+              WPE_TEST_CASE(test_lighting_postfx_grayscale), WPE_TEST_CASE(test_lighting_postfx_cracks),
+              WPE_TEST_CASE(test_lighting_postfx_shatter), WPE_TEST_CASE(test_lighting_postfx_configs))

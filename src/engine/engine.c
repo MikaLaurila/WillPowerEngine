@@ -1457,6 +1457,7 @@ static WPE_Result wpe__simulate(WPE_Engine* engine, double real_dt) {
     if (result == WPE_RESULT_OK) wpe_billboard_update(engine->ecs, (float)dt);
     if (result == WPE_RESULT_OK) wpe_surface_update(engine->ecs, (float)dt);
     wpe_wind_advance(&engine->environment.render.wind, (float)dt); /* Game time: it stops with the game. */
+    wpe_postfx_advance(engine->environment.postfx, engine->environment.postfx_count, (float)dt);
     /* Before transforms: a slash's head entity moves, and emitters on it emit from there this frame. */
     if (result == WPE_RESULT_OK) wpe_slash_update(engine->ecs, (float)dt);
     /* Shakes run on real time, so they go on through a hit-stop. */

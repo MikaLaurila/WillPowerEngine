@@ -268,6 +268,36 @@ typedef struct WPE_AcrylicParams {
     float noise;                  /* 0..0.25: the grain's strength. */
 } WPE_AcrylicParams;
 
+/* Under water: everything on screen below a water line (and above `bottom`, between `left` and `right`) is
+ * tinted toward the water's color, more the further below the line (screen heights, over `deep`) and the
+ * farther from the camera (the murk, by depth: distant things fade into the water while near ones stay
+ * clear), darkened with the same depth, and wobbled sideways row by row. The line itself waves and can glow.
+ * Positions are fractions of the screen ((0, 0) top-left); a line above the screen (< 0) puts all of it under
+ * water. */
+typedef struct WPE_UnderwaterParams {
+    float surface_y;                 /* The water line, a fraction of the height from the top. */
+    float left, right;               /* The water's sides, fractions of the width. */
+    float bottom;                    /* The water's floor, a fraction of the height (below it: dry). */
+    float color_r, color_g, color_b; /* The water's color (0..1). */
+    float tint;                      /* 0..1: how much of the color is mixed in just below the line... */
+    float deep_tint;                 /* ...and `deep` below it (in between, by distance). */
+    float deep;          /* Screen heights below the line where the tint and darkening are full. */
+    float darken;        /* 0..1: brightness lost at `deep` (none at the line). */
+    float murk;          /* 0..1: how much of the color distant things take... */
+    float murk_start;    /* ...beginning this far from the camera (view units)... */
+    float murk_distance; /* ...and reaching `murk` this much farther (0: no murk). */
+    float wobble_pixels; /* How far rows sway sideways. */
+    float wobble_rows;   /* Pixels from one sway to the next, down the screen. */
+    float wobble_speed;  /* Sways per second. */
+    float wave_pixels;   /* How far the water line waves up and down. */
+    float wave_length;   /* Pixels from one wave to the next along it. */
+    float glow;          /* 0..1: brightness added along the line (1-2 pixels). */
+    float time;          /* Not a parameter: seconds, advanced by wpe_postfx_advance() (wraps). */
+} WPE_UnderwaterParams;
+
+/** @return The underwater effect (the defaults when `params` is NULL). @thread_safety Any thread */
+WPE_PostEffect wpe_postfx_underwater(const WPE_UnderwaterParams* params);
+
 /* ---- Configured effects (scene files, scripts) ---------------------------------------------------- */
 
 #define WPE_POSTFX_MAX_EFFECTS 8u /* Effects a scene can have. */
@@ -287,8 +317,9 @@ typedef enum WPE_PostFxKind {
     WPE_POSTFX_SHATTER,
     WPE_POSTFX_BLACK_HOLE,
     WPE_POSTFX_ACRYLIC,
+    WPE_POSTFX_UNDERWATER,
 } WPE_PostFxKind;
-#define WPE_POSTFX_KIND_COUNT 13u
+#define WPE_POSTFX_KIND_COUNT 14u
 
 /** One configured built-in effect; only the parameters matching `kind` are used. */
 typedef struct WPE_PostFxConfig {
@@ -307,6 +338,7 @@ typedef struct WPE_PostFxConfig {
     WPE_ShatterParams shatter;
     WPE_BlackHoleParams black_hole;
     WPE_AcrylicParams acrylic;
+    WPE_UnderwaterParams underwater;
 } WPE_PostFxConfig;
 
 /** A parameter of an effect kind: its name (in scene files and scripts), where it lives in a
@@ -317,6 +349,10 @@ typedef struct WPE_PostFxParam {
     double min, max;
     bool integer;
 } WPE_PostFxParam;
+
+/** Moves the clocks of animated configured effects (the underwater wobble and waves) on by `dt` seconds.
+ * @thread_safety Thread owning the configs */
+void wpe_postfx_advance(WPE_PostFxConfig* configs, uint32_t count, float dt);
 
 /** @return The kind's name ("ssao", "depth_of_field", ...), or NULL. @thread_safety Any thread */
 const char* wpe_postfx_kind_name(WPE_PostFxKind kind);

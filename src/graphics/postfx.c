@@ -19,6 +19,7 @@ struct WPE_PostChain {
 
 /* Rows per parallel chunk; fixed so output is independent of the worker count. */
 #define WPE__POSTFX_ROW_GRAIN 8u
+#define WPE__TWO_PI_F 6.28318530717958647692f
 
 WPE_Result wpe_postfx_create(WPE_PostChain** out_chain) {
     if (!out_chain) return WPE_RESULT_ERROR_NULL_ARG;
@@ -1183,12 +1184,105 @@ WPE_PostEffect wpe_postfx_radial_blur(const WPE_RadialBlurParams* params) {
                             .enabled = true};
 }
 
+/* ---- Under water ------------------------------------------------------------------------------------- */
+
+static const WPE_UnderwaterParams wpe__underwater_defaults = {.surface_y = -1.0f,
+                                                              .left = -1.0f,
+                                                              .right = 2.0f,
+                                                              .bottom = 2.0f,
+                                                              .color_r = 0.05f,
+                                                              .color_g = 0.3f,
+                                                              .color_b = 0.5f,
+                                                              .tint = 0.2f,
+                                                              .deep_tint = 0.55f,
+                                                              .deep = 1.5f,
+                                                              .darken = 0.3f,
+                                                              .murk = 0.7f,
+                                                              .murk_start = 8.0f,
+                                                              .murk_distance = 30.0f,
+                                                              .wobble_pixels = 1.0f,
+                                                              .wobble_rows = 24.0f,
+                                                              .wobble_speed = 0.6f,
+                                                              .wave_pixels = 1.5f,
+                                                              .wave_length = 48.0f,
+                                                              .glow = 0.35f};
+
+#define WPE__UNDERWATER_PERIOD 600.0f /* Seconds the clock wraps at (sways and waves stay smooth enough). */
+
+/* Below the (waving) line: the image sampled from a sideways-swayed row, mixed toward the water's color by
+ * the larger of the depth's tint and the murk (combined as two layers of fog), then darkened by depth; the
+ * line's own pixels glow. */
+static void wpe__underwater_pass(const WPE_PostContext* c, const void* params_ptr, uint32_t pass,
+                                 uint32_t row_begin, uint32_t row_end) {
+    (void)pass;
+    const WPE_UnderwaterParams* p = params_ptr;
+    const float w = (float)c->width, h = (float)c->height;
+    const float left = p->left * w, right = p->right * w, line = p->surface_y * h, floor = p->bottom * h;
+    const float deep = fmaxf(p->deep, 1e-4f) * h;
+    const float phase = p->time * p->wobble_speed * WPE__TWO_PI_F;
+    const float row_step = WPE__TWO_PI_F / fmaxf(p->wobble_rows, 1.0f);
+    const float wave_step = WPE__TWO_PI_F / fmaxf(p->wave_length, 1.0f);
+    const float water[3] = {p->color_r * 255.0f, p->color_g * 255.0f, p->color_b * 255.0f};
+    for (uint32_t y = row_begin; y < row_end; ++y) {
+        const float fy = (float)y + 0.5f;
+        const int32_t sway = (int32_t)lroundf(p->wobble_pixels * sinf((float)y * row_step + phase));
+        for (uint32_t x = 0; x < c->width; ++x) {
+            const size_t i = (size_t)y * c->width + x;
+            const float fx = (float)x + 0.5f;
+            /* The line waves along x, travelling slowly (half the sway's pace). */
+            const float surface = line + p->wave_pixels * sinf(fx * wave_step + 0.5f * phase);
+            if (fy < surface || fy >= floor || fx < left || fx >= right) {
+                c->dst[i] = c->src[i];
+                continue;
+            }
+            const float below = fy - surface;
+            const float g = fminf(below / deep, 1.0f);
+            float mix = p->tint + (p->deep_tint - p->tint) * g;
+            if (p->murk_distance > 0.0f && c->depth) {
+                const float z = wpe_postfx_linear_depth(&c->camera, c->depth[i]);
+                const float murk = p->murk * wpe__clamp01((z - p->murk_start) / p->murk_distance);
+                mix = 1.0f - (1.0f - wpe__clamp01(mix)) * (1.0f - murk);
+            }
+            mix = wpe__clamp01(mix);
+            const float shade = 1.0f - wpe__clamp01(p->darken) * g;
+            const float glow = below < 1.5f ? p->glow * 255.0f * (1.0f - below / 1.5f) : 0.0f;
+            const WPE_Color s = wpe__texel_clamped(c, (int32_t)x + sway, (int32_t)y);
+            const float rgb[3] = {(float)((s >> 16) & 0xFFu), (float)((s >> 8) & 0xFFu), (float)(s & 0xFFu)};
+            uint32_t out[3];
+            for (int k = 0; k < 3; ++k) {
+                const float v = (rgb[k] + (water[k] - rgb[k]) * mix) * shade + glow;
+                out[k] = (uint32_t)lroundf(fminf(fmaxf(v, 0.0f), 255.0f));
+            }
+            c->dst[i] = (s & 0xFF000000u) | (out[0] << 16) | (out[1] << 8) | out[2];
+        }
+    }
+}
+
+WPE_PostEffect wpe_postfx_underwater(const WPE_UnderwaterParams* params) {
+    return (WPE_PostEffect){.name = "underwater",
+                            .pass = wpe__underwater_pass,
+                            .pass_count = 1,
+                            .params = params ? params : &wpe__underwater_defaults,
+                            .enabled = true};
+}
+
+void wpe_postfx_advance(WPE_PostFxConfig* configs, uint32_t count, float dt) {
+    if (!configs || !(dt > 0.0f)) return;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (configs[i].kind != WPE_POSTFX_UNDERWATER) continue;
+        configs[i].underwater.time = fmodf(configs[i].underwater.time + dt, WPE__UNDERWATER_PERIOD);
+    }
+}
+
 /* ---- Configured effects ----------------------------------------------------------------------------- */
 
-static const char* const wpe__kind_names[] = {
-    "ssao",      "chromatic_aberration", "ps1",       "vignette", "color_adjust", "depth_of_field",
-    "shockwave", "radial_blur",          "grayscale", "cracks",   "shatter",      "black_hole",
-    "acrylic"};
+static const char* const wpe__kind_names[] = {"ssao",         "chromatic_aberration",
+                                              "ps1",          "vignette",
+                                              "color_adjust", "depth_of_field",
+                                              "shockwave",    "radial_blur",
+                                              "grayscale",    "cracks",
+                                              "shatter",      "black_hole",
+                                              "acrylic",      "underwater"};
 static_assert(sizeof wpe__kind_names / sizeof wpe__kind_names[0] == WPE_POSTFX_KIND_COUNT,
               "a name for every effect kind");
 
@@ -1248,6 +1342,27 @@ static const WPE_PostFxParam wpe__acrylic_params[] = {
     {"tint", offsetof(WPE_PostFxConfig, acrylic.tint), 0, 1, false},
     {"saturation", offsetof(WPE_PostFxConfig, acrylic.saturation), 0, 3, false},
     {"noise", offsetof(WPE_PostFxConfig, acrylic.noise), 0, 0.25, false}};
+static const WPE_PostFxParam wpe__underwater_params[] = {
+    {"surface_y", offsetof(WPE_PostFxConfig, underwater.surface_y), -2, 2, false},
+    {"left", offsetof(WPE_PostFxConfig, underwater.left), -2, 3, false},
+    {"right", offsetof(WPE_PostFxConfig, underwater.right), -2, 3, false},
+    {"bottom", offsetof(WPE_PostFxConfig, underwater.bottom), -2, 3, false},
+    {"color_r", offsetof(WPE_PostFxConfig, underwater.color_r), 0, 1, false},
+    {"color_g", offsetof(WPE_PostFxConfig, underwater.color_g), 0, 1, false},
+    {"color_b", offsetof(WPE_PostFxConfig, underwater.color_b), 0, 1, false},
+    {"tint", offsetof(WPE_PostFxConfig, underwater.tint), 0, 1, false},
+    {"deep_tint", offsetof(WPE_PostFxConfig, underwater.deep_tint), 0, 1, false},
+    {"deep", offsetof(WPE_PostFxConfig, underwater.deep), 0.01, 100, false},
+    {"darken", offsetof(WPE_PostFxConfig, underwater.darken), 0, 1, false},
+    {"murk", offsetof(WPE_PostFxConfig, underwater.murk), 0, 1, false},
+    {"murk_start", offsetof(WPE_PostFxConfig, underwater.murk_start), 0, 1e6, false},
+    {"murk_distance", offsetof(WPE_PostFxConfig, underwater.murk_distance), 0, 1e6, false},
+    {"wobble_pixels", offsetof(WPE_PostFxConfig, underwater.wobble_pixels), 0, 32, false},
+    {"wobble_rows", offsetof(WPE_PostFxConfig, underwater.wobble_rows), 1, 1024, false},
+    {"wobble_speed", offsetof(WPE_PostFxConfig, underwater.wobble_speed), 0, 20, false},
+    {"wave_pixels", offsetof(WPE_PostFxConfig, underwater.wave_pixels), 0, 32, false},
+    {"wave_length", offsetof(WPE_PostFxConfig, underwater.wave_length), 1, 4096, false},
+    {"glow", offsetof(WPE_PostFxConfig, underwater.glow), 0, 1, false}};
 static const WPE_PostFxParam wpe__grayscale_params[] = {
     {"strength", offsetof(WPE_PostFxConfig, grayscale.strength), 0, 1, false},
     {"tint_r", offsetof(WPE_PostFxConfig, grayscale.tint_r), 0, 2, false},
@@ -1292,6 +1407,7 @@ static const WPE_PostFxParam wpe__shatter_params[] = {
 WPE__FITS(wpe__ssao_params);
 WPE__FITS(wpe__cracks_params);
 WPE__FITS(wpe__shatter_params);
+WPE__FITS(wpe__underwater_params);
 #undef WPE__FITS
 
 static const struct {
@@ -1305,7 +1421,7 @@ static const struct {
     WPE__TABLE(wpe__shockwave_params),    WPE__TABLE(wpe__radial_blur_params),
     WPE__TABLE(wpe__grayscale_params),    WPE__TABLE(wpe__cracks_params),
     WPE__TABLE(wpe__shatter_params),      WPE__TABLE(wpe__black_hole_params),
-    WPE__TABLE(wpe__acrylic_params),
+    WPE__TABLE(wpe__acrylic_params),      WPE__TABLE(wpe__underwater_params),
 #undef WPE__TABLE
 };
 
@@ -1368,7 +1484,8 @@ WPE_PostFxConfig wpe_postfx_config_default(WPE_PostFxKind kind) {
                               .cracks = wpe__cracks_defaults,
                               .shatter = wpe__shatter_defaults,
                               .black_hole = wpe__black_hole_defaults,
-                              .acrylic = wpe__acrylic_defaults};
+                              .acrylic = wpe__acrylic_defaults,
+                              .underwater = wpe__underwater_defaults};
 }
 
 WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* c) {
@@ -1412,6 +1529,9 @@ WPE_PostEffect wpe_postfx_from_config(const WPE_PostFxConfig* c) {
         break;
     case WPE_POSTFX_ACRYLIC:
         effect = wpe_postfx_acrylic(&c->acrylic);
+        break;
+    case WPE_POSTFX_UNDERWATER:
+        effect = wpe_postfx_underwater(&c->underwater);
         break;
     }
     effect.enabled = c->enabled;
