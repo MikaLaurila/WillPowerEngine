@@ -1694,6 +1694,90 @@ static void test_graphics_particles_spawn_shapes(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* `outward` aims each particle away from the emitter's origin; sphere_edge spawns on the surface. */
+static void test_graphics_particles_burst_outward(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_ParticleEmitter settings = wpe_particle_emitter_default();
+    settings.rate = 0.0f;
+    settings.spread = 0.0f;
+    settings.outward = true;
+    settings.speed_min = settings.speed_max = 3.0f;
+    settings.shape_size = wpe_vec3(1.5f, 1, 1);
+    const WPE_ParticleShape shapes[] = {WPE_PARTICLES_DISK_EDGE, WPE_PARTICLES_SPHERE_EDGE};
+    for (size_t s = 0; s < 2; ++s) {
+        settings.shape = shapes[s];
+        /* Turned and moved: velocities turn with the emitter and point away from its position. */
+        const WPE_Entity e = spawn_emitter(ecs, wpe_vec3(5, 0, 0), &settings);
+        WPE_Transform* transform = wpe_ecs_get_component(ecs, e, WPE_COMP_TRANSFORM);
+        transform->rotation = wpe_quat_from_axis_angle(wpe_vec3(1, 0, 0), 0.5f * WPE_PI);
+        WPE_TEST_ASSERT_OK(wpe_scene_update_transforms(ecs));
+        WPE_TEST_ASSERT_EQ_UINT(200, wpe_particles_emit(ecs, e, 200));
+        uint32_t below = 0;
+        for (uint32_t i = 0; i < 200; ++i) {
+            const WPE_Particle* p = &emitter_of(ecs, e)->particles[i];
+            const WPE_Vec3 from_center = wpe_vec3_sub(p->position, wpe_vec3(5, 0, 0));
+            WPE_TEST_ASSERT(fabsf(wpe_vec3_length(from_center) - 1.5f) < 1e-4f);
+            WPE_TEST_ASSERT(fabsf(wpe_vec3_length(p->velocity) - 3.0f) < 1e-3f);
+            WPE_TEST_ASSERT(wpe_vec3_dot(wpe_vec3_normalize(from_center), wpe_vec3_normalize(p->velocity)) >
+                            0.9999f);
+            if (shapes[s] == WPE_PARTICLES_DISK_EDGE) WPE_TEST_ASSERT(fabsf(p->position.z) < 1e-4f);
+            below += p->position.y < 0.0f;
+        }
+        WPE_TEST_ASSERT(below > 60 && below < 140); /* All the way round. */
+    }
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
+/* An attractor pulls particles to its point (in the emitter's space) and swallows those that reach it; a
+ * negative attraction pushes them away. */
+static void test_graphics_particles_attractor(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_ParticleEmitter settings = wpe_particle_emitter_default();
+    settings.rate = 0.0f;
+    settings.lifetime_min = settings.lifetime_max = 10.0f;
+    settings.speed_min = settings.speed_max = 0.0f;
+    settings.shape = WPE_PARTICLES_SPHERE_EDGE;
+    settings.shape_size = wpe_vec3(2, 1, 1);
+    settings.attractor = wpe_vec3(0, 1, 0);
+    settings.attraction = 8.0f;
+    /* World space: the attractor goes with the emitter (at 3, 0, 0 here). */
+    const WPE_Entity pulled = spawn_emitter(ecs, wpe_vec3(3, 0, 0), &settings);
+    WPE_TEST_ASSERT_EQ_UINT(50, wpe_particles_emit(ecs, pulled, 50));
+    const WPE_Vec3 point = wpe_vec3(3, 1, 0);
+    float before = 0.0f, after = 0.0f;
+    for (uint32_t i = 0; i < 50; ++i)
+        before += wpe_vec3_length(wpe_vec3_sub(emitter_of(ecs, pulled)->particles[i].position, point));
+    WPE_TEST_ASSERT_OK(wpe_particles_update(ecs, NULL, 0.1f));
+    for (uint32_t i = 0; i < 50; ++i)
+        after += wpe_vec3_length(wpe_vec3_sub(emitter_of(ecs, pulled)->particles[i].position, point));
+    WPE_TEST_ASSERT(after < before - 50 * 0.5f * 8.0f * 0.01f * 0.9f); /* About a t^2 / 2 closer each. */
+    /* With a radius, every particle is swallowed on its way in (none swings back out). */
+    WPE_ParticleEmitter* live = wpe_ecs_get_component(ecs, pulled, WPE_COMP_PARTICLES);
+    live->attractor_radius = 0.05f;
+    for (int step = 0; step < 60 && emitter_of(ecs, pulled)->count > 0; ++step)
+        WPE_TEST_ASSERT_OK(wpe_particles_update(ecs, NULL, 1.0f / 30.0f));
+    WPE_TEST_ASSERT_EQ_UINT(0, emitter_of(ecs, pulled)->count);
+
+    /* Pushing: everything moves away. */
+    settings.attraction = -8.0f;
+    settings.world_space = false;
+    const WPE_Entity pushed = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+    WPE_TEST_ASSERT_EQ_UINT(50, wpe_particles_emit(ecs, pushed, 50));
+    float distances[50];
+    for (uint32_t i = 0; i < 50; ++i)
+        distances[i] =
+            wpe_vec3_length(wpe_vec3_sub(emitter_of(ecs, pushed)->particles[i].position, wpe_vec3(0, 1, 0)));
+    WPE_TEST_ASSERT_OK(wpe_particles_update(ecs, NULL, 0.1f));
+    for (uint32_t i = 0; i < 50; ++i)
+        WPE_TEST_ASSERT(wpe_vec3_length(wpe_vec3_sub(emitter_of(ecs, pushed)->particles[i].position,
+                                                     wpe_vec3(0, 1, 0))) > distances[i]);
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
 /* The same seed gives the same particles, and worker threads change nothing. */
 static void test_graphics_particles_are_deterministic(void) {
     WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
@@ -2588,7 +2672,8 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
     WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),
     WPE_TEST_CASE(test_graphics_particles_stretch_into_streaks),
-    WPE_TEST_CASE(test_graphics_particles_spawn_shapes), WPE_TEST_CASE(test_graphics_trail_records_and_draws),
+    WPE_TEST_CASE(test_graphics_particles_spawn_shapes), WPE_TEST_CASE(test_graphics_particles_burst_outward),
+    WPE_TEST_CASE(test_graphics_particles_attractor), WPE_TEST_CASE(test_graphics_trail_records_and_draws),
     WPE_TEST_CASE(test_graphics_slash_sweeps), WPE_TEST_CASE(test_graphics_anim_states),
     WPE_TEST_CASE(test_graphics_surface_update_wraps),
     WPE_TEST_CASE(test_graphics_water_wave_is_periodic_with_matching_slopes),

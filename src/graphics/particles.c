@@ -123,6 +123,8 @@ static WPE_Vec3 wpe__curve_point(const WPE_Vec3 points[4], const float lengths[W
 /* Where a new particle starts, in the emitter's space. `curve_lengths` is set for the CURVE shape. */
 static WPE_Vec3 wpe__spawn_point(uint64_t* random, const WPE_ParticleEmitter* e, const float* curve_lengths) {
     switch (e->shape) {
+    case WPE_PARTICLES_SPHERE_EDGE:
+        return wpe_vec3_scale(wpe__cone(random, wpe_vec3(0, 1, 0), WPE_PI), e->shape_size.x);
     case WPE_PARTICLES_SPHERE:
     case WPE_PARTICLES_HEMISPHERE: {
         /* Uniform in the ball: a random direction at a radius growing with the cube root. A cap of 90 degrees
@@ -177,7 +179,9 @@ static uint32_t wpe__emit(WPE_ParticleEmitter* e, const WPE_Mat4* world, uint32_
     uint32_t emitted = 0;
     for (; emitted < count && e->count < e->capacity; ++emitted) {
         WPE_Vec3 position = wpe__spawn_point(&e->random, e, curve_lengths);
-        WPE_Vec3 velocity = wpe_vec3_scale(wpe__cone(&e->random, axis, e->spread),
+        const float away = wpe_vec3_length(position);
+        const WPE_Vec3 cone_axis = e->outward && away > 1e-6f ? wpe_vec3_scale(position, 1.0f / away) : axis;
+        WPE_Vec3 velocity = wpe_vec3_scale(wpe__cone(&e->random, cone_axis, e->spread),
                                            wpe__between(&e->random, e->speed_min, e->speed_max));
         if (e->world_space) {
             /* Into the world: positions with the emitter's whole transform, velocities turned (their speed
@@ -203,10 +207,22 @@ static uint32_t wpe__emit(WPE_ParticleEmitter* e, const WPE_Mat4* world, uint32_
 
 typedef struct wpe__Integrate {
     WPE_Particle* particles;
-    WPE_Vec3 gravity; /* In the particles' space. */
-    float damping;    /* Velocity kept this step. */
+    WPE_Vec3 gravity;   /* In the particles' space. */
+    WPE_Vec3 attractor; /* In the particles' space. */
+    float attraction, attractor_radius;
+    float damping; /* Velocity kept this step. */
     float dt;
 } wpe__Integrate;
+
+/* The squared distance from `point` to the segment a-b. */
+static float wpe__segment_distance_sq(WPE_Vec3 a, WPE_Vec3 b, WPE_Vec3 point) {
+    const WPE_Vec3 ab = wpe_vec3_sub(b, a);
+    const float length_sq = wpe_vec3_dot(ab, ab);
+    float t = length_sq > 1e-12f ? wpe_vec3_dot(wpe_vec3_sub(point, a), ab) / length_sq : 0.0f;
+    t = fminf(fmaxf(t, 0.0f), 1.0f);
+    const WPE_Vec3 d = wpe_vec3_sub(wpe_vec3_add(a, wpe_vec3_scale(ab, t)), point);
+    return wpe_vec3_dot(d, d);
+}
 
 static void wpe__integrate(void* context, uint32_t begin, uint32_t end, uint32_t thread_index) {
     (void)thread_index;
@@ -214,9 +230,21 @@ static void wpe__integrate(void* context, uint32_t begin, uint32_t end, uint32_t
     for (uint32_t i = begin; i < end; ++i) {
         WPE_Particle* p = &s->particles[i];
         p->age += s->dt;
+        WPE_Vec3 acceleration = s->gravity;
+        if (s->attraction != 0.0f) {
+            const WPE_Vec3 to = wpe_vec3_sub(s->attractor, p->position);
+            const float distance = wpe_vec3_length(to);
+            if (distance > 1e-6f)
+                acceleration = wpe_vec3_add(acceleration, wpe_vec3_scale(to, s->attraction / distance));
+        }
         p->velocity =
-            wpe_vec3_scale(wpe_vec3_add(p->velocity, wpe_vec3_scale(s->gravity, s->dt)), s->damping);
+            wpe_vec3_scale(wpe_vec3_add(p->velocity, wpe_vec3_scale(acceleration, s->dt)), s->damping);
+        const WPE_Vec3 from = p->position;
         p->position = wpe_vec3_add(p->position, wpe_vec3_scale(p->velocity, s->dt));
+        /* Swallowed: anywhere along this step's path, so fast particles can't skip past the attractor. */
+        if (s->attractor_radius > 0.0f && wpe__segment_distance_sq(from, p->position, s->attractor) <=
+                                              s->attractor_radius * s->attractor_radius)
+            p->age = p->lifetime;
         p->rotation += p->spin * s->dt;
     }
 }
@@ -228,6 +256,10 @@ static WPE_Result wpe__advance(WPE_ParticleEmitter* e, const WPE_Mat4* world, WP
     if (e->count > 0) {
         wpe__Integrate s = {.particles = e->particles,
                             .gravity = e->gravity,
+                            .attractor =
+                                e->world_space ? wpe_mat4_transform_point(world, e->attractor) : e->attractor,
+                            .attraction = e->attraction,
+                            .attractor_radius = e->attractor_radius,
                             .damping = fmaxf(0.0f, 1.0f - e->drag * dt),
                             .dt = dt};
         WPE_Mat4 inverse;

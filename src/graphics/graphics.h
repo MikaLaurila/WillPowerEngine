@@ -215,14 +215,15 @@ void wpe_billboard_update(WPE_Ecs* ecs, float dt);
 
 /** Where new particles appear, around the emitter's origin in its own space. */
 typedef enum WPE_ParticleShape {
-    WPE_PARTICLES_POINT = 0,  /* At the origin. */
-    WPE_PARTICLES_SPHERE,     /* Anywhere inside a sphere of radius shape_size.x. */
-    WPE_PARTICLES_BOX,        /* Anywhere inside a box of full extents shape_size. */
-    WPE_PARTICLES_HEMISPHERE, /* Anywhere inside the upper (+Y) half of a sphere of radius shape_size.x. */
-    WPE_PARTICLES_DISK,       /* Anywhere on a disk of radius shape_size.x in the XZ plane. */
-    WPE_PARTICLES_DISK_EDGE,  /* On the rim of that disk: a ring. */
-    WPE_PARTICLES_LINE,       /* On a line along X of length shape_size.x, centered on the origin. */
-    WPE_PARTICLES_CURVE,      /* On the cubic Bezier through `curve`, evenly by length. */
+    WPE_PARTICLES_POINT = 0,   /* At the origin. */
+    WPE_PARTICLES_SPHERE,      /* Anywhere inside a sphere of radius shape_size.x. */
+    WPE_PARTICLES_BOX,         /* Anywhere inside a box of full extents shape_size. */
+    WPE_PARTICLES_HEMISPHERE,  /* Anywhere inside the upper (+Y) half of a sphere of radius shape_size.x. */
+    WPE_PARTICLES_DISK,        /* Anywhere on a disk of radius shape_size.x in the XZ plane. */
+    WPE_PARTICLES_DISK_EDGE,   /* On the rim of that disk: a ring. */
+    WPE_PARTICLES_LINE,        /* On a line along X of length shape_size.x, centered on the origin. */
+    WPE_PARTICLES_CURVE,       /* On the cubic Bezier through `curve`, evenly by length. */
+    WPE_PARTICLES_SPHERE_EDGE, /* On the surface of a sphere of radius shape_size.x. */
 } WPE_ParticleShape;
 
 /** One live particle (in world space, or the emitter's space when not world_space). */
@@ -272,10 +273,16 @@ typedef struct WPE_ParticleEmitter {
     float speed_min, speed_max;       /* Initial speed, world units per second. */
     WPE_Vec3 direction;               /* Emission direction in the emitter's space. */
     float spread;                     /* Half-angle (radians) of the cone around `direction`. */
-    WPE_Vec3 gravity;                 /* Acceleration in world space (units per second squared). */
-    float drag;                       /* Fraction of velocity lost per second (0..). */
-    float spin_min, spin_max;         /* Radians per second. */
-    bool random_rotation;             /* Start each particle at a random angle. */
+    /* Each particle's cone points away from the emitter's origin through where it spawned (`direction` for
+     * particles at the origin): a ring or sphere bursts outward, and a negative speed pulls inward. */
+    bool outward;
+    WPE_Vec3 gravity;         /* Acceleration in world space (units per second squared). */
+    float drag;               /* Fraction of velocity lost per second (0..). */
+    WPE_Vec3 attractor;       /* A point in the emitter's space that pulls particles... */
+    float attraction;         /* ...with this acceleration (units per second squared; < 0 pushes). */
+    float attractor_radius;   /* Particles reaching this close to the attractor die (0: none do). */
+    float spin_min, spin_max; /* Radians per second. */
+    bool random_rotation;     /* Start each particle at a random angle. */
     /* Runtime state (read-only; reset by the add hook, freed by the remove hook). */
     WPE_Particle* particles;
     uint32_t count, capacity;

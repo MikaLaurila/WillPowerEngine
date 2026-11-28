@@ -3270,10 +3270,10 @@ static void wpe__field_range(lua_State* L, int table, const char* key, float* io
     lua_pop(L, 1);
 }
 
-static const char* const wpe__particle_shape_names[] = {"point",     "sphere", "box",   "hemisphere", "disk",
-                                                        "disk_edge", "line",   "curve", NULL};
+static const char* const wpe__particle_shape_names[] = {"point",     "sphere", "box",   "hemisphere",  "disk",
+                                                        "disk_edge", "line",   "curve", "sphere_edge", NULL};
 static_assert(sizeof wpe__particle_shape_names / sizeof wpe__particle_shape_names[0] ==
-                  WPE_PARTICLES_CURVE + 2,
+                  WPE_PARTICLES_SPHERE_EDGE + 2,
               "particle shape names");
 
 static WPE_ParticleEmitter wpe__check_particles(lua_State* L, int table, WPE_ParticleEmitter base) {
@@ -3282,6 +3282,12 @@ static WPE_ParticleEmitter wpe__check_particles(lua_State* L, int table, WPE_Par
     base.loop = wpe__field_bool(L, table, "loop", base.loop);
     base.world_space = wpe__field_bool(L, table, "world_space", base.world_space);
     base.random_rotation = wpe__field_bool(L, table, "random_rotation", base.random_rotation);
+    base.outward = wpe__field_bool(L, table, "outward", base.outward);
+    base.attractor = wpe__field_vec3(L, table, "attractor", base.attractor);
+    base.attraction = wpe__field_number(L, table, "attraction", base.attraction);
+    base.attractor_radius = wpe__field_number(L, table, "attractor_radius", base.attractor_radius);
+    if (!(isfinite(base.attraction) && base.attractor_radius >= 0.0f && isfinite(base.attractor_radius)))
+        luaL_errorL(L, "attraction must be a number and attractor_radius not negative");
     base.rate = wpe__field_number(L, table, "rate", base.rate);
     base.duration = wpe__field_number(L, table, "duration", base.duration);
     base.drag = wpe__field_number(L, table, "drag", base.drag);
@@ -3385,7 +3391,8 @@ static int wpe__api_get_particles(lua_State* L) {
     } flags[] = {{"playing", e.playing},
                  {"loop", e.loop},
                  {"world_space", e.world_space},
-                 {"random_rotation", e.random_rotation}};
+                 {"random_rotation", e.random_rotation},
+                 {"outward", e.outward}};
     for (size_t i = 0; i < sizeof flags / sizeof flags[0]; ++i) {
         lua_pushboolean(L, flags[i].value);
         lua_setfield(L, -2, flags[i].key);
@@ -3393,9 +3400,16 @@ static int wpe__api_get_particles(lua_State* L) {
     const struct {
         const char* key;
         double value;
-    } numbers[] = {{"rate", e.rate},     {"duration", e.duration}, {"drag", e.drag},
-                   {"spread", e.spread}, {"burst", e.burst},       {"max_particles", e.max_particles},
-                   {"count", e.count},   {"stretch", e.stretch}};
+    } numbers[] = {{"rate", e.rate},
+                   {"duration", e.duration},
+                   {"drag", e.drag},
+                   {"spread", e.spread},
+                   {"burst", e.burst},
+                   {"max_particles", e.max_particles},
+                   {"count", e.count},
+                   {"stretch", e.stretch},
+                   {"attraction", e.attraction},
+                   {"attractor_radius", e.attractor_radius}};
     for (size_t i = 0; i < sizeof numbers / sizeof numbers[0]; ++i) {
         lua_pushnumber(L, numbers[i].value);
         lua_setfield(L, -2, numbers[i].key);
@@ -3419,6 +3433,8 @@ static int wpe__api_get_particles(lua_State* L) {
     lua_setfield(L, -2, "direction");
     wpe__push_vec3(L, e.gravity);
     lua_setfield(L, -2, "gravity");
+    wpe__push_vec3(L, e.attractor);
+    lua_setfield(L, -2, "attractor");
     lua_pushstring(L, wpe__particle_shape_names[e.shape]);
     lua_setfield(L, -2, "shape");
     wpe__push_vec3(L, e.shape_size);

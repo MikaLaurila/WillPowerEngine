@@ -666,7 +666,15 @@ function Tour:on_start()
 	assert(shaped.shape == "curve" and shaped.curve[2] == arc[2] and #shaped.curve == 4)
 	assert(not pcall(wpe.set_particles, fire, { shape = "cone" })) -- not a shape
 	assert(not pcall(wpe.set_particles, fire, { curve = { arc[1] } })) -- not four points
-	wpe.set_particles(fire, { shape = p.shape, shape_size = p.shape_size })
+	-- A burst from a ring's edge outward, and a point pulling particles in.
+	wpe.set_particles(fire, { shape = "disk_edge", outward = true, attractor = vector.create(0, 2, 0), attraction = 3, attractor_radius = 0.1 })
+	shaped = wpe.get_particles(fire)
+	assert(shaped.outward and shaped.attractor == vector.create(0, 2, 0) and shaped.attraction == 3)
+	assert(near(shaped.attractor_radius, 0.1))
+	assert(not pcall(wpe.set_particles, fire, { attractor_radius = -1 }))
+	wpe.set_particles(fire, { shape = "sphere_edge" })
+	assert(wpe.get_particles(fire).shape == "sphere_edge")
+	wpe.set_particles(fire, { shape = p.shape, shape_size = p.shape_size, outward = false, attraction = 0, attractor_radius = 0 })
 	assert(wpe.get_particles(fire).shape == p.shape)
 	assert(wpe.emit_particles(fire, 5) == 5)
 	assert(wpe.particle_count(fire) >= 5)

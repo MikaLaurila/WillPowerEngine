@@ -192,9 +192,9 @@ void wpe__save_billboard(wpe__Saver* s, WPE_Entity e) {
     wpe_json_write_object_end(w);
 }
 
-static const char* const wpe__particle_shapes[] = {"point", "sphere",    "box",  "hemisphere",
-                                                   "disk",  "disk_edge", "line", "curve"};
-static_assert(WPE__COUNT(wpe__particle_shapes) == WPE_PARTICLES_CURVE + 1, "particle shape names");
+static const char* const wpe__particle_shapes[] = {"point",     "sphere", "box",   "hemisphere", "disk",
+                                                   "disk_edge", "line",   "curve", "sphere_edge"};
+static_assert(WPE__COUNT(wpe__particle_shapes) == WPE_PARTICLES_SPHERE_EDGE + 1, "particle shape names");
 
 static void wpe__write_pair_of(WPE_JsonWriter* w, const char* key, float a, float b) {
     const float values[2] = {a, b};
@@ -273,6 +273,13 @@ void wpe__save_particles(wpe__Saver* s, WPE_Entity e) {
     wpe__write_floats(w, "gravity", p->gravity.v, 3);
     wpe_json_write_key(w, "drag");
     wpe_json_write_number(w, p->drag);
+    wpe_json_write_key(w, "outward");
+    wpe_json_write_bool(w, p->outward);
+    wpe__write_floats(w, "attractor", p->attractor.v, 3);
+    wpe_json_write_key(w, "attraction");
+    wpe_json_write_number(w, p->attraction);
+    wpe_json_write_key(w, "attractor_radius");
+    wpe_json_write_number(w, p->attractor_radius);
     wpe_json_write_key(w, "spin");
     wpe_json_write_array_begin(w, true);
     wpe_json_write_rounded(w, (double)p->spin_min * WPE__DEGREES_PER_RADIAN, 6);
@@ -418,8 +425,9 @@ bool wpe__load_particles(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "particles", "image", "columns", "rows", "frame_count", "blend",
                                 "lit", "color_start", "color_end", "size", "stretch", "playing", "duration",
                                 "loop", "rate", "burst", "max_particles", "world_space", "seed", "shape",
-                                "shape_size", "curve", "lifetime", "speed", "direction", "spread", "gravity",
-                                "drag", "spin", "random_rotation") ||
+                                "shape_size", "curve", "lifetime", "speed", "direction", "spread", "outward",
+                                "gravity", "drag", "attractor", "attraction", "attractor_radius", "spin",
+                                "random_rotation") ||
         !wpe__json_read_uint(&l->r, v, "columns", 1, 256, &p.columns) ||
         !wpe__json_read_uint(&l->r, v, "rows", 1, 256, &p.rows) ||
         !wpe__json_read_uint(&l->r, v, "frame_count", 0, 65536, &p.frame_count) ||
@@ -447,6 +455,10 @@ bool wpe__load_particles(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
         !wpe__json_read_degrees(&l->r, v, "spread", 0.0, 180.0, &p.spread) ||
         !wpe__json_read_vec3(&l->r, v, "gravity", &p.gravity) ||
         !wpe__json_read_float(&l->r, v, "drag", 0.0, 1e3, &p.drag) ||
+        !wpe__json_read_bool(&l->r, v, "outward", &p.outward) ||
+        !wpe__json_read_vec3(&l->r, v, "attractor", &p.attractor) ||
+        !wpe__json_read_float(&l->r, v, "attraction", -1e5, 1e5, &p.attraction) ||
+        !wpe__json_read_float(&l->r, v, "attractor_radius", 0.0, 1e6, &p.attractor_radius) ||
         !wpe__read_range(l, v, "spin", -1e6, 1e6, &spin[0], &spin[1]) ||
         !wpe__json_read_bool(&l->r, v, "random_rotation", &p.random_rotation))
         return false;

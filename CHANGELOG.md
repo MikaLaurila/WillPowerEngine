@@ -5,6 +5,12 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Particle bursts and attractors: an emitter's `outward` sends each particle away from the emitter's origin
+  through where it appeared (a `"disk_edge"` ring bursts out like a shockwave); a new `"sphere_edge"` shape
+  spawns on a sphere's surface; `attractor` (a point in the emitter's space), `attraction` (pull, negative
+  pushes) and `attractor_radius` (particles reaching it die) suck particles in for charge-ups or blow them
+  away. Scene files, the editor and `wpe.set_particles`/`get_particles`. C: `WPE_ParticleEmitter.outward`,
+  `attractor`, `attraction`, `attractor_radius`, `WPE_PARTICLES_SPHERE_EDGE`.
 - Particle spawn shapes `"hemisphere"` (the upper half of the sphere), `"disk"` (on a disk in the XZ
   plane), `"disk_edge"` (a ring), `"line"` (along X) and `"curve"`: a cubic Bezier through the emitter's
   `curve` (four points, like a slash's `points`), spawning evenly along its length, so sparks can follow a
