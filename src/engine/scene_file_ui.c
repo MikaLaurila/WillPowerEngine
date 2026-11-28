@@ -192,8 +192,9 @@ void wpe__save_billboard(wpe__Saver* s, WPE_Entity e) {
     wpe_json_write_object_end(w);
 }
 
-static const char* const wpe__particle_shapes[] = {"point", "sphere", "box"};
-static_assert(WPE__COUNT(wpe__particle_shapes) == WPE_PARTICLES_BOX + 1, "particle shape names");
+static const char* const wpe__particle_shapes[] = {"point", "sphere",    "box",  "hemisphere",
+                                                   "disk",  "disk_edge", "line", "curve"};
+static_assert(WPE__COUNT(wpe__particle_shapes) == WPE_PARTICLES_CURVE + 1, "particle shape names");
 
 static void wpe__write_pair_of(WPE_JsonWriter* w, const char* key, float a, float b) {
     const float values[2] = {a, b};
@@ -246,6 +247,24 @@ void wpe__save_particles(wpe__Saver* s, WPE_Entity e) {
     wpe_json_write_key(w, "shape");
     wpe_json_write_string(w, wpe__particle_shapes[p->shape]);
     wpe__write_floats(w, "shape_size", p->shape_size.v, 3);
+    /* The curve only when it is used or changed, so emitters saved before curves keep their text. */
+    const WPE_ParticleEmitter defaults = wpe_particle_emitter_default();
+    bool curve_changed = false;
+    for (int i = 0; i < 4; ++i) {
+        for (int k = 0; k < 3; ++k)
+            curve_changed |= p->curve[i].v[k] != defaults.curve[i].v[k];
+    }
+    if (p->shape == WPE_PARTICLES_CURVE || curve_changed) {
+        wpe_json_write_key(w, "curve");
+        wpe_json_write_array_begin(w, true);
+        for (int i = 0; i < 4; ++i) {
+            wpe_json_write_array_begin(w, true);
+            for (int k = 0; k < 3; ++k)
+                wpe_json_write_number(w, p->curve[i].v[k]);
+            wpe_json_write_array_end(w);
+        }
+        wpe_json_write_array_end(w);
+    }
     wpe__write_pair_of(w, "lifetime", p->lifetime_min, p->lifetime_max);
     wpe__write_pair_of(w, "speed", p->speed_min, p->speed_max);
     wpe__write_floats(w, "direction", p->direction.v, 3);
@@ -399,8 +418,8 @@ bool wpe__load_particles(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     if (!WPE__JSON_CHECK_OBJECT(&l->r, v, "particles", "image", "columns", "rows", "frame_count", "blend",
                                 "lit", "color_start", "color_end", "size", "stretch", "playing", "duration",
                                 "loop", "rate", "burst", "max_particles", "world_space", "seed", "shape",
-                                "shape_size", "lifetime", "speed", "direction", "spread", "gravity", "drag",
-                                "spin", "random_rotation") ||
+                                "shape_size", "curve", "lifetime", "speed", "direction", "spread", "gravity",
+                                "drag", "spin", "random_rotation") ||
         !wpe__json_read_uint(&l->r, v, "columns", 1, 256, &p.columns) ||
         !wpe__json_read_uint(&l->r, v, "rows", 1, 256, &p.rows) ||
         !wpe__json_read_uint(&l->r, v, "frame_count", 0, 65536, &p.frame_count) ||
@@ -441,6 +460,14 @@ bool wpe__load_particles(wpe__Loader* l, WPE_Entity e, const WPE_JsonValue* v) {
     p.spin_max = (float)(spin[1] / WPE__DEGREES_PER_RADIAN);
     p.blend = (WPE_BillboardBlend)blend;
     p.shape = (WPE_ParticleShape)shape;
+    const WPE_JsonValue* curve = wpe_json_get(v, "curve");
+    if (curve) {
+        if (wpe_json_type(curve) != WPE_JSON_ARRAY || wpe_json_count(curve) != 4)
+            return wpe__json_fail(&l->r, curve, WPE_RESULT_ERROR_PARSE, "\"curve\" must be four [x, y, z]");
+        for (uint32_t i = 0; i < 4; ++i) {
+            if (!wpe__json_read_floats(&l->r, wpe_json_at(curve, i), "curve", 3, p.curve[i].v)) return false;
+        }
+    }
     if (!wpe__read_asset(l, v, "image", WPE_ASSET_IMAGE, &p.image)) return false;
     const bool ok = wpe__add(l, v, e, WPE_COMP_PARTICLES, &p, "particles");
     wpe_asset_release(l->context->assets, p.image); /* The component holds its own reference. */

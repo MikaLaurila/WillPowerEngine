@@ -1607,6 +1607,93 @@ static void test_graphics_particles_move(void) {
     wpe_test_assets_destroy(&t);
 }
 
+/* The other spawn shapes keep to their surfaces and fill them; the curve spreads evenly by length. */
+static void test_graphics_particles_spawn_shapes(void) {
+    WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
+    WPE_Ecs* ecs = make_world(t.assets);
+    WPE_ParticleEmitter settings = wpe_particle_emitter_default();
+    settings.rate = 0.0f;
+    settings.max_particles = 1000;
+    settings.world_space = false;
+    settings.seed = 7;
+    settings.shape_size = wpe_vec3(2, 5, 5); /* Only x counts for these shapes. */
+    const WPE_ParticleShape shapes[] = {WPE_PARTICLES_HEMISPHERE, WPE_PARTICLES_DISK, WPE_PARTICLES_DISK_EDGE,
+                                        WPE_PARTICLES_LINE};
+    for (size_t s = 0; s < sizeof shapes / sizeof shapes[0]; ++s) {
+        settings.shape = shapes[s];
+        const WPE_Entity e = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+        WPE_TEST_ASSERT_EQ_UINT(1000, wpe_particles_emit(ecs, e, 1000));
+        uint32_t inner = 0, outer = 0, negative_x = 0, negative_z = 0;
+        for (uint32_t i = 0; i < 1000; ++i) {
+            const WPE_Vec3 at = emitter_of(ecs, e)->particles[i].position;
+            /* A line is shape_size.x long in all, so twice its distance from the middle compares the same. */
+            const float radius =
+                shapes[s] == WPE_PARTICLES_LINE ? 2.0f * wpe_vec3_length(at) : wpe_vec3_length(at);
+            WPE_TEST_ASSERT(radius <= 2.0f + 1e-4f);
+            inner += radius < 1.0f;
+            outer += radius > 1.9f;
+            negative_x += at.x < 0.0f;
+            negative_z += at.z < 0.0f;
+            switch (shapes[s]) {
+            case WPE_PARTICLES_HEMISPHERE:
+                WPE_TEST_ASSERT(at.y >= 0.0f);
+                break;
+            case WPE_PARTICLES_DISK:
+                WPE_TEST_ASSERT(at.y == 0.0f);
+                break;
+            case WPE_PARTICLES_DISK_EDGE:
+                WPE_TEST_ASSERT(at.y == 0.0f && fabsf(radius - 2.0f) < 1e-4f);
+                break;
+            default:
+                WPE_TEST_ASSERT(at.y == 0.0f && at.z == 0.0f);
+                break;
+            }
+        }
+        /* Both sides, and the inside as much as uniform filling makes it (a ball's inner half radius holds an
+         * eighth, a disk's a quarter, a line's half). */
+        WPE_TEST_ASSERT(negative_x > 400 && negative_x < 600);
+        if (shapes[s] != WPE_PARTICLES_LINE) WPE_TEST_ASSERT(negative_z > 400 && negative_z < 600);
+        const uint32_t expected_inner[] = {125, 250, 0, 500};
+        WPE_TEST_ASSERT(inner >= expected_inner[s] * 7 / 10 && inner <= expected_inner[s] * 13 / 10);
+        WPE_TEST_ASSERT(outer > 20);
+    }
+
+    /* A curve that rushes at its end by parameter (x = 4 t^3): by length, half the particles are in the
+     * first half (by parameter it would be 79%). */
+    settings.shape = WPE_PARTICLES_CURVE;
+    settings.curve[0] = settings.curve[1] = settings.curve[2] = wpe_vec3(0, 0, 0);
+    settings.curve[3] = wpe_vec3(4, 0, 0);
+    const WPE_Entity line = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+    WPE_TEST_ASSERT_EQ_UINT(1000, wpe_particles_emit(ecs, line, 1000));
+    uint32_t first_half = 0;
+    for (uint32_t i = 0; i < 1000; ++i) {
+        const WPE_Vec3 at = emitter_of(ecs, line)->particles[i].position;
+        WPE_TEST_ASSERT(at.x >= 0.0f && at.x <= 4.0f + 1e-4f && at.y == 0.0f && at.z == 0.0f);
+        first_half += at.x < 2.0f;
+    }
+    WPE_TEST_ASSERT(first_half > 430 && first_half < 570);
+    /* The default (a slash's crescent): every particle lies on the curve. */
+    settings.curve[0] = wpe_vec3(-0.6f, 0.0f, 0.0f);
+    settings.curve[1] = wpe_vec3(-0.3f, 0.45f, 0.0f);
+    settings.curve[2] = wpe_vec3(0.3f, 0.45f, 0.0f);
+    settings.curve[3] = wpe_vec3(0.6f, 0.0f, 0.0f);
+    WPE_Slash slash = wpe_slash_default();
+    for (int i = 0; i < 4; ++i)
+        WPE_TEST_ASSERT(wpe_vec3_length(wpe_vec3_sub(slash.points[i], settings.curve[i])) < 1e-6f);
+    const WPE_Entity arc = spawn_emitter(ecs, wpe_vec3(0, 0, 0), &settings);
+    WPE_TEST_ASSERT_EQ_UINT(200, wpe_particles_emit(ecs, arc, 200));
+    for (uint32_t i = 0; i < 200; ++i) {
+        const WPE_Vec3 at = emitter_of(ecs, arc)->particles[i].position;
+        float nearest = 1e9f;
+        for (int k = 0; k <= 400; ++k)
+            nearest =
+                fminf(nearest, wpe_vec3_length(wpe_vec3_sub(at, wpe_slash_point(&slash, (float)k / 400))));
+        WPE_TEST_ASSERT(nearest < 0.01f && at.z == 0.0f);
+    }
+    wpe_ecs_destroy(ecs);
+    wpe_test_assets_destroy(&t);
+}
+
 /* The same seed gives the same particles, and worker threads change nothing. */
 static void test_graphics_particles_are_deterministic(void) {
     WPE_TestAssets t = wpe_test_assets_create(NULL, 0);
@@ -2501,8 +2588,9 @@ WPE_TEST_MAIN(
     WPE_TEST_CASE(test_graphics_particles_emit_and_expire), WPE_TEST_CASE(test_graphics_particles_move),
     WPE_TEST_CASE(test_graphics_particles_are_deterministic), WPE_TEST_CASE(test_graphics_particles_draw),
     WPE_TEST_CASE(test_graphics_particles_stretch_into_streaks),
-    WPE_TEST_CASE(test_graphics_trail_records_and_draws), WPE_TEST_CASE(test_graphics_slash_sweeps),
-    WPE_TEST_CASE(test_graphics_anim_states), WPE_TEST_CASE(test_graphics_surface_update_wraps),
+    WPE_TEST_CASE(test_graphics_particles_spawn_shapes), WPE_TEST_CASE(test_graphics_trail_records_and_draws),
+    WPE_TEST_CASE(test_graphics_slash_sweeps), WPE_TEST_CASE(test_graphics_anim_states),
+    WPE_TEST_CASE(test_graphics_surface_update_wraps),
     WPE_TEST_CASE(test_graphics_water_wave_is_periodic_with_matching_slopes),
     WPE_TEST_CASE(test_graphics_wind_offset_bends_by_height), WPE_TEST_CASE(test_graphics_wind_sways_meshes),
     WPE_TEST_CASE(test_graphics_uv_offset_and_water_render), WPE_TEST_CASE(test_graphics_transition_shapes),

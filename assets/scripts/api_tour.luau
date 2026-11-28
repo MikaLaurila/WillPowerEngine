@@ -659,6 +659,15 @@ function Tour:on_start()
 	assert(wpe.get_particles(fire).rate == 60)
 	assert(not pcall(wpe.set_particles, fire, { lifetime = { 2, 1 } })) -- low above high
 	assert(not pcall(wpe.set_particles, fire, { spread = 4 })) -- more than pi
+	-- Spawn shapes: a curve given as four points (a slash's), read back with the shape's name.
+	local arc = { vector.create(-1, 0, 0), vector.create(-0.5, 1, 0), vector.create(0.5, 1, 0), vector.create(1, 0, 0) }
+	wpe.set_particles(fire, { shape = "curve", curve = arc })
+	local shaped = wpe.get_particles(fire)
+	assert(shaped.shape == "curve" and shaped.curve[2] == arc[2] and #shaped.curve == 4)
+	assert(not pcall(wpe.set_particles, fire, { shape = "cone" })) -- not a shape
+	assert(not pcall(wpe.set_particles, fire, { curve = { arc[1] } })) -- not four points
+	wpe.set_particles(fire, { shape = p.shape, shape_size = p.shape_size })
+	assert(wpe.get_particles(fire).shape == p.shape)
 	assert(wpe.emit_particles(fire, 5) == 5)
 	assert(wpe.particle_count(fire) >= 5)
 	wpe.stop_particles(fire, true)

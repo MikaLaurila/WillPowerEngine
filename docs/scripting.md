@@ -658,7 +658,7 @@ Drawn on top of the 3D scene after post-processing (HUDs, menus), in call order,
 
 ### Particles
 
-Particle emitters ([scenes.md](scenes.md#particles)). A settings table uses the scene-file names: `playing`, `loop`, `world_space`, `random_rotation`, `rate`, `duration`, `drag`, `spread` (**radians** here), `burst`, `max_particles`, the pairs `lifetime`, `speed`, `spin` (radians per second) and `size` as `{a, b}`, the vectors `direction` and `gravity`, and the colors `color_start`, `color_end` (`wpe.color`). The image, sheet, blending, lighting and shape are set in the scene or the editor.
+Particle emitters ([scenes.md](scenes.md#particles)). A settings table uses the scene-file names: `playing`, `loop`, `world_space`, `random_rotation`, `rate`, `duration`, `drag`, `spread` (**radians** here), `burst`, `max_particles`, the pairs `lifetime`, `speed`, `spin` (radians per second) and `size` as `{a, b}`, the vectors `direction` and `gravity`, the colors `color_start`, `color_end` (`wpe.color`), the `shape` (a name: `"point"`, `"sphere"`, `"hemisphere"`, `"box"`, `"disk"`, `"disk_edge"`, `"line"`, `"curve"`), `shape_size` (a vector) and `curve` (four vectors, like a slash's `points`: `wpe.set_particles(e, {shape = "curve", curve = wpe.get_slash(e).points})` spawns along the slash's arc). The image, sheet, blending and lighting are set in the scene or the editor.
 
 | Function | Description |
 |---|---|

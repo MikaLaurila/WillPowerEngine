@@ -215,9 +215,14 @@ void wpe_billboard_update(WPE_Ecs* ecs, float dt);
 
 /** Where new particles appear, around the emitter's origin in its own space. */
 typedef enum WPE_ParticleShape {
-    WPE_PARTICLES_POINT = 0, /* At the origin. */
-    WPE_PARTICLES_SPHERE,    /* Anywhere inside a sphere of radius shape_size.x. */
-    WPE_PARTICLES_BOX,       /* Anywhere inside a box of full extents shape_size. */
+    WPE_PARTICLES_POINT = 0,  /* At the origin. */
+    WPE_PARTICLES_SPHERE,     /* Anywhere inside a sphere of radius shape_size.x. */
+    WPE_PARTICLES_BOX,        /* Anywhere inside a box of full extents shape_size. */
+    WPE_PARTICLES_HEMISPHERE, /* Anywhere inside the upper (+Y) half of a sphere of radius shape_size.x. */
+    WPE_PARTICLES_DISK,       /* Anywhere on a disk of radius shape_size.x in the XZ plane. */
+    WPE_PARTICLES_DISK_EDGE,  /* On the rim of that disk: a ring. */
+    WPE_PARTICLES_LINE,       /* On a line along X of length shape_size.x, centered on the origin. */
+    WPE_PARTICLES_CURVE,      /* On the cubic Bezier through `curve`, evenly by length. */
 } WPE_ParticleShape;
 
 /** One live particle (in world space, or the emitter's space when not world_space). */
@@ -258,6 +263,10 @@ typedef struct WPE_ParticleEmitter {
     uint32_t seed;          /* Random seed (0 = from the entity), so a scene plays the same every time. */
     WPE_ParticleShape shape;
     WPE_Vec3 shape_size;
+    /* The CURVE shape's control points (start, two handles, end) in the emitter's space, the same as a
+     * slash's `points`: an emitter beside a slash on its entity, given the slash's points, spawns along it.
+     */
+    WPE_Vec3 curve[4];
     /* Motion. */
     float lifetime_min, lifetime_max; /* Seconds. */
     float speed_min, speed_max;       /* Initial speed, world units per second. */

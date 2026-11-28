@@ -11,25 +11,28 @@
 #define WPE__TWO_PI 6.28318530717958647692f
 
 WPE_ParticleEmitter wpe_particle_emitter_default(void) {
-    return (WPE_ParticleEmitter){.columns = 1,
-                                 .rows = 1,
-                                 .blend = WPE_BILLBOARD_ALPHA,
-                                 .color_start = wpe_vec4(1, 1, 1, 1),
-                                 .color_end = wpe_vec4(1, 1, 1, 0),
-                                 .size_start = 0.2f,
-                                 .size_end = 0.05f,
-                                 .playing = true,
-                                 .loop = true,
-                                 .rate = 20.0f,
-                                 .max_particles = 256,
-                                 .world_space = true,
-                                 .shape_size = wpe_vec3(1, 1, 1),
-                                 .lifetime_min = 1.0f,
-                                 .lifetime_max = 1.0f,
-                                 .speed_min = 1.0f,
-                                 .speed_max = 2.0f,
-                                 .direction = wpe_vec3(0, 1, 0),
-                                 .spread = 15.0f * WPE_PI / 180.0f};
+    return (WPE_ParticleEmitter){
+        .columns = 1,
+        .rows = 1,
+        .blend = WPE_BILLBOARD_ALPHA,
+        .color_start = wpe_vec4(1, 1, 1, 1),
+        .color_end = wpe_vec4(1, 1, 1, 0),
+        .size_start = 0.2f,
+        .size_end = 0.05f,
+        .playing = true,
+        .loop = true,
+        .rate = 20.0f,
+        .max_particles = 256,
+        .world_space = true,
+        .shape_size = wpe_vec3(1, 1, 1),
+        /* The default slash's crescent. */
+        .curve = {{{-0.6f, 0.0f, 0.0f}}, {{-0.3f, 0.45f, 0.0f}}, {{0.3f, 0.45f, 0.0f}}, {{0.6f, 0.0f, 0.0f}}},
+        .lifetime_min = 1.0f,
+        .lifetime_max = 1.0f,
+        .speed_min = 1.0f,
+        .speed_max = 2.0f,
+        .direction = wpe_vec3(0, 1, 0),
+        .spread = 15.0f * WPE_PI / 180.0f};
 }
 
 /* ---- Random numbers: xorshift64*, seeded through splitmix64 so nearby seeds differ. ------------------- */
@@ -76,18 +79,74 @@ static WPE_Vec3 wpe__cone(uint64_t* random, WPE_Vec3 axis, float spread) {
         wpe_vec3_add(wpe_vec3_scale(u, sin_theta * cosf(phi)), wpe_vec3_scale(v, sin_theta * sinf(phi))));
 }
 
-/* Where a new particle starts, in the emitter's space. */
-static WPE_Vec3 wpe__spawn_point(uint64_t* random, const WPE_ParticleEmitter* e) {
+#define WPE__CURVE_SAMPLES 32
+
+static WPE_Vec3 wpe__bezier(const WPE_Vec3 points[4], float t) {
+    const float u = 1.0f - t;
+    const float w[4] = {u * u * u, 3.0f * u * u * t, 3.0f * u * t * t, t * t * t};
+    WPE_Vec3 p = wpe_vec3(0, 0, 0);
+    for (int i = 0; i < 4; ++i)
+        p = wpe_vec3_add(p, wpe_vec3_scale(points[i], w[i]));
+    return p;
+}
+
+/* The curve's length up to evenly spaced parameters (lengths[0] = 0), measured once per emission. */
+static void wpe__curve_lengths(const WPE_Vec3 points[4], float lengths[WPE__CURVE_SAMPLES + 1]) {
+    lengths[0] = 0.0f;
+    WPE_Vec3 previous = points[0];
+    for (int i = 1; i <= WPE__CURVE_SAMPLES; ++i) {
+        const WPE_Vec3 p = wpe__bezier(points, (float)i / WPE__CURVE_SAMPLES);
+        lengths[i] = lengths[i - 1] + wpe_vec3_length(wpe_vec3_sub(p, previous));
+        previous = p;
+    }
+}
+
+/* The point `along` (0..1) of the curve's length. */
+static WPE_Vec3 wpe__curve_point(const WPE_Vec3 points[4], const float lengths[WPE__CURVE_SAMPLES + 1],
+                                 float along) {
+    const float total = lengths[WPE__CURVE_SAMPLES];
+    if (!(total > 1e-9f)) return wpe__bezier(points, along); /* All four points together. */
+    const float goal = along * total;
+    int lo = 1, hi = WPE__CURVE_SAMPLES; /* The first sample at or past the goal. */
+    while (lo < hi) {
+        const int mid = (lo + hi) / 2;
+        if (lengths[mid] < goal)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    const float span = lengths[lo] - lengths[lo - 1];
+    const float f = span > 1e-9f ? (goal - lengths[lo - 1]) / span : 0.0f;
+    return wpe__bezier(points, ((float)(lo - 1) + f) / WPE__CURVE_SAMPLES);
+}
+
+/* Where a new particle starts, in the emitter's space. `curve_lengths` is set for the CURVE shape. */
+static WPE_Vec3 wpe__spawn_point(uint64_t* random, const WPE_ParticleEmitter* e, const float* curve_lengths) {
     switch (e->shape) {
-    case WPE_PARTICLES_SPHERE: {
-        /* Uniform in the ball: a random direction at a radius growing with the cube root. */
-        const WPE_Vec3 direction = wpe__cone(random, wpe_vec3(0, 1, 0), WPE_PI);
+    case WPE_PARTICLES_SPHERE:
+    case WPE_PARTICLES_HEMISPHERE: {
+        /* Uniform in the ball: a random direction at a radius growing with the cube root. A cap of 90 degrees
+         * around +Y is the upper half. */
+        const float cap = e->shape == WPE_PARTICLES_SPHERE ? WPE_PI : 0.5f * WPE_PI;
+        const WPE_Vec3 direction = wpe__cone(random, wpe_vec3(0, 1, 0), cap);
         return wpe_vec3_scale(direction, e->shape_size.x * cbrtf(wpe__unit(random)));
     }
     case WPE_PARTICLES_BOX:
         return wpe_vec3((wpe__unit(random) - 0.5f) * e->shape_size.x,
                         (wpe__unit(random) - 0.5f) * e->shape_size.y,
                         (wpe__unit(random) - 0.5f) * e->shape_size.z);
+    case WPE_PARTICLES_DISK:
+    case WPE_PARTICLES_DISK_EDGE: {
+        /* Uniform over the disk's area: the radius grows with the square root. */
+        const float angle = wpe__unit(random) * WPE__TWO_PI;
+        const float radius =
+            e->shape_size.x * (e->shape == WPE_PARTICLES_DISK ? sqrtf(wpe__unit(random)) : 1.0f);
+        return wpe_vec3(radius * cosf(angle), 0.0f, radius * sinf(angle));
+    }
+    case WPE_PARTICLES_LINE:
+        return wpe_vec3((wpe__unit(random) - 0.5f) * e->shape_size.x, 0.0f, 0.0f);
+    case WPE_PARTICLES_CURVE:
+        return wpe__curve_point(e->curve, curve_lengths, wpe__unit(random));
     case WPE_PARTICLES_POINT:
     default:
         return wpe_vec3(0, 0, 0);
@@ -113,9 +172,11 @@ static uint32_t wpe__emit(WPE_ParticleEmitter* e, const WPE_Mat4* world, uint32_
     if (!wpe__reserve(e)) return 0;
     const WPE_Vec3 axis =
         wpe_vec3_length(e->direction) > 1e-6f ? wpe_vec3_normalize(e->direction) : wpe_vec3(0, 1, 0);
+    float curve_lengths[WPE__CURVE_SAMPLES + 1] = {0};
+    if (e->shape == WPE_PARTICLES_CURVE && count > 0) wpe__curve_lengths(e->curve, curve_lengths);
     uint32_t emitted = 0;
     for (; emitted < count && e->count < e->capacity; ++emitted) {
-        WPE_Vec3 position = wpe__spawn_point(&e->random, e);
+        WPE_Vec3 position = wpe__spawn_point(&e->random, e, curve_lengths);
         WPE_Vec3 velocity = wpe_vec3_scale(wpe__cone(&e->random, axis, e->spread),
                                            wpe__between(&e->random, e->speed_min, e->speed_max));
         if (e->world_space) {

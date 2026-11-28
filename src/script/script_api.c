@@ -3270,6 +3270,12 @@ static void wpe__field_range(lua_State* L, int table, const char* key, float* io
     lua_pop(L, 1);
 }
 
+static const char* const wpe__particle_shape_names[] = {"point",     "sphere", "box",   "hemisphere", "disk",
+                                                        "disk_edge", "line",   "curve", NULL};
+static_assert(sizeof wpe__particle_shape_names / sizeof wpe__particle_shape_names[0] ==
+                  WPE_PARTICLES_CURVE + 2,
+              "particle shape names");
+
 static WPE_ParticleEmitter wpe__check_particles(lua_State* L, int table, WPE_ParticleEmitter base) {
     luaL_checktype(L, table, LUA_TTABLE);
     base.playing = wpe__field_bool(L, table, "playing", base.playing);
@@ -3304,6 +3310,24 @@ static WPE_ParticleEmitter wpe__check_particles(lua_State* L, int table, WPE_Par
     lua_pop(L, 1);
     base.size_start = size_low;
     base.size_end = size_high;
+    lua_getfield(L, table, "shape");
+    if (!lua_isnil(L, -1))
+        base.shape = (WPE_ParticleShape)luaL_checkoption(L, -1, NULL, wpe__particle_shape_names);
+    lua_pop(L, 1);
+    base.shape_size = wpe__field_vec3(L, table, "shape_size", base.shape_size);
+    if (!(base.shape_size.x >= 0.0f && base.shape_size.y >= 0.0f && base.shape_size.z >= 0.0f))
+        luaL_errorL(L, "shape_size must not be negative");
+    lua_getfield(L, table, "curve");
+    if (!lua_isnil(L, -1)) {
+        luaL_checktype(L, -1, LUA_TTABLE);
+        if (lua_objlen(L, -1) != 4) luaL_errorL(L, "curve must be four vectors");
+        for (int i = 0; i < 4; ++i) {
+            lua_rawgeti(L, -1, i + 1);
+            base.curve[i] = wpe__check_vec3(L, lua_gettop(L));
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
     const char* vectors[] = {"direction", "gravity"};
     WPE_Vec3* targets[] = {&base.direction, &base.gravity};
     for (int i = 0; i < 2; ++i) {
@@ -3395,6 +3419,16 @@ static int wpe__api_get_particles(lua_State* L) {
     lua_setfield(L, -2, "direction");
     wpe__push_vec3(L, e.gravity);
     lua_setfield(L, -2, "gravity");
+    lua_pushstring(L, wpe__particle_shape_names[e.shape]);
+    lua_setfield(L, -2, "shape");
+    wpe__push_vec3(L, e.shape_size);
+    lua_setfield(L, -2, "shape_size");
+    lua_createtable(L, 4, 0);
+    for (int i = 0; i < 4; ++i) {
+        wpe__push_vec3(L, e.curve[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    lua_setfield(L, -2, "curve");
     lua_pushnumber(L, (double)wpe_color_from_vec4(e.color_start));
     lua_setfield(L, -2, "color_start");
     lua_pushnumber(L, (double)wpe_color_from_vec4(e.color_end));

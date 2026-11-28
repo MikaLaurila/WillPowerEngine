@@ -5,6 +5,12 @@ All notable changes to WillPowerEngine are recorded here. Backward-incompatible 
 ## [Unreleased]
 
 ### Added
+- Particle spawn shapes `"hemisphere"` (the upper half of the sphere), `"disk"` (on a disk in the XZ
+  plane), `"disk_edge"` (a ring), `"line"` (along X) and `"curve"`: a cubic Bezier through the emitter's
+  `curve` (four points, like a slash's `points`), spawning evenly along its length, so sparks can follow a
+  slash's arc. Scene files, the editor, and `wpe.set_particles`/`get_particles`, which now take `shape`,
+  `shape_size` and `curve` too. C: `WPE_PARTICLES_HEMISPHERE`/`DISK`/`DISK_EDGE`/`LINE`/`CURVE`,
+  `WPE_ParticleEmitter.curve`.
 - Camera punches: `wpe.shake`'s `kick` (a vector) throws the entity along it and springs back with a small
   overshoot, so a hit can knock the view away from it; `wpe.set_fov`/`get_fov` change a camera's field of view
   (a zoom punch). C: `WPE_ShakeParams.kick`.

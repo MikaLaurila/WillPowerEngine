@@ -124,7 +124,8 @@ A `particles` component emits particles from its entity and simulates them: scre
 | `max_particles` | At most this many alive at once, 1..100000 (256). |
 | `world_space` | Particles stay where they were emitted (true); false: they move and turn with the emitter. |
 | `seed` | Random seed (0 = from the entity): a scene plays the same every time. |
-| `shape`, `shape_size` | Where particles appear: `"point"`, `"sphere"` (radius `shape_size[0]`) or `"box"` (full extents), in the emitter's space. |
+| `shape`, `shape_size` | Where particles appear, in the emitter's space: `"point"`, `"sphere"` (inside, radius `shape_size[0]`), `"hemisphere"` (the sphere's upper, +Y half), `"box"` (full extents), `"disk"` (anywhere on a disk of radius `shape_size[0]` in the XZ plane), `"disk_edge"` (on its rim: a ring), `"line"` (along X, `shape_size[0]` long, centered) or `"curve"` (along `curve`). |
+| `curve` | Four control points (`[[x, y, z], ...]`: start, two handles, end) of the cubic Bezier curve the `"curve"` shape spawns along, evenly by length. They mean the same as a slash's `points`, so an emitter on a slash's entity given the slash's points spawns along its arc (the default is the default slash's crescent). Saved only when the shape is `"curve"` or the points changed. |
 | `lifetime`, `speed` | `[low, high]` ranges in seconds and world units per second (`[1, 1]`, `[1, 2]`). |
 | `direction`, `spread` | Emission direction in the emitter's space (`[0, 1, 0]`) and the half-angle of the cone around it in degrees (15). |
 | `gravity`, `drag` | World-space acceleration (`[0, 0, 0]`) and the fraction of velocity lost per second (0). |

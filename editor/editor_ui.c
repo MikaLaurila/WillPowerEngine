@@ -476,7 +476,8 @@ static const char* const* wpe__choices(const char* component, const char* key, u
     static const char* const billboard_modes[] = {"fixed", "axis_aligned", "axis_aligned_y",
                                                   "screen_aligned"};
     static const char* const billboard_blends[] = {"cutout", "alpha", "additive"};
-    static const char* const particle_shapes[] = {"point", "sphere", "box"};
+    static const char* const particle_shapes[] = {"point", "sphere",    "box",  "hemisphere",
+                                                  "disk",  "disk_edge", "line", "curve"};
     static const char* const skies[] = {"color", "gradient", "panorama"};
     static const char* const texture_filters[] = {"material", "nearest", "bilinear", "three_point"};
     const struct {
@@ -498,7 +499,7 @@ static const char* const* wpe__choices(const char* component, const char* key, u
         {"billboard", "mode", billboard_modes, 4},
         {"billboard", "blend", billboard_blends, 3},
         {"particles", "blend", billboard_blends, 3},
-        {"particles", "shape", particle_shapes, 3},
+        {"particles", "shape", particle_shapes, 8},
         {"trail", "blend", billboard_blends, 3},
         {"slash", "blend", billboard_blends, 3},
     };
